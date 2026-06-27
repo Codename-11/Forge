@@ -2,6 +2,65 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-27 — UI/UX gap sweep (popover clipping, composer autocomplete, themed selects, gate labels)
+
+Follow-up to the QuickCreate redesign: swept for the same problem-classes it
+fixed and closed them across the app. Three Explore agents verified candidates
+(clip risk, picker gaps, raw-id displays); findings actioned below.
+
+**1. Reusable popover primitive + clip fixes.** New
+`src/components/ui/anchored-popover.tsx` — portals children to `document.body`,
+fixed-positioned off an anchor `getBoundingClientRect` (re-measured on
+scroll/resize, flips above when <`minSpaceBelow` room), owns outside-click
+(checks anchor + popover refs) + Escape. Supports hover popovers via
+`dismissOnOutsideClick={false}` + passthrough `onMouseEnter/Leave`. Migrated six
+hand-rolled `absolute top-full` dropdowns that were (or could be) clipped by an
+`overflow-hidden`/`overflow-y-auto` ancestor:
+- **HIGH (confirmed):** `RunControlMenu` (inside agent-pipeline's
+  `max-h-72 overflow-y-auto` lane), `CommentHistoryPopover` (scrollable comment
+  thread).
+- **MED:** `SnoozeMenu`, `AgentQuickActions`, `DispatchReasonChip` (hover —
+  added hover-intent grace so the pointer can cross into the portaled panel),
+  `QuickNotesWidget` status + convert menus (status trigger restructured from a
+  `<button>`-wrapping-menu to a sibling popover so portal event bubbling can't
+  re-toggle it).
+
+**2. Value autocomplete in the issue composers.** Generalized
+`useSlashAutocomplete` (slash-autocomplete.tsx) with a VALUE stage: once the
+caret line is `/<cmd> <arg>`, it suggests live projects/agents/labels (+ priority
+levels + due presets) from a new optional `attributes` arg; picking rewrites the
+line to `/<cmd> <value> ` so it still parses on submit. Backward compatible —
+without `attributes` it's keyword-only as before. `SlashSuggestion` is now a
+command|value union; the dropdown renders avatars/colour dots for values. Wired
+into all three issue-main composers (description, comment, comment-edit) via a
+shared `useSlashAttributes()` hook (React Query dedupes the 3 calls). quick-create
+keeps its own bespoke tokenized popover (unchanged).
+
+**3. Themed select upgrades.** New `src/components/ui/combobox.tsx` (trigger +
+AnchoredPopover, static or async-search, keyboard nav, avatar/dot rows). Applied
+to: `CrewSelector` (searchable when >8 crews), relation-kind picker
+(issue-relations-panel), and the **time-tracker issue picker** — now async-
+searchable via `issue.list({query})` instead of a fixed recent-20 native select
+(pins the chosen issue so its label survives a new query). Settings-form enum
+selects left as native (defensible).
+
+**4. Review-gate target labels.** `reviewGateRouter.list` now batch-resolves a
+`targetLabel` (+ `targetNumber` for issues) across issue/execution-plan/goal
+targets; the Review page renders the issue key + title / plan / goal name instead
+of `targetId.slice(0,12)…` (graceful null fallback for orphaned targets). Test
+added in `agent-crew.test.ts`.
+
+**Deferred (noted, not done):** audit-log + webhook-delivery rows still show
+`subjectId.slice(0,8)` — those subjects are polymorphic across ~6 entity kinds
+and live on admin-only diagnostic surfaces, so a proper id→name view needs a
+shared polymorphic resolver (its own change + tests) rather than a rushed join.
+
+Gates: typecheck + lint clean; `pnpm test` 1000 pass / 1 skip (+1 new reviewGate
+test → file 5/5). Files: +anchored-popover, +combobox; edited run-control-menu,
+comment-history-popover, snooze-menu, agent-quick-actions, dispatch-reason-chip,
+quick-notes-widget, slash-autocomplete, issue-main, crew-selector,
+issue-relations-panel, time-tracker-widget, agent-crew (router), review/page.
+
 ## 2026-06-27 — QuickCreate redesign: tokenized capture bar
 
 Reworked `src/components/quick-create.tsx` (the `⇧C` create overlay) from a

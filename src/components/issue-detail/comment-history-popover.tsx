@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { History } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 import { cn, relativeTime } from "@/lib/utils";
 
 /**
@@ -71,27 +72,7 @@ export function CommentHistoryPopover({
   editedAt: Date | string;
 }) {
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLSpanElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-      }
-    };
-    document.addEventListener("click", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const containerRef = useRef<HTMLSpanElement | null>(null);
 
   const result = useCommentHistory(commentId, open);
   const data = result?.data;
@@ -118,13 +99,15 @@ export function CommentHistoryPopover({
         <History className="h-3 w-3" aria-hidden />
         <span>edited</span>
       </button>
-      {open && (
-        <div
-          role="dialog"
-          aria-label="Comment edit history"
-          onClick={(e) => e.stopPropagation()}
-          className="absolute left-0 top-full z-30 mt-1 max-h-[24rem] w-[22rem] overflow-y-auto rounded-md border border-border bg-card p-3 shadow-md"
-        >
+      <AnchoredPopover
+        anchorRef={containerRef}
+        open={open}
+        onClose={() => setOpen(false)}
+        align="left"
+        role="dialog"
+        ariaLabel="Comment edit history"
+        className="max-h-[24rem] w-[22rem] overflow-y-auto rounded-md border border-border bg-card p-3 shadow-md"
+      >
           <div className="mb-2 flex items-center justify-between">
             <span className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
               Edit history
@@ -169,8 +152,7 @@ export function CommentHistoryPopover({
                 ))}
             </ol>
           )}
-        </div>
-      )}
+      </AnchoredPopover>
     </span>
   );
 }

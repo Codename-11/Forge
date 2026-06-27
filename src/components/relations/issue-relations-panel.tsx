@@ -6,6 +6,7 @@ import { RelationKind } from "@prisma/client";
 import { List, Workflow } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -224,17 +225,14 @@ function AddRelationForm({ issueId, onDone }: { issueId: string; onDone: () => v
         className="space-y-2"
       >
         <div className="flex items-center gap-2">
-          <select
+          <Combobox
             value={kind}
-            onChange={(e) => setKind(e.target.value as Kind)}
-            className="focus-ring h-7 rounded-md border border-input bg-background px-1.5 text-[0.6875rem]"
-          >
-            {ORDER.map((k) => (
-              <option key={k} value={k}>
-                {LABELS[k]}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setKind((v as Kind) ?? RelationKind.BLOCKS)}
+            options={ORDER.map((k) => ({ value: k, label: LABELS[k] }))}
+            ariaLabel="Relation type"
+            className="h-7 shrink-0 text-[0.6875rem]"
+            popoverClassName="min-w-[9rem]"
+          />
           {selected ? (
             <button
               type="button"

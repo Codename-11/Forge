@@ -36,6 +36,28 @@ import { Kbd } from "@/components/ui/kbd";
 import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
+// Live data for the slash-command VALUE autocomplete (projects / agents /
+// labels), shared by the description + comment composers so `/project`,
+// `/assign`, `/label` complete against real entities. React Query dedupes
+// the underlying calls across the three composers.
+function useSlashAttributes() {
+  const { data: projects } = trpc.project.list.useQuery(
+    { archived: false, limit: 100 },
+    { staleTime: 60_000 },
+  );
+  const { data: agents } = trpc.agent.list.useQuery(
+    { includeArchived: false },
+    { staleTime: 60_000 },
+  );
+  const { data: labels } = trpc.label.list.useQuery(undefined, {
+    staleTime: 60_000,
+  });
+  return useMemo(
+    () => ({ projects: projects?.items, agents, labels }),
+    [projects, agents, labels],
+  );
+}
+
 type AgentRequestMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
 
 type ComposerAgent = {
@@ -432,11 +454,13 @@ function DescriptionBlock({
   // model as the comment composer (suppressed while the @-mention list
   // owns the caret). Templates are off: a description isn't a comment, so
   // `/status` etc. don't apply.
+  const slashAttributes = useSlashAttributes();
   const slash = useSlashAutocomplete({
     value: draft,
     onChange: setDraft,
     textareaRef: editorRef,
     suppressed: mentionOpen,
+    attributes: slashAttributes,
   });
 
   const applyCommandsM = trpc.issue.applyCommands.useMutation({
@@ -669,12 +693,14 @@ function Comments({
   // `/approve`, `/handoff`) — quick-comment expanders. Picking a
   // template with a side-effect (e.g. `/blocked`) queues the
   // mutation; it fires when the comment lands.
+  const slashAttributes = useSlashAttributes();
   const slash = useSlashAutocomplete({
     value: draft,
     onChange: (next) => setDraft(next),
     textareaRef: composerRef,
     includeTemplates: true,
     suppressed: mentionOpen,
+    attributes: slashAttributes,
     onTemplateSideEffect: (eff) => {
       setPendingSideEffects((prev) => [...prev, eff]);
     },
@@ -1329,11 +1355,13 @@ function CommentEditor({
   const [mentionOpen, setMentionOpen] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
+  const slashAttributes = useSlashAttributes();
   const slash = useSlashAutocomplete({
     value: body,
     onChange: setBody,
     textareaRef: editorRef,
     suppressed: mentionOpen,
+    attributes: slashAttributes,
   });
 
   const applyCommandsM = trpc.issue.applyCommands.useMutation({

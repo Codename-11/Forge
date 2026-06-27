@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { HelpCircle } from "lucide-react";
 import type { AutoDispatchMode } from "@prisma/client";
 import { cn } from "@/lib/utils";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 import { DispatchModeBadge } from "@/components/dispatch-mode-badge";
 
 /**
@@ -58,12 +59,35 @@ export function DispatchReasonChip({
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  // Hover-intent: a short grace on close lets the pointer cross the gap from
+  // the chip into the portaled panel (which lives at the body level) without
+  // it disappearing.
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const openNow = () => {
+    if (closeTimer.current) {
+      clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+    setOpen(true);
+  };
+  const scheduleClose = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    closeTimer.current = setTimeout(() => setOpen(false), 120);
+  };
+  useEffect(
+    () => () => {
+      if (closeTimer.current) clearTimeout(closeTimer.current);
+    },
+    [],
+  );
 
   return (
     <span
+      ref={anchorRef}
       className={cn("relative inline-flex", className)}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
+      onMouseEnter={openNow}
+      onMouseLeave={scheduleClose}
     >
       <button
         type="button"
@@ -84,12 +108,17 @@ export function DispatchReasonChip({
         <span className="text-meta">Why?</span>
       </button>
 
-      {open && (
-        <div
-          role="tooltip"
-          className="absolute right-0 top-full z-30 mt-1 w-72 rounded-md border border-border bg-card p-2.5 shadow-md"
-          onClick={(e) => e.stopPropagation()}
-        >
+      <AnchoredPopover
+        anchorRef={anchorRef}
+        open={open}
+        onClose={() => setOpen(false)}
+        align="right"
+        role="tooltip"
+        dismissOnOutsideClick={false}
+        onMouseEnter={openNow}
+        onMouseLeave={scheduleClose}
+        className="w-72 rounded-md border border-border bg-card p-2.5 shadow-md"
+      >
           <div className="mb-2 flex items-center justify-between gap-2">
             {isAutoDispatchMode(reason.mode) ? (
               <DispatchModeBadge mode={reason.mode} />
@@ -141,8 +170,7 @@ export function DispatchReasonChip({
               </div>
             </div>
           )}
-        </div>
-      )}
+      </AnchoredPopover>
     </span>
   );
 }

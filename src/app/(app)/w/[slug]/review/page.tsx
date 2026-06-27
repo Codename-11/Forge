@@ -8,6 +8,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
+import { formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 
 /** Deep-link a gate target where it can be acted on; null if not routable. */
@@ -113,17 +114,27 @@ export default function ReviewPage() {
                   <div className="min-w-0 flex-1">
                     <div className="flex min-w-0 flex-wrap items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
                       <Shield className="h-3 w-3" />
-                      {gate.targetType.replace("-", " ")} ·{" "}
+                      <span>{gate.targetType.replace("-", " ")}</span>
+                      <span aria-hidden>·</span>
                       {gateTargetHref(ws.slug, gate.targetType, gate.targetId) ? (
                         <Link
                           href={gateTargetHref(ws.slug, gate.targetType, gate.targetId)!}
-                          className="inline-flex min-w-0 items-center gap-0.5 font-mono text-id text-ember hover:underline"
+                          className="inline-flex min-w-0 items-center gap-1 normal-case hover:underline"
                         >
-                          <span className="truncate">{gate.targetId.slice(0, 12)}…</span>
-                          <ArrowUpRight className="h-3 w-3" />
+                          {gate.targetType === "issue" && gate.targetNumber != null && (
+                            <span className="shrink-0 font-mono text-id text-ember">
+                              {formatIssueId(ws.key, gate.targetNumber)}
+                            </span>
+                          )}
+                          <span className="min-w-0 truncate text-foreground">
+                            {gate.targetLabel ?? `${gate.targetId.slice(0, 8)}…`}
+                          </span>
+                          <ArrowUpRight className="h-3 w-3 shrink-0 text-ember" />
                         </Link>
                       ) : (
-                        <span className="min-w-0 truncate font-mono text-id">{gate.targetId}</span>
+                        <span className="min-w-0 truncate normal-case text-foreground">
+                          {gate.targetLabel ?? gate.targetId}
+                        </span>
                       )}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{gate.prompt}</p>

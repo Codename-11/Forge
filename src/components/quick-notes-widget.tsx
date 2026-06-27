@@ -1,5 +1,6 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { NoteStatus } from "@prisma/client";
@@ -749,6 +750,8 @@ function NoteRow({
   const archived = !!note.archivedAt;
   const [convertOpen, setConvertOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
+  const statusBtnRef = useRef<HTMLButtonElement | null>(null);
+  const convertBtnRef = useRef<HTMLButtonElement | null>(null);
   const excerpt = useMemo(() => {
     if (note.title) return note.body;
     const firstLine = note.body.split("\n")[0] ?? "";
@@ -829,44 +832,48 @@ function NoteRow({
           </button>
           <div className="mt-1 flex items-center gap-2 text-meta text-muted-foreground">
             <span>{relativeTime(note.updatedAt)}</span>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setStatusOpen((v) => !v);
-                setConvertOpen(false);
-              }}
-              className="focus-ring relative"
-              title="Change lifecycle status"
-            >
-              <NoteStatusChip status={note.status} />
-              {statusOpen && (
-                <div
-                  onClick={(ev) => ev.stopPropagation()}
-                  className="absolute left-0 top-full z-10 mt-1 flex flex-col rounded-md border border-border bg-card py-1 shadow-md"
-                  role="menu"
-                >
-                  {(["IDEA", "SOMEDAY", "ACTIVE", "ARCHIVED"] as NoteStatus[]).map(
-                    (s) => (
-                      <button
-                        key={s}
-                        type="button"
-                        onClick={() => {
-                          onSetStatus(s);
-                          setStatusOpen(false);
-                        }}
-                        className={cn(
-                          "focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60",
-                          s === note.status && "text-foreground",
-                        )}
-                      >
-                        <NoteStatusChip status={s} />
-                      </button>
-                    ),
-                  )}
-                </div>
-              )}
-            </button>
+            <span className="relative inline-flex">
+              <button
+                ref={statusBtnRef}
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setStatusOpen((v) => !v);
+                  setConvertOpen(false);
+                }}
+                className="focus-ring"
+                title="Change lifecycle status"
+              >
+                <NoteStatusChip status={note.status} />
+              </button>
+              <AnchoredPopover
+                anchorRef={statusBtnRef}
+                open={statusOpen}
+                onClose={() => setStatusOpen(false)}
+                align="left"
+                role="menu"
+                className="flex flex-col rounded-md border border-border bg-card py-1 shadow-md"
+              >
+                {(["IDEA", "SOMEDAY", "ACTIVE", "ARCHIVED"] as NoteStatus[]).map(
+                  (s) => (
+                    <button
+                      key={s}
+                      type="button"
+                      onClick={() => {
+                        onSetStatus(s);
+                        setStatusOpen(false);
+                      }}
+                      className={cn(
+                        "focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60",
+                        s === note.status && "text-foreground",
+                      )}
+                    >
+                      <NoteStatusChip status={s} />
+                    </button>
+                  ),
+                )}
+              </AnchoredPopover>
+            </span>
             {alreadyPromoted && (
               <PromotedBadge note={note} slug={slug} workspaceKey={workspaceKey} />
             )}
@@ -881,6 +888,7 @@ function NoteRow({
         <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
           <div className="relative">
             <button
+              ref={convertBtnRef}
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
@@ -900,12 +908,14 @@ function NoteRow({
             >
               <Sparkles className="h-3.5 w-3.5" />
             </button>
-            {convertOpen && !alreadyPromoted && (
-              <div
-                onClick={(ev) => ev.stopPropagation()}
-                className="absolute right-0 top-full z-10 mt-1 flex w-44 flex-col rounded-md border border-border bg-card py-1 shadow-md"
-                role="menu"
-              >
+            <AnchoredPopover
+              anchorRef={convertBtnRef}
+              open={convertOpen && !alreadyPromoted}
+              onClose={() => setConvertOpen(false)}
+              align="right"
+              role="menu"
+              className="flex w-44 flex-col rounded-md border border-border bg-card py-1 shadow-md"
+            >
                 <button
                   type="button"
                   onClick={() => {
@@ -952,8 +962,7 @@ function NoteRow({
                   <FilePlus className="h-3 w-3 text-muted-foreground" />
                   <span>Open in Quick Create…</span>
                 </button>
-              </div>
-            )}
+            </AnchoredPopover>
           </div>
           {archived ? (
             <button

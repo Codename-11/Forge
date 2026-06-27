@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { CalendarClock, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 
 /**
  * `SnoozeMenu` — popover dropdown that lets the operator put an issue
@@ -55,31 +56,12 @@ export function SnoozeMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [customOpen, setCustomOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setCustomOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-        setCustomOpen(false);
-      }
-    };
-    document.addEventListener("click", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  const closeMenu = () => {
+    setOpen(false);
+    setCustomOpen(false);
+  };
 
   const isSnoozed =
     !!snoozedUntil && new Date(snoozedUntil).getTime() > Date.now();
@@ -138,18 +120,14 @@ export function SnoozeMenu({
         </button>
       )}
 
-      {open && (
-        <div
-          role="menu"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          className={cn(
-            "absolute top-full z-30 mt-1 w-48 rounded-md border border-border bg-card py-1 shadow-md",
-            align === "right" ? "right-0" : "left-0",
-          )}
-        >
+      <AnchoredPopover
+        anchorRef={containerRef}
+        open={open}
+        onClose={closeMenu}
+        align={align}
+        role="menu"
+        className="w-48 rounded-md border border-border bg-card py-1 shadow-md"
+      >
           {isSnoozed && snoozedDate ? (
             <div className="border-b border-border px-2.5 py-1.5">
               <div className="text-meta text-muted-foreground">
@@ -222,8 +200,7 @@ export function SnoozeMenu({
               </button>
             </>
           ) : null}
-        </div>
-      )}
+      </AnchoredPopover>
     </div>
   );
 }

@@ -405,7 +405,51 @@ export const reviewGateRouter = router({
         orderBy: { createdAt: "desc" },
         take: input.limit,
       });
-      return { items: rows };
+      // Resolve a human-readable label per target so the Review page shows
+      // *what* is being gated (issue key + title / plan / goal) rather than a
+      // raw cuid. Batched per type to avoid N+1.
+      const idsByType = (type: string) =>
+        rows.filter((r) => r.targetType === type).map((r) => r.targetId);
+      const [issues, plans, goals] = await Promise.all([
+        idsByType("issue").length
+          ? ctx.db.issue.findMany({
+              where: { id: { in: idsByType("issue") }, workspaceId: ctx.workspaceId },
+              select: { id: true, number: true, title: true },
+            })
+          : Promise.resolve([]),
+        idsByType("execution-plan").length
+          ? ctx.db.executionPlan.findMany({
+              where: { id: { in: idsByType("execution-plan") }, workspaceId: ctx.workspaceId },
+              select: { id: true, title: true },
+            })
+          : Promise.resolve([]),
+        idsByType("goal").length
+          ? ctx.db.goal.findMany({
+              where: { id: { in: idsByType("goal") }, workspaceId: ctx.workspaceId },
+              select: { id: true, title: true },
+            })
+          : Promise.resolve([]),
+      ]);
+      const issueMap = new Map(issues.map((i) => [i.id, i]));
+      const planMap = new Map(plans.map((p) => [p.id, p.title]));
+      const goalMap = new Map(goals.map((g) => [g.id, g.title]));
+      const items = rows.map((r) => {
+        const issue = r.targetType === "issue" ? issueMap.get(r.targetId) : undefined;
+        const targetLabel =
+          issue?.title ??
+          (r.targetType === "execution-plan"
+            ? planMap.get(r.targetId)
+            : r.targetType === "goal"
+              ? goalMap.get(r.targetId)
+              : undefined) ??
+          null;
+        return {
+          ...r,
+          targetLabel,
+          targetNumber: issue?.number ?? null,
+        };
+      });
+      return { items };
     }),
 
   get: workspaceProcedure

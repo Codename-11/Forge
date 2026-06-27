@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { Play, Square, Clock, X, DollarSign } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Combobox, type ComboOption } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId } from "@/lib/utils";
 import { useHotkey } from "@/lib/keyboard";
@@ -32,6 +33,10 @@ export function TimeTrackerWidget() {
   const [description, setDescription] = useState("");
   const [billable, setBillable] = useState(false);
   const [issueId, setIssueId] = useState<string | null>(null);
+  const [issueQuery, setIssueQuery] = useState("");
+  const [selectedIssueLabel, setSelectedIssueLabel] = useState<string | null>(
+    null,
+  );
   const [tick, setTick] = useState(0);
 
   const { data: running, refetch: refetchRunning } = trpc.timeEntry.running.useQuery(
@@ -49,10 +54,26 @@ export function TimeTrackerWidget() {
   const pomodoroMinutes = account?.pomodoroMinutes ?? 25;
   const pomodoroBreakMinutes = account?.pomodoroBreakMinutes ?? 5;
 
-  const { data: recentIssues } = trpc.issue.list.useQuery(
-    { includeDone: false, limit: 20 },
-    { enabled: enabled && open && !running },
-  );
+  const { data: recentIssues, isFetching: issuesFetching } =
+    trpc.issue.list.useQuery(
+      { query: issueQuery.trim() || undefined, includeDone: true, limit: 20 },
+      { enabled: enabled && open && !running },
+    );
+
+  // Searchable issue options. Keeps the chosen issue pinned at the top even
+  // when the current search no longer returns it, so the trigger label
+  // stays accurate while the operator types a new query.
+  const issueOptions = useMemo<ComboOption[]>(() => {
+    const opts: ComboOption[] = (recentIssues?.items ?? []).map((i) => ({
+      value: i.id,
+      label: i.title,
+      secondary: workspace ? formatIssueId(workspace.key, i.number) : `#${i.number}`,
+    }));
+    if (issueId && selectedIssueLabel && !opts.some((o) => o.value === issueId)) {
+      opts.unshift({ value: issueId, label: selectedIssueLabel });
+    }
+    return opts;
+  }, [recentIssues, workspace, issueId, selectedIssueLabel]);
 
   const utils = trpc.useUtils();
   const start = trpc.timeEntry.start.useMutation({
@@ -277,20 +298,29 @@ export function TimeTrackerWidget() {
               <span className="mb-1 block text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
                 Issue (optional)
               </span>
-              <select
-                value={issueId ?? ""}
-                onChange={(e) => setIssueId(e.target.value || null)}
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1"
-              >
-                <option value="">— none —</option>
-                {(recentIssues?.items ?? []).map((i) => (
-                  <option key={i.id} value={i.id}>
-                    {workspace ? formatIssueId(workspace.key, i.number) : `#${i.number}`}
-                    {" — "}
-                    {i.title}
-                  </option>
-                ))}
-              </select>
+              <Combobox
+                value={issueId}
+                onChange={(v) => {
+                  setIssueId(v);
+                  setSelectedIssueLabel(
+                    v
+                      ? issueOptions.find((o) => o.value === v)?.label ?? null
+                      : null,
+                  );
+                }}
+                options={issueOptions}
+                query={issueQuery}
+                onQueryChange={setIssueQuery}
+                loading={issuesFetching}
+                allowNone
+                noneLabel="— none —"
+                placeholder="— none —"
+                searchPlaceholder="Search issues by key or title…"
+                matchTriggerWidth
+                ariaLabel="Issue"
+                className="w-full bg-background"
+                emptyText="No issues found"
+              />
             </label>
             <label className="block">
               <span className="mb-1 block text-[0.6875rem] uppercase tracking-wider text-muted-foreground">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   ChevronRight,
@@ -15,6 +15,7 @@ import type {
 } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 
 /**
  * `RunControlMenu` — small icon button that exposes Pause / Cancel /
@@ -88,30 +89,6 @@ export function RunControlMenu({
     onError: (e) => toast.error(e.message),
   });
 
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) {
-        setOpen(false);
-        setRedirectOpen(false);
-      }
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-        setRedirectOpen(false);
-      }
-    };
-    document.addEventListener("click", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
-
   const isActive = run.status === "ACTIVE";
   const pausePending = run.controlState === "PAUSE_REQUESTED";
   const cancelPending = run.controlState === "CANCEL_REQUESTED";
@@ -149,18 +126,14 @@ export function RunControlMenu({
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
-      {open && (
-        <div
-          role="menu"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          className={cn(
-            "absolute top-full z-30 mt-1 w-44 rounded-md border border-border bg-card py-1 shadow-md",
-            align === "right" ? "right-0" : "left-0",
-          )}
-        >
+      <AnchoredPopover
+        anchorRef={containerRef}
+        open={open}
+        onClose={close}
+        align={align}
+        role="menu"
+        className="w-44 rounded-md border border-border bg-card py-1 shadow-md"
+      >
           <button
             type="button"
             role="menuitem"
@@ -249,8 +222,7 @@ export function RunControlMenu({
               )}
             </div>
           )}
-        </div>
-      )}
+      </AnchoredPopover>
     </div>
   );
 }

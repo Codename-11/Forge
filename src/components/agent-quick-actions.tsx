@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -14,6 +14,7 @@ import {
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 
 type AgentStatus = "ONLINE" | "BUSY" | "OFFLINE";
 
@@ -31,7 +32,7 @@ export function AgentQuickActions({
   const ws = useWorkspace();
   const utils = trpc.useUtils();
   const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   const heartbeat = trpc.agent.heartbeat.useMutation({
     onSuccess: (_data, vars) => {
@@ -43,26 +44,6 @@ export function AgentQuickActions({
     },
     onError: (e) => toast.error(e.message),
   });
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
-      }
-    };
-    document.addEventListener("click", onClick);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("click", onClick);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
 
   const force = (next: AgentStatus) => {
     setOpen(false);
@@ -92,15 +73,14 @@ export function AgentQuickActions({
         <MoreHorizontal className="h-3.5 w-3.5" />
       </button>
 
-      {open && (
-        <div
-          role="menu"
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-          }}
-          className="absolute right-0 top-full z-30 mt-1 w-44 rounded-md border border-border bg-card py-1 shadow-md"
-        >
+      <AnchoredPopover
+        anchorRef={containerRef}
+        open={open}
+        onClose={() => setOpen(false)}
+        align="right"
+        role="menu"
+        className="w-44 rounded-md border border-border bg-card py-1 shadow-md"
+      >
           <Link
             href={detailHref}
             onClick={() => setOpen(false)}
@@ -150,8 +130,7 @@ export function AgentQuickActions({
             <Activity className="h-3.5 w-3.5 text-muted-foreground" />
             <span>View recent deliveries</span>
           </Link>
-        </div>
-      )}
+      </AnchoredPopover>
     </div>
   );
 }

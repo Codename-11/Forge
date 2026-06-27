@@ -3,6 +3,7 @@ import { ReviewGateStatus } from "@prisma/client";
 import { agentCrewRouter, reviewGateRouter } from "@/server/routers/agent-crew";
 import {
   buildContext,
+  createIssue,
   createWorkspaceFixture,
   disconnectPrisma,
   getPrisma,
@@ -130,5 +131,31 @@ describe("agentCrewRouter + reviewGateRouter", () => {
     await expect(
       gateCaller.resolve({ id: open.id, decision: "APPROVED" }),
     ).rejects.toThrow(/already/);
+  });
+
+  it("resolves a human label + number for issue targets in list", async () => {
+    const { fixture, gateCaller } = await setup();
+    const issue = await createIssue(fixture, { title: "Wire up billing" });
+    await gateCaller.open({
+      targetType: "issue",
+      targetId: issue.id,
+      prompt: "Approve the billing change",
+    });
+    // An unresolvable target (deleted/foreign) falls back to null label,
+    // not a throw.
+    await gateCaller.open({
+      targetType: "execution-plan",
+      targetId: "plan_does_not_exist",
+      prompt: "Review missing plan",
+    });
+
+    const { items } = await gateCaller.list({});
+    const issueGate = items.find((g) => g.targetId === issue.id);
+    expect(issueGate?.targetLabel).toBe("Wire up billing");
+    expect(issueGate?.targetNumber).toBe(issue.number);
+
+    const orphanGate = items.find((g) => g.targetId === "plan_does_not_exist");
+    expect(orphanGate?.targetLabel).toBeNull();
+    expect(orphanGate?.targetNumber).toBeNull();
   });
 });

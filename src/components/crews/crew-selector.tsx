@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { UsersRound } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { Combobox } from "@/components/ui/combobox";
 import { roleBreakdown } from "@/components/crews/role-chip";
 
 /**
@@ -44,22 +45,23 @@ export function CrewSelector({
 
   return (
     <div className={cn("flex flex-col gap-1", className)}>
-      <div className="relative">
-        <UsersRound className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-        <select
-          value={value ?? ""}
-          disabled={disabled || crews.length === 0}
-          onChange={(e) => onChange(e.target.value || null)}
-          className="w-full rounded-md border border-border bg-card/40 py-2 pl-8 pr-3 text-sm disabled:opacity-50"
-        >
-          {allowNone ? <option value="">{noneLabel}</option> : null}
-          {crews.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-            </option>
-          ))}
-        </select>
-      </div>
+      <Combobox
+        value={value}
+        onChange={onChange}
+        options={crews.map((c) => ({ value: c.id, label: c.name }))}
+        allowNone={allowNone}
+        noneLabel={noneLabel}
+        placeholder={noneLabel}
+        searchable={crews.length > 8}
+        searchPlaceholder="Search crews…"
+        disabled={disabled || crews.length === 0}
+        matchTriggerWidth
+        ariaLabel="Crew"
+        className="w-full bg-card/40 py-2"
+        leadingIcon={
+          <UsersRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        }
+      />
       {summary ? (
         <p className="pl-1 text-meta text-muted-foreground">{summary}</p>
       ) : crews.length === 0 ? (
