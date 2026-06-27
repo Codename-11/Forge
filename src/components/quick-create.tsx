@@ -1,7 +1,16 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
+import { createPortal } from "react-dom";
 import { useRouter, usePathname } from "next/navigation";
-import { Check, ChevronDown, CornerDownLeft, X } from "lucide-react";
+import { Calendar, ChevronDown, CornerDownLeft, Plus, X } from "lucide-react";
 import { toast } from "sonner";
 import { ArtifactType, NotificationSeverity } from "@prisma/client";
 import { cn } from "@/lib/utils";
@@ -14,19 +23,26 @@ import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { NewCycleDialog } from "@/components/cycles/new-cycle-dialog";
 import { NewInitiativeDialog } from "@/components/initiatives/new-initiative-dialog";
 import { NewProjectDialog } from "@/components/projects/new-project-dialog";
+import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
+import { PriorityGlyph } from "@/components/ui/priority-glyph";
 import {
   matchTrailingCommand,
+  parseDateExpression,
   parseSlashCommands,
   SLASH_COMMAND_HELP,
   type SlashCommand,
 } from "@/lib/slash-commands";
-import {
-  SlashAutocomplete,
-  useSlashAutocomplete,
-} from "@/components/slash-autocomplete";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 type Priority = (typeof PRIORITIES)[number];
+
+const PRIORITY_LABEL: Record<Priority, string> = {
+  NONE: "No priority",
+  LOW: "Low",
+  MEDIUM: "Medium",
+  HIGH: "High",
+  URGENT: "Urgent",
+};
 
 const SEVERITIES = [
   NotificationSeverity.INFO,
@@ -43,6 +59,11 @@ const LEVEL_TO_PRIORITY: Record<string, Priority> = {
   low: "LOW",
   none: "NONE",
 };
+
+// Commands whose ARGUMENT we can autocomplete against live data (value
+// stage). `/watch` / `/unwatch` take no arg, so they complete at the
+// keyword stage only.
+const VALUE_COMMANDS = new Set(["project", "assign", "label", "priority", "p", "due"]);
 
 // Short, human label for a committed slash command rendered as a chip.
 function commandChipLabel(c: SlashCommand): string {
@@ -72,6 +93,94 @@ function commandChipLabel(c: SlashCommand): string {
 // (kind,label) pair is unique within `committed`.
 function commandKey(c: SlashCommand): string {
   return `${c.kind}:${commandChipLabel(c)}`;
+}
+
+// ----- trailing-token parsing (tokenized input) --------------------
+
+/**
+ * Find an in-progress slash token at the END of the single-line title.
+ * Unlike `matchTrailingCommand` (which only matches a *complete*,
+ * parseable command), this matches a command-in-progress so the value
+ * autocomplete can surface while the operator is still typing the arg:
+ *
+ *   "Fix bug /pro"          → { keyword: "pro",      hasSpace: false }
+ *   "Fix bug /project for"  → { keyword: "project",  hasSpace: true, arg: "for" }
+ *
+ * The `/` must start a token (preceded by start-of-string or whitespace)
+ * so a mid-word slash ("and/or", "https://…") is never a token.
+ */
+function matchTrailingToken(
+  text: string,
+): { start: number; keyword: string; hasSpace: boolean; arg: string } | null {
+  let slash = -1;
+  for (let i = text.length - 1; i >= 0; i--) {
+    if (text[i] === "/" && (i === 0 || /\s/.test(text[i - 1]))) {
+      slash = i;
+      break;
+    }
+  }
+  if (slash === -1) return null;
+  const rest = text.slice(slash + 1);
+  const m = rest.match(/^(\w*)(\s+)?([\s\S]*)$/);
+  if (!m) return null;
+  return {
+    start: slash,
+    keyword: (m[1] ?? "").toLowerCase(),
+    hasSpace: !!m[2],
+    arg: m[3] ?? "",
+  };
+}
+
+// Relative due-date presets surfaced by the `/due` value autocomplete.
+function buildDuePresets(): { label: string; date: Date }[] {
+  const atMidnight = (d: Date) => {
+    d.setHours(0, 0, 0, 0);
+    return d;
+  };
+  const now = new Date();
+  const today = atMidnight(new Date(now));
+  const tomorrow = atMidnight(new Date(now));
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const in3 = atMidnight(new Date(now));
+  in3.setDate(in3.getDate() + 3);
+  const nextWeek = atMidnight(new Date(now));
+  nextWeek.setDate(nextWeek.getDate() + 7);
+  return [
+    { label: "Today", date: today },
+    { label: "Tomorrow", date: tomorrow },
+    { label: "In 3 days", date: in3 },
+    { label: "Next week", date: nextWeek },
+  ];
+}
+
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// A single suggestion in the value/keyword autocomplete.
+type Suggestion =
+  | { kind: "command"; keyword: string; example: string }
+  | { kind: "project"; id: string; name: string; key: string; color?: string | null }
+  | { kind: "agent"; id: string; name: string | null; profileKey: string | null; avatar: string | null }
+  | { kind: "label"; name: string; color: string }
+  | { kind: "priority"; level: Priority }
+  | { kind: "due"; label: string; date: Date };
+
+function suggestionKey(s: Suggestion): string {
+  switch (s.kind) {
+    case "command":
+      return `cmd:${s.keyword}`;
+    case "project":
+      return `prj:${s.id}`;
+    case "agent":
+      return `agt:${s.id}`;
+    case "label":
+      return `lbl:${s.name}`;
+    case "priority":
+      return `pri:${s.level}`;
+    case "due":
+      return `due:${s.label}:${s.date.getTime()}`;
+  }
 }
 
 type Mode =
@@ -124,6 +233,14 @@ type DraftShape = {
  * intent (issue / sprint / project / initiative / note / artifact /
  * action request) can be captured without navigating first.
  *
+ * For issue capture the title field is a TOKENIZED bar: type a `/`
+ * command and the value autocomplete surfaces real projects / agents /
+ * labels / priorities / due dates. Tab (or Enter / click) "catches" the
+ * pick as a coloured badge inside the box and strips the `/command arg`
+ * text from the title. Backspace at the start of an empty caret removes
+ * the last badge. The autocomplete popover is PORTALED to `document.body`
+ * so it's never clipped by the card.
+ *
  * Pathname determines the *initial* mode (set when the overlay opens):
  *
  *   /w/*\/cycles           → "cycle"          (⏎ create · ⌘⏎ full form)
@@ -161,6 +278,12 @@ export function QuickCreate() {
     NotificationSeverity.INFO,
   );
 
+  // Autocomplete state: active index + a per-token dismissal flag (Esc
+  // closes the popover without closing the overlay; the next keystroke
+  // reopens it).
+  const [acActive, setAcActive] = useState(0);
+  const [acDismissed, setAcDismissed] = useState(false);
+
   // External seeding: when QuickCreate is opened via a `forge:quick-create`
   // event with `title` + `body` (e.g. from "Convert to issue" on a Quick
   // Note), we surface a description textarea and pre-fill it. The
@@ -178,18 +301,46 @@ export function QuickCreate() {
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const boxRef = useRef<HTMLDivElement | null>(null);
+  const acPopoverRef = useRef<HTMLDivElement | null>(null);
 
   const router = useRouter();
   const pathname = usePathname();
   const ws = useMaybeWorkspace();
   const utils = trpc.useUtils();
 
-  // Only fetch projects for issue mode — the chip picker in the secondary
-  // row uses it.
+  // Issue / sub-issue are the only modes with attribute tokens + slash
+  // autocomplete. Drives query enablement, the badge row, and the add
+  // pills.
+  const isIssueLike =
+    mode.kind === "issue" ||
+    (mode.kind === "issue-context" && mode.intent === "sub-issue");
+
+  // Live data for the value autocomplete + badge rendering.
   const { data: projects } = trpc.project.list.useQuery(
     { archived: false, limit: 100 },
-    { enabled: open && mode.kind === "issue" },
+    { enabled: open && isIssueLike },
   );
+  const { data: agents } = trpc.agent.list.useQuery(undefined, {
+    enabled: open && isIssueLike,
+  });
+  const { data: labels } = trpc.label.list.useQuery(undefined, {
+    enabled: open && isIssueLike,
+  });
+
+  // Lookups so committed assign/label badges can render an avatar / colour.
+  const agentByHandle = useMemo(() => {
+    const m = new Map<string, AgentAvatarIdentity>();
+    (agents ?? []).forEach((a) => {
+      if (a.profileKey) m.set(a.profileKey.toLowerCase(), a);
+    });
+    return m;
+  }, [agents]);
+  const labelColorByName = useMemo(() => {
+    const m = new Map<string, string>();
+    (labels ?? []).forEach((l) => m.set(l.name.toLowerCase(), l.color));
+    return m;
+  }, [labels]);
 
   // Parent issue context (for inheriting its project on sub-issue).
   const contextIssueId =
@@ -284,6 +435,8 @@ export function QuickCreate() {
       setProjectId("");
       setCommitted([]);
       setRestored(false);
+      setAcActive(0);
+      setAcDismissed(false);
       setSeedDescription("");
       setShowDescription(false);
       setArchiveNoteId(null);
@@ -370,7 +523,9 @@ export function QuickCreate() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // Global Escape: close the floating input. Clicks outside also close.
+  // Global Escape: close the floating input. Clicks outside also close —
+  // but a click inside the portaled autocomplete popover must NOT close
+  // the overlay, so we check that ref too.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
@@ -380,10 +535,10 @@ export function QuickCreate() {
       }
     };
     const onDocClick = (e: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(e.target as Node)) {
-        close(true);
-      }
+      const target = e.target as Node;
+      if (containerRef.current?.contains(target)) return;
+      if (acPopoverRef.current?.contains(target)) return;
+      close(true);
     };
     window.addEventListener("keydown", onKey);
     document.addEventListener("mousedown", onDocClick);
@@ -691,17 +846,106 @@ export function QuickCreate() {
     }
   }
 
-  // Slash autocomplete for issue / sub-issue modes. When the user types
-  // a top-of-body slash command, surface the dropdown so they can pick
-  // by keyword. Only enabled where commands actually parse.
-  const slashEnabled =
-    mode.kind === "issue" ||
-    (mode.kind === "issue-context" && mode.intent === "sub-issue");
-  const slash = useSlashAutocomplete({
-    value: text,
-    onChange: (next) => setText(next),
-    textareaRef: inputRef,
-  });
+  // ----- value autocomplete ----------------------------------------
+
+  // The in-progress slash token at the end of the title (issue-like only).
+  const trailing = useMemo(
+    () => (isIssueLike ? matchTrailingToken(text) : null),
+    [isIssueLike, text],
+  );
+
+  // Build the suggestion list for the current token. Keyword stage when
+  // no space has been typed yet ("/pro"); value stage once it has
+  // ("/project for") and the keyword takes an arg.
+  const suggestions = useMemo<Suggestion[]>(() => {
+    if (!trailing) return [];
+    if (!trailing.hasSpace) {
+      const q = trailing.keyword;
+      return SLASH_COMMAND_HELP.filter((c) =>
+        c.keyword.slice(1).startsWith(q),
+      ).map((c) => ({
+        kind: "command" as const,
+        keyword: c.keyword,
+        example: c.example,
+      }));
+    }
+    if (!VALUE_COMMANDS.has(trailing.keyword)) return [];
+    const q = trailing.arg.trim().toLowerCase();
+    switch (trailing.keyword) {
+      case "project":
+        return (projects?.items ?? [])
+          .filter(
+            (p) =>
+              !q ||
+              p.name.toLowerCase().includes(q) ||
+              p.key.toLowerCase().includes(q),
+          )
+          .slice(0, 8)
+          .map((p) => ({
+            kind: "project" as const,
+            id: p.id,
+            name: p.name,
+            key: p.key,
+            color: p.color,
+          }));
+      case "assign":
+        return (agents ?? [])
+          .filter(
+            (a) =>
+              !q ||
+              a.name?.toLowerCase().includes(q) ||
+              a.profileKey?.toLowerCase().includes(q),
+          )
+          .slice(0, 8)
+          .map((a) => ({
+            kind: "agent" as const,
+            id: a.id,
+            name: a.name,
+            profileKey: a.profileKey,
+            avatar: a.avatar,
+          }));
+      case "label":
+        return (labels ?? [])
+          .filter((l) => !q || l.name.toLowerCase().includes(q))
+          .slice(0, 8)
+          .map((l) => ({ kind: "label" as const, name: l.name, color: l.color }));
+      case "priority":
+      case "p":
+        return PRIORITIES.filter(
+          (p) => p !== "NONE" && (!q || p.toLowerCase().startsWith(q)),
+        ).map((level) => ({ kind: "priority" as const, level }));
+      case "due": {
+        const out: Suggestion[] = [];
+        const parsed = q ? parseDateExpression(trailing.arg.trim()) : null;
+        if (parsed) out.push({ kind: "due", label: fmtDate(parsed), date: parsed });
+        for (const d of buildDuePresets()) {
+          if (!q || d.label.toLowerCase().includes(q)) {
+            out.push({ kind: "due", label: d.label, date: d.date });
+          }
+        }
+        return out;
+      }
+      default:
+        return [];
+    }
+  }, [trailing, projects, agents, labels]);
+
+  const acVisible = !acDismissed && suggestions.length > 0;
+
+  // Reset active index when the candidate set shifts.
+  useEffect(() => {
+    setAcActive(0);
+  }, [suggestions.length, trailing?.keyword, trailing?.hasSpace]);
+
+  const focusInputEnd = useCallback(() => {
+    setTimeout(() => {
+      const el = inputRef.current;
+      if (!el) return;
+      el.focus();
+      const len = el.value.length;
+      el.setSelectionRange(len, len);
+    }, 0);
+  }, []);
 
   // Apply one parsed slash command. Priority + a resolvable project key
   // sync onto the native pickers (so the chip / select visibly updates);
@@ -752,6 +996,56 @@ export function QuickCreate() {
     [projects],
   );
 
+  // Catch a chosen suggestion as a badge: a keyword pick completes the
+  // stub and keeps the popover open for the value; a value pick strips
+  // the `/command arg` from the title and applies the attribute.
+  const applySuggestion = useCallback(
+    (s: Suggestion) => {
+      const tok = matchTrailingToken(text);
+      if (!tok) return;
+      if (s.kind === "command") {
+        setText(text.slice(0, tok.start) + s.keyword + " ");
+        setAcDismissed(false);
+        focusInputEnd();
+        return;
+      }
+      const stripped = text.slice(0, tok.start).replace(/\s+$/, "");
+      setText(stripped);
+      setAcDismissed(true);
+      switch (s.kind) {
+        case "project":
+          setProjectId(s.id);
+          break;
+        case "agent":
+          applyCommand({ kind: "assign", handle: s.profileKey ?? s.name ?? "" });
+          break;
+        case "label":
+          applyCommand({ kind: "label", name: s.name });
+          break;
+        case "priority":
+          setPriority(s.level);
+          break;
+        case "due":
+          applyCommand({ kind: "due", date: s.date });
+          break;
+      }
+      focusInputEnd();
+    },
+    [text, applyCommand, focusInputEnd],
+  );
+
+  // Click an "add" pill: prime the matching slash stub + reopen the
+  // popover so mouse users get the same value picker as `/`.
+  const primeSlash = useCallback(
+    (keyword: string) => {
+      const base = text.replace(/\s+$/, "");
+      setText((base ? base + " " : "") + "/" + keyword + " ");
+      setAcDismissed(false);
+      focusInputEnd();
+    },
+    [text, focusInputEnd],
+  );
+
   // Commit a trailing `/command arg` in the title into a chip, stripping
   // it (and the whitespace before it) from the title. Returns true when a
   // command was committed. Bound to Enter in the title input.
@@ -767,55 +1061,118 @@ export function QuickCreate() {
     setCommitted((prev) => prev.filter((c) => commandKey(c) !== key));
   }, []);
 
+  const hasBadges =
+    priority !== "NONE" || !!projectId || committed.length > 0;
+
+  // Backspace at caret-start pops the most-recent badge (committed →
+  // project → priority).
+  const removeLastBadge = useCallback(() => {
+    if (committed.length > 0) {
+      setCommitted((prev) => prev.slice(0, -1));
+      return;
+    }
+    if (projectId) {
+      setProjectId("");
+      return;
+    }
+    if (priority !== "NONE") setPriority("NONE");
+  }, [committed.length, projectId, priority]);
+
+  const switchMode = useCallback((kind: CyclableMode) => {
+    setMode({ kind } as Mode);
+    setPriority("NONE");
+    setProjectId("");
+    setCommitted([]);
+    setAcActive(0);
+    setAcDismissed(false);
+    inputRef.current?.focus();
+  }, []);
+
   // Live "this tail is a valid command" detection — drives the inline
   // "↵ apply …" hint so the operator sees the command is recognised
-  // before committing it.
+  // before committing it. Suppressed while the autocomplete is open
+  // (the popover already shows what ⏎/Tab will do).
   const pendingCommand = useMemo(
-    () => (slashEnabled ? matchTrailingCommand(text) : null),
-    [slashEnabled, text],
+    () => (isIssueLike && !acVisible ? matchTrailingCommand(text) : null),
+    [isIssueLike, acVisible, text],
   );
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // Autocomplete owns Arrow / Enter / Tab / Esc while it's open.
+    if (acVisible) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAcActive((a) => (a + 1) % suggestions.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAcActive((a) => (a - 1 + suggestions.length) % suggestions.length);
+        return;
+      }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const s = suggestions[acActive];
+        if (s) applySuggestion(s);
+        return;
+      }
+      if (e.key === "Escape") {
+        // Close the popover, not the overlay.
+        e.preventDefault();
+        e.stopPropagation();
+        setAcDismissed(true);
+        return;
+      }
+    }
+
     if (e.key === "Enter") {
       e.preventDefault();
       const secondary = e.metaKey || e.ctrlKey;
       // Plain ⏎ with a recognised command at the end of the title commits
-      // it into a chip and stays open (the title keeps just the prose).
-      // ⌘/Ctrl+⏎ skips straight to create+open — submit() flushes any
-      // trailing command itself, so nothing is lost.
-      if (!secondary && slashEnabled && tryCommitTrailing()) return;
-      // Mid-keyword (e.g. "/assi") with the dropdown open: let it insert
-      // the stub rather than submitting an incomplete command.
-      if (slashEnabled && slash.visible && slash.onKeyDown(e)) return;
+      // it into a chip and stays open. ⌘/Ctrl+⏎ skips straight to
+      // create+open — submit() flushes any trailing command itself.
+      if (!secondary && isIssueLike && tryCommitTrailing()) return;
       void submit(secondary);
       return;
     }
-    // Arrow / Tab / Escape → autocomplete navigation while it's open.
-    if (slashEnabled && slash.onKeyDown(e)) return;
-    // Tab / Shift+Tab cycles through cyclable modes — issue-context
-    // is sticky so users navigating from a `/issues/:id` page don't
-    // get bumped out of the comment/sub-issue flow by stray Tab.
-    if (e.key === "Tab" && mode.kind !== "issue-context") {
+
+    // Backspace at the very start of an empty caret removes the last badge.
+    if (e.key === "Backspace" && hasBadges) {
+      const el = inputRef.current;
+      if (el && el.selectionStart === 0 && el.selectionEnd === 0) {
+        e.preventDefault();
+        removeLastBadge();
+        return;
+      }
+    }
+
+    // Tab / Shift+Tab cycles modes — only when the title is empty, so it
+    // never fights tokenization mid-type. issue-context is sticky.
+    if (
+      e.key === "Tab" &&
+      mode.kind !== "issue-context" &&
+      text.trim() === ""
+    ) {
       e.preventDefault();
       const dir = e.shiftKey ? -1 : 1;
       const idx = CYCLABLE_MODES.indexOf(mode.kind as CyclableMode);
-      const next = CYCLABLE_MODES[(idx + dir + CYCLABLE_MODES.length) % CYCLABLE_MODES.length];
-      setMode({ kind: next } as Mode);
-      setPriority("NONE");
-      setProjectId("");
-      setCommitted([]);
+      const next =
+        CYCLABLE_MODES[(idx + dir + CYCLABLE_MODES.length) % CYCLABLE_MODES.length];
+      switchMode(next);
       return;
     }
+
     // ⌘1..⌘7 jump straight to a mode without dragging through the
     // dropdown — fastest path for muscle memory.
-    if ((e.metaKey || e.ctrlKey) && /^[1-7]$/.test(e.key) && mode.kind !== "issue-context") {
+    if (
+      (e.metaKey || e.ctrlKey) &&
+      /^[1-7]$/.test(e.key) &&
+      mode.kind !== "issue-context"
+    ) {
       const idx = Number(e.key) - 1;
       if (idx >= 0 && idx < CYCLABLE_MODES.length) {
         e.preventDefault();
-        setMode({ kind: CYCLABLE_MODES[idx] } as Mode);
-        setPriority("NONE");
-        setProjectId("");
-        setCommitted([]);
+        switchMode(CYCLABLE_MODES[idx]);
       }
       return;
     }
@@ -853,6 +1210,9 @@ export function QuickCreate() {
 
   if (!open) return null;
 
+  const isEmpty = text.trim() === "";
+  const showModesLegend = mode.kind !== "issue-context" && isEmpty;
+
   return (
     <div
       // Wrap the floating bar so it anchors to the top of the viewport
@@ -876,85 +1236,88 @@ export function QuickCreate() {
               Pick the target, add context, then press Enter to create.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => close(true)}
-            aria-label="Close quick create"
-            className="focus-ring -mr-1 rounded-md p-1 text-muted-foreground hover:bg-subtle hover:text-foreground"
-          >
-            <X className="h-4 w-4" aria-hidden />
-          </button>
+          <div className="flex items-center gap-2">
+            {restored && (
+              <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember sm:inline">
+                Restored
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => close(true)}
+              aria-label="Close quick create"
+              className="focus-ring -mr-1 rounded-md p-1 text-muted-foreground hover:bg-subtle hover:text-foreground"
+            >
+              <X className="h-4 w-4" aria-hidden />
+            </button>
+          </div>
         </div>
 
-        {/* Top row: mode chip + input + hint */}
-        <div className="flex flex-col gap-2.5 px-4 py-3.5 sm:flex-row sm:items-center">
-          <ModeChip
-            mode={mode}
-            onToggleIntent={() => {
-              if (mode.kind !== "issue-context") return;
-              setMode({
-                ...mode,
-                intent: mode.intent === "comment" ? "sub-issue" : "comment",
-              });
-            }}
-            onSwitch={(kind) => {
-              // Switching modes resets per-mode pickers (priority + project +
-              // committed slash chips) so stale state doesn't follow you
-              // from issue → sprint.
-              if (mode.kind === "issue-context") return;
-              setMode({ kind } as Mode);
-              setPriority("NONE");
-              setProjectId("");
-              setCommitted([]);
-            }}
-          />
-          <div className="relative min-w-0 flex-1">
-            <input
-              ref={inputRef}
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={onKeyDown}
-              {...(slashEnabled ? slash.bind : {})}
-              placeholder={placeholder}
-              aria-label={`Quick-create ${modeLabel}`}
-              autoComplete="off"
-              className="focus-ring w-full bg-transparent px-1 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
-            />
-            {slashEnabled && slash.visible && (
-              <SlashAutocomplete {...slash.dropdownProps} />
-            )}
+        {/* Capture row: the tokenized box + Create button */}
+        <div className="flex items-start gap-2 px-4 py-3.5">
+          <div className="min-w-0 flex-1">
+            <div
+              ref={boxRef}
+              onClick={() => inputRef.current?.focus()}
+              className="focus-within:border-ember/60 flex flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background/40 px-2 py-1.5 transition-colors"
+            >
+              <ModeChip
+                mode={mode}
+                onToggleIntent={() => {
+                  if (mode.kind !== "issue-context") return;
+                  setMode({
+                    ...mode,
+                    intent: mode.intent === "comment" ? "sub-issue" : "comment",
+                  });
+                }}
+                onSwitch={(kind) => {
+                  if (mode.kind === "issue-context") return;
+                  switchMode(kind as CyclableMode);
+                }}
+              />
+              {isIssueLike && (
+                <TokenBadges
+                  priority={priority}
+                  projectId={projectId}
+                  projects={projects?.items}
+                  committed={committed}
+                  agentByHandle={agentByHandle}
+                  labelColorByName={labelColorByName}
+                  onRemovePriority={() => setPriority("NONE")}
+                  onRemoveProject={() => setProjectId("")}
+                  onRemoveCommitted={removeCommitted}
+                />
+              )}
+              <input
+                ref={inputRef}
+                value={text}
+                onChange={(e) => {
+                  setText(e.target.value);
+                  setAcDismissed(false);
+                }}
+                onKeyDown={onKeyDown}
+                placeholder={placeholder}
+                aria-label={`Quick-create ${modeLabel}`}
+                autoComplete="off"
+                className="min-w-[10rem] flex-1 bg-transparent px-1 py-0.5 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
+              />
+              {pendingCommand && (
+                <span className="hidden shrink-0 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[0.6875rem] text-ember sm:inline-flex">
+                  <CornerDownLeft className="h-3 w-3" aria-hidden />
+                  <span>apply</span>
+                  <span className="font-mono">
+                    {commandChipLabel(pendingCommand.command)}
+                  </span>
+                </span>
+              )}
+            </div>
           </div>
-          {restored && (
-            <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember sm:inline">
-              Restored
-            </span>
-          )}
-          {/* Live "valid command" hint — shows the moment the tail of the
-              title parses as a recognised command, so ⏎ visibly "applies"
-              it into a chip instead of creating. Takes precedence over the
-              ⌘⏎ secondary hint while a command is pending. */}
-          {pendingCommand ? (
-            <span className="hidden shrink-0 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[0.6875rem] text-ember sm:inline-flex">
-              <CornerDownLeft className="h-3 w-3" aria-hidden />
-              <span>apply</span>
-              <span className="font-mono">
-                {commandChipLabel(pendingCommand.command)}
-              </span>
-            </span>
-          ) : (
-            secondaryHint && (
-              <span className="hidden shrink-0 items-center gap-1 text-[0.6875rem] text-muted-foreground sm:inline-flex">
-                <Kbd>⌘⏎</Kbd>
-                <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
-              </span>
-            )
-          )}
           <button
             type="button"
             onClick={() => submit(false)}
             disabled={!text.trim() || busy}
             className={cn(
-              "focus-ring inline-flex w-full items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-2.5 py-1.5 text-xs font-medium text-ember-foreground hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40 sm:w-auto sm:py-1",
+              "focus-ring mt-0.5 inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-3 py-2 text-xs font-medium text-ember-foreground hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40",
               MOTION.fast,
             )}
           >
@@ -965,23 +1328,50 @@ export function QuickCreate() {
           </button>
         </div>
 
-        {/* Mode pill row — Tab / Shift+Tab to cycle, ⌘1..⌘7 to jump.
-            Hidden in issue-context since that mode is URL-driven and
-            shouldn't be cycled off accidentally. */}
-        {mode.kind !== "issue-context" && (
+        {/* Add pills (mouse path) — issue / sub-issue only. Each primes
+            the matching slash so it shares the keyboard value picker. */}
+        {isIssueLike && (
+          <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-card/40 px-4 py-1.5 text-[0.6875rem] text-muted-foreground">
+            <span className="mr-0.5 font-mono uppercase tracking-wider opacity-60">
+              add
+            </span>
+            <AddPill label="Priority" onClick={() => primeSlash("priority")} />
+            <AddPill label="Project" onClick={() => primeSlash("project")} />
+            <AddPill label="Assignee" onClick={() => primeSlash("assign")} />
+            <AddPill label="Label" onClick={() => primeSlash("label")} />
+            <AddPill label="Due" onClick={() => primeSlash("due")} />
+            <button
+              type="button"
+              onClick={() => setShowDescription((v) => !v)}
+              aria-pressed={showDescription}
+              className={cn(
+                "focus-ring rounded px-1.5 py-0.5 transition-colors",
+                showDescription
+                  ? "bg-ember/15 text-ember"
+                  : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+              )}
+            >
+              Description
+            </button>
+            <span className="ml-auto inline-flex items-center gap-1 opacity-70">
+              <Kbd>/</Kbd>
+              <span>or</span>
+              <Kbd>Tab</Kbd>
+              <span>to add</span>
+            </span>
+          </div>
+        )}
+
+        {/* Mode pill row — only while the title is empty (teach, then get
+            out of the way). Tab / Shift+Tab cycle, ⌘1..⌘7 jump. */}
+        {showModesLegend && (
           <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-card/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
             <span className="font-mono uppercase tracking-wider opacity-70">modes</span>
             {CYCLABLE_MODES.map((m, idx) => (
               <button
                 key={m}
                 type="button"
-                onClick={() => {
-                  setMode({ kind: m } as Mode);
-                  setPriority("NONE");
-                  setProjectId("");
-                  setCommitted([]);
-                  inputRef.current?.focus();
-                }}
+                onClick={() => switchMode(m)}
                 className={cn(
                   "focus-ring inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
                   mode.kind === m
@@ -1000,31 +1390,8 @@ export function QuickCreate() {
           </div>
         )}
 
-        {/* Slash hint — render only for issue / sub-issue (commands
-            don't apply to plain comments or to cycles/projects). */}
-        {(mode.kind === "issue" ||
-          (mode.kind === "issue-context" && mode.intent === "sub-issue")) && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
-            <span className="font-mono uppercase tracking-wider opacity-70">
-              slash
-            </span>
-            {SLASH_COMMAND_HELP.slice(0, 6).map((c) => (
-              <span
-                key={c.keyword}
-                className="rounded bg-subtle/50 px-1.5 py-0.5 font-mono"
-                title={`Example: ${c.example}`}
-              >
-                {c.keyword}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* Body / description textarea — used for:
-            - issue mode when seeded from a "Convert to issue" event;
-            - note/artifact/action-request modes when the user expands
-              the secondary description via ⌘⏎. The textarea is editable
-              so operators can trim or extend before submitting. */}
+        {/* Body / description textarea — for issue (seeded from "Convert
+            to issue") and for note/artifact/action-request when expanded. */}
         {showDescription &&
           (mode.kind === "issue" ||
             mode.kind === "note" ||
@@ -1039,15 +1406,11 @@ export function QuickCreate() {
                 value={seedDescription}
                 onChange={(e) => setSeedDescription(e.target.value)}
                 onKeyDown={(e) => {
-                  // Match the title input's keymap: ⏎ submits primary,
-                  // ⌘/Ctrl+⏎ submits secondary (create + open). Inside a
-                  // textarea we require a modifier for both so plain ⏎
-                  // still inserts newlines for description paragraphs.
+                  // Match the title input's keymap: ⌘/Ctrl+⏎ submits
+                  // secondary (create + open). Plain ⏎ inserts newlines.
                   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                     e.preventDefault();
                     void submit(true);
-                  } else if (e.key === "Enter" && e.shiftKey === false && (e.altKey)) {
-                    // (Alt+Enter unused — leave for future use.)
                   } else if (e.key === "Escape") {
                     e.preventDefault();
                     close(true);
@@ -1072,11 +1435,9 @@ export function QuickCreate() {
           </div>
         )}
 
-        {/* Secondary row: per-mode chips. Issue → priority + project,
-            issue-context → comment/sub-issue intent, artifact → type
-            picker, action-request → severity. */}
-        {(mode.kind === "issue" ||
-          mode.kind === "issue-context" ||
+        {/* Per-mode secondary row: issue-context intent tabs, artifact
+            type, action-request severity. */}
+        {(mode.kind === "issue-context" ||
           mode.kind === "artifact" ||
           mode.kind === "action-request") && (
           <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-2 text-[0.6875rem]">
@@ -1084,16 +1445,12 @@ export function QuickCreate() {
               <>
                 <IntentChip
                   selected={mode.intent === "comment"}
-                  onClick={() =>
-                    setMode({ ...mode, intent: "comment" })
-                  }
+                  onClick={() => setMode({ ...mode, intent: "comment" })}
                   label="Comment"
                 />
                 <IntentChip
                   selected={mode.intent === "sub-issue"}
-                  onClick={() =>
-                    setMode({ ...mode, intent: "sub-issue" })
-                  }
+                  onClick={() => setMode({ ...mode, intent: "sub-issue" })}
                   label="Sub-issue"
                 />
                 {mode.intent === "sub-issue" && contextIssue && (
@@ -1104,52 +1461,6 @@ export function QuickCreate() {
                     </span>
                   </span>
                 )}
-                {mode.intent === "sub-issue" && (
-                  <CommittedChips
-                    committed={committed}
-                    onRemove={removeCommitted}
-                  />
-                )}
-              </>
-            )}
-
-            {mode.kind === "issue" && (
-              <>
-                <span className="mr-0.5 font-mono uppercase tracking-wider opacity-70">
-                  priority
-                </span>
-                {PRIORITIES.map((p) => (
-                  <PriorityChip
-                    key={p}
-                    selected={priority === p}
-                    label={p}
-                    onClick={() => setPriority(p)}
-                  />
-                ))}
-                {projects && projects.items.length > 0 && (
-                  <>
-                    <span className="mx-1 h-3 w-px bg-border" aria-hidden />
-                    <ProjectPickerChip
-                      projects={projects.items}
-                      value={projectId}
-                      onChange={setProjectId}
-                    />
-                  </>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setShowDescription((v) => !v)}
-                  aria-pressed={showDescription}
-                  className={cn(
-                    "focus-ring rounded px-1.5 py-0.5 text-[0.6875rem] transition-colors",
-                    showDescription
-                      ? "bg-ember/15 text-ember"
-                      : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-                  )}
-                >
-                  Description
-                </button>
-                <CommittedChips committed={committed} onRemove={removeCommitted} />
               </>
             )}
 
@@ -1186,11 +1497,32 @@ export function QuickCreate() {
             )}
 
             <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
+              {secondaryHint && (
+                <>
+                  <Kbd>⌘⏎</Kbd>
+                  <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
+                  <span className="mx-1 opacity-40">·</span>
+                </>
+              )}
               <Kbd>⎋</Kbd> close
             </span>
           </div>
         )}
       </div>
+
+      {/* Portaled value autocomplete — anchored to the box, never clipped. */}
+      {acVisible && (
+        <AutocompletePopover
+          anchorRef={boxRef}
+          popoverRef={acPopoverRef}
+          measureKey={text}
+          items={suggestions}
+          active={acActive}
+          setActive={setAcActive}
+          onPick={applySuggestion}
+          agentByHandle={agentByHandle}
+        />
+      )}
     </div>
   );
 }
@@ -1264,7 +1596,10 @@ function ModeChip({
     return (
       <button
         type="button"
-        onClick={onToggleIntent}
+        onClick={(e) => {
+          e.stopPropagation();
+          onToggleIntent();
+        }}
         aria-label="Toggle comment / sub-issue"
         className="focus-ring shrink-0 cursor-pointer rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
       >
@@ -1273,7 +1608,7 @@ function ModeChip({
     );
   }
 
-  // Switchable: real dropdown listing the four creation modes.
+  // Switchable: real dropdown listing the creation modes.
   return (
     <div ref={wrapRef} className="relative shrink-0">
       <button
@@ -1306,7 +1641,8 @@ function ModeChip({
                     type="button"
                     role="option"
                     aria-selected={selected}
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       setOpen(false);
                       if (!selected) onSwitch(opt.kind);
                     }}
@@ -1381,171 +1717,350 @@ function IntentChip({
   );
 }
 
-/**
- * Themed project picker for the create overlay — replaces a native
- * `<select>` so it matches the warm-earthy chip language of the rest of
- * the row (a coloured dot + name, ember tint when set). Mirrors the
- * ModeChip dropdown mechanics (outside-click close + stopPropagation so
- * picking an item doesn't dismiss the overlay).
- */
-function ProjectPickerChip({
-  projects,
-  value,
-  onChange,
-}: {
-  projects: { id: string; name: string; color?: string | null }[];
-  value: string;
-  onChange: (id: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (!ref.current) return;
-      if (!ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  const selected = projects.find((p) => p.id === value) ?? null;
-
+// A small "+ field" button below the box — primes the matching slash.
+function AddPill({ label, onClick }: { label: string; onClick: () => void }) {
   return (
-    <div ref={ref} className="relative">
+    <button
+      type="button"
+      onClick={onClick}
+      className="focus-ring inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
+    >
+      <Plus className="h-2.5 w-2.5 opacity-70" aria-hidden />
+      <span>{label}</span>
+    </button>
+  );
+}
+
+// Dynamic colour swatch for project / label badges + suggestions.
+function ColorDot({ color }: { color?: string | null }) {
+  return (
+    <span
+      className="h-2 w-2 shrink-0 rounded-sm"
+      style={{ backgroundColor: color ?? "transparent" }}
+      aria-hidden
+    />
+  );
+}
+
+// Removable badge wrapper used for every caught attribute.
+function Badge({
+  children,
+  onRemove,
+  removeLabel,
+}: {
+  children: React.ReactNode;
+  onRemove: () => void;
+  removeLabel: string;
+}) {
+  return (
+    <span className="inline-flex h-6 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 text-[0.6875rem] text-foreground">
+      <span className="flex max-w-[160px] items-center gap-1 truncate">
+        {children}
+      </span>
       <button
         type="button"
+        aria-label={removeLabel}
         onClick={(e) => {
           e.stopPropagation();
-          setOpen((v) => !v);
+          onRemove();
         }}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label="Project"
-        className={cn(
-          "focus-ring inline-flex h-6 items-center gap-1.5 rounded-md border px-2 text-[0.6875rem] transition-colors",
-          selected
-            ? "border-ember/50 bg-ember/10 text-foreground"
-            : "border-border bg-background/60 text-muted-foreground hover:bg-subtle/60",
-        )}
+        className="focus-ring -mr-0.5 rounded p-0.5 text-muted-foreground hover:bg-ember/20 hover:text-foreground"
       >
-        {selected?.color && (
-          <span
-            className="h-2 w-2 shrink-0 rounded-sm"
-            style={{ backgroundColor: selected.color }}
-            aria-hidden
-          />
-        )}
-        <span className="max-w-[160px] truncate">
-          {selected ? selected.name : "No project"}
-        </span>
-        <ChevronDown className="h-2.5 w-2.5 opacity-70" aria-hidden />
+        <X className="h-2.5 w-2.5" aria-hidden />
       </button>
-      {open && (
-        <div
-          onMouseDown={(e) => e.stopPropagation()}
-          className="absolute left-0 top-[calc(100%+4px)] z-50 max-h-64 min-w-[200px] overflow-y-auto rounded-md border border-border bg-popover shadow-sm"
-        >
-          <ul role="listbox" className="py-1">
-            <ProjectOption
-              label="No project"
-              selected={!value}
-              onClick={() => {
-                onChange("");
-                setOpen(false);
-              }}
-            />
-            {projects.map((p) => (
-              <ProjectOption
-                key={p.id}
-                label={p.name}
-                color={p.color}
-                selected={value === p.id}
-                onClick={() => {
-                  onChange(p.id);
-                  setOpen(false);
-                }}
-              />
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ProjectOption({
-  label,
-  selected,
-  onClick,
-  color,
-}: {
-  label: string;
-  selected: boolean;
-  onClick: () => void;
-  color?: string | null;
-}) {
-  return (
-    <li>
-      <button
-        type="button"
-        role="option"
-        aria-selected={selected}
-        onClick={onClick}
-        className={cn(
-          "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-subtle",
-          selected && "bg-subtle/60 text-foreground",
-        )}
-      >
-        <span
-          className="h-2.5 w-2.5 shrink-0 rounded-sm"
-          style={{ backgroundColor: color ?? "transparent" }}
-          aria-hidden
-        />
-        <span className="flex-1 truncate">{label}</span>
-        {selected && <Check className="h-3 w-3 text-ember" aria-hidden />}
-      </button>
-    </li>
+    </span>
   );
 }
 
 /**
- * Committed slash-command chips (assign / due / label / watch / unwatch,
- * plus any unresolved /project). Each is removable with the × — the
- * source of truth is the parent's `committed` array. Priority + a
- * resolvable project never appear here; they sync onto the native
- * controls instead.
+ * The caught attributes rendered as inline badges inside the capture box:
+ * priority (when set) → project (when set) → committed slash commands in
+ * order (assign / due / label / watch|unwatch / unresolved project).
+ * Priority + a resolved project sync onto the native state; everything
+ * else lives in `committed`.
  */
-function CommittedChips({
+function TokenBadges({
+  priority,
+  projectId,
+  projects,
   committed,
-  onRemove,
+  agentByHandle,
+  labelColorByName,
+  onRemovePriority,
+  onRemoveProject,
+  onRemoveCommitted,
 }: {
+  priority: Priority;
+  projectId: string;
+  projects?: { id: string; name: string; color?: string | null }[];
   committed: SlashCommand[];
-  onRemove: (key: string) => void;
+  agentByHandle: Map<string, AgentAvatarIdentity>;
+  labelColorByName: Map<string, string>;
+  onRemovePriority: () => void;
+  onRemoveProject: () => void;
+  onRemoveCommitted: (key: string) => void;
 }) {
-  if (committed.length === 0) return null;
+  const project = projects?.find((p) => p.id === projectId) ?? null;
   return (
     <>
+      {priority !== "NONE" && (
+        <Badge onRemove={onRemovePriority} removeLabel="Remove priority">
+          <PriorityGlyph priority={priority} />
+          <span>{PRIORITY_LABEL[priority]}</span>
+        </Badge>
+      )}
+      {project && (
+        <Badge onRemove={onRemoveProject} removeLabel="Remove project">
+          <ColorDot color={project.color} />
+          <span className="truncate">{project.name}</span>
+        </Badge>
+      )}
       {committed.map((c) => {
         const key = commandKey(c);
-        const text = commandChipLabel(c);
         return (
-          <span
+          <Badge
             key={key}
-            className="inline-flex h-6 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 text-[0.6875rem] text-foreground"
+            onRemove={() => onRemoveCommitted(key)}
+            removeLabel={`Remove ${commandChipLabel(c)}`}
           >
-            <span className="max-w-[140px] truncate">{text}</span>
-            <button
-              type="button"
-              aria-label={`Remove ${text}`}
-              onClick={() => onRemove(key)}
-              className="focus-ring -mr-0.5 rounded p-0.5 text-muted-foreground hover:bg-ember/20 hover:text-foreground"
-            >
-              <X className="h-2.5 w-2.5" aria-hidden />
-            </button>
-          </span>
+            <CommittedBadgeContent
+              command={c}
+              agentByHandle={agentByHandle}
+              labelColorByName={labelColorByName}
+            />
+          </Badge>
         );
       })}
     </>
   );
+}
+
+function CommittedBadgeContent({
+  command,
+  agentByHandle,
+  labelColorByName,
+}: {
+  command: SlashCommand;
+  agentByHandle: Map<string, AgentAvatarIdentity>;
+  labelColorByName: Map<string, string>;
+}) {
+  switch (command.kind) {
+    case "assign": {
+      const agent = agentByHandle.get(command.handle.toLowerCase()) ?? null;
+      return (
+        <>
+          {agent ? (
+            <AgentAvatar agent={agent} size="xs" title={null} />
+          ) : null}
+          <span className="truncate">@{command.handle}</span>
+        </>
+      );
+    }
+    case "label":
+      return (
+        <>
+          <ColorDot color={labelColorByName.get(command.name.toLowerCase())} />
+          <span className="truncate">{command.name}</span>
+        </>
+      );
+    case "due":
+      return (
+        <>
+          <Calendar className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
+          <span className="truncate">
+            {command.date.toLocaleDateString(undefined, {
+              month: "short",
+              day: "numeric",
+            })}
+          </span>
+        </>
+      );
+    case "project":
+      return <span className="font-mono">{command.key}</span>;
+    case "watch":
+      return <span>watching</span>;
+    case "unwatch":
+      return <span>unwatch</span>;
+    case "priority":
+      return <span>!{command.level}</span>;
+  }
+}
+
+/**
+ * Portaled autocomplete popover. Anchored to the capture box's bounding
+ * rect (fixed positioning, re-measured on scroll / resize / text change)
+ * and rendered into `document.body` so the card's `overflow-hidden` can
+ * never clip it — the original "project dropdown is invisible" bug.
+ */
+function AutocompletePopover({
+  anchorRef,
+  popoverRef,
+  measureKey,
+  items,
+  active,
+  setActive,
+  onPick,
+  agentByHandle,
+}: {
+  anchorRef: RefObject<HTMLDivElement | null>;
+  popoverRef: RefObject<HTMLDivElement | null>;
+  measureKey: string;
+  items: Suggestion[];
+  active: number;
+  setActive: (i: number) => void;
+  onPick: (s: Suggestion) => void;
+  agentByHandle: Map<string, AgentAvatarIdentity>;
+}) {
+  const [rect, setRect] = useState<{
+    left: number;
+    width: number;
+    anchorTop: number;
+    anchorBottom: number;
+    placeAbove: boolean;
+  } | null>(null);
+
+  useLayoutEffect(() => {
+    function measure() {
+      const el = anchorRef.current;
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      const below = window.innerHeight - r.bottom;
+      const placeAbove = below < 260 && r.top > below;
+      setRect({
+        left: r.left,
+        width: r.width,
+        anchorTop: r.top,
+        anchorBottom: r.bottom,
+        placeAbove,
+      });
+    }
+    measure();
+    window.addEventListener("resize", measure);
+    window.addEventListener("scroll", measure, true);
+    return () => {
+      window.removeEventListener("resize", measure);
+      window.removeEventListener("scroll", measure, true);
+    };
+  }, [anchorRef, items.length, measureKey]);
+
+  if (!rect) return null;
+
+  const style: React.CSSProperties = rect.placeAbove
+    ? {
+        position: "fixed",
+        left: rect.left,
+        width: rect.width,
+        bottom: window.innerHeight - rect.anchorTop + 4,
+      }
+    : {
+        position: "fixed",
+        left: rect.left,
+        width: rect.width,
+        top: rect.anchorBottom + 4,
+      };
+
+  return createPortal(
+    <div
+      ref={popoverRef}
+      // preventDefault on mousedown keeps the input focused while clicking.
+      onMouseDown={(e) => e.preventDefault()}
+      style={style}
+      className="z-[60] max-h-64 overflow-y-auto rounded-md border border-border bg-popover shadow-md"
+      role="listbox"
+      aria-label="Field suggestions"
+    >
+      <ul className="py-1">
+        {items.map((s, i) => {
+          const selected = i === active;
+          return (
+            <li key={suggestionKey(s)}>
+              <button
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onMouseEnter={() => setActive(i)}
+                onClick={() => onPick(s)}
+                className={cn(
+                  "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs",
+                  selected
+                    ? "bg-subtle text-foreground"
+                    : "text-muted-foreground hover:bg-subtle/70",
+                )}
+              >
+                <SuggestionRow suggestion={s} agentByHandle={agentByHandle} />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>,
+    document.body,
+  );
+}
+
+function SuggestionRow({
+  suggestion: s,
+  agentByHandle,
+}: {
+  suggestion: Suggestion;
+  agentByHandle: Map<string, AgentAvatarIdentity>;
+}) {
+  switch (s.kind) {
+    case "command":
+      return (
+        <>
+          <span className="font-mono text-foreground">{s.keyword}</span>
+          <span className="text-meta ml-auto truncate text-muted-foreground">
+            {s.example}
+          </span>
+        </>
+      );
+    case "project":
+      return (
+        <>
+          <ColorDot color={s.color} />
+          <span className="flex-1 truncate text-foreground">{s.name}</span>
+          <span className="text-id font-mono text-muted-foreground">{s.key}</span>
+        </>
+      );
+    case "agent": {
+      const agent =
+        (s.profileKey && agentByHandle.get(s.profileKey.toLowerCase())) || s;
+      return (
+        <>
+          <AgentAvatar agent={agent} size="xs" title={null} />
+          <span className="flex-1 truncate text-foreground">
+            {s.name ?? s.profileKey}
+          </span>
+          {s.profileKey && (
+            <span className="text-id font-mono text-muted-foreground">
+              @{s.profileKey}
+            </span>
+          )}
+        </>
+      );
+    }
+    case "label":
+      return (
+        <>
+          <ColorDot color={s.color} />
+          <span className="flex-1 truncate text-foreground">{s.name}</span>
+        </>
+      );
+    case "priority":
+      return (
+        <>
+          <PriorityGlyph priority={s.level} />
+          <span className="flex-1 text-foreground">{PRIORITY_LABEL[s.level]}</span>
+        </>
+      );
+    case "due":
+      return (
+        <>
+          <Calendar className="h-3 w-3 shrink-0 opacity-70" aria-hidden />
+          <span className="flex-1 text-foreground">{s.label}</span>
+          <span className="text-meta text-muted-foreground">{fmtDate(s.date)}</span>
+        </>
+      );
+  }
 }

@@ -2,6 +2,60 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-27 — QuickCreate redesign: tokenized capture bar
+
+Reworked `src/components/quick-create.tsx` (the `⇧C` create overlay) from a
+five-row "input + static legends + detached pickers" layout into a tokenized
+capture bar. Triggered by two reports: (1) the **Project** picker dropdown was
+invisible — it lived in the *last* row of the card and opened downward, but the
+card is `overflow-hidden`, so the menu rendered past the bottom edge and was
+clipped to nothing (z-index was a red herring); (2) the raw priority/project
+pickers sat in a detached row, not where you type, and there was no value
+autocomplete — the existing `useSlashAutocomplete` completes only the command
+**keyword** (`/pro` → `/project `), never the **argument**.
+
+What changed (issue / sub-issue modes only; other modes keep their rows):
+- **Tokenized box.** The title field is now a flex box holding `[ModeChip]
+  [badges…] [borderless input]`. Priority (≠NONE), a resolved project, and every
+  committed slash command render as removable coloured badges *inside* the box.
+  Backspace at caret-start (`selectionStart===selectionEnd===0`) pops the last
+  badge (committed → project → priority).
+- **Value autocomplete.** New `matchTrailingToken()` (looser than
+  `matchTrailingCommand` — matches an in-progress `/cmd partialArg`). A
+  `suggestions` memo runs a keyword stage (filter `SLASH_COMMAND_HELP`) then a
+  value stage against live data: `/project`→`project.list`, `/assign`→
+  `agent.list` (by name/profileKey), `/label`→`label.list`, `/priority`→levels,
+  `/due`→relative presets + a parsed-date row (`parseDateExpression`). Tab /
+  Enter / click "catches" the pick — applies it (setProjectId / applyCommand /
+  setPriority) and strips the `/cmd arg` substring from the title. Keyword picks
+  complete the stub and keep the popover open for the value (so `/pr`⇥`/priority`
+  ⇥`High` chains).
+- **Portaled popover.** `AutocompletePopover` renders into `document.body` via
+  `createPortal`, fixed-positioned off the box's `getBoundingClientRect`
+  (re-measured on scroll/resize/text via `useLayoutEffect`; flips above when
+  <260px below). Kills the clipping bug for good regardless of which row the
+  anchor sits in. The overlay's outside-mousedown handler now also checks
+  `acPopoverRef` so clicking a suggestion doesn't close the sheet.
+- **+ field pills (mouse path).** A row under the box (`+ Priority/Project/
+  Assignee/Label/Due` + Description toggle) primes the matching slash stub +
+  focuses, so mouse users hit the same value picker — one code path.
+- **Progressive legends.** The MODES pill row shows only while the title is
+  empty (teach, then get out of the way); the permanent SLASH cheatsheet row is
+  gone (the autocomplete *is* discoverability now). Tab cycles modes only when
+  the title is empty so it never fights tokenization; `⌘1..7` still jumps
+  anytime.
+
+Preserved verbatim: all create mutations + `submit()`, `resolveIssueComposition`,
+draft hydrate/persist, note-convert seeding, escalation to NewX dialogs,
+artifact/action-request/issue-context rows, `SWITCHABLE_MODES` (test). Removed:
+`useSlashAutocomplete`/`SlashAutocomplete` usage here (shared hook untouched —
+comment composer still uses it), `ProjectPickerChip`/`ProjectOption`/
+`CommittedChips` (replaced by `TokenBadges` + portaled popover).
+
+Gates: `pnpm typecheck` + `pnpm lint` clean; `pnpm test` 1000 pass / 1 skip.
+Not yet visually screenshotted (no Forge dev server up locally; host :3000 is
+another app). Not committed/deployed — awaiting review.
+
 ## 2026-06-25 — GitHub Browse "anything the App can reach" + claim-holder badge
 
 Follow-up to the GithubApp↔Connection unification. After that fix, the URL tab
