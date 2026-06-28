@@ -14,8 +14,6 @@ import {
   ArrowRight,
   Check,
   ChevronRight,
-  CircleDashed,
-  Clock3,
   Globe,
   KeyRound,
   LayoutGrid,
@@ -40,7 +38,7 @@ import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { NeedsYouTile } from "@/components/dashboard/needs-you-tile";
 import { PulseTile } from "@/components/dashboard/pulse-tile";
-import { ResumeTile } from "@/components/dashboard/resume-tile";
+import { IssueCard, type DashboardWorkCard } from "@/components/dashboard/issue-card";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import {
@@ -76,13 +74,6 @@ const PRIORITY_GLYPH: Record<string, string> = {
   LOW: "·",
   NONE: "—",
 };
-const PRIORITY_RANK: Record<string, number> = {
-  URGENT: 4,
-  HIGH: 3,
-  MEDIUM: 2,
-  LOW: 1,
-  NONE: 0,
-};
 const ONBOARDING_KEY = "forge:onboarding:dismissed";
 const ONBOARDING_DONE_TOAST = "forge:onboarding:done-toast";
 
@@ -99,10 +90,10 @@ export default function DashboardPage() {
   const { data: access } = trpc.access.list.useQuery();
   const active = trpc.issue.list.useQuery({ includeDone: false, limit: 100 });
   const anyIssue = trpc.issue.list.useQuery({ includeDone: true, limit: 1 });
-  // Stalled column: server resolves the threshold from
-  // `Workspace.stalledThresholdDays` and filters snoozed rows. Avoids the
-  // hardcoded 3-day cutoff that used to live on this page.
-  const stalledQ = trpc.dashboard.stalledInProgress.useQuery({ limit: 8 });
+  // "You" zone — Focus + Pick-up, enriched server-side into rich cards
+  // (people / progress / activity / context). Replaces the old client-side
+  // filter of the 100-issue `issue.list`.
+  const myWork = trpc.dashboard.myWork.useQuery();
 
   const isAdmin = me?.role === "OWNER" || me?.role === "ADMIN";
   const prefs = useTimePrefs();
@@ -110,22 +101,9 @@ export default function DashboardPage() {
   const workspaceKey = ws?.key ?? "—";
   const firstName = (me?.user.name ?? me?.user.email ?? "").split(/[\s@]/)[0] || "there";
   const greeting = useGreeting();
-  const myId = me?.user.id;
-
-  const focus = useMemo(() => {
-    const items = active.data?.items ?? [];
-    if (!myId) return [];
-    return items
-      .filter((i) => i.assignees.some((a) => a.userId === myId))
-      .sort((a, b) => {
-        const pr = (PRIORITY_RANK[b.priority] ?? 0) - (PRIORITY_RANK[a.priority] ?? 0);
-        if (pr !== 0) return pr;
-        const ad = a.dueDate ? new Date(a.dueDate).getTime() : Number.POSITIVE_INFINITY;
-        const bd = b.dueDate ? new Date(b.dueDate).getTime() : Number.POSITIVE_INFINITY;
-        return ad - bd;
-      })
-      .slice(0, 6);
-  }, [active.data, myId]);
+  const focusCards = myWork.data?.focus ?? [];
+  const resumeCards = myWork.data?.resume ?? [];
+  const myWorkLoading = myWork.isLoading || !me;
 
   const statusRows = useMemo(() => {
     const map = new Map<string, number>();
@@ -140,16 +118,6 @@ export default function DashboardPage() {
     [statusRows],
   );
 
-  const stalled = stalledQ.data?.items ?? [];
-  const stalledThresholdDays = stalledQ.data?.stalledThresholdDays ?? null;
-
-  const recent = useMemo(
-    () =>
-      [...(active.data?.items ?? [])]
-        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-        .slice(0, 6),
-    [active.data],
-  );
 
   // ---- Customizable widget stack -------------------------------------
   // Layout (order + hidden) persists on the user via `dashboardPrefs`.
@@ -181,21 +149,12 @@ export default function DashboardPage() {
     [setPrefsMut],
   );
 
+  // Zone-2 (Workspace & agents) widget stack. Agents lead the default
+  // order; the rest stays user-reorderable/hideable via Customize. The
+  // "Pick up where you left off" tile is gone — it's now a first-class
+  // Zone-1 section rendered as rich cards.
   const widgets: DashboardWidget[] = useMemo(
     () => [
-      {
-        id: "today",
-        title: "Today",
-        defaultWidth: "half",
-        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
-      },
-      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
-      {
-        id: "resume",
-        title: "Pick up where you left off",
-        defaultWidth: "half",
-        node: <ResumeTile slug={slug} />,
-      },
       {
         id: "agent-activity",
         title: "Agent activity",
@@ -209,11 +168,19 @@ export default function DashboardPage() {
         node: <AgentAttentionPanel slug={slug} />,
       },
       {
+        id: "today",
+        title: "Today",
+        defaultWidth: "half",
+        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
+      },
+      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
+      {
         id: "workspace-activity",
         title: "Workspace activity",
         defaultWidth: "full",
         node: <WorkspaceActivityTimeline limit={8} />,
       },
+      { id: "standup", title: "Standup", defaultWidth: "half", node: <StandupTile slug={slug} /> },
       { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
       {
         id: "quick-notes",
@@ -221,7 +188,6 @@ export default function DashboardPage() {
         defaultWidth: "full",
         node: <QuickNotesWidget />,
       },
-      { id: "standup", title: "Standup", defaultWidth: "half", node: <StandupTile slug={slug} /> },
       {
         id: "whats-new",
         title: "What's new",
@@ -315,65 +281,74 @@ export default function DashboardPage() {
             skippedSteps={account?.onboardingSkippedSteps ?? []}
           />
 
-          {focus.length === 0 && !(active.isLoading || !me) ? (
-            // Focus is empty — Suggestions becomes the primary "what to do
-            // next" surface. The "Nothing on your plate" stub is gone; the
-            // Suggestions strip is a real handoff with discoverable work.
+          {/* ── Zone 1 · YOU ─────────────────────────────────────────
+              Focus (assigned, priority-first) + Pick-up (recent). Both
+              render rich auto-height cards. If there's no personal work at
+              all, Suggestions takes the slot as the primary handoff. */}
+          {focusCards.length === 0 && resumeCards.length === 0 && !myWorkLoading ? (
             <SuggestionsStrip
               variant="primary"
               workspaceKey={workspaceKey}
               slug={slug}
             />
           ) : (
-            <section>
-              <SectionHeader
-                title="Focus today"
-                hint="Assigned to you, priority first."
-              />
-              <FocusGrid
-                issues={focus}
-                isLoading={active.isLoading || !me}
-                workspaceKey={workspaceKey}
-                tz={prefs.timezone ?? null}
-                slug={slug}
-              />
-            </section>
+            <div className="space-y-5">
+              {(focusCards.length > 0 || myWorkLoading) && (
+                <section>
+                  <SectionHeader
+                    title="Focus today"
+                    hint="Assigned to you, priority first."
+                  />
+                  <WorkCardGrid
+                    cards={focusCards}
+                    isLoading={myWorkLoading}
+                    workspaceKey={workspaceKey}
+                    tz={prefs.timezone ?? null}
+                    slug={slug}
+                  />
+                </section>
+              )}
+              {resumeCards.length > 0 && (
+                <section>
+                  <SectionHeader
+                    title="Pick up where you left off"
+                    hint="Your most recently touched work."
+                  />
+                  <WorkCardGrid
+                    cards={resumeCards}
+                    isLoading={false}
+                    workspaceKey={workspaceKey}
+                    tz={prefs.timezone ?? null}
+                    slug={slug}
+                  />
+                </section>
+              )}
+            </div>
           )}
 
-          {focus.length > 0 && (
+          {/* ── Zone 2 · WORKSPACE & AGENTS ──────────────────────────
+              Agents, attention, and the rest of the customizable stack;
+              handoffs & stalled (the old under-Focus Suggestions, demoted
+              here); and a by-status pipeline. */}
+          <div className="space-y-5">
+            <ZoneDivider label="Workspace & agents" />
+
+            <DashboardStack
+              widgets={widgets}
+              layout={effLayout}
+              editing={editing}
+              onChange={persistLayout}
+            />
+
             <SuggestionsStrip
               variant="secondary"
               workspaceKey={workspaceKey}
               slug={slug}
             />
-          )}
 
-          <DashboardStack
-            widgets={widgets}
-            layout={effLayout}
-            editing={editing}
-            onChange={persistLayout}
-          />
-
-          <section className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Column title="Recent issues" hint="Most recently touched">
-              <Rows loading={active.isLoading} empty="No active issues.">
-                {recent.map((i) => (
-                  <IssueRow
-                    key={i.id}
-                    id={i.id}
-                    number={i.number}
-                    title={i.title}
-                    priority={i.priority}
-                    trailing={relativeTime(i.updatedAt)}
-                    workspaceKey={workspaceKey}
-                    slug={slug}
-                  />
-                ))}
-              </Rows>
-            </Column>
-            <Column title="By status" hint="Active work across the pipeline">
-              <Rows loading={!statuses} empty="No statuses configured.">
+            <section>
+              <SectionHeader title="By status" hint="Active work across the pipeline" />
+              <ul className="grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-2">
                 {statusRows.map(({ status, count }) => (
                   <li key={status.id}>
                     <Link
@@ -381,7 +356,7 @@ export default function DashboardPage() {
                       className="flex items-center gap-2 text-xs hover:text-foreground"
                     >
                       <span
-                        className="h-2 w-2 rounded-full"
+                        className="h-2 w-2 shrink-0 rounded-full"
                         style={{ backgroundColor: status.color }}
                       />
                       <span className="truncate">{status.name}</span>
@@ -401,40 +376,9 @@ export default function DashboardPage() {
                     </Link>
                   </li>
                 ))}
-              </Rows>
-            </Column>
-
-            <Column
-              title="Stalled"
-              hint={
-                stalledThresholdDays
-                  ? `In progress, quiet ${stalledThresholdDays}+ days`
-                  : "In progress, threshold disabled"
-              }
-            >
-              <Rows
-                loading={stalledQ.isLoading}
-                empty={
-                  stalledThresholdDays === 0
-                    ? "Stalled threshold disabled in workspace settings."
-                    : "Nothing stalled. Momentum intact."
-                }
-              >
-                {stalled.map((i) => (
-                  <IssueRow
-                    key={i.id}
-                    id={i.id}
-                    number={i.number}
-                    title={i.title}
-                    trailing={relativeTime(i.updatedAt)}
-                    trailingTone="warn"
-                    workspaceKey={workspaceKey}
-                    slug={slug}
-                  />
-                ))}
-              </Rows>
-            </Column>
-          </section>
+              </ul>
+            </section>
+          </div>
           </div>
         </div>
       </div>
@@ -507,27 +451,17 @@ function GreetingBar({
 }
 
 // ---------------------------------------------------------------------------
-// Focus grid
+// Zone helpers — rich work-card grid + zone divider
 // ---------------------------------------------------------------------------
 
-type FocusIssue = {
-  id: string;
-  number: number;
-  title: string;
-  priority: string;
-  dueDate: Date | string | null;
-  status: { name: string; color: string };
-  project?: { key: string; color: string | null } | null;
-};
-
-function FocusGrid({
-  issues,
+function WorkCardGrid({
+  cards,
   isLoading,
   workspaceKey,
   tz,
   slug,
 }: {
-  issues: FocusIssue[];
+  cards: DashboardWorkCard[];
   isLoading: boolean;
   workspaceKey: string;
   tz: string | null;
@@ -537,51 +471,35 @@ function FocusGrid({
     return (
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
         {Array.from({ length: 3 }).map((_, i) => (
-          <div key={i} className="h-24 animate-pulse rounded-lg border border-border bg-card/40" />
+          <div key={i} className="h-28 animate-pulse rounded-lg border border-border bg-card/40" />
         ))}
       </div>
     );
   }
-  // Empty state intentionally elided — the page promotes the Suggestions
-  // strip into Focus's slot when `focus.length === 0`, so we never render
-  // FocusGrid with zero issues. (See the conditional on DashboardPage.)
-  if (issues.length === 0) return null;
+  if (cards.length === 0) return null;
+  // `items-start` so each card sizes to its own content instead of
+  // stretching to the tallest sibling in the row — that stretch was the
+  // source of the empty space between sparse cards.
   return (
-    <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-      {issues.map((issue) => (
-        <li key={issue.id}>
-          <Link
-            href={`/w/${slug}/issues/${issue.id}`}
-            className="group flex h-full flex-col rounded-lg border border-border bg-card/40 p-3 transition-colors hover:border-ember/40"
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
-                {PRIORITY_GLYPH[issue.priority]}
-              </span>
-              <span className="text-id shrink-0 text-muted-foreground">
-                {formatIssueId(workspaceKey, issue.number)}
-              </span>
-              <Badge className="ml-auto max-w-[45%] truncate" color={issue.status.color}>
-                {issue.status.name}
-              </Badge>
-            </div>
-            <div className="mt-2 line-clamp-2 text-sm">{issue.title}</div>
-            <div className="mt-3 flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
-              {issue.project && (
-                <Badge color={issue.project.color ?? undefined}>{issue.project.key}</Badge>
-              )}
-              {issue.dueDate && (
-                <span className="flex items-center gap-1">
-                  <Clock3 className="h-3 w-3" />
-                  {formatDueDate(issue.dueDate, tz)}
-                </span>
-              )}
-              <ArrowRight className="ml-auto h-3 w-3 opacity-0 transition-opacity group-hover:opacity-100" />
-            </div>
-          </Link>
+    <ul className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {cards.map((card) => (
+        <li key={card.id}>
+          <IssueCard card={card} workspaceKey={workspaceKey} tz={tz} slug={slug} />
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Labeled hairline divider that opens a dashboard zone. */
+function ZoneDivider({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 pt-1">
+      <span className="shrink-0 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="h-px flex-1 bg-border" />
+    </div>
   );
 }
 
@@ -915,105 +833,6 @@ function SectionHeader({ title, hint }: { title: string; hint?: string }) {
   );
 }
 
-function Column({
-  title,
-  hint,
-  children,
-}: {
-  title: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-lg border border-border bg-card/40 p-4">
-      <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <div className="shrink-0 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          {title}
-        </div>
-        {hint && <div className="min-w-0 text-[0.6875rem] text-muted-foreground/70">{hint}</div>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function Rows({
-  loading,
-  empty,
-  children,
-}: {
-  loading: boolean;
-  empty: string;
-  children: React.ReactNode;
-}) {
-  if (loading) {
-    return (
-      <ul className="space-y-1.5">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <li key={i} className="flex h-5 animate-pulse rounded bg-subtle/60" />
-        ))}
-      </ul>
-    );
-  }
-  const kids = Array.isArray(children) ? children : [children];
-  if (kids.length === 0 || (kids.length === 1 && !kids[0])) {
-    return (
-      <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
-        <CircleDashed className="h-3.5 w-3.5" />
-        <span>{empty}</span>
-      </div>
-    );
-  }
-  return <ul className="space-y-1.5">{children}</ul>;
-}
-
-function IssueRow({
-  id,
-  number,
-  title,
-  priority,
-  trailing,
-  trailingTone,
-  workspaceKey,
-  slug,
-}: {
-  id: string;
-  number: number;
-  title: string;
-  priority?: string;
-  trailing: string;
-  trailingTone?: "warn";
-  workspaceKey: string;
-  slug: string;
-}) {
-  return (
-    <li>
-      <Link
-        href={`/w/${slug}/issues/${id}`}
-        className="flex min-w-0 items-center gap-2 text-xs hover:text-foreground"
-      >
-        {priority && (
-          <span className="w-5 shrink-0 text-center font-mono text-[0.6875rem] text-muted-foreground">
-            {PRIORITY_GLYPH[priority]}
-          </span>
-        )}
-        <span className="text-id shrink-0 text-muted-foreground">
-          {formatIssueId(workspaceKey, number)}
-        </span>
-        <span className="min-w-0 flex-1 truncate">{title}</span>
-        <span
-          className={
-            "text-meta shrink-0 " +
-            (trailingTone === "warn" ? "text-warning" : "text-muted-foreground")
-          }
-        >
-          {trailing}
-        </span>
-      </Link>
-    </li>
-  );
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1028,25 +847,6 @@ function useGreeting() {
     else setGreeting("Good evening");
   }, []);
   return greeting;
-}
-
-function formatDueDate(d: Date | string, tz: string | null) {
-  const date = typeof d === "string" ? new Date(d) : d;
-  const diffDays = Math.round((date.getTime() - Date.now()) / 86_400_000);
-  if (diffDays === 0) return "due today";
-  if (diffDays === 1) return "due tomorrow";
-  if (diffDays === -1) return "due yesterday";
-  if (diffDays < 0) return `${Math.abs(diffDays)}d overdue`;
-  if (diffDays <= 7) return `in ${diffDays}d`;
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      month: "short",
-      day: "numeric",
-      timeZone: tz ?? undefined,
-    }).format(date);
-  } catch {
-    return date.toLocaleDateString();
-  }
 }
 
 // ---------------------------------------------------------------------------

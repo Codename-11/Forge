@@ -11301,3 +11301,46 @@ Coach only fire once an issue with a target ages past it).
 
 Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors; `issue.test.ts`
 (29) + `sla-breach.test.ts` (5) green — 34 passed. Local stack on :55432/:56379.
+
+## 2026-06-28 — Dashboard redesign: You / Workspace zones + shared rich IssueCard
+
+Reworked the dashboard (`/w/[slug]/dashboard`) from a flat stack into two
+labeled zones and replaced the sparse Focus cards with one reusable rich
+card. Driven through the brainstorming flow — design chosen interactively
+(two-zone You→Workspace; all four card signals; description snippet only
+when the title is short).
+
+- **`dashboard.myWork`** (new query) → `{ focus, resume }`, enriched
+  server-side. `CARD_FIELDS` extends `SUGGESTION_FIELDS` with people
+  (assignees + assignedAgent presence), context (labels / dueDate /
+  slaMinutes / description), child rows, and the latest run. focus = my
+  assigned non-done, priority-desc → due-asc; resume = my assigned-or-
+  authored non-done by updatedAt, **de-duped against focus**. Bounded ~6
+  each so the two extra pulls (children + run) stay cheap — the shared
+  `issue.list` is deliberately left lean. `shapeCard` rolls children to
+  done/total (canceled excluded) and normalizes the latest run.
+- **`src/components/dashboard/issue-card.tsx`** — one `IssueCard` for the
+  You zone. Renders progress / context / people / activity rows ONLY where
+  the data exists; snippet only when title ≤ 42 chars; run chip for
+  ACTIVE/WAITING/STALLED, else the updated-at stamp. Pure helpers
+  (`PRIORITY_GLYPH`, `formatDueDate`, `formatSlaShort`, `firstLine`) moved
+  to **`src/lib/issue-display.ts`** off the page.
+- **Whitespace fix is structural.** `WorkCardGrid` uses `items-start` (no
+  `h-full`), so each card sizes to its own content instead of stretching to
+  the tallest sibling in the row — that stretch was the source of the empty
+  gaps the operator flagged.
+- **Page reorg.** Zone 1 (Focus + Pick-up rich cards) → Zone 2
+  (`ZoneDivider` "Workspace & agents": agents-first customizable widget
+  stack, the demoted Suggestions strip as handoffs/stalled, a by-status
+  pipeline). Removed the client-side focus/recent derivations, the
+  FocusGrid / Column / Rows / IssueRow helpers, the resume chip tile, and
+  the footer Recent/Stalled columns (Pick-up absorbs Recent; Suggestions
+  covers stalled). Default widget order now leads with agent-activity +
+  agent-attention. Empty-state preserved: no personal work → Suggestions
+  takes the Zone-1 slot as the primary handoff.
+- **Tests.** `tests/unit/issue-display.test.ts` (pure helpers) +
+  `dashboard-my-work.test.ts` (focus filter/order, resume de-dup + terminal
+  exclusion, child rollup excluding canceled, latest-run surfacing).
+
+Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors; new unit (5) +
+integration (3) tests green; local `STAGE_ONLY=1 pnpm build` clean.

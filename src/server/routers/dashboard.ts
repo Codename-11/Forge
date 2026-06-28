@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { AgentRunStatus } from "@prisma/client";
+import { AgentRunStatus, type Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
@@ -29,6 +29,90 @@ const SUGGESTION_FIELDS = {
   status: { select: { id: true, name: true, category: true, color: true } },
   project: { select: { id: true, key: true, name: true, color: true, icon: true } },
 } as const;
+
+/**
+ * Rich-card field set for the "You" zone (Focus + Pick-up). Extends
+ * SUGGESTION_FIELDS with the four signals the dashboard card surfaces —
+ * people (assignees + assigned agent), context (labels / due / SLA /
+ * description snippet), progress (sub-issue rollup), and activity (latest
+ * run). Bounded to ~6 rows per slice, so the two extra relation pulls
+ * (children + latest run) stay cheap. The shared `issue.list` is left
+ * lean on purpose — this enrichment lives only where the cards render.
+ */
+const CARD_FIELDS = {
+  ...SUGGESTION_FIELDS,
+  description: true,
+  dueDate: true,
+  slaMinutes: true,
+  kind: true,
+  parentId: true,
+  labels: {
+    select: { label: { select: { id: true, name: true, color: true } } },
+  },
+  assignees: {
+    select: { user: { select: { id: true, name: true, image: true } } },
+  },
+  assignedAgent: {
+    select: {
+      id: true,
+      name: true,
+      profileKey: true,
+      avatar: true,
+      status: true,
+      provider: true,
+      runtimeMode: true,
+      lastHeartbeatAt: true,
+      webhookUrl: true,
+      runtimeId: true,
+    },
+  },
+  // Sub-issue rows (status category only) — rolled up to done/total in JS.
+  // Cheap because the parent slice is capped at ~6.
+  children: {
+    where: { deletedAt: null },
+    select: { status: { select: { category: true } } },
+  },
+  // Newest run, terminal or not — drives the activity chip (running /
+  // waiting / stalled / blocked). Mirrors the issue-detail `byId` shape.
+  agentRuns: {
+    orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+    take: 1,
+    select: {
+      id: true,
+      status: true,
+      currentStep: true,
+      lastEventAt: true,
+      startedAt: true,
+      agent: { select: { name: true, profileKey: true, avatar: true } },
+    },
+  },
+} satisfies Prisma.IssueSelect;
+
+/**
+ * Roll a card row's children + latest run into the compact shape the
+ * client card consumes. `childTotal` excludes canceled sub-issues;
+ * `childDone` counts DONE. `latestRun` is null when the issue has never
+ * had a run.
+ */
+function shapeCard<
+  T extends {
+    children: Array<{ status: { category: string } }>;
+    agentRuns: Array<{
+      id: string;
+      status: AgentRunStatus;
+      currentStep: string | null;
+      lastEventAt: Date | null;
+      startedAt: Date;
+      agent: { name: string | null; profileKey: string | null; avatar: string | null } | null;
+    }>;
+  },
+>(row: T) {
+  const { children, agentRuns, ...rest } = row;
+  const childTotal = children.filter((c) => c.status.category !== "CANCELED").length;
+  const childDone = children.filter((c) => c.status.category === "DONE").length;
+  const latestRun = agentRuns[0] ?? null;
+  return { ...rest, childDone, childTotal, latestRun };
+}
 
 export const dashboardRouter = router({
   suggestions: workspaceProcedure
@@ -333,6 +417,70 @@ export const dashboardRouter = router({
         items,
         stalledThresholdDays: ws.stalledThresholdDays,
       };
+    }),
+
+  /**
+   * "You" zone — the two personal work slices the redesigned dashboard
+   * leads with, enriched into rich-card rows server-side so the page
+   * doesn't filter a 100-issue `issue.list` client-side:
+   *
+   *   - focus  — my non-done assigned issues, priority-desc then due-asc.
+   *              "What's important for me right now."
+   *   - resume — my non-done issues (assigned OR authored) by recency.
+   *              "Pick up where you left off." De-duped against focus so
+   *              the same card never appears in both rows.
+   *
+   * Each row carries people / context / progress / activity (see
+   * CARD_FIELDS). Capped small so the child + run pulls stay cheap.
+   */
+  myWork: workspaceProcedure
+    .input(
+      z
+        .object({ limit: z.number().int().min(1).max(12).default(6) })
+        .default({ limit: 6 }),
+    )
+    .query(async ({ ctx, input }) => {
+      const userId = ctx.session.user.id;
+      const limit = input.limit;
+
+      const [focusRows, resumeRows] = await Promise.all([
+        ctx.db.issue.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+            assignees: { some: { userId } },
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+          },
+          orderBy: [
+            { priority: "desc" },
+            { dueDate: "asc" },
+            { updatedAt: "desc" },
+          ],
+          take: limit,
+          select: CARD_FIELDS,
+        }),
+        // Pull extra so the focus de-dup still leaves a full row.
+        ctx.db.issue.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+            status: { category: { notIn: ["DONE", "CANCELED"] } },
+            OR: [{ assignees: { some: { userId } } }, { authorId: userId }],
+          },
+          orderBy: [{ updatedAt: "desc" }],
+          take: limit * 2,
+          select: CARD_FIELDS,
+        }),
+      ]);
+
+      const focus = focusRows.map(shapeCard);
+      const focusIds = new Set(focus.map((f) => f.id));
+      const resume = resumeRows
+        .filter((r) => !focusIds.has(r.id))
+        .slice(0, limit)
+        .map(shapeCard);
+
+      return { focus, resume };
     }),
 
   /**
