@@ -410,7 +410,37 @@ Use plain prose, no bullets, no headers. Do not address the agent directly.`;
     logger.warn({ completion }, "ai.coach: empty response");
     return null;
   }
+  // Some gateways (the Hermes model-router) wrap the call in an agent loop
+  // that answers with a meta-acknowledgement ("Posted the diagnostic
+  // comment…") instead of an actual diagnostic. Drop those so we never post
+  // a useless coach comment.
+  if (!isUsefulCoachComment(text)) {
+    logger.warn(
+      { provider: ctx.providerId, text: text.slice(0, 120) },
+      "ai.coach: dropped low-quality response",
+    );
+    return null;
+  }
   return text.trim();
+}
+
+/**
+ * Whether a Coach completion is a real diagnostic worth posting — rejects
+ * meta-acknowledgements ("Posted the diagnostic comment…") and terse
+ * non-answers that some gateways return instead of an actual diagnosis.
+ */
+export function isUsefulCoachComment(text: string | null | undefined): boolean {
+  if (!text) return false;
+  const t = text.trim();
+  if (t.length < 40) return false;
+  if (t.split(/\s+/).length < 8) return false;
+  const meta = [
+    /^\s*posted\b/i,
+    /posted (the )?(diagnostic )?comment/i,
+    /^\s*i(?:'ve| have)?\s+(posted|added|left|written)\b/i,
+    /^\s*(done|ok|okay|acknowledged|noted)\b[.!]?\s*$/i,
+  ];
+  return !meta.some((re) => re.test(t));
 }
 
 // ---------------------------------------------------------------------------

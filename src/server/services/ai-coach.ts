@@ -49,6 +49,21 @@ export async function coachOnEvent(
     });
     if (!coach) return;
 
+    // Dedup: don't re-coach the same issue within a day. The trigger sweeps
+    // can re-emit ISSUE_STALLED for an issue that's still stalled, which used
+    // to spam one issue with multiple comments (AXI-84 got 4 in 4 hours).
+    // Checked before the LLM call so we don't burn tokens either.
+    const dedupSince = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const alreadyCoached = await client.comment.findFirst({
+      where: {
+        issueId: params.issueId,
+        authoringAgentId: coach.id,
+        createdAt: { gte: dedupSince },
+      },
+      select: { id: true },
+    });
+    if (alreadyCoached) return;
+
     const issue = await client.issue.findUnique({
       where: { id: params.issueId },
       select: {

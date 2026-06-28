@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **See your Coach agent's health at a glance.** Settings → Workspace → AI now shows whether the Coach is *armed*, whether it can reach a model, whether the Coach agent exists, which events trigger it (issue stalled / missed ack / SLA breach — and which are turned off), and when it last fired. No more guessing why it is or isn't commenting.
 - **A built-in calendar for every date field.** Due dates, sprint and initiative dates, roadmap dates, the time-log range, and snooze now open Forge's own themed calendar instead of the browser's native date box — same look on every browser and OS, with month navigation and a clear button.
 - **Draft or improve an issue description with AI.** Next to the Description heading there's now an AI button — **Draft with AI** writes a description from the issue title when there's none yet, and **Enhance** rewrites an existing one for clarity and structure. You see the suggestion (with a current-vs-suggested view for an enhance) and choose **Apply** or **Discard** — nothing changes until you accept it. Appears only when AI is enabled for the workspace.
 - **Create a label without leaving the issue.** The label picker on an issue now has a search box — type to filter, and (if you're a workspace admin) pick **Create "&lt;name&gt;"** to make a new label with a name and color right there and apply it in one step. No more detour to Settings → Labels first.
@@ -24,6 +25,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **The Coach stops posting junk or duplicate comments.** It now discards empty or meta AI responses (e.g. "Posted the diagnostic comment…") instead of posting them, and won't comment on the same issue more than once in 24 hours — so a stuck issue gets one useful diagnostic, not an hourly pile-up.
 - **AI triage works again — and tells you what's wrong when it can't.** The "AI triage suggestion" card on an issue could get stuck showing a bare *"AI triage unavailable."* with only a Retry, because some AI providers reply in plain text instead of the structured format Forge expected — so every suggestion was thrown away. Forge now reads those plain-text replies too, so triage produces a real priority / label / agent suggestion. When triage genuinely can't run, the card now explains why and links straight to **Settings → Workspace → AI** to fix it, instead of leaving you guessing.
 
 ### Changed

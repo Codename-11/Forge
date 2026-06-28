@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { AlertTriangle } from "lucide-react";
 import { Topbar } from "@/components/topbar";
+import { CoachStatusPanel } from "@/components/settings/coach-status-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
@@ -778,6 +779,7 @@ export default function WorkspaceSettingsPage() {
                   label="Coach comments"
                   hint="When an issue stalls, an agent misses an ack, or an SLA is breached, post a short diagnostic comment as the Coach agent. Requires the Coach agent below."
                 />
+                <CoachStatusPanel />
               </div>
 
               <div className="border-t border-border/60 pt-5">

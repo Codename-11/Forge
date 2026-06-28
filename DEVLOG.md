@@ -11236,3 +11236,30 @@ warnings = the backlog). Confirm/alert/prompt fully gone + hard-enforced.
 
 Verification: date-helper unit test green; `pnpm typecheck` clean; `pnpm lint`
 0 errors. No native `<input type="date">` remain (only doc-comments mention it).
+
+## 2026-06-27 — Coach agent: diagnosis + fixes (quality guard, dedup, status panel)
+
+Diagnosed why AXI's Coach felt "on but not working". It IS functional (last
+fired 2026-06-18 on AXI-84, now Done) but: (1) it's purely event-driven and
+dormant — SLA-breach trigger off (`slaEnforcementEnabled=f`), stale-work fires
+once per issue, no recent no-ack; (2) the Hermes gateway garbled 3 of the 4
+AXI-84 comments into degenerate meta-acks ("Posted the diagnostic comment on
+AXI-84.") posted verbatim — same gateway root cause as triage; (3) it re-fired
+4× on AXI-84 (hourly); (4) nothing in the UI showed any of it. Provider/model +
+toggle live in Settings → Workspace → AI (same backend as triage); the trigger
+thresholds live elsewhere, unlinked.
+
+- **`ai.ts` `runCoachComment`** — `isUsefulCoachComment()` rejects meta-acks
+  (`^posted`, "posted the diagnostic comment", "I've posted…") and terse
+  non-answers (<40 chars / <8 words), so garbage is never posted. Unit-tested
+  with the verbatim prod strings (`tests/unit/coach-comment-quality.test.ts`).
+- **`ai-coach.ts` `coachOnEvent`** — dedup: skip if a Coach comment already
+  exists on the issue within 24h (checked *before* the LLM call, so it also
+  saves tokens). Kills the per-issue spam.
+- **`ai.coachStatus` + `CoachStatusPanel`** (Settings → Workspace → AI, under
+  the Coach toggle) — armed/needs-attention/off, provider reachability, Coach
+  agent presence, trigger chips (stalled / no-ack / SLA, each active|disabled),
+  and a last-fired link. Answers "is it working / where's the backend".
+
+Verification: `isUsefulCoachComment` unit test (3 cases) green; `pnpm typecheck`
+clean; `pnpm lint` 0 errors.

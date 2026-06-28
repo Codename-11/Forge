@@ -52,6 +52,84 @@ export const aiRouter = router({
   }),
 
   /**
+   * Full Coach health for the settings panel: is it armed, can it reach a
+   * model, does the Coach agent exist, which trigger events are active vs
+   * disabled, and when it last fired. Answers "it's on but not doing
+   * anything / where's the backend".
+   */
+  coachStatus: workspaceProcedure.query(async ({ ctx }) => {
+    const ws = await ctx.db.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: {
+        aiEnabled: true,
+        aiCoachEnabled: true,
+        aiProvider: true,
+        aiModel: true,
+        assignmentSlaMinutes: true,
+        requiredAckSeconds: true,
+        slaEnforcementEnabled: true,
+      },
+    });
+    const coach = await ctx.db.agent.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        role: AgentRole.COACH,
+        archivedAt: null,
+      },
+      select: { id: true, profileKey: true, name: true, status: true },
+    });
+    const providers = listProviders();
+    const provider =
+      providers.find((p) => p.id === (ws.aiProvider ?? "hermes")) ?? providers[0];
+
+    let lastFired: {
+      issueId: string;
+      issueNumber: number;
+      at: Date;
+    } | null = null;
+    if (coach) {
+      const last = await ctx.db.comment.findFirst({
+        where: { authoringAgentId: coach.id, workspaceId: ctx.workspaceId },
+        orderBy: { createdAt: "desc" },
+        select: { createdAt: true, issue: { select: { id: true, number: true } } },
+      });
+      if (last?.issue) {
+        lastFired = {
+          issueId: last.issue.id,
+          issueNumber: last.issue.number,
+          at: last.createdAt,
+        };
+      }
+    }
+
+    return {
+      enabled: ws.aiEnabled && ws.aiCoachEnabled,
+      aiEnabled: ws.aiEnabled,
+      coachToggle: ws.aiCoachEnabled,
+      provider: {
+        id: provider.id,
+        label: provider.label,
+        available: provider.available,
+        reason: provider.unavailableReason ?? null,
+      },
+      model: ws.aiModel || provider.defaultModel,
+      agent: coach,
+      triggers: {
+        stalled: {
+          enabled: ws.assignmentSlaMinutes > 0,
+          minutes: ws.assignmentSlaMinutes,
+        },
+        noack: {
+          enabled: ws.requiredAckSeconds > 0,
+          seconds: ws.requiredAckSeconds,
+        },
+        sla: { enabled: ws.slaEnforcementEnabled },
+      },
+      lastFired,
+    };
+  }),
+
+  /**
    * Per-workspace chat-model credentials (DB-backed, key encrypted). Lets the
    * Streaming engine work with no env config. Keys are NEVER returned — only
    * `hasKey`. Workspace-admin gated.
