@@ -30,6 +30,10 @@ output/
 # Local agent/tool scratch workspace (design drops, etc.) — not source.
 .orca/
 
+# Skills tooling (orca-cli skill install + lockfile) — local, not app source.
+.agents/
+skills-lock.json
+
 # Playwright auth storageState
 tests/e2e/.auth/
 playwright-report/
