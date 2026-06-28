@@ -21,7 +21,7 @@ export default defineConfig({
   // Exclude internal working docs (execution plans + audit notes) from the
   // published site. They're in no sidebar and reference internal infra —
   // not user documentation. Applies to both the app and public docs builds.
-  srcExclude: ["audits/**", "plans/**"],
+  srcExclude: ["audits/**", "plans/**", "superpowers/**"],
   // Emit /docs/sitemap.xml with canonical public URLs (the public docs home,
   // not the personal app instance) so every doc page is individually indexable.
   // VitePress emits page paths without the site `base`, so inject /docs/ to
