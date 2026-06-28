@@ -1,4 +1,22 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+function monthDelta(from: Date, to: Date) {
+  return (to.getFullYear() - from.getFullYear()) * 12 + to.getMonth() - from.getMonth();
+}
+
+async function pickDate(page: Page, label: string, target: Date) {
+  await page.getByRole("button", { name: label, exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "Date picker" });
+  await expect(picker).toBeVisible();
+
+  const delta = monthDelta(new Date(), target);
+  const direction = delta >= 0 ? "Next month" : "Previous month";
+  for (let i = 0; i < Math.abs(delta); i += 1) {
+    await picker.getByRole("button", { name: direction }).click();
+  }
+
+  await picker.getByRole("button", { name: String(target.getDate()), exact: true }).click();
+}
 
 test.describe("Sprints and roadmap management", () => {
   test("sprints exposes management, rollover, and collapsible backlog", async ({ page }) => {
@@ -45,9 +63,11 @@ test.describe("Sprints and roadmap management", () => {
     await dateButton.click();
 
     await expect(page.getByRole("dialog", { name: "Project roadmap dates" })).toBeVisible();
-    const dates = page.locator('input[type="date"]');
-    await dates.nth(0).fill("2026-08-03");
-    await dates.nth(1).fill("2026-08-14");
+    const now = new Date();
+    const startDate = new Date(now.getFullYear(), now.getMonth() + 1, 3);
+    const targetDate = new Date(now.getFullYear(), now.getMonth() + 1, 14);
+    await pickDate(page, "Start date", startDate);
+    await pickDate(page, "Target date", targetDate);
     await page.getByRole("button", { name: "Save dates" }).click();
     await expect(page.getByText("Roadmap dates updated.")).toBeVisible();
   });

@@ -43,6 +43,14 @@ async function createIssueFromMobileTopbar(page: Page, title: string) {
   await expect(page.getByText(title).first()).toBeVisible();
 }
 
+async function selectComboboxOption(page: Page, name: string, option: string) {
+  const combo = page.getByRole("combobox", { name });
+  await expect(combo).toBeVisible();
+  await combo.click();
+  await page.getByRole("option", { name: option, exact: true }).click();
+  await expect(combo).toContainText(option);
+}
+
 test.describe("Mobile smoke", () => {
   test.beforeEach(async ({ page }) => {
     await page.addInitScript(() => {
@@ -199,9 +207,7 @@ test.describe("Mobile smoke", () => {
     await page.getByRole("button", { name: /^Comment/ }).click();
     await expect(page.locator("span", { hasText: comment }).first()).toBeVisible();
 
-    const status = page.getByRole("combobox", { name: "Status" });
-    await status.selectOption({ label: "In Progress" });
-    await expect(status).toHaveValue(/.+/);
+    await selectComboboxOption(page, "Status", "In Progress");
 
     await page.getByTitle(/Assign agent/i).click();
     await expect(page.getByRole("dialog")).toBeVisible();

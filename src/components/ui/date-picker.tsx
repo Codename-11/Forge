@@ -177,6 +177,8 @@ export function DatePicker({
         onClose={() => setOpen(false)}
         role="dialog"
         ariaLabel="Date picker"
+        align="right"
+        minSpaceBelow={280}
         className="w-64 rounded-lg border border-border bg-card p-3 shadow-xl"
       >
         <div className="mb-2 flex items-center justify-between">

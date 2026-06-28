@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 /**
  * Golden-path E2E: create an issue via the quick-create dialog, verify it
@@ -6,8 +6,20 @@ import { test, expect } from "@playwright/test";
  * storageState minted in global-setup against the seeded `forge` workspace.
  */
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function selectComboboxOption(page: Page, name: string, option: string) {
+  const combo = page.getByRole("combobox", { name });
+  await expect(combo).toBeVisible();
+  await combo.click();
+  await page.getByRole("option", { name: option, exact: true }).click();
+  await expect(combo).toContainText(option);
+}
+
 test.describe("Issue flow", () => {
-  test("create and transition an issue", async ({ page }) => {
+  test("create, pin/unpin from navbar, and transition an issue", async ({ page }) => {
     await page.goto("/w/forge/inbox");
 
     // QuickCreate opens on the ⇧C global hotkey (src/components/quick-create.tsx).
@@ -28,8 +40,20 @@ test.describe("Issue flow", () => {
     await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
     await expect(page.getByText(title).first()).toBeVisible();
 
+    // The issue-detail pin control targets the navbar pin bucket. Once pinned,
+    // the navbar chip exposes its own direct unpin button so users do not have
+    // to hunt through other issue controls to remove the pin.
+    await page.getByRole("button", { name: "Pin to navbar (p)" }).click();
+    await expect(page.getByRole("button", { name: "Unpin from navbar (p)" })).toBeVisible();
+    const navbarUnpin = page.getByRole("button", {
+      name: new RegExp(`^Unpin from navbar: .*${escapeRegExp(title)}`),
+    });
+    await expect(navbarUnpin).toBeVisible();
+    await navbarUnpin.click();
+    await expect(page.getByRole("button", { name: "Pin to navbar (p)" })).toBeVisible();
+    await expect(navbarUnpin).toHaveCount(0);
+
     // Move status on the detail page and confirm it sticks.
-    await page.locator("select").first().selectOption({ label: "In Progress" });
-    await expect(page.locator("select").first()).toHaveValue(/.+/);
+    await selectComboboxOption(page, "Status", "In Progress");
   });
 });

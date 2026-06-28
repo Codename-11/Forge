@@ -28,6 +28,7 @@ import { cn } from "@/lib/utils";
  * the pointer can cross the gap into the portaled panel without it closing.
  */
 export function AnchoredPopover({
+  id,
   anchorRef,
   open,
   onClose,
@@ -44,6 +45,7 @@ export function AnchoredPopover({
   onMouseLeave,
   children,
 }: {
+  id?: string;
   /** The trigger element (or its wrapper) the popover anchors to. */
   anchorRef: RefObject<HTMLElement | null>;
   open: boolean;
@@ -139,6 +141,7 @@ export function AnchoredPopover({
 
   return createPortal(
     <div
+      id={id}
       ref={popoverRef}
       role={role}
       aria-label={ariaLabel}

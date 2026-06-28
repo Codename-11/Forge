@@ -19,11 +19,20 @@ Changes:
 - Issue detail now uses the cross-workspace/navbar issue pin (`workspaceId:
   null`) for the visible pin control and `p` shortcut, so a pinned issue can be
   removed from either the navbar chip or its own issue controls.
+- Shared `Combobox` now advertises the ARIA combobox role/controls so the
+  issue status/priority controls are discoverable by role-based tests and AT.
+- `DatePicker` popovers align right and flip earlier so roadmap date pickers
+  stay inside the viewport when opened near the right/bottom edge.
+- E2E coverage now exercises create → pin issue to navbar → unpin directly
+  from the navbar chip → transition status, plus updates stale mobile/roadmap
+  tests to the current combobox/date-picker UI.
 
 Verification: `pnpm typecheck`; `pnpm lint` (passes with existing native-select
 warnings); `set -a; source /home/bailey/forge/.env; set +a; unset
 OPENAI_API_KEY; pnpm test` → 1027 passed / 1 skipped; same env `pnpm
-build:app` → Next build successful.
+build:app` → Next build successful; same env `E2E_FORCE_BUILD=0 pnpm exec
+playwright test tests/e2e/issue-flow.spec.ts tests/e2e/mobile-smoke.spec.ts
+tests/e2e/sprints-roadmap.spec.ts --workers=1` → 10 passed.
 
 ## 2026-06-27 — Subject-label resolver (audit log + webhook deliveries)
 
