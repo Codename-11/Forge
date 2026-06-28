@@ -11217,3 +11217,22 @@ review, doesn't fail CI). Escalate that rule to `error` once cleared. Native
 
 Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors (64 `<select>`
 warnings = the backlog). Confirm/alert/prompt fully gone + hard-enforced.
+
+## 2026-06-27 — Phase 5: themed DatePicker + native date-input sweep
+
+- **`ui/date-picker.tsx`** — themed calendar popover on `AnchoredPopover`.
+  Local-time `YYYY-MM-DD` in/out, so it's a drop-in for `<input type="date">`.
+  Prev/next month nav, today + selected highlight, optional clear, `min`/`max`.
+  Pure helpers `parseDateValue` / `formatDateValue` / `buildMonthGrid`
+  (overflow-rejecting parse, leading-pad grid) — unit-tested
+  (`tests/unit/date-picker-helpers.test.ts`, 4 cases).
+- Migrated **all 11 native date inputs**: cycles (edit ×2, new), initiatives,
+  roadmap (×2), time-log range (×2), recurring, snooze, and the issue **DUE**
+  field. Each preserved its exact value-shape (the issue field still stores a
+  `Date`; the time-log field still does its 00:00 / 23:59 boundary).
+- Known minor: `QuickForm`'s 24h draft-restore no longer captures the date
+  field (DatePicker is controlled React state, not a named FormData input) —
+  the primary value + submit are unaffected; only that one cosmetic restore is.
+
+Verification: date-helper unit test green; `pnpm typecheck` clean; `pnpm lint`
+0 errors. No native `<input type="date">` remain (only doc-comments mention it).

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, MOTION, Skeleton } from "@/components/ui";
-import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { QuickForm, SidePanel } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -834,10 +834,20 @@ function RoadmapDateEditor({
         )}
         <div className="grid grid-cols-2 gap-2">
           <QuickForm.Field label="Start date">
-            <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            <DatePicker
+              value={startDate}
+              onChange={(v) => setStartDate(v)}
+              ariaLabel="Start date"
+              placeholder="Start date"
+            />
           </QuickForm.Field>
           <QuickForm.Field label="Target date">
-            <Input type="date" value={targetDate} onChange={(e) => setTargetDate(e.target.value)} />
+            <DatePicker
+              value={targetDate}
+              onChange={(v) => setTargetDate(v)}
+              ariaLabel="Target date"
+              placeholder="Target date"
+            />
           </QuickForm.Field>
         </div>
         <div className="text-meta rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground">

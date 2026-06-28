@@ -4,6 +4,7 @@ import { CycleStatus } from "@prisma/client";
 import { toast } from "sonner";
 import { QuickForm } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 
@@ -100,11 +101,11 @@ export function NewCycleDialog({
       </QuickForm.Field>
       <div className="grid grid-cols-2 gap-2">
         <QuickForm.Field label="Starts">
-          <Input
-            name="startsAt"
-            type="date"
+          <DatePicker
             value={startsAt}
-            onChange={(e) => setStartsAt(e.target.value)}
+            onChange={(v) => setStartsAt(v)}
+            placeholder="Start date"
+            ariaLabel="Starts"
           />
         </QuickForm.Field>
         <QuickForm.Field label="Length (days)">

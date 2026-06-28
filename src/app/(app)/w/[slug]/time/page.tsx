@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { DatePicker } from "@/components/ui/date-picker";
 import { trpc } from "@/lib/trpc";
 import { formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -265,18 +266,19 @@ function DateField({
   return (
     <label className="flex flex-col gap-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
       {label}
-      <input
-        type="date"
+      <DatePicker
         value={value.toISOString().slice(0, 10)}
-        onChange={(e) => {
-          const d = new Date(e.target.value);
+        onChange={(v) => {
+          const d = new Date(v);
           if (!isNaN(d.getTime())) {
             if (label === "To") d.setHours(23, 59, 59, 999);
             else d.setHours(0, 0, 0, 0);
             onChange(d);
           }
         }}
-        className="focus-ring h-7 rounded-md border border-input bg-background px-2 font-mono text-[0.6875rem] normal-case tracking-normal text-foreground"
+        clearable={false}
+        ariaLabel={label}
+        className="h-7 px-2 font-mono text-[0.6875rem] normal-case tracking-normal"
       />
     </label>
   );

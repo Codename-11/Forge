@@ -44,6 +44,7 @@ import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { CreateLabelModal } from "@/components/inline-create/create-label-modal";
 import { Combobox } from "@/components/ui/combobox";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
 import { InitiativeChip } from "@/components/initiative-chip";
@@ -599,18 +600,19 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       />
                     </SidebarField>
                     <SidebarField label="Due">
-                      <input
-                        type="date"
+                      <DatePicker
                         value={
                           issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""
                         }
-                        onChange={(e) =>
+                        onChange={(v) =>
                           update.mutate({
                             id: issue.id,
-                            dueDate: e.target.value ? new Date(e.target.value) : null,
+                            dueDate: v ? new Date(v) : null,
                           })
                         }
-                        className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 font-mono text-xs"
+                        placeholder="No due date"
+                        ariaLabel="Due date"
+                        className="font-mono text-xs"
                       />
                     </SidebarField>
                     <SidebarField label="Agent queue">

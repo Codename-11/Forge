@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { CalendarClock, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnchoredPopover } from "@/components/ui/anchored-popover";
+import { DatePicker } from "@/components/ui/date-picker";
 
 /**
  * `SnoozeMenu` — popover dropdown that lets the operator put an issue
@@ -169,19 +170,19 @@ export function SnoozeMenu({
               <label className="text-meta text-muted-foreground">
                 Snooze until
               </label>
-              <input
-                type="date"
+              <DatePicker
+                value={null}
                 min={toInputDate(addDays(new Date(), 1))}
-                onChange={(e) => {
-                  const v = e.target.value;
+                onChange={(v) => {
                   if (!v) return;
                   const d = new Date(v + "T09:00:00");
                   if (Number.isFinite(d.getTime()) && d.getTime() > Date.now()) {
                     pick(d);
                   }
                 }}
-                className="mt-1 w-full rounded-md border border-border bg-card/40 px-1.5 py-1 text-[0.75rem] focus-ring"
-                autoFocus
+                placeholder="Pick a date"
+                ariaLabel="Snooze until"
+                className="mt-1 text-[0.75rem]"
               />
             </div>
           )}

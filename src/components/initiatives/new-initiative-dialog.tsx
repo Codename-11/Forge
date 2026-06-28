@@ -3,6 +3,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { QuickForm } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { trpc } from "@/lib/trpc";
 
 const DEFAULT_COLORS = [
@@ -129,11 +130,11 @@ export function NewInitiativeDialog({
       </QuickForm.Field>
       <div className="grid grid-cols-2 gap-2">
         <QuickForm.Field label="Target date">
-          <Input
-            name="targetDate"
-            type="date"
+          <DatePicker
             value={targetDate}
-            onChange={(e) => setTargetDate(e.target.value)}
+            onChange={(v) => setTargetDate(v)}
+            placeholder="Target date"
+            ariaLabel="Target date"
           />
         </QuickForm.Field>
         <QuickForm.Field label="Color">

@@ -6,6 +6,7 @@ import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Dialog } from "@/components/ui/dialog";
 import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
@@ -242,10 +243,10 @@ export default function RecurringPage() {
               </div>
               <div className="space-y-1.5">
                 <label className="text-xs text-muted-foreground">Next run (date)</label>
-                <Input
-                  type="date"
+                <DatePicker
                   value={editing.nextRunAt}
-                  onChange={(e) => setEditing({ ...editing, nextRunAt: e.target.value })}
+                  onChange={(v) => setEditing({ ...editing, nextRunAt: v })}
+                  ariaLabel="Next run (date)"
                 />
               </div>
               <div className="space-y-1.5">

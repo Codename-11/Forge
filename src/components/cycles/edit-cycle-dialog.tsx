@@ -5,6 +5,7 @@ import { CycleStatus } from "@prisma/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { DatePicker } from "@/components/ui/date-picker";
 import { Confirm, QuickForm, SidePanel } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 
@@ -197,10 +198,20 @@ export function EditCycleDialog({
           </QuickForm.Field>
           <div className="grid grid-cols-2 gap-2">
             <QuickForm.Field label="Starts" required>
-              <Input type="date" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} />
+              <DatePicker
+                value={startsAt}
+                onChange={(v) => setStartsAt(v)}
+                placeholder="Start date"
+                ariaLabel="Starts"
+              />
             </QuickForm.Field>
             <QuickForm.Field label="Ends" required>
-              <Input type="date" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} />
+              <DatePicker
+                value={endsAt}
+                onChange={(v) => setEndsAt(v)}
+                placeholder="End date"
+                ariaLabel="Ends"
+              />
             </QuickForm.Field>
           </div>
           <QuickForm.Field
