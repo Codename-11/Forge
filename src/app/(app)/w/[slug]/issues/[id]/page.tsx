@@ -501,7 +501,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               </span>
             </div>
 
-            <AiTriageCard issue={issue} />
+            <AiTriageCard issue={issue} slug={slug} />
 
             <TerminalRunFailureBanner
               run={issue.agentRuns?.[0] ?? null}

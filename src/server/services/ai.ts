@@ -165,39 +165,175 @@ Suggest a priority, applicable labels (only from the list above — match by id,
     return null;
   }
 
-  const call =
-    completion.choices?.[0]?.message?.tool_calls?.[0] as
-      | { type: string; function?: { name?: string; arguments?: string } }
-      | undefined;
-  if (!call?.function?.arguments) {
-    logger.warn({ completion }, "ai.triage: tool call missing");
+  const validLabelIds = new Set(input.workspaceLabels.map((l) => l.id));
+  const validAgentIds = new Set(input.agents.map((a) => a.id));
+  const suggestion = parseTriageMessage(
+    completion.choices?.[0]?.message,
+    validLabelIds,
+    validAgentIds,
+  );
+  if (!suggestion) {
+    logger.warn(
+      {
+        provider: ctx.providerId,
+        finishReason: completion.choices?.[0]?.finish_reason,
+      },
+      "ai.triage: no usable suggestion",
+    );
     return null;
   }
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = JSON.parse(call.function.arguments);
-  } catch (err) {
-    logger.warn({ err, args: call.function.arguments }, "ai.triage: bad JSON");
-    return null;
+  return suggestion;
+}
+
+// ---------------------------------------------------------------------------
+// Triage response parsing. The happy path is a forced `submit_triage` tool
+// call. But some OpenAI-compatible gateways (notably the Hermes model-router)
+// ignore `tool_choice` and answer in prose — so we degrade gracefully:
+// tool_calls → function_call → fenced/inline JSON → labelled prose. A prose
+// answer only counts if it names a recognizable priority; otherwise we treat
+// it as a non-result so the caller can mark ERROR. Mirrors the resilience the
+// PLANNER already has in `parseGeneratedPlanMessage`.
+// ---------------------------------------------------------------------------
+
+const PRIORITY_PATTERN = "NONE|LOW|MEDIUM|HIGH|URGENT";
+
+export function parseTriageMessage(
+  message: unknown,
+  validLabelIds: Set<string>,
+  validAgentIds: Set<string>,
+): TriageSuggestion | null {
+  for (const payload of triagePayloadCandidates(message)) {
+    const fromPayload = suggestionFromPayload(
+      payload,
+      validLabelIds,
+      validAgentIds,
+    );
+    if (fromPayload) return fromPayload;
   }
+  const text = messageTextContent(message);
+  if (text) return suggestionFromProse(text, validLabelIds, validAgentIds);
+  return null;
+}
+
+function triagePayloadCandidates(message: unknown): Record<string, unknown>[] {
+  const out: Record<string, unknown>[] = [];
+  const msg = asRecord(message);
+  if (!msg) return out;
+
+  const toolCalls = Array.isArray(msg.tool_calls) ? msg.tool_calls : [];
+  for (const toolCall of toolCalls) {
+    const fn = asRecord(asRecord(toolCall)?.function);
+    const name = typeof fn?.name === "string" ? fn.name : null;
+    if (name && name !== "submit_triage") continue;
+    const payload = jsonRecord(fn?.arguments);
+    if (payload) out.push(payload);
+  }
+
+  const legacy = asRecord(msg.function_call);
+  if (legacy) {
+    const name = typeof legacy.name === "string" ? legacy.name : null;
+    if (!name || name === "submit_triage") {
+      const payload = jsonRecord(legacy.arguments);
+      if (payload) out.push(payload);
+    }
+  }
+
+  const text = messageTextContent(message);
+  if (text) {
+    for (const candidate of jsonCandidates(text)) {
+      try {
+        const record = asRecord(JSON.parse(candidate));
+        if (record) out.push(record);
+      } catch {
+        // Try the next likely JSON span.
+      }
+    }
+  }
+  return out;
+}
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value === "string") {
+    try {
+      return asRecord(JSON.parse(value));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function suggestionFromPayload(
+  parsed: Record<string, unknown>,
+  validLabelIds: Set<string>,
+  validAgentIds: Set<string>,
+): TriageSuggestion | null {
+  const reasoning =
+    typeof parsed.reasoning === "string" && parsed.reasoning.trim()
+      ? parsed.reasoning.trim().slice(0, 1000)
+      : null;
+  // Guard against arbitrary JSON that isn't a triage payload (e.g. a stray
+  // object embedded in prose): it must carry a priority or a reasoning.
+  if (!("priority" in parsed) && reasoning === null) return null;
 
   const priority = isPriority(parsed.priority) ? parsed.priority : Priority.NONE;
-  const labelIds = Array.isArray(parsed.label_ids)
-    ? parsed.label_ids.filter((x): x is string => typeof x === "string")
-    : [];
-  const validLabelIds = new Set(input.workspaceLabels.map((l) => l.id));
-  const filteredLabelIds = labelIds.filter((id) => validLabelIds.has(id));
-  const validAgentIds = new Set(input.agents.map((a) => a.id));
+  const rawLabels = Array.isArray(parsed.label_ids)
+    ? parsed.label_ids
+    : Array.isArray(parsed.labelIds)
+      ? parsed.labelIds
+      : [];
+  const labelIds = rawLabels
+    .filter((x): x is string => typeof x === "string")
+    .filter((id) => validLabelIds.has(id));
+  const agentRaw = parsed.agent_id ?? parsed.agentId;
   const agentId =
-    typeof parsed.agent_id === "string" && validAgentIds.has(parsed.agent_id)
-      ? parsed.agent_id
+    typeof agentRaw === "string" && validAgentIds.has(agentRaw)
+      ? agentRaw
       : null;
-  const reasoning =
-    typeof parsed.reasoning === "string"
-      ? parsed.reasoning.slice(0, 1000)
-      : "(no reasoning provided)";
 
-  return { priority, labelIds: filteredLabelIds, agentId, reasoning };
+  return {
+    priority,
+    labelIds,
+    agentId,
+    reasoning: reasoning ?? "(no reasoning provided)",
+  };
+}
+
+function suggestionFromProse(
+  text: string,
+  validLabelIds: Set<string>,
+  validAgentIds: Set<string>,
+): TriageSuggestion | null {
+  const priority = prosePriority(text);
+  if (!priority) return null; // no recognizable triage signal — let caller ERROR.
+
+  // ids are unique cuids, so a substring scan is the most format-robust match
+  // regardless of how the model formatted the prose.
+  const labelIds = [...validLabelIds].filter((id) => text.includes(id));
+  const agentId = [...validAgentIds].find((id) => text.includes(id)) ?? null;
+
+  const reasonMatch = text.match(/reasoning[\s*_]*[:\-]\s*([\s\S]+)/i);
+  const reasoning = (reasonMatch?.[1]?.trim() || text.trim()).slice(0, 1000);
+
+  return { priority, labelIds, agentId, reasoning };
+}
+
+function prosePriority(text: string): Priority | null {
+  const labelled = text.match(
+    new RegExp(
+      `priority[\\s*_]*[:\\-]?\\s*\\*{0,2}\\s*(${PRIORITY_PATTERN})`,
+      "i",
+    ),
+  );
+  const token =
+    labelled?.[1] ??
+    text.match(new RegExp(`\\b(${PRIORITY_PATTERN})\\b`, "i"))?.[1];
+  if (!token) return null;
+  const upper = token.toUpperCase();
+  return isPriority(upper) ? upper : null;
 }
 
 export async function runCoachComment(

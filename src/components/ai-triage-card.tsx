@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
-import { Sparkles, RefreshCw, X } from "lucide-react";
+import Link from "next/link";
+import { Sparkles, RefreshCw, X, Settings } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
@@ -48,7 +49,13 @@ const PRIORITY_TONE: Record<Issue["priority"], string> = {
   URGENT: "bg-red-400/15 text-red-200",
 };
 
-export function AiTriageCard({ issue }: { issue: Issue }) {
+export function AiTriageCard({
+  issue,
+  slug,
+}: {
+  issue: Issue;
+  slug: string;
+}) {
   const utils = trpc.useUtils();
   const { data: allLabels } = trpc.label.list.useQuery();
   const { data: agents } = trpc.agent.list.useQuery();
@@ -116,14 +123,26 @@ export function AiTriageCard({ issue }: { issue: Issue }) {
 
   if (status === "ERROR") {
     return (
-      <div className="mb-5 flex items-center justify-between gap-2 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-        <div className="flex items-center gap-2">
-          <Sparkles className="h-3.5 w-3.5 text-muted-foreground/70" />
-          <span>AI triage unavailable.</span>
+      <div className="mb-5 flex items-start justify-between gap-2 rounded-lg border border-border/60 bg-card/40 px-3 py-2.5 text-xs text-muted-foreground">
+        <div className="flex items-start gap-2">
+          <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground/70" />
+          <div className="space-y-1.5">
+            <p className="leading-relaxed">
+              {issue.aiTriageReasoning?.trim() || "AI triage unavailable."}
+            </p>
+            <Link
+              href={`/w/${slug}/settings/workspace`}
+              className="inline-flex items-center gap-1 text-[0.6875rem] text-foreground/80 underline-offset-2 hover:underline"
+            >
+              <Settings className="h-3 w-3" />
+              Configure AI
+            </Link>
+          </div>
         </div>
         <Button
           size="sm"
           variant="ghost"
+          className="shrink-0"
           onClick={() => rerun.mutate({ issueId: issue.id })}
           disabled={rerun.isPending}
         >

@@ -11,6 +11,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Fixed
+
+- **AI triage works again — and tells you what's wrong when it can't.** The "AI triage suggestion" card on an issue could get stuck showing a bare *"AI triage unavailable."* with only a Retry, because some AI providers reply in plain text instead of the structured format Forge expected — so every suggestion was thrown away. Forge now reads those plain-text replies too, so triage produces a real priority / label / agent suggestion. When triage genuinely can't run, the card now explains why and links straight to **Settings → Workspace → AI** to fix it, instead of leaving you guessing.
+
 ### Changed
 
 - **The audit log and webhook deliveries name what they touched.** Both used to identify the subject by a raw id fragment (`issue/a1b2c3d4`). They now resolve it to the real thing — the issue (with its key), project, agent (`@handle`), goal, plan, sprint, artifact, and more — so you can scan the system audit log and delivery history without decoding cuids. The full id is still there on hover.

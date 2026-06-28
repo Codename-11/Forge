@@ -11081,3 +11081,40 @@ runtime tests clean (`tests/unit/runtime-info.test.ts`,
 clean; full `pnpm test` clean (936 passed / 1 skipped); full Playwright e2e
 clean (`E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1`, 34 passed);
 `pnpm build` clean.
+
+## 2026-06-27 — AI triage: prose fallback + actionable ERROR card
+
+Diagnosed why the AI-triage card (`AiTriageCard`, above the issue description)
+was stuck in ERROR for every issue on the AXI workspace. Root cause was *not*
+config: `Workspace.aiProvider=hermes` routes through the Hermes gateway, which
+wraps the call in a full agent loop with its own toolset and **ignores OpenAI
+`tool_choice`**. The model answered in prose ("…the backend tool
+`submit_triage` isn't available in this environment…", with a usable
+recommendation inline), `runTriage` only read `message.tool_calls[0]`, found
+none → returned null → `triageIssue` wrote ERROR **with no reason**, and the
+card showed a bare "AI triage unavailable." + Retry. Logs confirmed: gateway
+returns `finish_reason: stop`, prose content, ~55k prompt tokens (gateway
+context injection).
+
+Three fixes (no provider change — the goal was to make `hermes` work):
+- `src/server/services/ai.ts`: new exported `parseTriageMessage(message,
+  validLabelIds, validAgentIds)` degrades tool_calls → `function_call` →
+  fenced/inline JSON → labelled prose. Prose only counts if it names a
+  recognizable priority (else null → caller ERRORs); label/agent ids matched by
+  scanning the text for the workspace's actual cuids (format-agnostic). Mirrors
+  the resilience `parseGeneratedPlanMessage` already had for the PLANNER.
+  `runTriage`'s old single-tool-call parse block replaced with a call to it.
+- `src/server/services/ai-triage.ts`: the two ERROR paths now persist an
+  actionable `aiTriageReasoning` — distinguishes "provider not configured"
+  (`aiAvailable(provider)` false) from "model returned nothing usable", both
+  pointing at Settings → Workspace → AI. `triageRerun` already nulls the field,
+  so no staleness.
+- `src/components/ai-triage-card.tsx`: ERROR branch renders the persisted
+  reason + a "Configure AI" link (`/w/<slug>/settings/workspace`) alongside
+  Retry. Card now takes a `slug` prop; issue page passes it.
+
+Verification: new `tests/unit/ai-triage-parse.test.ts` (7 cases incl. the
+verbatim prod prose) green; `pnpm typecheck` clean; `pnpm lint` clean on the
+four touched files. Full DB-backed `pnpm test` skipped intentionally (dev points
+at prod Postgres; didn't want fixture churn there). Out of scope but noted: the
+~55k-token gateway prompts are a cost/latency smell for a separate pass.

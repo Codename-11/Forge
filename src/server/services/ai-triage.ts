@@ -2,7 +2,7 @@ import "server-only";
 import { AiTriageStatus, AgentRole } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
-import { runTriage } from "@/server/services/ai";
+import { runTriage, aiAvailable } from "@/server/services/ai";
 
 /**
  * Background-runnable triage routine. Loads the issue + workspace context,
@@ -86,10 +86,16 @@ export async function triageIssue(issueId: string): Promise<void> {
     });
 
     if (!suggestion) {
+      // Distinguish "provider not wired up" from "model gave nothing usable"
+      // so the card can show an actionable reason instead of a bare error.
+      const reason = aiAvailable(issue.workspace.aiProvider)
+        ? "The model didn't return a usable triage suggestion. Try Re-run, or switch the AI provider/model in Settings → Workspace → AI."
+        : `The “${issue.workspace.aiProvider ?? "hermes"}” AI provider isn't configured for this workspace. Set it up in Settings → Workspace → AI.`;
       await db.issue.update({
         where: { id: issueId },
         data: {
           aiTriageStatus: AiTriageStatus.ERROR,
+          aiTriageReasoning: reason,
           aiTriagedAt: new Date(),
         },
       });
@@ -114,6 +120,8 @@ export async function triageIssue(issueId: string): Promise<void> {
         where: { id: issueId },
         data: {
           aiTriageStatus: AiTriageStatus.ERROR,
+          aiTriageReasoning:
+            "Triage failed unexpectedly. Try Re-run, or check the AI provider in Settings → Workspace → AI.",
           aiTriagedAt: new Date(),
         },
       })
