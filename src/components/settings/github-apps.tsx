@@ -17,7 +17,7 @@ import { Section } from "@/components/ui";
 import { Card } from "@/components/settings/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Confirm } from "@/components/ui/modal";
+import { Confirm, QuickForm } from "@/components/ui/modal";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
@@ -43,6 +43,9 @@ export function GithubAppsManager() {
 
   const [showManual, setShowManual] = useState(false);
   const [testResults, setTestResults] = useState<Record<string, VerifyResult>>({});
+  const [manifestOpen, setManifestOpen] = useState(false);
+  const [appName, setAppName] = useState("");
+  const [appOrg, setAppOrg] = useState("");
 
   // Surface manifest-flow outcomes carried back as query params.
   useEffect(() => {
@@ -61,22 +64,17 @@ export function GithubAppsManager() {
 
   const invalidate = () => void utils.githubApp.list.invalidate();
 
-  const startManifest = () => {
-    const name = window.prompt(
-      "Name for the GitHub App (created on your account; you can change it on GitHub):",
-      `Forge ${ws.key}`,
-    );
-    if (name === null) return;
-    const org = window.prompt(
-      "Install under a GitHub organization? Enter its login, or leave blank for your personal account.",
-      "",
-    );
-    if (org === null) return;
+  const openManifest = () => {
+    setAppName(`Forge ${ws.key}`);
+    setAppOrg("");
+    setManifestOpen(true);
+  };
+  const submitManifest = () => {
     const url = new URL("/api/integrations/github-app/manifest", window.location.origin);
     url.searchParams.set("ws", ws.id);
     url.searchParams.set("returnTo", pathname);
-    if (name.trim()) url.searchParams.set("name", name.trim());
-    if (org.trim()) url.searchParams.set("org", org.trim());
+    if (appName.trim()) url.searchParams.set("name", appName.trim());
+    if (appOrg.trim()) url.searchParams.set("org", appOrg.trim());
     window.location.href = url.toString();
   };
 
@@ -114,7 +112,7 @@ export function GithubAppsManager() {
         )}
 
         <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
-          <Button type="button" size="sm" onClick={startManifest}>
+          <Button type="button" size="sm" onClick={openManifest}>
             <Github className="h-3.5 w-3.5" />
             Create with GitHub
           </Button>
@@ -134,6 +132,36 @@ export function GithubAppsManager() {
 
         {showManual && <ManualForm onDone={() => { setShowManual(false); invalidate(); }} />}
       </Card>
+
+      <QuickForm
+        open={manifestOpen}
+        onOpenChange={setManifestOpen}
+        title="Create a GitHub App"
+        description="Created on your account — you can rename it on GitHub afterward. Next you'll approve it on GitHub, then install it."
+        primaryLabel="Continue on GitHub"
+        onSubmit={() => submitManifest()}
+      >
+        <QuickForm.Field label="App name" htmlFor="gh-app-name">
+          <Input
+            id="gh-app-name"
+            value={appName}
+            onChange={(e) => setAppName(e.target.value)}
+            autoFocus
+          />
+        </QuickForm.Field>
+        <QuickForm.Field
+          label="GitHub organization"
+          htmlFor="gh-app-org"
+          hint="Leave blank to install under your personal account."
+        >
+          <Input
+            id="gh-app-org"
+            value={appOrg}
+            onChange={(e) => setAppOrg(e.target.value)}
+            placeholder="my-org (optional)"
+          />
+        </QuickForm.Field>
+      </QuickForm>
     </Section>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnchoredPopover } from "@/components/ui/anchored-popover";
+import { useConfirm } from "@/components/ui/modal";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { NoteStatus } from "@prisma/client";
@@ -747,6 +748,7 @@ function NoteRow({
   onPromote,
   promoting,
 }: NoteRowProps) {
+  const { confirm, confirmElement } = useConfirm();
   const archived = !!note.archivedAt;
   const [convertOpen, setConvertOpen] = useState(false);
   const [statusOpen, setStatusOpen] = useState(false);
@@ -986,11 +988,15 @@ function NoteRow({
           {archived && (
             <button
               type="button"
-              onClick={() => {
+              onClick={async () => {
                 if (
-                  confirm(
-                    "Permanently delete this note? Use Archive for the soft path.",
-                  )
+                  await confirm({
+                    title: "Delete this note?",
+                    description:
+                      "This can't be undone — use Archive for the soft path.",
+                    primaryLabel: "Delete",
+                    variant: "destructive",
+                  })
                 )
                   onDelete();
               }}
@@ -1002,6 +1008,7 @@ function NoteRow({
           )}
         </div>
       </div>
+      {confirmElement}
     </li>
   );
 }

@@ -339,6 +339,15 @@ Nothing-inspired minimalism + Anthropic warm earthy. Tokens in
 `text-muted-foreground` over ad-hoc tailwind classes. Mono for identifiers
 (issue IDs, keys), sans for everything else.
 
+**No native browser controls on any app surface — always themed in-app UI.**
+Never use native `<select>`, `window.confirm` / `alert` / `prompt`, or raw
+`<input type="color">`. Use the primitives in `src/components/ui`: `Combobox`
+/ `Picker` for selects, `useConfirm()` / `Confirm` for confirmations,
+`QuickForm` for prompt-style input, `ColorSwatchPicker` for color, a toast
+(`sonner`) for alerts. Enforced by ESLint (`no-restricted-globals` /
+`no-restricted-syntax` in `eslint.config.mjs`). (Native `<input type="date">`
+is mid-migration to a themed `DatePicker` — don't add new ones.)
+
 ### Density-aware text utilities
 
 Per-user **Appearance** prefs (`User.density`, `User.textSize`) cascade

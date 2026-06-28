@@ -43,6 +43,7 @@ import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { CreateLabelModal } from "@/components/inline-create/create-label-modal";
+import { Combobox } from "@/components/ui/combobox";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
 import { InitiativeChip } from "@/components/initiative-chip";
@@ -754,32 +755,14 @@ function InlineStatus({
   options: { id: string; name: string; color: string }[];
   onChange: (id: string) => void;
 }) {
-  const current = options.find((o) => o.id === value);
   return (
-    <label className="relative flex items-center">
-      <span className="pointer-events-none inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1 text-[0.6875rem]">
-        {current && (
-          <span
-            aria-hidden
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ backgroundColor: current.color }}
-          />
-        )}
-        <span>{current?.name ?? "Status"}</span>
-      </span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="absolute inset-0 cursor-pointer opacity-0"
-        aria-label="Status"
-      >
-        {options.map((s) => (
-          <option key={s.id} value={s.id}>
-            {s.name}
-          </option>
-        ))}
-      </select>
-    </label>
+    <Combobox
+      value={value}
+      onChange={(v) => v && onChange(v)}
+      options={options.map((s) => ({ value: s.id, label: s.name, color: s.color }))}
+      ariaLabel="Status"
+      matchTriggerWidth
+    />
   );
 }
 
@@ -791,21 +774,13 @@ function InlinePriority({
   onChange: (p: (typeof PRIORITIES)[number]) => void;
 }) {
   return (
-    <label className="relative flex items-center">
-      <span className="pointer-events-none inline-flex items-center rounded-md border border-border bg-background px-2 py-1 font-mono text-[0.6875rem]">
-        {value}
-      </span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as (typeof PRIORITIES)[number])}
-        className="absolute inset-0 cursor-pointer opacity-0"
-        aria-label="Priority"
-      >
-        {PRIORITIES.map((p) => (
-          <option key={p}>{p}</option>
-        ))}
-      </select>
-    </label>
+    <Combobox
+      value={value}
+      onChange={(v) => v && onChange(v as (typeof PRIORITIES)[number])}
+      options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+      ariaLabel="Priority"
+      matchTriggerWidth
+    />
   );
 }
 

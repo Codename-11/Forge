@@ -3,6 +3,7 @@ import { useState } from "react";
 import { ShieldPlus, ShieldMinus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { useConfirm } from "@/components/ui/modal";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } from "./admin-ui";
 import { InviteUserDialog } from "./admin-overview";
 
@@ -14,6 +15,7 @@ import { InviteUserDialog } from "./admin-overview";
  */
 export function AdminUsers() {
   const utils = trpc.useUtils();
+  const { confirm, confirmElement } = useConfirm();
   const users = trpc.instanceAdmin.users.useQuery();
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -34,8 +36,16 @@ export function AdminUsers() {
   function promote(userId: string) {
     setRole.mutate({ userId, role: "INSTANCE_ADMIN" });
   }
-  function demote(userId: string, name: string | null) {
-    if (!window.confirm(`Remove instance-admin from ${name ?? "this user"}? They lose access to /admin.`)) return;
+  async function demote(userId: string, name: string | null) {
+    if (
+      !(await confirm({
+        title: `Remove instance-admin from ${name ?? "this user"}?`,
+        description: "They lose access to /admin.",
+        primaryLabel: "Remove",
+        variant: "destructive",
+      }))
+    )
+      return;
     setRole.mutate({ userId, role: "MEMBER" });
   }
 
@@ -135,6 +145,7 @@ export function AdminUsers() {
         )}
       </AdminPanel>
       <InviteUserDialog open={inviteOpen} onOpenChange={setInviteOpen} />
+      {confirmElement}
     </div>
   );
 }

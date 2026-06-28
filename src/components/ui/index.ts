@@ -44,6 +44,8 @@ export { MOTION, type MotionToken } from "@/lib/motion";
 // legacy `<Dialog>` primitive — call-sites should migrate to these.
 export {
   Confirm,
+  useConfirm,
+  type ConfirmOptions,
   QuickForm,
   SidePanel,
   Picker,

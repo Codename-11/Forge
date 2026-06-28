@@ -4,6 +4,7 @@ import { CycleStatus } from "@prisma/client";
 import { toast } from "sonner";
 import { QuickForm } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 
 /**
@@ -126,19 +127,22 @@ export function NewCycleDialog({
             : undefined
         }
       >
-        <select
-          name="status"
+        <Combobox
           value={status}
-          onChange={(e) => setStatus(e.target.value as CycleStatus)}
-          className="focus-ring h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
-        >
-          <option value={CycleStatus.PLANNED}>Planned</option>
-          <option value={CycleStatus.ACTIVE} disabled={!!activeCycleName}>
-            Active
-          </option>
-          <option value={CycleStatus.COMPLETED}>Completed</option>
-          <option value={CycleStatus.CANCELED}>Canceled</option>
-        </select>
+          onChange={(v) => setStatus((v ?? CycleStatus.PLANNED) as CycleStatus)}
+          options={[
+            { value: CycleStatus.PLANNED, label: "Planned" },
+            // Active is unavailable (omitted) while another sprint is active.
+            ...(activeCycleName
+              ? []
+              : [{ value: CycleStatus.ACTIVE, label: "Active" }]),
+            { value: CycleStatus.COMPLETED, label: "Completed" },
+            { value: CycleStatus.CANCELED, label: "Canceled" },
+          ]}
+          ariaLabel="Status"
+          matchTriggerWidth
+          className="h-9 w-full"
+        />
       </QuickForm.Field>
     </QuickForm>
   );

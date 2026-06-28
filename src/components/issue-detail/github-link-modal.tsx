@@ -17,6 +17,7 @@ import type { inferRouterOutputs } from "@trpc/server";
 import type { AppRouter } from "@/server/routers/_app";
 import { CenterModal } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
@@ -196,18 +197,14 @@ function KindSelector({ kind, onChange }: { kind: LinkKind; onChange: (k: LinkKi
   return (
     <label className="flex items-center gap-2 text-xs text-muted-foreground">
       <span className="shrink-0">Link as</span>
-      <select
+      <Combobox
         value={kind}
-        onChange={(e) => onChange(e.target.value as LinkKind)}
-        className="focus-ring h-7 rounded-md border border-input bg-background px-2 text-xs"
-        aria-label="Link kind"
-      >
-        {LINK_KINDS.map((k) => (
-          <option key={k} value={k}>
-            {kindLabel(k)}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onChange((v ?? "RELATES_TO") as LinkKind)}
+        options={LINK_KINDS.map((k) => ({ value: k, label: kindLabel(k) }))}
+        ariaLabel="Link kind"
+        className="h-7 text-xs"
+        matchTriggerWidth
+      />
     </label>
   );
 }
@@ -470,18 +467,17 @@ function Remediation({
         {isAdmin ? (
           <div className="flex flex-wrap items-center gap-2">
             {state.connections.length > 1 && (
-              <select
+              <Combobox
                 value={connectionId}
-                onChange={(e) => setConnectionId(e.target.value)}
-                className="focus-ring h-8 rounded-md border border-input bg-background px-2 text-xs"
-                aria-label="GitHub connection"
-              >
-                {state.connections.map((c) => (
-                  <option key={c.connectionId} value={c.connectionId}>
-                    {c.account ?? c.label}
-                  </option>
-                ))}
-              </select>
+                onChange={(v) => setConnectionId(v ?? "")}
+                options={state.connections.map((c) => ({
+                  value: c.connectionId,
+                  label: c.account ?? c.label,
+                }))}
+                ariaLabel="GitHub connection"
+                className="h-8 text-xs"
+                matchTriggerWidth
+              />
             )}
             <Button
               type="button"
@@ -727,29 +723,32 @@ function BrowseTab({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
-        <select
+        <Combobox
           value={selectedRepo}
-          onChange={(e) => setSelectedRepo(e.target.value)}
-          className="focus-ring h-8 min-w-0 flex-1 rounded-md border border-input bg-background px-2 font-mono text-xs"
-          aria-label="Repository"
-        >
-          {repos.data.map((m) => (
-            <option key={m.repoFullName} value={m.repoFullName}>
-              {m.repoFullName}
-              {m.mapped ? "" : " · not connected"}
-            </option>
-          ))}
-        </select>
-        <select
-          value={type}
-          onChange={(e) => setType(e.target.value as "" | "issue" | "pr")}
-          className="focus-ring h-8 rounded-md border border-input bg-background px-2 text-xs"
-          aria-label="Type filter"
-        >
-          <option value="">All</option>
-          <option value="issue">Issues</option>
-          <option value="pr">PRs</option>
-        </select>
+          onChange={(v) => setSelectedRepo(v ?? "")}
+          options={repos.data.map((m) => ({
+            value: m.repoFullName,
+            label: `${m.repoFullName}${m.mapped ? "" : " · not connected"}`,
+          }))}
+          searchable
+          ariaLabel="Repository"
+          className="h-8 min-w-0 flex-1 font-mono text-xs"
+          matchTriggerWidth
+        />
+        <Combobox
+          value={type || null}
+          onChange={(v) => setType((v ?? "") as "" | "issue" | "pr")}
+          options={[
+            { value: "issue", label: "Issues" },
+            { value: "pr", label: "PRs" },
+          ]}
+          allowNone
+          noneLabel="All"
+          placeholder="All"
+          ariaLabel="Type filter"
+          className="h-8 text-xs"
+          matchTriggerWidth
+        />
       </div>
 
       <div className="relative">

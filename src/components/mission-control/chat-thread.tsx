@@ -33,6 +33,7 @@ import { ChatMarkdown } from "./chat-markdown";
 import { ChatWorkTrace, type ChatTraceToolCall } from "./chat-work-trace";
 import type { SlashCommandContext } from "@/lib/chat-slash-commands";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { Combobox } from "@/components/ui/combobox";
 import { TransportChip } from "@/components/agents/transport-chip";
 import { agentAvailabilityModel, presenceAvailability } from "@/lib/transport-display";
 
@@ -636,17 +637,22 @@ function ProviderOverridePopover({
             <label className="block text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
               Provider override
             </label>
-            <select
-              value={providerOverride ?? ""}
-              onChange={(e) => onProviderChange(e.target.value)}
-              className="w-full rounded border border-border bg-background/60 px-1.5 py-1 text-[0.6875rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ember/40"
-            >
-              <option value="">Use agent default ({defaultProvider})</option>
-              <option value="HERMES">HERMES</option>
-              <option value="CLAUDE">CLAUDE</option>
-              <option value="CODEX">CODEX</option>
-              <option value="CUSTOM">CUSTOM</option>
-            </select>
+            <Combobox
+              value={providerOverride ?? null}
+              onChange={(v) => onProviderChange(v ?? "")}
+              options={[
+                { value: "HERMES", label: "HERMES" },
+                { value: "CLAUDE", label: "CLAUDE" },
+                { value: "CODEX", label: "CODEX" },
+                { value: "CUSTOM", label: "CUSTOM" },
+              ]}
+              allowNone
+              noneLabel={`Use agent default (${defaultProvider})`}
+              placeholder={`Use agent default (${defaultProvider})`}
+              ariaLabel="Provider override"
+              matchTriggerWidth
+              className="w-full"
+            />
             <p className="text-[0.5625rem] italic text-muted-foreground/60">
               Routes this thread to the chosen platform&apos;s configured chat backend — it does not
               fall back to another. A provider with no chat model (a pull/act CLI, or an unset API
@@ -674,19 +680,23 @@ function ProviderOverridePopover({
             <label className="block text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
               YOLO mode
             </label>
-            <select
+            <Combobox
               value={
                 yoloModeOverride === null ? "inherit" : yoloModeOverride ? "on" : "off"
               }
-              onChange={(e) => onYoloChange(e.target.value)}
-              className="w-full rounded border border-border bg-background/60 px-1.5 py-1 text-[0.6875rem] text-foreground focus:outline-none focus:ring-1 focus:ring-ember/40"
-            >
-              <option value="inherit">
-                Inherit runtime default ({runtimeYoloDefault ? "on" : "off"})
-              </option>
-              <option value="on">Force on</option>
-              <option value="off">Force off</option>
-            </select>
+              onChange={(v) => onYoloChange(v ?? "inherit")}
+              options={[
+                {
+                  value: "inherit",
+                  label: `Inherit runtime default (${runtimeYoloDefault ? "on" : "off"})`,
+                },
+                { value: "on", label: "Force on" },
+                { value: "off", label: "Force off" },
+              ]}
+              ariaLabel="YOLO mode"
+              matchTriggerWidth
+              className="w-full"
+            />
             <p className="text-[0.5625rem] italic text-muted-foreground/60">
               Codex uses full-access/no-approval turn policy; Hermes approvals are auto-approved.
             </p>

@@ -9,6 +9,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
+import { Combobox } from "@/components/ui/combobox";
 import { cn, relativeTime } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -248,7 +249,7 @@ export default function PlansPage() {
   };
 
   // Open the New-plan modal pre-selected to a template. Reuses the same
-  // modal + templateId state the <select> drives — the rail cards are
+  // modal + templateId state the Combobox drives — the rail cards are
   // just another trigger.
   const openCreate = (presetTemplateId = "blank") => {
     setTemplateId(presetTemplateId);
@@ -597,18 +598,15 @@ export default function PlansPage() {
             <label className="mt-3 block text-meta uppercase tracking-wide text-muted-foreground">
               Template
             </label>
-            <select
+            <Combobox
               value={templateId}
-              onChange={(e) => setTemplateId(e.target.value)}
+              onChange={(v) => setTemplateId(v ?? "blank")}
+              options={PLAN_TEMPLATES.map((t) => ({ value: t.id, label: t.label }))}
               disabled={seeding}
-              className="mt-1 w-full rounded-md border border-border bg-card/40 px-2 py-1.5 text-sm"
-            >
-              {PLAN_TEMPLATES.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
+              ariaLabel="Plan template"
+              matchTriggerWidth
+              className="mt-1 w-full"
+            />
             <p className="mt-1.5 text-meta text-muted-foreground">
               {selectedTemplate.blurb}
               {selectedTemplate.steps.length > 0 && (

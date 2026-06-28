@@ -18,6 +18,7 @@
  * `@/components/ui` for back-compat while call-sites migrate.
  */
 export { Confirm } from "./confirm";
+export { useConfirm, type ConfirmOptions } from "./use-confirm";
 export { QuickForm } from "./quick-form";
 export { CenterModal } from "./center-modal";
 export { SidePanel } from "./side-panel";

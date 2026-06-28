@@ -11183,3 +11183,37 @@ Verification: unit test green; `pnpm typecheck` + `pnpm lint` clean.
 
 Verification: `pnpm typecheck` + `pnpm lint` clean; in-app smoke via dev:local
 (enable workspace AI + point at the Hermes gateway) next.
+
+Verified in-app (dev:local + Playwright, real Hermes gateway): Enhance button →
+"Suggested rewrite" panel (Current vs Suggested with acceptance criteria) →
+Apply. Shipped to prod.
+
+## 2026-06-27 — Phase 4: native-element sweep (confirm/alert/prompt) + guardrails
+
+Replaced jarring native browser controls with the existing in-app primitives.
+
+- **`useConfirm()`** (`ui/modal/use-confirm.tsx`) — imperative wrapper over the
+  existing `<Confirm>` so call-sites `await confirm({...})`. Migrated
+  `window.confirm`: `quick-notes-widget` (NoteRow), `admin-shell/admin-users`,
+  `agent-run-strip` (RunModeControl).
+- **`window.alert`** → toast: `time/page.tsx` export error.
+- **`window.prompt`** (×2) → `QuickForm`: GitHub App creation in
+  `settings/github-apps` (App name + org as a 2-field form).
+- **Native `<select>` → `Combobox`** (13 sites): issue-topbar Status/Priority,
+  plans template, `github-link-modal` (×4), `chat-thread` (×2),
+  mission-control `settings-popover` (×2), `new-cycle-dialog`, issue-main
+  agent-mode, `runtime-credentials`. (`crew-selector` was already Combobox; only
+  its doc-comment was stale.)
+- **Guardrails** (`eslint.config.mjs`): `no-restricted-globals` for bare
+  `confirm/alert/prompt` (the local `useConfirm` binding shadows the global, so
+  it's not flagged) + `no-restricted-syntax` for `window.confirm/alert/prompt`,
+  both at **error**. CLAUDE.md "Design style" rule added.
+
+**Scope reality:** the ESLint guard revealed **~64 native `<select>` across ~29
+files** — far beyond the spec's estimate of 4. Migrated 13; the remaining ~51
+are a **`react/forbid-elements` warn-tracked backlog** (blocks NEW `<select>` in
+review, doesn't fail CI). Escalate that rule to `error` once cleared. Native
+`<input type=date>` (Phase 5 DatePicker) still pending.
+
+Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors (64 `<select>`
+warnings = the backlog). Confirm/alert/prompt fully gone + hard-enforced.

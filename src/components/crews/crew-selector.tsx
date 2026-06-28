@@ -7,9 +7,10 @@ import { Combobox } from "@/components/ui/combobox";
 import { roleBreakdown } from "@/components/crews/role-chip";
 
 /**
- * Reusable crew picker. A native `<select>` styled to match the warm
- * earthy form controls used elsewhere, plus a one-line summary of the
- * chosen crew (member count + role breakdown) beneath it.
+ * Reusable crew picker. Uses the themed in-app `Combobox` (no native
+ * browser dropdown) to match the warm earthy form controls used
+ * elsewhere, plus a one-line summary of the chosen crew (member count +
+ * role breakdown) beneath it.
  *
  * `value` is the selected crew id (or null for "no crew"). Lists active
  * crews via `agentCrew.list` — which already embeds members, so the role

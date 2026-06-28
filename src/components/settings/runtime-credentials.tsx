@@ -17,6 +17,7 @@ import { Section } from "@/components/ui";
 import { Card } from "@/components/settings/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { Confirm } from "@/components/ui/modal";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
@@ -84,21 +85,23 @@ function GithubAppSection({ runtimeId }: { runtimeId: string }) {
           <>
             <label className="block space-y-1">
               <span className="text-meta text-muted-foreground">App used by this runtime</span>
-              <select
-                value={linked ? (apps.find((a) => a.appId === linked.appId)?.id ?? "") : ""}
-                onChange={(e) => link.mutate({ runtimeId, githubAppId: e.target.value || null })}
+              <Combobox
+                value={
+                  linked ? (apps.find((a) => a.appId === linked.appId)?.id ?? null) : null
+                }
+                onChange={(v) => link.mutate({ runtimeId, githubAppId: v })}
+                options={apps.map((a) => ({
+                  value: a.id,
+                  label: `${a.name}${a.installed ? "" : " (not installed)"}`,
+                }))}
+                allowNone
+                noneLabel="None — use a static GH_TOKEN secret"
+                placeholder="None — use a static GH_TOKEN secret"
                 disabled={link.isPending}
-                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
-                aria-label="GitHub App"
-              >
-                <option value="">None — use a static GH_TOKEN secret</option>
-                {apps.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.name}
-                    {a.installed ? "" : " (not installed)"}
-                  </option>
-                ))}
-              </select>
+                ariaLabel="GitHub App"
+                matchTriggerWidth
+                className="h-9 w-full"
+              />
             </label>
             {linked && (
               <HealthLine lastMintedAt={linked.lastMintedAt} lastError={linked.lastError} />

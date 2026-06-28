@@ -3,6 +3,7 @@ import { useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
+import { Combobox } from "@/components/ui/combobox";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
 interface SettingsPopoverProps {
@@ -100,11 +101,11 @@ export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopover
             <div className="border-t border-border/60 pt-1.5">
               <div className="flex items-center justify-between gap-2 px-2 py-1 text-[0.75rem]">
                 <span className="text-foreground">Open on (this workspace)</span>
-                <select
+                <Combobox
                   value={wsPref ?? "__inherit__"}
                   disabled={updatePrefs.isPending || !workspaceId}
-                  onChange={(e) => {
-                    const raw = e.target.value;
+                  onChange={(v) => {
+                    const raw = v ?? "__inherit__";
                     if (raw === "__inherit__") {
                       updatePrefs.mutate({
                         missionControlDefaultTab: null,
@@ -118,35 +119,25 @@ export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopover
                       workspaceId: workspaceId ?? undefined,
                     });
                   }}
-                  className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[0.6875rem] outline-none focus:border-ember/50"
-                >
-                  <option value="__inherit__">
-                    Inherit ({userPref})
-                  </option>
-                  {TAB_OPTIONS.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
+                  options={[
+                    { value: "__inherit__", label: `Inherit (${userPref})` },
+                    ...TAB_OPTIONS.map((t) => ({ value: t.id, label: t.label })),
+                  ]}
+                  ariaLabel="Open on (this workspace)"
+                />
               </div>
               <div className="flex items-center justify-between gap-2 px-2 py-1 text-[0.75rem]">
                 <span className="text-muted-foreground">Open on (all workspaces)</span>
-                <select
+                <Combobox
                   value={userPref}
                   disabled={updatePrefs.isPending}
-                  onChange={(e) => {
-                    const next = normalizeDefaultTab(e.target.value);
+                  onChange={(v) => {
+                    const next = normalizeDefaultTab(v);
                     updatePrefs.mutate({ missionControlDefaultTab: next });
                   }}
-                  className="rounded-md border border-border bg-background px-1.5 py-0.5 text-[0.6875rem] outline-none focus:border-ember/50"
-                >
-                  {TAB_OPTIONS.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.label}
-                    </option>
-                  ))}
-                </select>
+                  options={TAB_OPTIONS.map((t) => ({ value: t.id, label: t.label }))}
+                  ariaLabel="Open on (all workspaces)"
+                />
               </div>
               <p className="px-2 pb-1 pt-0.5 text-[0.625rem] text-muted-foreground">
                 Per-workspace value wins. Activity will open on{" "}

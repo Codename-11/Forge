@@ -9,6 +9,7 @@ import {
   MODE_SUBTITLE,
   type EngagementModeValue,
 } from "@/components/ui/engagement-mode-glyph";
+import { useConfirm } from "@/components/ui/modal";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
@@ -233,6 +234,7 @@ function RunModeControl({
   runId: string;
   mode: EngagementModeValue;
 }) {
+  const { confirm, confirmElement } = useConfirm();
   const utils = trpc.useUtils();
   const restartM = trpc.agentRun.restartWithMode.useMutation({
     onSuccess: (res) => {
@@ -273,14 +275,16 @@ function RunModeControl({
                   : `Stop this run and restart as ${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}.`
               }
               disabled={active || restartM.isPending}
-              onClick={() => {
+              onClick={async () => {
                 if (
-                  window.confirm(
-                    `Stop the current ${MODE_LABEL[mode]} run and restart as ${MODE_LABEL[m]}?`,
-                  )
-                ) {
+                  await confirm({
+                    title: `Restart this run as ${MODE_LABEL[m]}?`,
+                    description: `Stops the current ${MODE_LABEL[mode]} run and restarts in ${MODE_LABEL[m]} mode.`,
+                    primaryLabel: "Restart",
+                    variant: "destructive",
+                  })
+                )
                   restartM.mutate({ runId, mode: m });
-                }
               }}
               className={cn(
                 "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
@@ -306,6 +310,7 @@ function RunModeControl({
       >
         active mode locked
       </span>
+      {confirmElement}
     </div>
   );
 }

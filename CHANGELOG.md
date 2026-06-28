@@ -18,6 +18,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
+- **Confirmations, prompts, and dropdowns use Forge's own UI, not the browser's.** "Are you sure?" confirmations (deleting a note, removing an admin, restarting a run), the GitHub App setup prompts, and a batch of dropdowns now use Forge's themed in-app dialogs and pickers instead of the operating system's native popups — consistent look, keyboard-friendly, on-brand. (More dropdowns are still being converted.)
 - **The label color picker is now in-app.** Choosing a label color (in Settings → Labels and the new inline create) uses themed swatches plus a hex field instead of the operating system's native color dialog — consistent with the rest of Forge.
 
 ### Fixed

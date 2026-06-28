@@ -34,6 +34,7 @@ import { expandTemplatesInBody, type SlashTemplateSideEffect } from "@/lib/slash
 import { SlashAutocomplete, useSlashAutocomplete } from "@/components/slash-autocomplete";
 import { MentionInput } from "@/components/inputs/mention-input";
 import { Kbd } from "@/components/ui/kbd";
+import { Combobox } from "@/components/ui/combobox";
 import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 
@@ -1090,11 +1091,11 @@ function Comments({
                   <span className="font-mono text-[0.625rem] text-muted-foreground">
                     @{request.profileKey}
                   </span>
-                  <select
-                    aria-label={`Mode for ${request.agentName}`}
+                  <Combobox
+                    ariaLabel={`Mode for ${request.agentName}`}
                     value={request.mode}
-                    onChange={(e) => {
-                      const mode = e.target.value as AgentRequestMode;
+                    onChange={(v) => {
+                      const mode = (v ?? "DISCUSS") as AgentRequestMode;
                       setAgentRequestOverrides((prev) => ({
                         ...prev,
                         [key]: {
@@ -1106,14 +1107,12 @@ function Comments({
                         },
                       }));
                     }}
-                    className="rounded border border-border bg-card/60 px-1 py-0.5 text-[0.6875rem] text-foreground"
-                  >
-                    {AGENT_REQUEST_MODES.map((mode) => (
-                      <option key={mode.value} value={mode.value}>
-                        {mode.label} — {mode.hint}
-                      </option>
-                    ))}
-                  </select>
+                    options={AGENT_REQUEST_MODES.map((mode) => ({
+                      value: mode.value,
+                      label: `${mode.label} — ${mode.hint}`,
+                    }))}
+                    className="text-[0.6875rem]"
+                  />
                   {request.mode === "EXECUTE" && (
                     <label className="inline-flex items-center gap-1 text-[0.6875rem] text-muted-foreground">
                       <input

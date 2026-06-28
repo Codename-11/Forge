@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import { Clock, Download } from "lucide-react";
+import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
@@ -95,7 +96,7 @@ export default function TimeLogPage() {
       URL.revokeObjectURL(url);
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Export failed";
-      alert(msg);
+      toast.error(msg);
     }
   }
 
