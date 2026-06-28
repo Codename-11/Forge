@@ -10,10 +10,21 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, usePathname } from "next/navigation";
-import { Calendar, ChevronDown, CornerDownLeft, Plus, X } from "lucide-react";
+import {
+  AlertCircle,
+  Calendar,
+  ChevronDown,
+  CornerDownLeft,
+  Github,
+  GitPullRequest,
+  Loader2,
+  Plus,
+  X,
+} from "lucide-react";
 import { toast } from "sonner";
 import { ArtifactType, NotificationSeverity } from "@prisma/client";
 import { cn } from "@/lib/utils";
+import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
 import { MOTION } from "@/lib/motion";
 import { Kbd } from "@/components/ui/kbd";
 import { useHotkey } from "@/lib/keyboard";
@@ -350,9 +361,42 @@ export function QuickCreate() {
     { enabled: open && !!contextIssueId },
   );
 
+  // Pasting a GitHub issue/PR URL (or owner/repo#123) into Issue mode turns
+  // the capture bar into an import path instead of creating a literal URL-title
+  // Forge issue. Sub-issue/comment contexts stay local to the current issue.
+  const githubImportRef = useMemo(
+    () => (mode.kind === "issue" ? parseGitHubIssueOrPrRef(text) : null),
+    [mode.kind, text],
+  );
+  const githubImportRepo = githubImportRef?.repoFullName ?? null;
+  const githubLinkability = trpc.github.linkability.useQuery(
+    { repoFullName: githubImportRepo ?? "" },
+    {
+      enabled: open && !!githubImportRepo && !!githubImportRef?.number,
+      staleTime: 15_000,
+      retry: false,
+    },
+  );
+  const githubReady = githubLinkability.data?.status === "ready" ? githubLinkability.data : null;
+  const githubPreviewInput = githubImportRef?.url
+    ? { url: githubImportRef.url, mappingId: githubReady?.mappingId }
+    : {
+        repoFullName: githubImportRepo ?? "",
+        number: githubImportRef?.number ?? 0,
+        mappingId: githubReady?.mappingId,
+      };
+  const githubPreview = trpc.github.preview.useQuery(githubPreviewInput, {
+    enabled: !!githubReady && !!githubImportRef?.number,
+    staleTime: 15_000,
+    retry: false,
+  });
+
   // ----- mutations --------------------------------------------------
 
   const createIssue = trpc.issue.create.useMutation({
+    onError: (err) => toast.error(err.message),
+  });
+  const importGitHubIssue = trpc.github.importIssue.useMutation({
     onError: (err) => toast.error(err.message),
   });
   const createComment = trpc.comment.create.useMutation({
@@ -390,6 +434,7 @@ export function QuickCreate() {
 
   const busy =
     createIssue.isPending ||
+    importGitHubIssue.isPending ||
     createComment.isPending ||
     createCycle.isPending ||
     createInitiative.isPending ||
@@ -671,6 +716,45 @@ export function QuickCreate() {
     try {
       switch (mode.kind) {
         case "issue": {
+          if (githubImportRef) {
+            if (githubLinkability.isLoading) {
+              toast.info("Checking GitHub access…");
+              return;
+            }
+            if (!githubReady) {
+              toast.error("Connect this GitHub repository before importing it.");
+              return;
+            }
+            if (githubPreview.isLoading) {
+              toast.info("Loading GitHub preview…");
+              return;
+            }
+            if (githubPreview.isError || !githubPreview.data) {
+              toast.error(githubPreview.error?.message ?? "Could not load GitHub preview.");
+              return;
+            }
+            const explicitLabelIds = (labels ?? [])
+              .filter((label) =>
+                committed.some(
+                  (c) => c.kind === "label" && c.name.toLowerCase() === label.name.toLowerCase(),
+                ),
+              )
+              .map((label) => label.id);
+            const result = await importGitHubIssue.mutateAsync({
+              mappingId: githubReady.mappingId,
+              url: githubPreview.data.url,
+              projectId: projectId || null,
+              labelIds: explicitLabelIds,
+            });
+            await utils.issue.list.invalidate();
+            done(result.created ? "Imported GitHub issue." : "Opened existing imported issue.");
+            if (secondary) {
+              const base = ws ? `/w/${ws.slug}` : "";
+              router.push(`${base}/issues/${result.issueId}`);
+            }
+            return;
+          }
+
           // Resolve title + commands. Most commands have already been
           // committed into chips (priority/project synced onto the native
           // pickers, the rest in `committed`), but the operator may have a
@@ -1321,12 +1405,25 @@ export function QuickCreate() {
               MOTION.fast,
             )}
           >
-            {busy ? "…" : "Create"}
+            {busy ? "…" : githubImportRef ? "Import" : "Create"}
             <Kbd className="border-ember-foreground/30 bg-ember-foreground/10 text-ember-foreground/80">
               ⏎
             </Kbd>
           </button>
         </div>
+
+        {githubImportRef && (
+          <GitHubImportStatus
+            checking={githubLinkability.isLoading}
+            linkabilityError={githubLinkability.error?.message ?? null}
+            linkabilityStatus={githubLinkability.data?.status ?? null}
+            previewLoading={githubPreview.isLoading}
+            previewError={githubPreview.error?.message ?? null}
+            snapshot={githubPreview.data ?? null}
+            fallbackRepo={githubImportRef.repoFullName}
+            fallbackNumber={githubImportRef.number}
+          />
+        )}
 
         {/* Add pills (mouse path) — issue / sub-issue only. Each primes
             the matching slash so it shares the keyboard value picker. */}
@@ -1523,6 +1620,121 @@ export function QuickCreate() {
           agentByHandle={agentByHandle}
         />
       )}
+    </div>
+  );
+}
+
+function GitHubImportStatus({
+  checking,
+  linkabilityError,
+  linkabilityStatus,
+  previewLoading,
+  previewError,
+  snapshot,
+  fallbackRepo,
+  fallbackNumber,
+}: {
+  checking: boolean;
+  linkabilityError: string | null;
+  linkabilityStatus: string | null;
+  previewLoading: boolean;
+  previewError: string | null;
+  snapshot:
+    | {
+        resourceType: string;
+        title: string;
+        state: string;
+        url: string;
+        repoFullName: string;
+        number: number;
+      }
+    | null;
+  fallbackRepo: string;
+  fallbackNumber: number;
+}) {
+  const lineClass = "flex items-center gap-1.5 text-meta";
+  const warningClass = `${lineClass} text-warning`;
+  const mutedClass = `${lineClass} text-muted-foreground`;
+
+  if (checking) {
+    return (
+      <div className="border-t border-border/60 bg-card/30 px-4 py-2">
+        <p className={mutedClass}>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Checking access to <span className="font-mono">{fallbackRepo}</span>…
+        </p>
+      </div>
+    );
+  }
+
+  if (linkabilityError) {
+    return (
+      <div className="border-t border-border/60 bg-card/30 px-4 py-2">
+        <p className={warningClass}>
+          <AlertCircle className="h-3.5 w-3.5" />
+          {linkabilityError}
+        </p>
+      </div>
+    );
+  }
+
+  if (linkabilityStatus && linkabilityStatus !== "ready") {
+    return (
+      <div className="border-t border-border/60 bg-card/30 px-4 py-2">
+        <p className={warningClass}>
+          <AlertCircle className="h-3.5 w-3.5" />
+          Connect <span className="font-mono">{fallbackRepo}</span> in GitHub settings before importing.
+        </p>
+      </div>
+    );
+  }
+
+  if (previewLoading) {
+    return (
+      <div className="border-t border-border/60 bg-card/30 px-4 py-2">
+        <p className={mutedClass}>
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          Loading <span className="font-mono">{fallbackRepo}#{fallbackNumber}</span>…
+        </p>
+      </div>
+    );
+  }
+
+  if (previewError) {
+    return (
+      <div className="border-t border-border/60 bg-card/30 px-4 py-2">
+        <p className={warningClass}>
+          <AlertCircle className="h-3.5 w-3.5" />
+          {previewError}
+        </p>
+      </div>
+    );
+  }
+
+  if (!snapshot) return null;
+  const isPr = snapshot.resourceType === "PULL_REQUEST";
+  return (
+    <div className="border-t border-border/60 bg-card/30 px-4 py-2">
+      <div className="flex items-start gap-2 rounded-md border border-border bg-background/70 p-2">
+        {isPr ? (
+          <GitPullRequest className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        ) : (
+          <Github className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[0.8125rem] font-medium" title={snapshot.title}>
+            {snapshot.title}
+          </p>
+          <div className="mt-0.5 flex items-center gap-1.5 text-meta text-muted-foreground">
+            <span className="font-mono">
+              {snapshot.repoFullName}#{snapshot.number}
+            </span>
+            <span>{isPr ? "pull request" : "issue"}</span>
+            <span>{snapshot.state || "unknown"}</span>
+            <span className="ml-auto">Press Enter to import</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, ChevronDown, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnchoredPopover } from "@/components/ui/anchored-popover";
@@ -79,6 +79,7 @@ export function Combobox({
   const [active, setActive] = useState(0);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const listboxId = useId();
 
   const isAsync = !!onQueryChange;
   const showSearch = searchable || isAsync;
@@ -134,9 +135,11 @@ export function Combobox({
       <button
         ref={triggerRef}
         type="button"
+        role="combobox"
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={listboxId}
         aria-label={ariaLabel}
         onClick={() => setOpen((v) => !v)}
         className={cn(
@@ -167,6 +170,7 @@ export function Combobox({
         align={align}
         matchWidth={matchTriggerWidth}
         role="listbox"
+        id={listboxId}
         ariaLabel={ariaLabel}
         className={cn(
           "min-w-[11rem] rounded-md border border-border bg-popover shadow-md",

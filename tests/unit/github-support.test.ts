@@ -85,4 +85,32 @@ describe("GitHub support utilities", () => {
       resourceType: "ISSUE",
     });
   });
+
+  it("maps GitHub pull requests into Forge issue-create input", () => {
+    const input = issueCreateInputFromGitHub({
+      mapping: { labelIds: [], config: {} },
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/api",
+        number: 99,
+        url: "https://github.com/acme/api/pull/99",
+        title: "Fix flaky import",
+        state: "open",
+        authorLogin: "octo",
+        labels: [],
+        assignees: [],
+        metadata: { body: "PR body" },
+      },
+    });
+
+    expect(input.title).toBe("Fix flaky import");
+    expect(input.description).toContain("GitHub pull request: https://github.com/acme/api/pull/99");
+    expect(input.eventPayload).toMatchObject({
+      source: "github",
+      repo: "acme/api",
+      number: 99,
+      resourceType: "PULL_REQUEST",
+    });
+  });
 });

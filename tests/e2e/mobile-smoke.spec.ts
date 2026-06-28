@@ -200,8 +200,9 @@ test.describe("Mobile smoke", () => {
     await expect(page.locator("span", { hasText: comment }).first()).toBeVisible();
 
     const status = page.getByRole("combobox", { name: "Status" });
-    await status.selectOption({ label: "In Progress" });
-    await expect(status).toHaveValue(/.+/);
+    await status.click();
+    await page.getByRole("option", { name: "In Progress" }).click();
+    await expect(status).toContainText("In Progress");
 
     await page.getByTitle(/Assign agent/i).click();
     await expect(page.getByRole("dialog")).toBeVisible();

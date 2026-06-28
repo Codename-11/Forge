@@ -27,7 +27,7 @@ import {
   resolveRepoLinkability,
 } from "@/server/services/github/linkability";
 import { parseGitHubUrl, splitRepoFullName } from "@/server/services/github/url";
-import { EXTERNAL_LINK_KINDS, type GitHubResourceSnapshot } from "@/server/services/github/types";
+import { EXTERNAL_LINK_KINDS, GITHUB_RESOURCE_TYPES, type GitHubResourceSnapshot } from "@/server/services/github/types";
 
 const linkKindSchema = z.enum(EXTERNAL_LINK_KINDS);
 
@@ -257,21 +257,29 @@ export const githubRouter = router({
 
   importIssue: workspaceProcedure
     .input(
-      z.object({
-        mappingId: z.string().cuid().optional(),
-        repoFullName: repoFullNameSchema.optional(),
-        number: z.number().int().positive(),
-        projectId: z.string().cuid().nullable().optional(),
-        labelIds: z.array(z.string().cuid()).default([]),
-        queue: z.boolean().optional(),
-      }),
+      z
+        .object({
+          mappingId: z.string().cuid().optional(),
+          url: z.string().url().max(2048).optional(),
+          repoFullName: repoFullNameSchema.optional(),
+          resourceType: z.enum(GITHUB_RESOURCE_TYPES).optional(),
+          number: z.number().int().positive().optional(),
+          projectId: z.string().cuid().nullable().optional(),
+          labelIds: z.array(z.string().cuid()).default([]),
+          queue: z.boolean().optional(),
+        })
+        .refine((v) => !!v.url || (!!v.repoFullName && !!v.number), {
+          message: "Provide a url, or repoFullName + number.",
+        }),
     )
     .mutation(({ ctx, input }) =>
       importGitHubIssue({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         mappingId: input.mappingId,
+        url: input.url,
         repoFullName: input.repoFullName,
+        resourceType: input.resourceType,
         number: input.number,
         projectId: input.projectId,
         labelIds: input.labelIds,

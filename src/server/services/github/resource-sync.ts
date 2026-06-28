@@ -139,10 +139,13 @@ export async function fetchGitHubSnapshotForParsed(
     number: parsed.number,
   });
   if (issue.pull_request) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "That GitHub issue URL points to a pull request. Use the pull request URL instead.",
+    const pr = await getGitHubPullRequest({
+      installationId,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      number: parsed.number,
     });
+    return pullRequestSnapshot(parsed.repoFullName, pr);
   }
   return issueSnapshot(parsed.repoFullName, issue);
 }
@@ -358,8 +361,10 @@ export async function importGitHubIssue(args: {
   db: PrismaClient;
   workspaceId: string;
   mappingId?: string | null;
+  url?: string | null;
   repoFullName?: string | null;
-  number: number;
+  resourceType?: GitHubResourceType;
+  number?: number | null;
   actor: ActorMeta;
   projectId?: string | null;
   labelIds?: string[];
@@ -370,18 +375,29 @@ export async function importGitHubIssue(args: {
   resource: ExternalResource;
   link: ExternalResourceLink;
 }> {
+  const parsed = args.url ? parseGitHubUrl(args.url) : null;
+  const repoFullName = parsed?.repoFullName ?? args.repoFullName;
+  const number = parsed?.number ?? args.number;
+  if (!repoFullName || !number) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Provide a GitHub URL, or repoFullName + number.",
+    });
+  }
   const mapping = await resolveGitHubRepoMapping({
     db: args.db,
     workspaceId: args.workspaceId,
     mappingId: args.mappingId,
-    repoFullName: args.repoFullName,
+    repoFullName,
   });
-  const snapshot = await fetchGitHubSnapshot({
-    mapping,
-    repoFullName: args.repoFullName ?? mapping.target,
-    resourceType: "ISSUE",
-    number: args.number,
-  });
+  const snapshot = parsed
+    ? await fetchGitHubSnapshotForParsed(parsed, mapping)
+    : await fetchGitHubSnapshot({
+        mapping,
+        repoFullName,
+        resourceType: args.resourceType ?? "ISSUE",
+        number,
+      });
   const resource = await upsertExternalResource(args.db, {
     workspaceId: args.workspaceId,
     connectionMappingId: mapping.id,
