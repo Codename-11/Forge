@@ -3,13 +3,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { MessageCircleReply, Target, Workflow } from "lucide-react";
+import { MessageCircleReply, Sparkles, Target, Workflow } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
+import { DescriptionAiAssist } from "@/components/issue-detail/description-ai-assist";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import { SubIssuesPanel, ParentIssueBacklink } from "@/components/issue-detail/sub-issues-panel";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
@@ -442,6 +443,11 @@ function DescriptionBlock({
   const [draft, setDraft] = useState(description ?? "");
   const [editing, setEditing] = useState(false);
   const [mentionOpen, setMentionOpen] = useState(false);
+  // AI draft/enhance result, staged for review before it touches the issue.
+  const [suggestion, setSuggestion] = useState<{
+    markdown: string;
+    original: string | null;
+  } | null>(null);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
   // Keep draft in sync when the server sends a fresh description and we're
@@ -508,7 +514,57 @@ function DescriptionBlock({
 
   return (
     <section>
-      <SectionLabel>Description</SectionLabel>
+      <div className="flex items-center justify-between gap-2">
+        <SectionLabel>Description</SectionLabel>
+        <DescriptionAiAssist
+          issueId={issueId}
+          hasDescription={!!description?.trim()}
+          onResult={setSuggestion}
+        />
+      </div>
+      {suggestion && (
+        <div className="mb-2 mt-1 space-y-2 rounded-md border border-amber-300/30 bg-amber-300/[0.04] p-3">
+          <div className="flex items-center gap-1.5 text-[0.6875rem] font-medium uppercase tracking-wider text-amber-200/80">
+            <Sparkles className="h-3 w-3 text-amber-300" />
+            {suggestion.original != null ? "Suggested rewrite" : "Drafted description"}
+          </div>
+          {suggestion.original != null && suggestion.original.trim() && (
+            <div className="space-y-1">
+              <div className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                Current
+              </div>
+              <div className="prose prose-sm max-w-none rounded bg-background/50 p-2 text-[0.8125rem] opacity-70">
+                <MarkdownWithAttachments body={suggestion.original} />
+              </div>
+            </div>
+          )}
+          <div className="space-y-1">
+            <div className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+              {suggestion.original != null ? "Suggested" : "Draft"}
+            </div>
+            <div className="prose prose-sm max-w-none rounded bg-background p-2 text-[0.8125rem]">
+              <MarkdownWithAttachments body={suggestion.markdown} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button size="sm" variant="ghost" onClick={() => setSuggestion(null)}>
+              Discard
+            </Button>
+            <Button
+              size="sm"
+              variant="ember"
+              onClick={() => {
+                onSave(suggestion.markdown);
+                setDraft(suggestion.markdown);
+                setSuggestion(null);
+                setEditing(false);
+              }}
+            >
+              Apply
+            </Button>
+          </div>
+        </div>
+      )}
       {editing ? (
         <div
           className="relative space-y-2"

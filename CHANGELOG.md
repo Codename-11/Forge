@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Draft or improve an issue description with AI.** Next to the Description heading there's now an AI button — **Draft with AI** writes a description from the issue title when there's none yet, and **Enhance** rewrites an existing one for clarity and structure. You see the suggestion (with a current-vs-suggested view for an enhance) and choose **Apply** or **Discard** — nothing changes until you accept it. Appears only when AI is enabled for the workspace.
 - **Create a label without leaving the issue.** The label picker on an issue now has a search box — type to filter, and (if you're a workspace admin) pick **Create "&lt;name&gt;"** to make a new label with a name and color right there and apply it in one step. No more detour to Settings → Labels first.
 
 ### Changed

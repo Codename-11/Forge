@@ -11165,3 +11165,21 @@ tree** — deploy only from a clean/consistent tree, never mid-edit.
   `AiAssistMenu` (re-run + draft + enhance-with-diff) still to come.
 
 Verification: unit test green; `pnpm typecheck` + `pnpm lint` clean.
+
+## 2026-06-27 — AI assist ph3 (frontend): description draft/enhance button + review panel
+
+- `components/issue-detail/description-ai-assist.tsx`: a contextual button next
+  to the Description label — **Draft with AI** when the description is empty,
+  **Enhance** when it has one. Hidden entirely when `workspace.aiEnabled` is
+  false. Calls `ai.draftDescription` / `ai.enhanceDescription` and hands the
+  result up via `onResult`; never writes the issue itself.
+- `issue-main.tsx` `DescriptionBlock`: stages the result in `suggestion` and
+  renders a **review panel** — for Enhance, a "Current" vs "Suggested"
+  before/after (both rendered Markdown); Apply saves via `onSave`, Discard
+  drops it. Nothing touches the issue until Apply, so it never clobbers.
+- Scope call: triage **re-run** stays on the `AiTriageCard` (it already had
+  it); description assist is its own button, not one merged menu. A popover can
+  unify them later when sub-tasks / duplicate-finding land (YAGNI for now).
+
+Verification: `pnpm typecheck` + `pnpm lint` clean; in-app smoke via dev:local
+(enable workspace AI + point at the Hermes gateway) next.
