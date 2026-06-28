@@ -118,7 +118,11 @@ export function PinButton({
 
   const dim = size === "md" ? "h-7 w-7" : "h-6 w-6";
   const iconDim = size === "md" ? "h-3.5 w-3.5" : "h-3 w-3";
-  const label = pinned ? "Unpin from sidebar" : "Pin to sidebar";
+  const pinSurface = workspaceId === null ? "navbar" : "sidebar";
+  const shortcutHint = shortcut ? ` (${shortcut})` : "";
+  const label = pinned
+    ? `Unpin from ${pinSurface}${shortcutHint}`
+    : `Pin to ${pinSurface}${shortcutHint}`;
 
   return (
     <button

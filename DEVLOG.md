@@ -2,6 +2,29 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-28 — Navbar pinned issue unpin affordance
+
+Closed AXI-89. Root cause: the cross-workspace topbar pin strip rendered
+pinned items as pure links, so pinned issues had no direct removal affordance
+there; the issue detail `p` shortcut had also drifted to the workspace/sidebar
+pin bucket even though the UI comment said it controlled the navbar strip.
+
+Changes:
+- `PinsStrip` now gives every pinned navbar chip a visible `×` button with
+  `Unpin from navbar: …` title/aria-label. It calls `pin.remove({ id })`,
+  invalidates both modern/legacy pin caches, broadcasts `pins:updated`, and
+  shows an `Unpinned` toast.
+- `PinButton` labels now distinguish `navbar` vs `sidebar` pins and include
+  the shortcut hint when present.
+- Issue detail now uses the cross-workspace/navbar issue pin (`workspaceId:
+  null`) for the visible pin control and `p` shortcut, so a pinned issue can be
+  removed from either the navbar chip or its own issue controls.
+
+Verification: `pnpm typecheck`; `pnpm lint` (passes with existing native-select
+warnings); `set -a; source /home/bailey/forge/.env; set +a; unset
+OPENAI_API_KEY; pnpm test` → 1027 passed / 1 skipped; same env `pnpm
+build:app` → Next build successful.
+
 ## 2026-06-27 — Subject-label resolver (audit log + webhook deliveries)
 
 Closed the deferral from the gap sweep: raw `subjectId.slice(0,8)` on the

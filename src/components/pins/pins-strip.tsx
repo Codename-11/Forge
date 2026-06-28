@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
   Pin as PinIcon,
+  X,
   FolderKanban,
   Diamond,
   Filter,
@@ -41,6 +42,16 @@ export function PinsStrip() {
   const { data } = trpc.pin.listAll.useQuery({ workspaceId: null });
   const pins = (data ?? []) as HydratedPin[];
 
+  const removeMut = trpc.pin.remove.useMutation({
+    onSuccess: () => {
+      void utils.pin.listAll.invalidate();
+      void utils.pin.list.invalidate();
+      broadcastCrossTab({ type: "pins:updated" });
+      toast.success("Unpinned");
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // If another tab toggles a pin, refresh our cached list so the strip
   // stays consistent across windows. Pins are user-scoped (not tied to
   // a single workspace) so the BroadcastChannel is the right bus here;
@@ -62,7 +73,14 @@ export function PinsStrip() {
         if (!pin || !pin.target) {
           return <EmptyPinSlot key={`empty-${idx}`} alreadyPinnedIds={pinnedKeySet(pins)} />;
         }
-        return <PinChip key={pin.id} target={pin.target} />;
+        return (
+          <PinChip
+            key={pin.id}
+            pin={pin}
+            onRemove={() => removeMut.mutate({ id: pin.id })}
+            removing={removeMut.isPending}
+          />
+        );
       })}
     </div>
   );
@@ -252,7 +270,39 @@ function TargetIcon({ kind }: { kind: HydratedPinTarget["targetType"] }) {
  * keeps the same outer dimensions (`h-7`) so the strip stays a uniform
  * height regardless of which mix of pin types the user has.
  */
-function PinChip({ target }: { target: HydratedPinTarget }) {
+function PinChip({
+  pin,
+  onRemove,
+  removing,
+}: {
+  pin: HydratedPin;
+  onRemove: () => void;
+  removing: boolean;
+}) {
+  if (!pin.target) return null;
+  const label = labelFor(pin.target);
+  return (
+    <div className="group/pinned-strip relative inline-flex min-w-0">
+      <PinChipLink target={pin.target} />
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          onRemove();
+        }}
+        disabled={removing}
+        title={`Unpin from navbar: ${label}`}
+        aria-label={`Unpin from navbar: ${label}`}
+        className="focus-ring absolute right-1 top-1/2 inline-flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-card hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+      >
+        <X className="h-3 w-3" />
+      </button>
+    </div>
+  );
+}
+
+function PinChipLink({ target }: { target: HydratedPinTarget }) {
   switch (target.targetType) {
     case "ISSUE":
       return <IssueChip target={target} />;
@@ -270,7 +320,7 @@ function PinChip({ target }: { target: HydratedPinTarget }) {
 }
 
 const STRIP_BASE = cn(
-  "focus-ring group inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-card/60 pl-1 pr-2 text-left hover:bg-subtle",
+  "focus-ring group inline-flex h-7 max-w-[220px] items-center gap-1.5 rounded-md border border-border bg-card/60 pl-1 pr-7 text-left hover:bg-subtle",
   MOTION.base,
 );
 

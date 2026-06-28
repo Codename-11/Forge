@@ -402,15 +402,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 const reason = coerceDispatchReason(issue.dispatchReason);
                 return reason ? <DispatchReasonChip reason={reason} /> : null;
               })()}
-              {/* Phase 1A: per-workspace pin toggle. Lives next to the
-                  chip cluster so it visually groups with the issue's other
-                  metadata. The legacy `<PinToggleButton>` higher up in the
-                  Topbar actions still drives the cross-workspace strip
-                  (issue-only, p shortcut). */}
+              {/* Cross-workspace/navbar pin toggle. It mirrors the topbar
+                  pinned strip, so a pinned issue can always be unpinned from
+                  either the navbar chip or the issue's own controls. */}
               <PinButton
                 targetType="ISSUE"
                 targetId={issue.id}
-                workspaceId={workspace.id}
+                workspaceId={null}
                 shortcut="p"
               />
               <WatchButton issueId={issue.id} />
