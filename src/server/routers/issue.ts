@@ -1035,6 +1035,15 @@ export const issueRouter = router({
         dueDate: z.date().nullable().optional(),
         estimate: z.number().min(0).nullable().optional(),
         /**
+         * Per-issue SLA target in minutes. `null` clears it; omit to leave
+         * unchanged. When the workspace has `slaEnforcementEnabled`, the
+         * sla-breach sweep emits `ISSUE_SLA_BREACH` once the issue ages past
+         * this many minutes — which in turn fires the Coach. Mirrors the
+         * `slaMinutes` field on `issue.create`; flows through the generic
+         * `...patchRest` spread into the update data below.
+         */
+        slaMinutes: z.number().int().min(1).max(525_600).nullable().optional(),
+        /**
          * Agent completion contract. `null` clears the field; omit to
          * leave unchanged. See agent-completion-contract.ts for the
          * structured shape of verificationChecklist.

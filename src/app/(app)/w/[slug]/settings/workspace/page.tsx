@@ -563,7 +563,7 @@ export default function WorkspaceSettingsPage() {
                   onChange={setSlaEnforcementEnabled}
                   disabled={!canEdit}
                   label="Enforce per-issue SLA"
-                  hint="When on, scans for issues past their slaMinutes target and emits ISSUE_SLA_BREACH. Set per-issue slaMinutes from issue detail."
+                  hint="When on, scans for issues past their SLA target and emits ISSUE_SLA_BREACH (which also fires the Coach). Set a target per issue from the “SLA target” field in the issue rail — issues with no target are never breached."
                 />
               </div>
             </FormCard>

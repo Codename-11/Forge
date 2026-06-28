@@ -3,12 +3,12 @@ import { use, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus, WorkItemKind } from "@prisma/client";
-import { Bot, Paperclip, Plus, Trash2, Workflow } from "lucide-react";
+import { Bot, Paperclip, Plus, Timer, Trash2, Workflow } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { Confirm, Picker } from "@/components/ui/modal";
+import { Confirm, Picker, QuickForm } from "@/components/ui/modal";
 import {
   WorkItemKindGlyph,
   KIND_LABEL,
@@ -615,6 +615,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                         className="font-mono text-xs"
                       />
                     </SidebarField>
+                    <SidebarField label="SLA target">
+                      <SlaPickerField
+                        value={issue.slaMinutes ?? null}
+                        onChange={(slaMinutes) =>
+                          update.mutate({ id: issue.id, slaMinutes })
+                        }
+                      />
+                    </SidebarField>
                     <SidebarField label="Agent queue">
                       <label className="flex w-full flex-wrap items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
                         <input
@@ -915,6 +923,154 @@ function PickerTrigger({
       {children ?? <span className="text-muted-foreground">{placeholder}</span>}
       <span className="ml-auto text-muted-foreground">▾</span>
     </button>
+  );
+}
+
+/**
+ * Per-issue SLA target picker for the issue rail. Writes `Issue.slaMinutes`
+ * — the threshold the workspace's sla-breach sweep measures issue age
+ * against (when `slaEnforcementEnabled` is on) before emitting
+ * ISSUE_SLA_BREACH, which fires the Coach. Presets cover the common ladder;
+ * "Custom…" opens a themed minutes form for anything off-ladder.
+ */
+const SLA_PRESETS: Array<{ minutes: number; label: string }> = [
+  { minutes: 60, label: "1 hour" },
+  { minutes: 240, label: "4 hours" },
+  { minutes: 480, label: "8 hours" },
+  { minutes: 1440, label: "1 day" },
+  { minutes: 2880, label: "2 days" },
+  { minutes: 4320, label: "3 days" },
+  { minutes: 10080, label: "1 week" },
+];
+
+const SLA_MAX_MINUTES = 525_600; // one year; mirrors the issue.update ceiling
+
+function formatSla(min: number): string {
+  if (min < 60) return `${min}m`;
+  if (min < 1440) {
+    const h = min / 60;
+    return Number.isInteger(h) ? `${h}h` : `${h.toFixed(1)}h`;
+  }
+  const d = min / 1440;
+  return Number.isInteger(d) ? `${d}d` : `${d.toFixed(1)}d`;
+}
+
+type SlaRow =
+  | { kind: "none"; key: string }
+  | { kind: "preset"; key: string; minutes: number; label: string }
+  | { kind: "custom"; key: string };
+
+function SlaPickerField({
+  value,
+  onChange,
+}: {
+  value: number | null;
+  onChange: (slaMinutes: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [customOpen, setCustomOpen] = useState(false);
+
+  const items: SlaRow[] = [
+    { kind: "none", key: "__none" },
+    ...SLA_PRESETS.map((p) => ({
+      kind: "preset" as const,
+      key: `p${p.minutes}`,
+      minutes: p.minutes,
+      label: p.label,
+    })),
+    { kind: "custom", key: "__custom" },
+  ];
+
+  return (
+    <>
+      <PickerTrigger onClick={() => setOpen(true)} placeholder="No SLA target">
+        {value != null && (
+          <span className="flex min-w-0 items-center gap-1.5">
+            <Timer className="h-3 w-3 shrink-0 text-muted-foreground" />
+            <span className="truncate font-mono">{formatSla(value)}</span>
+          </span>
+        )}
+      </PickerTrigger>
+      <Picker<SlaRow>
+        open={open}
+        onOpenChange={setOpen}
+        placeholder="Set SLA target…"
+        items={items}
+        getKey={(it) => it.key}
+        onSelect={(it) => {
+          if (it.kind === "none") onChange(null);
+          else if (it.kind === "preset") onChange(it.minutes);
+          else setCustomOpen(true);
+        }}
+        renderItem={(it) => {
+          if (it.kind === "none") {
+            return (
+              <div className="flex items-center gap-2">
+                <span className="text-muted-foreground">No SLA target</span>
+                {value === null && (
+                  <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                    current
+                  </span>
+                )}
+              </div>
+            );
+          }
+          if (it.kind === "custom") {
+            return (
+              <div className="flex items-center gap-2">
+                <Plus className="h-3 w-3 text-muted-foreground" />
+                <span>Custom…</span>
+              </div>
+            );
+          }
+          return (
+            <div className="flex items-center gap-2">
+              <Timer className="h-3 w-3 shrink-0 text-muted-foreground" />
+              <span>{it.label}</span>
+              <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
+                {formatSla(it.minutes)}
+                {value === it.minutes ? " · current" : ""}
+              </span>
+            </div>
+          );
+        }}
+      />
+      <QuickForm
+        open={customOpen}
+        onOpenChange={setCustomOpen}
+        title="Custom SLA target"
+        description="Minutes from issue creation before it breaches its SLA."
+        primaryLabel="Set SLA"
+        onSubmit={(e) => {
+          const fd = new FormData(e.currentTarget);
+          const raw = String(fd.get("minutes") ?? "").trim();
+          const n = Number(raw);
+          if (!Number.isInteger(n) || n < 1) {
+            return { error: "Enter a whole number of minutes (1 or more)." };
+          }
+          if (n > SLA_MAX_MINUTES) {
+            return { error: "That's over a year — pick a smaller target." };
+          }
+          onChange(n);
+        }}
+      >
+        <label className="block space-y-1">
+          <span className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+            Minutes
+          </span>
+          <input
+            name="minutes"
+            type="number"
+            min={1}
+            max={SLA_MAX_MINUTES}
+            step={1}
+            defaultValue={value ?? 1440}
+            autoFocus
+            className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2.5 text-sm"
+          />
+        </label>
+      </QuickForm>
+    </>
   );
 }
 

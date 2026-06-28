@@ -11263,3 +11263,41 @@ thresholds live elsewhere, unlinked.
 
 Verification: `isUsefulCoachComment` unit test (3 cases) green; `pnpm typecheck`
 clean; `pnpm lint` 0 errors.
+
+## 2026-06-28 — Wire per-issue SLA target → Coach SLA-breach trigger
+
+Follow-up to the Coach health panel: the SLA-breach trigger was the only chip
+showing ✗, and "wire it" = make that path actually fire. The *backend* was
+already complete — `sweepSlaBreaches` is a registered maintenance job
+(`worker.ts`), emits `ISSUE_SLA_BREACH`, calls `coachOnEvent`, gated by
+`Workspace.slaEnforcementEnabled` (toggle exists in Settings → Workspace →
+Agent SLA) with per-issue `Issue.slaMinutes` as the threshold. The gap was the
+front half: `slaMinutes` was only accepted by `issue.create` (and MCP) — NOT by
+`issue.update` — and there was **no issue-detail UI** to set it. So the settings
+hint ("Set per-issue slaMinutes from issue detail") pointed at a control that
+didn't exist, and flipping the workspace toggle was inert because no issue ever
+carried a target.
+
+- **`src/server/routers/issue.ts`** — `update` input now accepts
+  `slaMinutes: z.number().int().min(1).max(525_600).nullable().optional()`.
+  Flows through the existing generic `...patchRest` spread into Prisma `data`;
+  `null` clears the column. Mirrors the `issue.create` field (which only had
+  `min(1)`).
+- **`src/app/(app)/w/[slug]/issues/[id]/page.tsx`** — new `SlaPickerField`
+  rendered as an "SLA target" `SidebarField` right after "Due". Themed `Picker`
+  with a preset ladder (1h/4h/8h/1d/2d/3d/1w), a "No SLA target" clear row, and
+  a "Custom…" row that opens a `QuickForm` minutes input (validates whole ≥1,
+  ≤525 600). Trigger shows the current target via `formatSla()` (compact m/h/d)
+  with a `Timer` glyph. No native controls (number input is allowlisted).
+- **`settings/workspace/page.tsx`** — reworded the toggle hint to point at the
+  new rail field and note that no-target issues are never breached (so enabling
+  enforcement is safe).
+- **`issue.test.ts`** — 3 new cases: set→change→clear round-trip; reject 0;
+  preserve `slaMinutes` across an unrelated (title-only) patch.
+
+Enabled `slaEnforcementEnabled=true` on prod AXI so all three Coach trigger
+chips read green; targets are set per-issue via the new field (the breach +
+Coach only fire once an issue with a target ages past it).
+
+Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors; `issue.test.ts`
+(29) + `sla-breach.test.ts` (5) green — 34 passed. Local stack on :55432/:56379.

@@ -773,3 +773,42 @@ describe("issueRouter — auto-watch on create / assign / agent-assign", () => {
     expect(watcher).not.toBeNull();
   });
 });
+
+describe("issueRouter — per-issue SLA target", () => {
+  it("sets, changes, and clears slaMinutes via update", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "sla target" });
+
+    // Set
+    await caller.update({ id: issue.id, slaMinutes: 240 });
+    let row = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(row.slaMinutes).toBe(240);
+
+    // Change
+    await caller.update({ id: issue.id, slaMinutes: 1440 });
+    row = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(row.slaMinutes).toBe(1440);
+
+    // Clear (null)
+    await caller.update({ id: issue.id, slaMinutes: null });
+    row = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(row.slaMinutes).toBeNull();
+  });
+
+  it("rejects a zero / negative SLA target", async () => {
+    const { caller, fixture } = await setup();
+    const issue = await createIssue(fixture, { title: "bad sla" });
+    await expect(caller.update({ id: issue.id, slaMinutes: 0 })).rejects.toThrow();
+  });
+
+  it("leaves slaMinutes untouched when omitted from an unrelated patch", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "keep sla" });
+    await caller.update({ id: issue.id, slaMinutes: 480 });
+    await caller.update({ id: issue.id, title: "keep sla (renamed)" });
+    const row = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(row.slaMinutes).toBe(480);
+  });
+});
