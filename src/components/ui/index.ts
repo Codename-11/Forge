@@ -12,6 +12,7 @@ export { Input } from "@/components/ui/input";
 
 // New primitives (this PR).
 export { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle, type CardProps } from "@/components/ui/card";
+export { ColorSwatchPicker, DEFAULT_LABEL_COLORS, normalizeHexColor } from "@/components/ui/color-swatch-picker";
 export { DensityProvider, useDensity, useSetDensity, type Density } from "@/components/ui/density";
 export { EmptyState, type EmptyStateProps } from "@/components/ui/empty-state";
 export { Chord, Kbd } from "@/components/ui/kbd";

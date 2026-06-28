@@ -12,11 +12,11 @@ import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { Section } from "@/components/settings/section";
+import {
+  ColorSwatchPicker,
+  DEFAULT_LABEL_COLORS,
+} from "@/components/ui/color-swatch-picker";
 import { trpc } from "@/lib/trpc";
-
-const DEFAULT_COLORS = [
-  "#d97706", "#ca8a04", "#65a30d", "#0ea5e9", "#7c3aed", "#be185d", "#78716c",
-];
 
 type Editing = { id?: string; name: string; color: string } | null;
 
@@ -62,7 +62,7 @@ export default function LabelsPage() {
           <Button
             variant="ember"
             size="sm"
-            onClick={() => setEditing({ name: "", color: DEFAULT_COLORS[0] })}
+            onClick={() => setEditing({ name: "", color: DEFAULT_LABEL_COLORS[0] })}
           >
             New label
           </Button>
@@ -124,7 +124,7 @@ export default function LabelsPage() {
                     <Button
                       variant="ember"
                       size="sm"
-                      onClick={() => setEditing({ name: "", color: DEFAULT_COLORS[0] })}
+                      onClick={() => setEditing({ name: "", color: DEFAULT_LABEL_COLORS[0] })}
                     >
                       New label
                     </Button>
@@ -139,7 +139,7 @@ export default function LabelsPage() {
             hint="Suggested colors. The create and edit dialogs default to these swatches, but the color picker accepts any hex value."
           >
             <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-card/40 p-5">
-              {DEFAULT_COLORS.map((c) => (
+              {DEFAULT_LABEL_COLORS.map((c) => (
                 <span
                   key={c}
                   className="inline-flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1"
@@ -177,26 +177,10 @@ export default function LabelsPage() {
             </div>
             <div className="space-y-1.5">
               <label className="text-xs text-muted-foreground">Color</label>
-              <div className="flex items-center gap-2">
-                <input
-                  type="color"
-                  value={editing.color}
-                  onChange={(e) => setEditing({ ...editing, color: e.target.value })}
-                  className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
-                />
-                <div className="flex gap-1">
-                  {DEFAULT_COLORS.map((c) => (
-                    <button
-                      key={c}
-                      type="button"
-                      onClick={() => setEditing({ ...editing, color: c })}
-                      className="h-5 w-5 rounded border border-border"
-                      style={{ backgroundColor: c }}
-                      aria-label={c}
-                    />
-                  ))}
-                </div>
-              </div>
+              <ColorSwatchPicker
+                value={editing.color}
+                onChange={(c) => setEditing({ ...editing, color: c })}
+              />
               <Badge color={editing.color}>{editing.name || "preview"}</Badge>
             </div>
             <div className="flex flex-wrap justify-end gap-2">
