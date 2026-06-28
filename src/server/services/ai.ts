@@ -414,6 +414,98 @@ Use plain prose, no bullets, no headers. Do not address the agent directly.`;
 }
 
 // ---------------------------------------------------------------------------
+// Description assist — draft a description from the title, or enhance an
+// existing one. Free-text Markdown out (no tool call), so parsing is just
+// "take the content, strip a wrapping code fence". Never throws; returns null
+// on any failure so the router surfaces an actionable message.
+// ---------------------------------------------------------------------------
+
+export interface DescriptionInput {
+  title: string;
+  description?: string | null;
+  provider?: string | null;
+  model?: string | null;
+}
+
+const DESCRIBE_SYSTEM =
+  "You write crisp issue descriptions for a project-management tool. Output GitHub-flavored Markdown only — a 1–2 sentence summary, then, only if it genuinely helps, a short `## Acceptance criteria` or `## Steps` list. No preamble, no sign-off, and do NOT wrap your whole answer in a code fence.";
+
+/**
+ * Strip a code fence that wraps the *entire* model output (some models wrap
+ * their whole markdown answer in ```markdown … ```). Only when there are
+ * exactly two fences, so a description with a genuine embedded code block is
+ * left intact. Returns null for empty/nullish.
+ */
+export function cleanDescriptionOutput(
+  content: string | null | undefined,
+): string | null {
+  if (!content) return null;
+  let text = content.trim();
+  const fenceCount = (text.match(/```/g) ?? []).length;
+  if (fenceCount === 2) {
+    const m = text.match(/^```(?:markdown|md)?\s*\n?([\s\S]*?)\n?```$/i);
+    if (m) text = m[1].trim();
+  }
+  return text.length ? text : null;
+}
+
+export async function runDescriptionDraft(
+  input: DescriptionInput,
+): Promise<string | null> {
+  const ctx = getClient(input.provider);
+  if (!ctx) return null;
+  try {
+    const completion = await ctx.client.chat.completions.create({
+      model: input.model || ctx.defaultModel,
+      max_tokens: 700,
+      messages: [
+        { role: "system", content: DESCRIBE_SYSTEM },
+        {
+          role: "user",
+          content: `Write an issue description from this title:\n\n${input.title}`,
+        },
+      ],
+    });
+    return cleanDescriptionOutput(completion.choices?.[0]?.message?.content);
+  } catch (err) {
+    logger.warn({ err, provider: ctx.providerId }, "ai.describe: draft failed");
+    return null;
+  }
+}
+
+export async function runDescriptionEnhance(
+  input: DescriptionInput,
+): Promise<string | null> {
+  const ctx = getClient(input.provider);
+  if (!ctx) return null;
+  const existing = input.description?.trim();
+  // Nothing to enhance → fall back to a fresh draft.
+  if (!existing) return runDescriptionDraft(input);
+  try {
+    const completion = await ctx.client.chat.completions.create({
+      model: input.model || ctx.defaultModel,
+      max_tokens: 800,
+      messages: [
+        {
+          role: "system",
+          content:
+            DESCRIBE_SYSTEM +
+            " You are improving an EXISTING description: keep the author's intent and every concrete fact, improve clarity / structure / grammar, and do NOT invent requirements or drop information.",
+        },
+        {
+          role: "user",
+          content: `Issue title: ${input.title}\n\nCurrent description:\n${existing}\n\nReturn an improved version of the description.`,
+        },
+      ],
+    });
+    return cleanDescriptionOutput(completion.choices?.[0]?.message?.content);
+  } catch (err) {
+    logger.warn({ err, provider: ctx.providerId }, "ai.describe: enhance failed");
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Plan generation — Forge's built-in PLANNER. Single-shot, forced tool-call
 // that decomposes a goal into ordered ExecutionSteps so "Generate with Forge"
 // works without dispatching to an external agent runtime. The output is mapped

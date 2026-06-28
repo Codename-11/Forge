@@ -4,7 +4,11 @@ import { AgentRole, AiTriageStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { triageIssue } from "@/server/services/ai-triage";
-import { listProviders } from "@/server/services/ai";
+import {
+  listProviders,
+  runDescriptionDraft,
+  runDescriptionEnhance,
+} from "@/server/services/ai";
 import { encryptSecret } from "@/server/crypto";
 
 /** Providers that accept a DB-backed key (hermes is a runtime, not a key). */
@@ -436,6 +440,86 @@ export const aiRouter = router({
       });
       void triageIssue(issue.id);
       return { ok: true };
+    }),
+
+  /**
+   * Draft an issue description from its title. Read-only — returns Markdown the
+   * client stages for the operator to Apply (via `issue.update`); never
+   * persists here. Gated on workspace `aiEnabled`.
+   */
+  draftDescription: workspaceProcedure
+    .input(z.object({ issueId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: {
+          title: true,
+          description: true,
+          workspace: {
+            select: { aiEnabled: true, aiProvider: true, aiModel: true },
+          },
+        },
+      });
+      if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      if (!issue.workspace.aiEnabled)
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "AI is off for this workspace. Enable it in Settings → Workspace → AI.",
+        });
+      const markdown = await runDescriptionDraft({
+        title: issue.title,
+        description: issue.description,
+        provider: issue.workspace.aiProvider,
+        model: issue.workspace.aiModel,
+      });
+      if (!markdown)
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message:
+            "The AI provider didn't return a description. Check the provider/model in Settings → Workspace → AI.",
+        });
+      return { markdown };
+    }),
+
+  /**
+   * Enhance the current description (clarity/structure, preserving intent and
+   * facts). Returns both the original and the suggestion so the client can show
+   * a diff. Read-only; falls back to a fresh draft when empty.
+   */
+  enhanceDescription: workspaceProcedure
+    .input(z.object({ issueId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: {
+          title: true,
+          description: true,
+          workspace: {
+            select: { aiEnabled: true, aiProvider: true, aiModel: true },
+          },
+        },
+      });
+      if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      if (!issue.workspace.aiEnabled)
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message:
+            "AI is off for this workspace. Enable it in Settings → Workspace → AI.",
+        });
+      const markdown = await runDescriptionEnhance({
+        title: issue.title,
+        description: issue.description,
+        provider: issue.workspace.aiProvider,
+        model: issue.workspace.aiModel,
+      });
+      if (!markdown)
+        throw new TRPCError({
+          code: "BAD_GATEWAY",
+          message:
+            "The AI provider didn't return a result. Check the provider/model in Settings → Workspace → AI.",
+        });
+      return { original: issue.description ?? "", markdown };
     }),
 
   /**

@@ -11141,3 +11141,27 @@ Re-survey found most modal primitives already exist (`Confirm`, `QuickForm`,
 Verification: `normalizeHexColor` unit test green; `pnpm typecheck` clean;
 `pnpm lint` clean on touched files. Not yet exercised in-app (no native logic
 to unit-test on the picker wiring) — verify on next deploy.
+
+**Deploy gotcha (logged):** the first deploy of ph1–2 failed — the image's
+VitePress docs build (`pnpm --dir docs --ignore-workspace build`) compiles
+every `.md` under `docs/` as a Vue template, and the design spec's literal
+`<select>`/`<query>`/`<name>` tokens parsed as unclosed tags. Fixed by adding
+`superpowers/**` to `srcExclude` in `docs/.vitepress/config.ts` (alongside the
+existing `audits/**`, `plans/**`). Reminder: prod builds from the **working
+tree** — deploy only from a clean/consistent tree, never mid-edit.
+
+## 2026-06-27 — AI assist ph3 (backend): description draft / enhance
+
+- `ai.ts`: `runDescriptionDraft` / `runDescriptionEnhance` (free-text Markdown
+  out, no tool call) + `cleanDescriptionOutput` (strips a whole-output code
+  fence only when exactly two fences, so embedded code blocks survive). Enhance
+  falls back to draft when the description is empty; both return null on failure.
+- `routers/ai.ts`: `draftDescription` / `enhanceDescription` mutations —
+  read-only (client applies via `issue.update`), gated on `workspace.aiEnabled`,
+  with actionable PRECONDITION/BAD_GATEWAY errors pointing at Settings →
+  Workspace → AI. `enhanceDescription` returns `{ original, markdown }` for a
+  client-side diff.
+- Test: `tests/unit/clean-description-output.test.ts` (5 cases). Frontend
+  `AiAssistMenu` (re-run + draft + enhance-with-diff) still to come.
+
+Verification: unit test green; `pnpm typecheck` + `pnpm lint` clean.
