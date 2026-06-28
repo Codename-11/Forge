@@ -11118,3 +11118,26 @@ verbatim prod prose) green; `pnpm typecheck` clean; `pnpm lint` clean on the
 four touched files. Full DB-backed `pnpm test` skipped intentionally (dev points
 at prod Postgres; didn't want fixture churn there). Out of scope but noted: the
 ~55k-token gateway prompts are a cost/latency smell for a separate pass.
+
+## 2026-06-27 — Inline label create + ColorSwatchPicker (in-app UI initiative ph1–2)
+
+Kicking off the "in-app AI assist + UI primitives + native-element sweep"
+initiative (spec: `docs/superpowers/specs/2026-06-27-in-app-ai-assist-and-ui-primitives-design.md`).
+Re-survey found most modal primitives already exist (`Confirm`, `QuickForm`,
+`Picker`), so the work is mostly reuse + migration.
+
+- **Phase 1** — `ui/color-swatch-picker.tsx`: themed swatches + freeform hex
+  field (`normalizeHexColor` handles 3/6-digit, optional `#`). Replaced the
+  native `<input type=color>` in `settings/labels`; exported from
+  `@/components/ui`. Unit test `tests/unit/color-swatch-picker.test.ts`.
+- **Phase 2** — inline label create from the issue label picker. New
+  `components/inline-create/create-label-modal.tsx` (`QuickForm` +
+  `ColorSwatchPicker` → `label.create`, `mutateAsync` so errors keep the modal
+  open). `LabelPicker` (in `issues/[id]/page.tsx`) gained a search box + a
+  `Create "<query>"` row. **Admin-gated** (`workspace.role` OWNER/ADMIN) because
+  `label.create` is an `adminProcedure` — non-admins just see search, no create
+  row. On create: invalidates `label.list`, adds the new label to the issue.
+
+Verification: `normalizeHexColor` unit test green; `pnpm typecheck` clean;
+`pnpm lint` clean on touched files. Not yet exercised in-app (no native logic
+to unit-test on the picker wiring) — verify on next deploy.

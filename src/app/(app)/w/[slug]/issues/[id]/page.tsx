@@ -42,6 +42,7 @@ import { RuntimePreflightBanner } from "@/components/issue-detail/runtime-prefli
 import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
+import { CreateLabelModal } from "@/components/inline-create/create-label-modal";
 import { Breadcrumb } from "@/components/breadcrumb";
 import { ProjectChip } from "@/components/project-chip";
 import { InitiativeChip } from "@/components/initiative-chip";
@@ -77,6 +78,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
   const workspace = useWorkspace();
   const slug = workspace.slug;
+  const isAdmin = workspace.role === "OWNER" || workspace.role === "ADMIN";
   const railCardRef = useRef<HTMLDivElement | null>(null);
   const [railCardHeight, setRailCardHeight] = useState<number | null>(null);
   const { data: ws } = trpc.workspace.current.useQuery();
@@ -591,6 +593,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                           color: l.label.color,
                         }))}
                         all={allLabels ?? []}
+                        canCreate={isAdmin}
                         onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
                       />
                     </SidebarField>
@@ -1154,12 +1157,17 @@ function LabelPicker({
   current,
   all,
   onChange,
+  canCreate = false,
 }: {
   current: { id: string; name: string; color: string }[];
   all: { id: string; name: string; color: string }[];
   onChange: (labelIds: string[]) => void;
+  /** Admin-only: show the inline "Create '<query>'" affordance. */
+  canCreate?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
   const selected = new Set(current.map((l) => l.id));
 
   function toggle(labelId: string) {
@@ -1168,6 +1176,11 @@ function LabelPicker({
       : [...current.map((l) => l.id), labelId];
     onChange(next);
   }
+
+  const q = query.trim().toLowerCase();
+  const filtered = q ? all.filter((l) => l.name.toLowerCase().includes(q)) : all;
+  const exactMatch = all.some((l) => l.name.toLowerCase() === q);
+  const showCreate = canCreate && q.length > 0 && !exactMatch;
 
   return (
     <div className="relative w-full">
@@ -1193,12 +1206,26 @@ function LabelPicker({
         </button>
       </div>
       {open && (
-        <div
-          className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card shadow-lg"
-          onMouseLeave={() => setOpen(false)}
-        >
+        <div className="absolute z-20 mt-1 w-full rounded-md border border-border bg-card shadow-lg">
+          <div className="border-b border-border/60 p-1.5">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.stopPropagation();
+                  setOpen(false);
+                }
+              }}
+              autoFocus
+              spellCheck={false}
+              autoComplete="off"
+              placeholder={canCreate ? "Search or create…" : "Search…"}
+              className="focus-ring h-7 w-full rounded-md border border-input bg-background px-2 text-xs text-foreground placeholder:text-muted-foreground"
+            />
+          </div>
           <ul className="max-h-64 overflow-y-auto py-1">
-            {all.map((l) => (
+            {filtered.map((l) => (
               <li key={l.id}>
                 <button
                   type="button"
@@ -1215,13 +1242,35 @@ function LabelPicker({
                 </button>
               </li>
             ))}
-            {all.length === 0 && (
+            {filtered.length === 0 && !showCreate && (
               <li className="px-3 py-3 text-center text-[0.6875rem] text-muted-foreground">
-                No labels defined yet.
+                {all.length === 0 ? "No labels defined yet." : "No matches."}
               </li>
             )}
           </ul>
+          {showCreate && (
+            <button
+              type="button"
+              onClick={() => setCreateOpen(true)}
+              className="focus-ring flex w-full items-center gap-2 border-t border-border/60 px-2 py-1.5 text-left text-xs text-foreground hover:bg-subtle"
+            >
+              <Plus className="h-3 w-3 text-muted-foreground" />
+              Create &ldquo;<span className="font-medium">{query.trim()}</span>&rdquo;
+            </button>
+          )}
         </div>
+      )}
+      {canCreate && (
+        <CreateLabelModal
+          open={createOpen}
+          onOpenChange={setCreateOpen}
+          initialName={query.trim()}
+          onCreated={(label) => {
+            onChange([...current.map((l) => l.id), label.id]);
+            setQuery("");
+            setOpen(false);
+          }}
+        />
       )}
     </div>
   );

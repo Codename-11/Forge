@@ -11,6 +11,14 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- **Create a label without leaving the issue.** The label picker on an issue now has a search box — type to filter, and (if you're a workspace admin) pick **Create "&lt;name&gt;"** to make a new label with a name and color right there and apply it in one step. No more detour to Settings → Labels first.
+
+### Changed
+
+- **The label color picker is now in-app.** Choosing a label color (in Settings → Labels and the new inline create) uses themed swatches plus a hex field instead of the operating system's native color dialog — consistent with the rest of Forge.
+
 ### Fixed
 
 - **AI triage works again — and tells you what's wrong when it can't.** The "AI triage suggestion" card on an issue could get stuck showing a bare *"AI triage unavailable."* with only a Retry, because some AI providers reply in plain text instead of the structured format Forge expected — so every suggestion was thrown away. Forge now reads those plain-text replies too, so triage produces a real priority / label / agent suggestion. When triage genuinely can't run, the card now explains why and links straight to **Settings → Workspace → AI** to fix it, instead of leaving you guessing.
