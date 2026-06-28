@@ -90,23 +90,36 @@ small create form. Only labels are wired in this initiative.
 
 ## Thread C — In-app primitives + native sweep
 
-New primitives in `src/components/ui/`:
+**Most primitives already exist** (re-survey 2026-06-27) — this thread is
+mostly *adoption/migration*, not new construction:
 
-- **`select.tsx`** — themed select built on `anchored-popover` + `combobox`
-  internals (keyboard, search optional). Replaces native `<select>`.
-- **`confirm-dialog.tsx`** + **`useConfirm()`** — promise-returning hook so
-  call sites read like `if (await confirm({...})) …`, replacing
-  `window.confirm`. Themed modal with title/body/confirm/cancel + variant.
-- **`prompt-modal.tsx`** + **`usePrompt()`** — replaces `window.prompt`
-  (github-apps app-id / org entry).
-- **`color-swatch-picker.tsx`** — shared with Thread B.
-- **Date picker** — themed calendar popover for the user-facing date inputs
-  (reuse if one already exists in due-date UI; else add). Color via swatch
-  picker. File inputs: themed dropzone wrapper last.
+- **`Confirm`** (`ui/modal/confirm.tsx`) — themed, destructive +
+  type-to-confirm + loading + a11y. **Reuse.** Add a thin `useConfirm()`
+  imperative wrapper (promise-returning) so migrating `window.confirm` sites is
+  one-line.
+- **`QuickForm`** (`ui/modal/quick-form.tsx`) — 1–3 field create dialog with
+  `.Field`, draft persistence, error banner. **Reuse** for `CreateLabelModal`
+  and to replace `window.prompt` (github-apps app-id / org → a 1-field
+  QuickForm).
+- **`Picker`** (`ui/modal/picker.tsx`) — palette-style chooser; **reuse** for
+  modal `<select>` replacements. Inline `<select>` → `combobox`.
+- **`ColorSwatchPicker`** (NEW, `ui/color-swatch-picker.tsx`) — extract the
+  `DEFAULT_COLORS` swatches currently inlined in `settings/labels/page.tsx`
+  into a shared component (swatches + optional hex entry). Replaces the native
+  `<input type=color>` there and feeds Thread B.
+- **`DatePicker`** (NEW, `ui/date-picker.tsx`) — the one genuinely missing
+  primitive: a themed calendar popover (built on `anchored-popover`) to replace
+  the ~8 native `<input type=date>` (cycles, initiatives, roadmap, snooze). The
+  largest piece; sequenced last.
 
-**Migrations (this initiative):** the 4 native `<select>`, the 6
-confirm/alert/prompt sites, and the most user-facing date inputs. Remaining
-date/color/file inputs tracked as follow-up.
+**Migrations (this initiative):** `window.confirm` (×4) → `Confirm`/`useConfirm`;
+`window.prompt` (×2, github-apps) → `QuickForm`; `window.alert` (time) → toast;
+native `<select>` (×4) → `combobox`/`Picker`; native `<input type=color>`
+(labels) → `ColorSwatchPicker`; native `<input type=date>` → `DatePicker`.
+
+**Guardrails:** CLAUDE.md "Design style" rule + ESLint
+`no-restricted-globals`/`no-restricted-syntax` for `window.confirm|alert|prompt`
+and native `<select>`, so it can't regress.
 
 **Guardrails:** add a "Design style" rule to `CLAUDE.md` ("never native
 `<select>` / `confirm` / `alert` / `prompt`; use the `ui/` primitives"), and an
@@ -117,17 +130,19 @@ ESLint `no-restricted-syntax` / `no-restricted-globals` rule flagging
 
 ## Architecture / new units
 
-| Unit | Purpose | Depends on |
-|------|---------|-----------|
-| `ui/select.tsx` | themed select | anchored-popover, combobox |
-| `ui/confirm-dialog.tsx` + `useConfirm` | in-app confirm | dialog/modal base |
-| `ui/prompt-modal.tsx` + `usePrompt` | in-app text prompt | dialog/modal base |
-| `ui/color-swatch-picker.tsx` | themed color choice | tokens |
-| `ui/date-picker.tsx` (if absent) | themed date input | anchored-popover |
-| `components/inline-create/create-label-modal.tsx` | inline label create | combobox `onCreate`, swatch, `labels.create` |
-| `components/issue-detail/ai-assist-menu.tsx` | AI action entry point | anchored-popover, `ai.*` |
-| `ai.draftDescription` / `ai.enhanceDescription` (router) | AI desc endpoints | `runDescription*` |
-| `runDescriptionDraft` / `runDescriptionEnhance` (service) | model calls | `getClient`, prose-tolerant parse |
+| Unit | New? | Purpose | Depends on |
+|------|------|---------|-----------|
+| `ui/modal/confirm.tsx` (`Confirm`) | exists | confirm dialog | — |
+| `useConfirm()` wrapper | new (thin) | imperative `await confirm()` | `Confirm` |
+| `ui/modal/quick-form.tsx` (`QuickForm`) | exists | 1–3 field create / prompt | — |
+| `ui/modal/picker.tsx` (`Picker`) | exists | palette-style chooser | — |
+| `ui/combobox.tsx` | exists (+`onCreate`) | inline select / typeahead | anchored-popover |
+| `ui/color-swatch-picker.tsx` | new | themed color choice | tokens |
+| `ui/date-picker.tsx` | new | themed date input | anchored-popover |
+| `components/inline-create/create-label-modal.tsx` | new | inline label create | `QuickForm`, swatch, `labels.create` |
+| `components/issue-detail/ai-assist-menu.tsx` | new | AI action entry point | anchored-popover, `ai.*` |
+| `ai.draftDescription` / `ai.enhanceDescription` (router) | new | AI desc endpoints | `runDescription*` |
+| `runDescriptionDraft` / `runDescriptionEnhance` (service) | new | model calls | `getClient`, prose-tolerant parse |
 
 ## Error handling
 
@@ -149,16 +164,22 @@ ESLint `no-restricted-syntax` / `no-restricted-globals` rule flagging
 
 ## Phasing / build order (commit + verify each)
 
-1. **Primitives + guardrails** — `select`, `confirm-dialog`/`useConfirm`,
-   `prompt-modal`/`usePrompt`, `color-swatch-picker`, date picker; CLAUDE.md
-   rule + ESLint guard. No behavior change yet.
-2. **Inline create-from-picker (labels)** — combobox `onCreate` +
-   `CreateLabelModal`; wire label pickers.
-3. **Issue AI assist** — `runDescription*` + `ai.*` endpoints +
-   `AiAssistMenu` (re-run, draft, enhance-with-diff).
-4. **Native sweep** — migrate the 4 selects, 6 confirm/alert/prompt sites, and
-   user-facing date inputs onto the new primitives; ESLint guard turned to
-   error.
+Reordered for dependencies now that most primitives exist:
+
+1. **`ColorSwatchPicker` + `useConfirm`** — extract swatches from
+   `settings/labels` (replacing its native `<input type=color>`); add the
+   `useConfirm()` wrapper over the existing `Confirm`. Small foundation.
+2. **Thread B — inline label create** — combobox `onCreate` + `CreateLabelModal`
+   (QuickForm + ColorSwatchPicker); wire label pickers (issue detail first,
+   then quick-create / issue-list).
+3. **Thread A — issue AI assist** — `runDescriptionDraft/Enhance` +
+   `ai.draftDescription/enhanceDescription` + `AiAssistMenu` (re-run, draft,
+   enhance-with-diff).
+4. **Thread C — non-date sweep + guardrails** — `window.confirm`→`useConfirm`,
+   `window.prompt`→`QuickForm`, `window.alert`→toast, native `<select>`→
+   `combobox`/`Picker`; CLAUDE.md rule + ESLint guard (warn→error).
+5. **`DatePicker` + date sweep** — themed calendar; migrate the native
+   `<input type=date>` sites. Largest; last.
 
 Each phase: DEVLOG + (user-facing) CHANGELOG, `lint && typecheck` + focused
 tests, commit. Deploy when a coherent slice is ready.
