@@ -23,7 +23,9 @@ full suite passed when run with the repo `.env` and `OPENAI_API_KEY` unset
 (1032 pass / 1 skipped). Targeted Playwright coverage for `issue-flow` and
 `mobile-smoke` passed locally (8/8) after updating the Combobox ARIA contract
 and status-picker E2E interactions to match the themed Combobox replacement for
-native selects. Initial full-suite attempt without the repo `.env` failed on
+native selects. Follow-up CI fix updated `sprints-roadmap.spec.ts` to drive the
+new `DatePicker` buttons instead of removed native date inputs; local rerun
+passed (2/2). Initial full-suite attempt without the repo `.env` failed on
 missing `DATABASE_URL`, then was rerun with env loaded.
 
 ## 2026-06-27 — Subject-label resolver (audit log + webhook deliveries)
