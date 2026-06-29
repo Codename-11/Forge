@@ -86,7 +86,24 @@ const CARD_FIELDS = {
       agent: { select: { name: true, profileKey: true, avatar: true } },
     },
   },
+  // Latest thread activity for dashboard recency. Comments intentionally
+  // do not bump Issue.updatedAt because stale/SLA logic depends on the
+  // issue row's own write clock.
+  comments: {
+    where: { deletedAt: null },
+    orderBy: { updatedAt: "desc" },
+    take: 1,
+    select: { updatedAt: true },
+  },
 } satisfies Prisma.IssueSelect;
+
+type CardRow = Prisma.IssueGetPayload<{ select: typeof CARD_FIELDS }>;
+type ShapedCard = Omit<CardRow, "children" | "agentRuns" | "comments"> & {
+  childDone: number;
+  childTotal: number;
+  latestRun: CardRow["agentRuns"][number] | null;
+  activityAt: Date;
+};
 
 /**
  * Roll a card row's children + latest run into the compact shape the
@@ -94,24 +111,17 @@ const CARD_FIELDS = {
  * `childDone` counts DONE. `latestRun` is null when the issue has never
  * had a run.
  */
-function shapeCard<
-  T extends {
-    children: Array<{ status: { category: string } }>;
-    agentRuns: Array<{
-      id: string;
-      status: AgentRunStatus;
-      currentStep: string | null;
-      lastEventAt: Date | null;
-      startedAt: Date;
-      agent: { name: string | null; profileKey: string | null; avatar: string | null } | null;
-    }>;
-  },
->(row: T) {
-  const { children, agentRuns, ...rest } = row;
+function shapeCard(row: CardRow): ShapedCard {
+  const { children, agentRuns, comments, ...rest } = row;
   const childTotal = children.filter((c) => c.status.category !== "CANCELED").length;
   const childDone = children.filter((c) => c.status.category === "DONE").length;
   const latestRun = agentRuns[0] ?? null;
-  return { ...rest, childDone, childTotal, latestRun };
+  const latestCommentAt = comments[0]?.updatedAt ?? null;
+  const activityAt =
+    latestCommentAt && latestCommentAt.getTime() > row.updatedAt.getTime()
+      ? latestCommentAt
+      : row.updatedAt;
+  return { ...rest, childDone, childTotal, latestRun, activityAt };
 }
 
 export const dashboardRouter = router({
@@ -459,17 +469,10 @@ export const dashboardRouter = router({
           take: limit,
           select: CARD_FIELDS,
         }),
-        // Pull extra so the focus de-dup still leaves a full row.
-        ctx.db.issue.findMany({
-          where: {
-            workspaceId: ctx.workspaceId,
-            deletedAt: null,
-            status: { category: { notIn: ["DONE", "CANCELED"] } },
-            OR: [{ assignees: { some: { userId } } }, { authorId: userId }],
-          },
-          orderBy: [{ updatedAt: "desc" }],
+        fetchResumeCards(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          userId,
           take: limit * 2,
-          select: CARD_FIELDS,
         }),
       ]);
 
@@ -477,8 +480,7 @@ export const dashboardRouter = router({
       const focusIds = new Set(focus.map((f) => f.id));
       const resume = resumeRows
         .filter((r) => !focusIds.has(r.id))
-        .slice(0, limit)
-        .map(shapeCard);
+        .slice(0, limit);
 
       return { focus, resume };
     }),
@@ -637,6 +639,72 @@ async function fetchSlice(
     take: args.take,
     select: SUGGESTION_FIELDS,
   });
+}
+
+function resumeIssueWhere(args: {
+  workspaceId: string;
+  userId: string;
+}): Prisma.IssueWhereInput {
+  return {
+    workspaceId: args.workspaceId,
+    deletedAt: null,
+    status: { category: { notIn: ["DONE", "CANCELED"] } },
+    OR: [
+      { assignees: { some: { userId: args.userId } } },
+      { authorId: args.userId },
+      { comments: { some: { authorId: args.userId, deletedAt: null } } },
+    ],
+  };
+}
+
+async function fetchResumeCards(
+  db: DB,
+  args: { workspaceId: string; userId: string; take: number },
+): Promise<ShapedCard[]> {
+  if (args.take === 0) return [];
+
+  const where = resumeIssueWhere(args);
+  const candidateTake = Math.max(args.take * 2, 12);
+  const [issueCandidates, commentCandidates] = await Promise.all([
+    db.issue.findMany({
+      where,
+      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
+      take: candidateTake,
+      select: { id: true },
+    }),
+    db.comment.groupBy({
+      by: ["issueId"],
+      where: {
+        workspaceId: args.workspaceId,
+        deletedAt: null,
+        issueId: { not: null },
+        issue: where,
+      },
+      _max: { updatedAt: true },
+      orderBy: { _max: { updatedAt: "desc" } },
+      take: candidateTake,
+    }),
+  ]);
+
+  const ids = new Set(issueCandidates.map((i) => i.id));
+  for (const row of commentCandidates) {
+    if (row.issueId) ids.add(row.issueId);
+  }
+  if (ids.size === 0) return [];
+
+  const rows = await db.issue.findMany({
+    where: { ...where, id: { in: Array.from(ids) } },
+    select: CARD_FIELDS,
+  });
+
+  return rows
+    .map(shapeCard)
+    .sort((a, b) => {
+      const activityDelta = b.activityAt.getTime() - a.activityAt.getTime();
+      if (activityDelta !== 0) return activityDelta;
+      return b.updatedAt.getTime() - a.updatedAt.getTime();
+    })
+    .slice(0, args.take);
 }
 
 /**

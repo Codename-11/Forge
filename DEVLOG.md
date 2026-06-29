@@ -28,6 +28,21 @@ new `DatePicker` buttons instead of removed native date inputs; local rerun
 passed (2/2). Initial full-suite attempt without the repo `.env` failed on
 missing `DATABASE_URL`, then was rerun with env loaded.
 
+## 2026-06-28 — Dashboard recency counts comments
+
+Fixed the dashboard "You" zone recency bug: rich issue cards now carry a
+dashboard-only `activityAt = max(Issue.updatedAt, latest non-deleted issue
+comment updatedAt)`. `Issue.updatedAt` remains untouched so stalled/SLA logic
+continues to mean "issue row changed," not "someone commented."
+
+`dashboard.myWork` resume candidates now come from both issue row updates and
+comment activity, then sort by `activityAt`. The "pick up" slice also includes
+issues the caller has touched only by commenting, matching the dashboard copy.
+`IssueCard` renders `activityAt` for its relative timestamp.
+
+Tests: `pnpm exec vitest run src/server/routers/__tests__/dashboard-my-work.test.ts`,
+`pnpm typecheck`, and targeted ESLint on the touched dashboard files.
+
 ## 2026-06-27 — Subject-label resolver (audit log + webhook deliveries)
 
 Closed the deferral from the gap sweep: raw `subjectId.slice(0,8)` on the

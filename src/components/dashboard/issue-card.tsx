@@ -140,7 +140,7 @@ export function IssueCard({
             {showRun ? (
               <RunChip status={run!.status} agentKey={run!.agent?.profileKey ?? null} />
             ) : (
-              <span>{relativeTime(card.updatedAt)}</span>
+              <span>{relativeTime(card.activityAt)}</span>
             )}
           </span>
         </div>

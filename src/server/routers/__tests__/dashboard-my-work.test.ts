@@ -93,6 +93,68 @@ describe("dashboard.myWork — resume", () => {
     expect(resumeIds).toContain(authoredOnly.id); // authored, unassigned → resume
     expect(resumeIds).not.toContain(doneAuthored.id); // terminal excluded
   });
+
+  it("orders by latest issue activity, including comments", async () => {
+    const { fixture, caller } = await setup();
+    const prisma = getPrisma();
+    const commented = await createIssue(fixture, { title: "stale header, fresh comment" });
+    const headerUpdated = await createIssue(fixture, { title: "fresh header only" });
+
+    const staleHeaderAt = new Date("2026-01-01T10:00:00.000Z");
+    const freshHeaderAt = new Date("2026-01-02T10:00:00.000Z");
+    const commentAt = new Date("2026-01-03T10:00:00.000Z");
+
+    await prisma.issue.update({
+      where: { id: commented.id },
+      data: { updatedAt: staleHeaderAt },
+    });
+    await prisma.issue.update({
+      where: { id: headerUpdated.id },
+      data: { updatedAt: freshHeaderAt },
+    });
+    await prisma.comment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: commented.id,
+        authorId: fixture.secondUser.id,
+        body: "This should count as dashboard activity.",
+        createdAt: commentAt,
+        updatedAt: commentAt,
+      },
+    });
+
+    const { resume } = await caller.myWork({ limit: 6 });
+    const card = resume.find((r) => r.id === commented.id);
+
+    expect(resume[0]?.id).toBe(commented.id);
+    expect(card).toBeDefined();
+    expect(card!.updatedAt.toISOString()).toBe(staleHeaderAt.toISOString());
+    expect(card!.activityAt.toISOString()).toBe(commentAt.toISOString());
+  });
+
+  it("includes issues I touched only by commenting", async () => {
+    const { fixture, caller } = await setup();
+    const prisma = getPrisma();
+    const touched = await createIssue(fixture, { title: "commented by me" });
+    await prisma.issue.update({
+      where: { id: touched.id },
+      data: { authorId: fixture.secondUser.id },
+    });
+    await prisma.comment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: touched.id,
+        authorId: fixture.user.id,
+        body: "I touched this issue via the thread.",
+      },
+    });
+
+    const { focus, resume } = await caller.myWork({ limit: 6 });
+    const resumeIds = resume.map((r) => r.id);
+
+    expect(focus.map((f) => f.id)).not.toContain(touched.id);
+    expect(resumeIds).toContain(touched.id);
+  });
 });
 
 describe("dashboard.myWork — card enrichment", () => {
