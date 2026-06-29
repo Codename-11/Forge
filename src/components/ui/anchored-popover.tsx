@@ -37,6 +37,7 @@ export function AnchoredPopover({
   minSpaceBelow = 220,
   className,
   role = "menu",
+  id,
   ariaLabel,
   dismissOnOutsideClick = true,
   dismissOnEscape = true,
@@ -58,6 +59,7 @@ export function AnchoredPopover({
   minSpaceBelow?: number;
   className?: string;
   role?: string;
+  id?: string;
   ariaLabel?: string;
   dismissOnOutsideClick?: boolean;
   dismissOnEscape?: boolean;
@@ -140,6 +142,7 @@ export function AnchoredPopover({
   return createPortal(
     <div
       ref={popoverRef}
+      id={id}
       role={role}
       aria-label={ariaLabel}
       onMouseEnter={onMouseEnter}

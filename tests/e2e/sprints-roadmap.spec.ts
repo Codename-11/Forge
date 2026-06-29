@@ -45,9 +45,17 @@ test.describe("Sprints and roadmap management", () => {
     await dateButton.click();
 
     await expect(page.getByRole("dialog", { name: "Project roadmap dates" })).toBeVisible();
-    const dates = page.locator('input[type="date"]');
-    await dates.nth(0).fill("2026-08-03");
-    await dates.nth(1).fill("2026-08-14");
+
+    await page.getByRole("button", { name: "Start date" }).click();
+    const startPicker = page.getByRole("dialog", { name: "Date picker" });
+    await expect(startPicker).toBeVisible();
+    await startPicker.getByRole("button", { name: "3", exact: true }).click();
+
+    await page.getByRole("button", { name: "Target date" }).click();
+    const targetPicker = page.getByRole("dialog", { name: "Date picker" });
+    await expect(targetPicker).toBeVisible();
+    await targetPicker.getByRole("button", { name: "14", exact: true }).click();
+
     await page.getByRole("button", { name: "Save dates" }).click();
     await expect(page.getByText("Roadmap dates updated.")).toBeVisible();
   });

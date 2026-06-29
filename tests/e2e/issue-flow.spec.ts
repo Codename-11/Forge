@@ -29,7 +29,9 @@ test.describe("Issue flow", () => {
     await expect(page.getByText(title).first()).toBeVisible();
 
     // Move status on the detail page and confirm it sticks.
-    await page.locator("select").first().selectOption({ label: "In Progress" });
-    await expect(page.locator("select").first()).toHaveValue(/.+/);
+    const status = page.getByRole("combobox", { name: "Status" });
+    await status.click();
+    await page.getByRole("option", { name: "In Progress" }).click();
+    await expect(status).toContainText("In Progress");
   });
 });

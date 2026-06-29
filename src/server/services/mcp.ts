@@ -129,7 +129,11 @@ import { searchGitHubIssuesAndPulls } from "@/server/services/github/client";
 import { listGitHubRepoMappings } from "@/server/services/github/linkability";
 import { githubInstallationId } from "@/server/services/github/mapping-policy";
 import { parseGitHubUrl } from "@/server/services/github/url";
-import { EXTERNAL_LINK_KINDS } from "@/server/services/github/types";
+import {
+  EXTERNAL_LINK_KINDS,
+  GITHUB_RESOURCE_TYPES,
+  type GitHubResourceType,
+} from "@/server/services/github/types";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -7433,8 +7437,10 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       mappingId: z.string().cuid().optional(),
+      url: z.string().url().max(2048).optional(),
       repoFullName: z.string().min(3).max(200).optional(),
-      number: z.number().int().positive(),
+      resourceType: z.enum(GITHUB_RESOURCE_TYPES).optional(),
+      number: z.number().int().positive().optional(),
       projectId: z.string().cuid().nullable().optional(),
       labelIds: z.array(z.string().cuid()).default([]),
       queue: z.boolean().optional(),
@@ -7442,8 +7448,10 @@ export const mcpTools = {
     async run(
       input: {
         mappingId?: string;
+        url?: string;
         repoFullName?: string;
-        number: number;
+        resourceType?: GitHubResourceType;
+        number?: number;
         projectId?: string | null;
         labelIds: string[];
         queue?: boolean;
@@ -7458,7 +7466,9 @@ export const mcpTools = {
         db,
         workspaceId: ctx.workspaceId,
         mappingId: input.mappingId,
+        url: input.url,
         repoFullName: input.repoFullName,
+        resourceType: input.resourceType,
         number: input.number,
         projectId: input.projectId,
         labelIds: input.labelIds,

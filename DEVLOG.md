@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-06-28 — AXI-90 QuickCreate GitHub issue/PR import
+
+Enhanced the ⇧C QuickCreate issue overlay so a pasted GitHub issue/PR URL (or
+`owner/repo#123`) becomes an import flow instead of creating a Forge issue whose
+title is the URL. The overlay now checks repo linkability, previews the resolved
+GitHub resource, shows issue vs PR state inline, switches the primary action to
+Import, and calls `github.importIssue` with the canonical preview URL. Existing
+project and resolved label chips are carried through to the import where possible.
+
+Backend import path now accepts either `url` or `repoFullName + number`, plus an
+optional `resourceType`; issue-number shorthands auto-resolve to PRs when GitHub
+marks the issue response as `pull_request`. Imported PRs reuse the existing
+`issueCreateInputFromGitHub` path, creating a normal Forge issue with a SOURCE
+link to the PR.
+
+Gates: `pnpm typecheck` clean; `pnpm lint` clean (pre-existing native-select
+warnings only); targeted `vitest` for QuickCreate/GitHub support passed (11/11);
+full suite passed when run with the repo `.env` and `OPENAI_API_KEY` unset
+(1032 pass / 1 skipped). Targeted Playwright coverage for `issue-flow` and
+`mobile-smoke` passed locally (8/8) after updating the Combobox ARIA contract
+and status-picker E2E interactions to match the themed Combobox replacement for
+native selects. Follow-up CI fix updated `sprints-roadmap.spec.ts` to drive the
+new `DatePicker` buttons instead of removed native date inputs; local rerun
+passed (2/2). Initial full-suite attempt without the repo `.env` failed on
+missing `DATABASE_URL`, then was rerun with env loaded.
+
 ## 2026-06-27 — Subject-label resolver (audit log + webhook deliveries)
 
 Closed the deferral from the gap sweep: raw `subjectId.slice(0,8)` on the
