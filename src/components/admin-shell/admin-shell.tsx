@@ -10,6 +10,7 @@ import {
   FileText,
   Settings,
   Shield,
+  MoveRight,
   ChevronRight,
   ChevronLeft,
   type LucideIcon,
@@ -28,6 +29,7 @@ import { VersionChip } from "@/components/global-shell/version-chip";
 const ADMIN_NAV: { href: string; icon: LucideIcon; label: string; hint: string }[] = [
   { href: "/admin", icon: LayoutDashboard, label: "Overview", hint: "Health & license" },
   { href: "/admin/tenants", icon: Layers, label: "Workspaces", hint: "All tenants" },
+  { href: "/admin/move-issues", icon: MoveRight, label: "Move issues", hint: "Between workspaces" },
   { href: "/admin/users", icon: Users, label: "Users", hint: "Across instance" },
   { href: "/admin/agents", icon: Bot, label: "Agent policy", hint: "Shared & disabled" },
   { href: "/admin/runtimes", icon: Server, label: "Runtimes", hint: "Instance-wide" },
