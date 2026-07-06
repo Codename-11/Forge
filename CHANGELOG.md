@@ -30,6 +30,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 - **The Coach stops posting junk or duplicate comments.** It now discards empty or meta AI responses (e.g. "Posted the diagnostic comment…") instead of posting them, and won't comment on the same issue more than once in 24 hours — so a stuck issue gets one useful diagnostic, not an hourly pile-up.
 - **AI triage works again — and tells you what's wrong when it can't.** The "AI triage suggestion" card on an issue could get stuck showing a bare *"AI triage unavailable."* with only a Retry, because some AI providers reply in plain text instead of the structured format Forge expected — so every suggestion was thrown away. Forge now reads those plain-text replies too, so triage produces a real priority / label / agent suggestion. When triage genuinely can't run, the card now explains why and links straight to **Settings → Workspace → AI** to fix it, instead of leaving you guessing.
+- **A goal or plan that hits its budget actually stops spending.** When a plan reaches its cost or time cap (or you abandon its goal), its remaining steps stop dispatching immediately — previously a blocked plan could keep launching agents and spend the very budget you were asked to approve.
+- **Finished work stays finished.** A late or duplicate reviewer verdict can no longer knock a completed step back into "to-do" and re-run it.
+- **Agent runs aren't falsely marked "stalled" after a deploy or restart.** A run whose runtime briefly can't report status — or that's quietly mid-work on a long step — now stays running, and is only marked stalled when it's genuinely idle.
+- **Approving or stopping an agent run tells you if it didn't go through.** A failed Approve or Stop now surfaces an error instead of showing success while the run stays blocked at the runtime.
+- **Goals and Plans tell a load error apart from an empty list.** A network hiccup now shows "couldn't load … Retry" instead of "No goals yet" / "Goal not found — may have been abandoned", which looked like your work had been deleted.
+- **A freshly registered runtime is no longer a dead-end.** You can open a just-registered local daemon's settings — run its self-test, add credentials, bind a repo — straight from the global **Runtimes** page, without waiting for an agent to use it first.
 
 ### Changed
 

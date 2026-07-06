@@ -2,6 +2,55 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-06 — Agent-runtime audit: Phase 1 safety fixes
+
+Acted on the 2026-07-06 agent-runtime audit (73 findings; report artifact +
+[[agent-runtime-audit-2026-07]] memory). Phase 1 = the small, confirmed
+safety/lifecycle/false-terminal fixes. Landed as four commits on branch
+`worktree-audit-fixes`.
+
+- **Orchestration loop (`orchestration-service.ts`).** `cascadeReadiness` and
+  `transitionStepToReady` now load `plan.status` and early-return unless RUNNING
+  — a BLOCKED/CANCELED plan stops cascading finishing steps into fresh dispatch
+  (was: kept spending past the budget block / after abandon). `recordVerdict`
+  throws CONFLICT on a settled step (DONE/BLOCKED/CANCELED) so a stale/dup verdict
+  can't reopen finished work. `ExecutionPlan.startedAt` (migration **0091**)
+  stamped in `activatePlan`; `checkAndBlockBudget` measures wall-time from
+  `startedAt ?? createdAt` so planning + approval-wait isn't charged to execution.
+- **Migration 0091** also adds `AgentRun @@index([status,lastEventAt])` +
+  `@@index([assignmentEventId])` — the cross-tenant 5s/60s sweeps
+  (`pollActiveRuns`/`ensureSubscriptions`/stale watchdog) previously seq-scanned
+  (every AgentRun index led with `workspaceId`). Left the pre-existing
+  `ExternalResource` rename-index drift out of the migration (unrelated).
+- **Run dispatch (`run-dispatcher.ts` / `hermes-runs.ts`).** `getStatus`
+  `'unknown'` is now NON-terminal (leave ACTIVE, let the stale watchdog arbitrate)
+  — fixes the Codex worker-restart / deploy false-STALL and momentary blips.
+  `mapStatus` maps an unrecognized non-empty status → `running` (not `unknown`).
+  On a live `running` poll we always bump `lastEventAt` even when the step label
+  is unchanged, so a quiet-but-alive run isn't watchdog-STALLED. Hermes
+  `approve`/`stop` now inspect `res.ok` and throw; `agent-run.approve` (reject too)
+  surfaces the failure as a TRPCError instead of clearing the block + returning ok.
+  `runtime.register` now calls `assertEndpointTransport` like create/update.
+- **CLI daemon (`daemon.ts`).** `acquirePidLock()` writes the pid via
+  `fs.open(..., "wx")` (O_CREAT|O_EXCL) before SSE opens → closes the
+  double-daemon TOCTOU. `refreshLinkedAgent` returns `undefined` on a transient
+  `agents.me` failure vs `null` on genuine unlink; the heartbeat only overwrites
+  `linkedAgent` on a definitive answer (was: one blip nulled linkage, dropping all
+  dispatch ~60s).
+- **UI.** Goals/Plans list+detail get an `isError` branch (themed "couldn't load …
+  Retry") so a fetch failure isn't rendered as "No goals yet"/"Goal not found".
+  `global.runtimes` returns each runtime's `homeWorkspace`; the global Runtimes
+  settings gear routes via `workspacesInUse[0] ?? homeWorkspace` so a fresh
+  LOCAL_DAEMON isn't a read-only dead-end. Widened the `useGoalRouter` query shim
+  type with `isError`/`refetch`.
+
+Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors (only pre-existing
+native-`<select>` warnings — Phase 3 P3.2); orchestration suite **24 passed**
+(4 new Phase-1 regression tests); `pnpm build:cli` clean. Local isolated stack on
+:55432/:56379. Phase 2 (budget/lifecycle integrity, delivery idempotency, the two
+security holes) + Phase 3 (cross-workspace move, UI consistency, connector parity)
+still pending — see the audit memory.
+
 ## 2026-06-28 — AXI-90 QuickCreate GitHub issue/PR import
 
 Enhanced the ⇧C QuickCreate issue overlay so a pasted GitHub issue/PR URL (or
