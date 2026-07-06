@@ -233,6 +233,10 @@ export const runtimeRouter = router({
   register: workspaceProcedure
     .input(z.object(baseFields))
     .mutation(async ({ ctx, input }) => {
+      // Same transport guard as `create` / `update`: a REMOTE_HTTP endpoint
+      // on a public host must use TLS. `register` previously skipped this, so
+      // a plaintext public endpoint could slip in through this path.
+      assertEndpointTransport(input.endpoint || null);
       // For LOCAL_DAEMON the daemon registers itself and owns the row;
       // for REMOTE_HTTP an admin typically registers it but the same
       // attribution holds. ownerId is set from the calling user.

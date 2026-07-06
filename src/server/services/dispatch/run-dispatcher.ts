@@ -782,23 +782,18 @@ async function pollActiveRuns(): Promise<number> {
       if (verdict.state === "breach") continue;
 
       const step = status.lastEvent ?? "running";
-      // Clear a prior approval block (operator approved → agent resumed)
-      // or just advance the step label.
-      if (run.awaitingApprovalAt || step !== run.currentStep) {
-        const hasLiveEventStream = Boolean(connector.subscribe);
-        await db
-          .$transaction(async (tx) => {
-            if (hasLiveEventStream) {
-              await tx.agentRun.update({
-                where: { id: run.id },
-                data: {
-                  lastEventAt: new Date(),
-                  currentStep: step,
-                  ...(run.awaitingApprovalAt ? { awaitingApprovalAt: null } : {}),
-                },
-              });
-              return;
-            }
+      const stepChanged = step !== run.currentStep;
+      const hasLiveEventStream = Boolean(connector.subscribe);
+      const clearApproval = Boolean(run.awaitingApprovalAt);
+      // Always touch the run on a live "running" poll — even when the step
+      // label is unchanged — so the stale watchdog never STALLs a
+      // quiet-but-alive run (an agent mid-long-tool-call emits no step change
+      // for a while, but it is very much alive).
+      await db
+        .$transaction(async (tx) => {
+          if (!hasLiveEventStream && stepChanged) {
+            // No SSE enrichment layer + the step advanced → append a discrete
+            // STEP event (which itself bumps lastEventAt + currentStep).
             await appendRunEvent(tx, {
               runId: run.id,
               workspaceId: run.workspaceId,
@@ -808,11 +803,38 @@ async function pollActiveRuns(): Promise<number> {
               currentStep: step,
               payload: { lastEvent: status.lastEvent ?? null, currentStep: step },
             });
-          })
-          .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: step update failed"));
-      }
+            if (clearApproval) {
+              await tx.agentRun.update({
+                where: { id: run.id },
+                data: { awaitingApprovalAt: null },
+              });
+            }
+            return;
+          }
+          // Live SSE layer (granular events land there) or unchanged step: a
+          // cheap keep-alive bump, plus currentStep / approval-clear when they
+          // actually changed.
+          await tx.agentRun.update({
+            where: { id: run.id },
+            data: {
+              lastEventAt: new Date(),
+              ...(stepChanged ? { currentStep: step } : {}),
+              ...(clearApproval ? { awaitingApprovalAt: null } : {}),
+            },
+          });
+        })
+        .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: step update failed"));
       continue;
     }
+
+    // A connector that can't currently determine the run's state ("unknown")
+    // is NOT a terminal failure: a worker restart (Codex keeps its run state in
+    // process memory), a momentary provider blip, or an as-yet-unrecognized
+    // lifecycle word all surface as unknown. Terminalizing here false-STALLs
+    // live work on every deploy. Leave the run ACTIVE and deliberately do NOT
+    // bump lastEventAt — the stale watchdog is the single arbiter of death and
+    // will STALL it only if it stays unknown/idle past the threshold.
+    if (status.state === "unknown") continue;
 
     // Terminal — finish the run and mirror usage. Provider-side
     // "completed" is not enough to complete a Forge issue run; agents must

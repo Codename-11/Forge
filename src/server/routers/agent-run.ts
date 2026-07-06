@@ -1243,7 +1243,19 @@ export const agentRunRouter = router({
       }
 
       if (input.decision === "approve") {
-        await connector.approve?.(run.externalRunId, input.scope);
+        // A failed approval POST must NOT clear the block — surface it so the
+        // operator can retry instead of seeing a false success while the run
+        // stays blocked at the provider.
+        try {
+          await connector.approve?.(run.externalRunId, input.scope);
+        } catch (err) {
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Approval didn't reach the runtime — the run is still blocked. ${
+              err instanceof Error ? err.message : ""
+            }`.trim(),
+          });
+        }
         await ctx.db.$transaction(async (tx) => {
           await tx.agentRun.update({
             where: { id: run.id },
@@ -1267,8 +1279,19 @@ export const agentRunRouter = router({
         return { ok: true as const, decision: "approve" as const };
       }
 
-      // Reject → stop the live run, then close the AgentRun.
-      await connector.stop?.(run.externalRunId);
+      // Reject → stop the live run, then close the AgentRun. If the stop POST
+      // fails, do NOT close the run locally (that would orphan a still-live
+      // provider run) — surface the failure so the operator can retry.
+      try {
+        await connector.stop?.(run.externalRunId);
+      } catch (err) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Stop didn't reach the runtime — the run may still be active. ${
+            err instanceof Error ? err.message : ""
+          }`.trim(),
+        });
+      }
       await ctx.db.$transaction(async (tx) => {
         await tx.agentRun.update({
           where: { id: run.id },

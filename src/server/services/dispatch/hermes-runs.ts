@@ -15,7 +15,12 @@ function mapStatus(raw: string): RunStatus["state"] {
   if (s.includes("fail") || s.includes("error")) return "failed";
   if (s.includes("approval")) return "waiting_for_approval";
   if (s.includes("run") || s.includes("pending") || s.includes("queue")) return "running";
-  return "unknown";
+  // A non-empty but unrecognized lifecycle word ("initializing", "preparing",
+  // "starting", …) means the run is alive in a phase we don't have an explicit
+  // label for. Treat it as running, NOT unknown, so the poll loop keeps it
+  // ACTIVE instead of false-STALLing a run that hasn't even started emitting.
+  // Only a truly empty status is genuinely unknown.
+  return s.trim() ? "running" : "unknown";
 }
 
 /**
@@ -98,14 +103,27 @@ export function makeHermesRunsConnector(opts?: {
     return token ? { authorization: `Bearer ${token}` } : {};
   };
 
+  // Throws on network failure OR a non-2xx response so the caller can surface
+  // "approval failed, retry" instead of silently showing success while the
+  // provider run stays blocked. Internal fire-and-forget callers (auto-yolo)
+  // must attach their own .catch.
   const approveRun = async (externalRunId: string, choice: string): Promise<void> => {
-    await fetch(`${base()}/runs/${externalRunId}/approval`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...authHeaders() },
-      body: JSON.stringify({ choice }),
-    }).catch((err) => {
+    let res: Response;
+    try {
+      res = await fetch(`${base()}/runs/${externalRunId}/approval`, {
+        method: "POST",
+        headers: { "content-type": "application/json", ...authHeaders() },
+        body: JSON.stringify({ choice }),
+      });
+    } catch (err) {
       logger.warn({ err, externalRunId }, "hermes-runs: approval post failed");
-    });
+      throw err instanceof Error ? err : new Error("Hermes approval post failed");
+    }
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      logger.warn({ externalRunId, status: res.status }, "hermes-runs: approval rejected");
+      throw new Error(text || `Hermes approval failed (${res.status})`);
+    }
   };
 
   return {
@@ -232,7 +250,9 @@ export function makeHermesRunsConnector(opts?: {
             break;
           case "approval.request":
             if (runYoloOverrides.get(externalRunId) ?? runtimeYoloMode) {
-              void approveRun(externalRunId, "once");
+              void approveRun(externalRunId, "once").catch((err) =>
+                logger.warn({ err, externalRunId }, "hermes-runs: auto-approve failed"),
+              );
               onEvent({ type: "approval_resolved", choice: "once" });
               break;
             }
@@ -345,12 +365,21 @@ export function makeHermesRunsConnector(opts?: {
     },
 
     async stop(externalRunId: string): Promise<void> {
-      await fetch(`${base()}/runs/${externalRunId}/stop`, {
-        method: "POST",
-        headers: authHeaders(),
-      }).catch((err) => {
+      let res: Response;
+      try {
+        res = await fetch(`${base()}/runs/${externalRunId}/stop`, {
+          method: "POST",
+          headers: authHeaders(),
+        });
+      } catch (err) {
         logger.warn({ err, externalRunId }, "hermes-runs: stop post failed");
-      });
+        throw err instanceof Error ? err : new Error("Hermes stop post failed");
+      }
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        logger.warn({ externalRunId, status: res.status }, "hermes-runs: stop rejected");
+        throw new Error(text || `Hermes stop failed (${res.status})`);
+      }
     },
   };
 }
