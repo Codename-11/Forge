@@ -72,6 +72,8 @@ export default function GoalDetailPage() {
   const { data: crewList } = trpc.agentCrew.list.useQuery({});
   const goal = query?.data;
   const isLoading = available ? (query?.isLoading ?? true) : false;
+  // A fetch failure must not read as "Goal not found — abandoned or removed".
+  const isError = available ? (query?.isError ?? false) : false;
 
   // Reactivity: any orchestration event invalidates the goal so the
   // page repaints with fresh plan/step/budget state. The `goal` router
@@ -188,6 +190,26 @@ export default function GoalDetailPage() {
         <Topbar title="Goal" />
         <div className="p-4">
           <SkeletonList rows={5} />
+        </div>
+      </>
+    );
+  }
+
+  if (isError) {
+    return (
+      <>
+        <Topbar title="Goal" />
+        <div className="p-4">
+          <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
+            <EmptyState
+              variant="page"
+              title="Couldn't load this goal"
+              description="Something went wrong fetching it — this is a load error, not a deletion. The goal is still there."
+            />
+            <Button size="sm" variant="outline" onClick={() => query?.refetch()}>
+              Retry
+            </Button>
+          </div>
         </div>
       </>
     );

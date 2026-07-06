@@ -183,6 +183,11 @@ export const globalRouter = router({
         disabledAt: true,
         archivedAt: true,
         createdAt: true,
+        // The runtime's own home workspace (where it was registered). Always
+        // present, unlike `workspacesInUse` (derived from bound agents), so the
+        // settings UI can always link to the per-runtime detail page — even for
+        // a freshly registered daemon with no agents yet.
+        workspace: { select: { id: true, slug: true, name: true, key: true } },
         agents: {
           where: { archivedAt: null },
           select: {
@@ -222,6 +227,7 @@ export const globalRouter = router({
         online: health.kind === "online",
         disabled: !!r.disabledAt,
         boundAgents: r.agents.map((a) => ({ id: a.id, profileKey: a.profileKey, name: a.name })),
+        homeWorkspace: r.workspace,
         workspacesInUse: [...workspaces.values()],
       };
     });

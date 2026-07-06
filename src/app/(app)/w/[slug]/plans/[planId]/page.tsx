@@ -183,7 +183,12 @@ export default function PlanDetailPage() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
 
-  const { data: plan, isLoading } = trpc.executionPlan.get.useQuery({ id: params.planId });
+  const {
+    data: plan,
+    isLoading,
+    isError,
+    refetch,
+  } = trpc.executionPlan.get.useQuery({ id: params.planId });
 
   // Agents — for presence dots + glyphs on assigned steps. Cheap list,
   // cached; we index by id below.
@@ -540,6 +545,25 @@ export default function PlanDetailPage() {
         <Topbar title="Plan" />
         <div className="p-4">
           <SkeletonList rows={6} />
+        </div>
+      </>
+    );
+  }
+  if (isError) {
+    return (
+      <>
+        <Topbar title="Plan" />
+        <div className="p-4">
+          <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
+            <EmptyState
+              variant="page"
+              title="Couldn't load this plan"
+              description="Something went wrong fetching it — this is a load error, not a deletion. The plan is still there."
+            />
+            <Button size="sm" variant="outline" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </div>
         </div>
       </>
     );

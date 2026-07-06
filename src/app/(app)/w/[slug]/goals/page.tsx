@@ -53,6 +53,10 @@ export default function GoalsPage() {
   const available = Boolean(goalRouter?.list);
   const data = listQuery?.data;
   const isLoading = available ? (listQuery?.isLoading ?? true) : false;
+  // Distinguish a fetch FAILURE from a genuinely empty workspace — otherwise a
+  // transient network/server error renders "No goals yet" and reads as though
+  // the operator's goals were deleted.
+  const isError = available ? (listQuery?.isError ?? false) : false;
 
   const invalidateGoalList = () => {
     const goalUtils = (utils as unknown as { goal?: { list?: { invalidate?: () => void } } }).goal;
@@ -155,6 +159,18 @@ export default function GoalsPage() {
           />
         ) : isLoading ? (
           <SkeletonList rows={4} />
+        ) : isError ? (
+          <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
+            <EmptyState
+              variant="page"
+              icon={<Target />}
+              title="Couldn't load goals"
+              description="Something went wrong fetching your goals — this is a load error, not an empty workspace. Your goals are safe."
+            />
+            <Button size="sm" variant="outline" onClick={() => listQuery?.refetch()}>
+              Retry
+            </Button>
+          </div>
         ) : items.length === 0 ? (
           <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
             <EmptyState

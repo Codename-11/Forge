@@ -127,7 +127,14 @@ type QueryHook<TInput, TOutput> = {
   useQuery: (
     input: TInput,
     opts?: { enabled?: boolean; staleTime?: number },
-  ) => { data: TOutput | undefined; isLoading: boolean };
+  ) => {
+    data: TOutput | undefined;
+    isLoading: boolean;
+    // Surfaced so callers can distinguish a fetch FAILURE from an empty result
+    // (a transient error must not render as "no goals" / "goal not found").
+    isError: boolean;
+    refetch: () => void;
+  };
 };
 
 type MutationHook<TInput, TOutput> = {

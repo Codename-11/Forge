@@ -227,7 +227,7 @@ export default function PlansPage() {
   const router = useRouter();
   const utils = trpc.useUtils();
   const [tab, setTab] = useState<Tab>("active");
-  const { data, isLoading } = trpc.executionPlan.list.useQuery(
+  const { data, isLoading, isError, refetch } = trpc.executionPlan.list.useQuery(
     tab === "archived"
       ? { archivedOnly: true }
       : { includeArchived: false },
@@ -391,6 +391,18 @@ export default function PlansPage() {
 
         {isLoading ? (
           <SkeletonList rows={4} />
+        ) : isError ? (
+          <div className="mx-auto flex max-w-xl flex-col items-center gap-4 py-6">
+            <EmptyState
+              variant="page"
+              icon={<ListChecks />}
+              title="Couldn't load plans"
+              description="Something went wrong fetching plans — this is a load error, not an empty list. Nothing was deleted."
+            />
+            <Button size="sm" variant="outline" onClick={() => refetch()}>
+              Retry
+            </Button>
+          </div>
         ) : items.length === 0 ? (
           tab === "archived" ? (
             <EmptyState

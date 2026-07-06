@@ -122,7 +122,11 @@ export default function RuntimesPage() {
                     : r.health.tone === "warning"
                       ? "border-warning/30 bg-warning/5"
                       : "border-border bg-card/40";
-                const settingsWorkspace = r.workspacesInUse[0];
+                // Prefer a workspace the runtime is actively used in, but
+                // always fall back to its home workspace so the settings link
+                // is never a dead-end (a freshly registered daemon has no
+                // workspacesInUse yet but still needs self-test / secrets).
+                const settingsWorkspace = r.workspacesInUse[0] ?? r.homeWorkspace;
                 return (
                   <div key={r.id} className={`flex flex-col gap-3 rounded-lg border p-4 ${tone}`}>
                     <header className="flex items-start gap-2">
