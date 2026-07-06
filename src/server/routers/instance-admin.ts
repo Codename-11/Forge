@@ -329,4 +329,46 @@ export const instanceAdminRouter = router({
       note: "No backup job is wired up in this deployment yet — backups are handled at the infrastructure layer (volume snapshots / managed Postgres). Logged the request.",
     };
   }),
+
+  /**
+   * Dry-run preview of a cross-workspace issue move (audit ask #2). Read-only:
+   * returns the full remap plan (renumber, status/label remap, nulled FKs,
+   * dropped relations, blocked-issue reasons, attachment quota delta) so the
+   * operator sees every integrity consequence before any row is mutated.
+   * Instance-admin gated because it references two tenants at once — a
+   * per-workspace adminProcedure is pinned to a single ctx.workspaceId.
+   */
+  previewIssueMove: instanceAdminProcedure
+    .input(
+      z.object({
+        sourceWorkspaceId: z.string().cuid(),
+        targetWorkspaceId: z.string().cuid(),
+        issueIds: z.array(z.string().cuid()).min(1).max(500),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const { planIssueMove } = await import("@/server/services/cross-workspace-move");
+      return planIssueMove(ctx.db, input);
+    }),
+
+  /**
+   * Execute the move for the plan's movable issues in one transaction, writing
+   * MOVE audit events in both workspaces. Blocked (entangled) issues are
+   * skipped and returned so the caller can surface them.
+   */
+  moveIssues: instanceAdminProcedure
+    .input(
+      z.object({
+        sourceWorkspaceId: z.string().cuid(),
+        targetWorkspaceId: z.string().cuid(),
+        issueIds: z.array(z.string().cuid()).min(1).max(500),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const { executeIssueMove } = await import("@/server/services/cross-workspace-move");
+      return executeIssueMove(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+      });
+    }),
 });
