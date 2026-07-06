@@ -21,6 +21,7 @@ import {
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { sweepIdleAgents, recordAgentReachable } from "@/server/services/heartbeat";
 import { sweepRuntimeHealth } from "@/server/services/runtime-health";
+import { sweepOrchestrationBudget } from "@/server/services/orchestration-service";
 import { sweepStaleWork } from "@/server/services/stale-work";
 import { checkRequiredAck } from "@/server/services/required-ack";
 import { sweepSlaBreaches } from "@/server/services/sla-breach";
@@ -51,6 +52,8 @@ const RUNS_DISPATCH_SWEEP_JOB_ID = "runs-dispatch-sweep";
 const CHAT_COMPACTION_SWEEP_JOB_ID = "chat-compaction-sweep";
 const RUNTIME_HEALTH_SWEEP_INTERVAL_MS = 60_000;
 const RUNTIME_HEALTH_SWEEP_JOB_ID = "runtime-health-sweep";
+const ORCH_WATCHDOG_SWEEP_INTERVAL_MS = 60_000;
+const ORCH_WATCHDOG_SWEEP_JOB_ID = "orchestration-watchdog-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -285,6 +288,10 @@ export const maintenanceWorker = new Worker(
         const res = await sweepRuntimeHealth();
         return res;
       }
+      case "orchestration-watchdog-sweep": {
+        const res = await sweepOrchestrationBudget();
+        return res;
+      }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;
         if (!eventId) return null;
@@ -477,6 +484,24 @@ export async function registerRuntimeHealthSweepJob(): Promise<void> {
   );
 }
 
+/**
+ * Periodic orchestration watchdog. Enforces plan WALL-TIME budgets independent
+ * of cost reporting (a plan whose agents never report cost otherwise never has
+ * its time cap checked) and logs plans that appear wedged.
+ */
+export async function registerOrchestrationWatchdogSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "orchestration-watchdog-sweep",
+    {},
+    {
+      jobId: ORCH_WATCHDOG_SWEEP_JOB_ID,
+      repeat: { every: ORCH_WATCHDOG_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -503,6 +528,9 @@ void registerRunsDispatchSweepJob().catch((err) => {
 });
 void registerRuntimeHealthSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register runtime-health-sweep job");
+});
+void registerOrchestrationWatchdogSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register orchestration-watchdog-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

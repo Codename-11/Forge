@@ -1063,3 +1063,74 @@ describe("orchestration: audit phase-1 safety guards", () => {
     expect(after.startedAt).not.toBeNull();
   });
 });
+
+describe("orchestration: audit phase-2 lifecycle + integrity", () => {
+  it("P2.3 — rejects a plan whose steps form a dependency cycle", async () => {
+    const { fixture, prisma } = await setup();
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal",
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+    // step 0 depends on step 1 and step 1 depends on step 0 → cycle.
+    await expect(
+      addStepsToPlan(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        planId,
+        steps: [
+          { title: "a", dependsOnStepIndexes: [1] },
+          { title: "b", dependsOnStepIndexes: [0] },
+        ],
+      }),
+    ).rejects.toThrow(/cycle/i);
+  });
+
+  it("P2.2 — abandoning a goal cancels its plan's non-terminal steps", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "worker");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Crew",
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal",
+      crewId: crew.id,
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+    const { stepIds } = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [{ title: "root" }, { title: "child", dependsOnStepIndexes: [0] }],
+    });
+    await prisma.$transaction((tx) =>
+      activatePlan(tx, { workspaceId: fixture.workspace.id, actorId: fixture.user.id, planId }),
+    );
+    // root READY, child TODO. Abandon → both CANCELED, plan CANCELED.
+    await abandonGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      id: goal.id,
+    });
+    const root = await prisma.executionStep.findUniqueOrThrow({ where: { id: stepIds[0] } });
+    const child = await prisma.executionStep.findUniqueOrThrow({ where: { id: stepIds[1] } });
+    expect(root.status).toBe(ExecutionStepStatus.CANCELED);
+    expect(child.status).toBe(ExecutionStepStatus.CANCELED);
+    const plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(plan.status).toBe(ExecutionPlanStatus.CANCELED);
+  });
+});

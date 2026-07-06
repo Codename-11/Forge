@@ -65,6 +65,40 @@ export interface CreateExecutionPlanInput {
 }
 
 /** Create an ExecutionPlan with optional seeded steps. */
+/**
+ * Reject index-based step dependencies that form a cycle (Kahn's algorithm).
+ * A dependency loop would leave the plan RUNNING forever with nothing ready.
+ * Kept local (a pure ~20-line function) to avoid an import cycle with the
+ * orchestration service. Out-of-range / self indexes are ignored.
+ */
+function assertNoStepCycles(steps: { dependsOnStepIndexes?: number[] }[]): void {
+  const n = steps.length;
+  const indeg = new Array<number>(n).fill(0);
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    for (const d of steps[i].dependsOnStepIndexes ?? []) {
+      if (!Number.isInteger(d) || d < 0 || d >= n || d === i) continue;
+      adj[d].push(i);
+      indeg[i]++;
+    }
+  }
+  const queue: number[] = [];
+  for (let i = 0; i < n; i++) if (indeg[i] === 0) queue.push(i);
+  let seen = 0;
+  while (queue.length) {
+    const u = queue.shift()!;
+    seen++;
+    for (const v of adj[u]) if (--indeg[v] === 0) queue.push(v);
+  }
+  if (seen !== n) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Plan steps contain a dependency cycle — steps can't depend on each other in a loop.",
+    });
+  }
+}
+
 export async function createExecutionPlan(
   db: PrismaClient,
   input: CreateExecutionPlanInput,
@@ -138,6 +172,7 @@ export async function createExecutionPlan(
       },
     });
     if (input.steps && input.steps.length) {
+      assertNoStepCycles(input.steps);
       // First pass: create steps without index-based deps so we have real ids.
       const createdIds: string[] = [];
       for (let i = 0; i < input.steps.length; i++) {

@@ -15,6 +15,8 @@ import {
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { nanoid } from "nanoid";
+import { db } from "@/server/db";
+import { logger } from "@/server/logger";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import { openReviewGateTx } from "@/server/services/agent-crew-service";
 import { createActionRequest } from "@/server/services/action-request-service";
@@ -597,6 +599,138 @@ export async function listGoals(
   });
 }
 
+/**
+ * Tear down the in-flight execution of a set of plans: cancel their
+ * non-terminal steps, mark their live AgentRuns ABANDONED so the poll loop
+ * stops tracking them, and best-effort `connector.stop` the provider runs so
+ * they stop spending tokens. Used when a goal is abandoned or superseded by a
+ * fresh decompose attempt — without it a "canceled" plan's runs keep burning
+ * budget until the stale watchdog reaps them, and a late verdict could still
+ * cascade. Provider stop is a network call, so it runs OUTSIDE the DB tx.
+ */
+async function reapPlanRuns(
+  db: PrismaClient,
+  params: { workspaceId: string; planIds: string[] },
+): Promise<void> {
+  if (params.planIds.length === 0) return;
+  const steps = await db.executionStep.findMany({
+    where: { planId: { in: params.planIds }, workspaceId: params.workspaceId },
+    select: { id: true },
+  });
+  const stepIds = steps.map((s) => s.id);
+  if (stepIds.length === 0) return;
+
+  // Snapshot the live provider runs before we abandon them (need externalRunId
+  // + agent/runtime to resolve a connector for the stop).
+  const liveRuns = await db.agentRun.findMany({
+    where: {
+      workspaceId: params.workspaceId,
+      executionStepId: { in: stepIds },
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      externalRunId: { not: null },
+    },
+    select: {
+      id: true,
+      externalRunId: true,
+      agent: {
+        select: {
+          provider: true,
+          runtime: {
+            select: {
+              adapterKey: true,
+              endpoint: true,
+              secret: true,
+              config: true,
+              disabledAt: true,
+              name: true,
+            },
+          },
+        },
+      },
+    },
+  });
+
+  await db.$transaction(async (tx) => {
+    await tx.executionStep.updateMany({
+      where: {
+        planId: { in: params.planIds },
+        status: {
+          in: [
+            ExecutionStepStatus.TODO,
+            ExecutionStepStatus.READY,
+            ExecutionStepStatus.RUNNING,
+            ExecutionStepStatus.REVIEW,
+            ExecutionStepStatus.BLOCKED,
+          ],
+        },
+      },
+      data: { status: ExecutionStepStatus.CANCELED },
+    });
+    await tx.agentRun.updateMany({
+      where: {
+        executionStepId: { in: stepIds },
+        status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      },
+      data: { status: AgentRunStatus.ABANDONED, finishedAt: new Date() },
+    });
+  });
+
+  for (const run of liveRuns) {
+    if (!run.externalRunId) continue;
+    try {
+      const { getRunsConnectorForAgent } = await import("@/server/services/dispatch/registry");
+      const connector = getRunsConnectorForAgent({
+        provider: run.agent.provider,
+        runtime: run.agent.runtime,
+      });
+      await connector?.stop?.(run.externalRunId);
+    } catch (err) {
+      logger.warn({ err, runId: run.id }, "orchestration: provider stop on teardown failed");
+    }
+  }
+}
+
+/**
+ * Demote a goal's prior decompose attempts AND cancel + reap any that were
+ * still dispatching. A re-decompose / re-generate used to only flip
+ * `isActiveAttempt=false`, leaving a prior RUNNING/APPROVED/BLOCKED plan
+ * cascading steps and spending in the background — two plans driving one goal's
+ * totals. Call this before creating the fresh attempt.
+ */
+async function demoteAndReapPriorAttempts(
+  db: PrismaClient,
+  params: { workspaceId: string; goalId: string },
+): Promise<void> {
+  const dispatching = await db.executionPlan.findMany({
+    where: {
+      goalId: params.goalId,
+      isActiveAttempt: true,
+      status: {
+        in: [
+          ExecutionPlanStatus.RUNNING,
+          ExecutionPlanStatus.APPROVED,
+          ExecutionPlanStatus.BLOCKED,
+        ],
+      },
+    },
+    select: { id: true },
+  });
+  const ids = dispatching.map((p) => p.id);
+  await db.$transaction(async (tx) => {
+    if (ids.length) {
+      await tx.executionPlan.updateMany({
+        where: { id: { in: ids } },
+        data: { status: ExecutionPlanStatus.CANCELED },
+      });
+    }
+    await tx.executionPlan.updateMany({
+      where: { goalId: params.goalId, isActiveAttempt: true },
+      data: { isActiveAttempt: false },
+    });
+  });
+  await reapPlanRuns(db, { workspaceId: params.workspaceId, planIds: ids });
+}
+
 export async function abandonGoal(
   db: PrismaClient,
   params: { workspaceId: string; actorId: string | null; id: string; reason?: string | null },
@@ -614,16 +748,33 @@ export async function abandonGoal(
       message: `Goal is already ${goal.status.toLowerCase()}.`,
     });
   }
-  await db.$transaction(async (tx) => {
+  const canceledPlanIds = await db.$transaction(async (tx) => {
     await tx.goal.update({
       where: { id: goal.id },
       data: { status: GoalStatus.ABANDONED },
     });
     // Cancel any active plan attempt so dispatch stops.
-    await tx.executionPlan.updateMany({
-      where: { goalId: goal.id, status: { in: [ExecutionPlanStatus.DRAFT, ExecutionPlanStatus.APPROVED, ExecutionPlanStatus.RUNNING] } },
-      data: { status: ExecutionPlanStatus.CANCELED },
+    const plans = await tx.executionPlan.findMany({
+      where: {
+        goalId: goal.id,
+        status: {
+          in: [
+            ExecutionPlanStatus.DRAFT,
+            ExecutionPlanStatus.APPROVED,
+            ExecutionPlanStatus.RUNNING,
+            ExecutionPlanStatus.BLOCKED,
+          ],
+        },
+      },
+      select: { id: true },
     });
+    const ids = plans.map((p) => p.id);
+    if (ids.length) {
+      await tx.executionPlan.updateMany({
+        where: { id: { in: ids } },
+        data: { status: ExecutionPlanStatus.CANCELED },
+      });
+    }
     await recordChange(tx, {
       workspaceId: params.workspaceId,
       actorId: params.actorId,
@@ -637,7 +788,12 @@ export async function abandonGoal(
       subjectId: goal.id,
       payload: { from: goal.status, to: GoalStatus.ABANDONED, reason: params.reason ?? null },
     });
+    return ids;
   });
+  // Cancel non-terminal steps + stop their in-flight runs so an abandoned goal
+  // stops spending immediately (was: runs kept burning tokens until the stale
+  // watchdog reaped them, and a late verdict could still cascade).
+  await reapPlanRuns(db, { workspaceId: params.workspaceId, planIds: canceledPlanIds });
 }
 
 // ---------------------------------------------------------------------------
@@ -763,12 +919,11 @@ export async function decomposeGoal(
     }
   }
 
+  // Cancel + reap any prior dispatching attempt before starting a fresh one,
+  // so two plans don't drive the same goal at once (was: a prior RUNNING plan
+  // kept dispatching steps + spending in the background after re-generate).
+  await demoteAndReapPriorAttempts(db, { workspaceId: params.workspaceId, goalId: goal.id });
   const result = await db.$transaction(async (tx) => {
-    // Mark prior attempts inactive.
-    await tx.executionPlan.updateMany({
-      where: { goalId: goal.id, isActiveAttempt: true },
-      data: { isActiveAttempt: false },
-    });
     const plan = await tx.executionPlan.create({
       data: {
         workspaceId: params.workspaceId,
@@ -973,12 +1128,11 @@ export async function generatePlanForGoal(
     });
   }
 
+  // Cancel + reap any prior dispatching attempt before starting a fresh one,
+  // so two plans don't drive the same goal at once (was: a prior RUNNING plan
+  // kept dispatching steps + spending in the background after re-generate).
+  await demoteAndReapPriorAttempts(db, { workspaceId: params.workspaceId, goalId: goal.id });
   const result = await db.$transaction(async (tx) => {
-    // Mark prior attempts inactive.
-    await tx.executionPlan.updateMany({
-      where: { goalId: goal.id, isActiveAttempt: true },
-      data: { isActiveAttempt: false },
-    });
     const plan = await tx.executionPlan.create({
       data: {
         workspaceId: params.workspaceId,
@@ -1167,6 +1321,41 @@ export interface AddStepInput {
  * generate is one rollback-safe unit). Assumes the plan exists, is DRAFT, and
  * any explicit assignees were already validated by the caller.
  */
+/**
+ * Reject a set of steps whose index-based dependencies form a cycle (Kahn's
+ * algorithm). A mutually-dependent pair (step 0 ↔ step 1) would otherwise leave
+ * the plan RUNNING forever — cascadeReadiness flips nothing, maybeCompleteGoal
+ * never fires, and no error surfaces. A bad LLM planner output silently wedges
+ * the goal. Out-of-range / self indexes are ignored (dropped elsewhere too).
+ */
+export function assertNoStepCycles(steps: { dependsOnStepIndexes?: number[] }[]): void {
+  const n = steps.length;
+  const indeg = new Array<number>(n).fill(0);
+  const adj: number[][] = Array.from({ length: n }, () => []);
+  for (let i = 0; i < n; i++) {
+    for (const d of steps[i].dependsOnStepIndexes ?? []) {
+      if (!Number.isInteger(d) || d < 0 || d >= n || d === i) continue;
+      adj[d].push(i);
+      indeg[i]++;
+    }
+  }
+  const queue: number[] = [];
+  for (let i = 0; i < n; i++) if (indeg[i] === 0) queue.push(i);
+  let seen = 0;
+  while (queue.length) {
+    const u = queue.shift()!;
+    seen++;
+    for (const v of adj[u]) if (--indeg[v] === 0) queue.push(v);
+  }
+  if (seen !== n) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Plan steps contain a dependency cycle — steps can't depend on each other in a loop.",
+    });
+  }
+}
+
 async function insertStepsTx(
   tx: Prisma.TransactionClient,
   params: {
@@ -1176,6 +1365,7 @@ async function insertStepsTx(
     steps: AddStepInput[];
   },
 ): Promise<string[]> {
+  assertNoStepCycles(params.steps);
   const last = await tx.executionStep.findFirst({
     where: { planId: params.planId },
     orderBy: { position: "desc" },
@@ -2296,4 +2486,81 @@ export async function checkAndBlockBudget(
     crewId: plan.crewId,
   });
   return true;
+}
+
+/**
+ * Periodic budget/liveness watchdog for RUNNING plans (worker sweep).
+ *
+ * `checkAndBlockBudget` was previously only ever called from the cost-record
+ * path (applyRunCostToPlan), so a plan whose agents never report cost had its
+ * WALL-TIME cap silently un-enforced, and a wedged plan sat RUNNING forever
+ * with no signal. This sweep re-runs the same guard on every RUNNING plan with
+ * a wall-time cap (enforcing time independent of cost events), and logs plans
+ * that appear stuck (RUNNING, a wall-time cap, but no in-flight work) for
+ * operator visibility.
+ */
+export async function sweepOrchestrationBudget(): Promise<{ blocked: number }> {
+  const plans = await db.executionPlan.findMany({
+    where: {
+      status: ExecutionPlanStatus.RUNNING,
+      maxWallTimeMinutes: { not: null },
+      archivedAt: null,
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      status: true,
+      totalCostUsd: true,
+      maxTotalCostUsd: true,
+      maxWallTimeMinutes: true,
+      crewId: true,
+      goalId: true,
+      createdAt: true,
+      startedAt: true,
+    },
+    take: 200,
+  });
+  let blocked = 0;
+  for (const plan of plans) {
+    try {
+      const didBlock = await db.$transaction((tx) =>
+        checkAndBlockBudget(tx, { workspaceId: plan.workspaceId, plan }),
+      );
+      if (didBlock) {
+        blocked++;
+        continue;
+      }
+      // Not over budget but possibly wedged: no ACTIVE run + no READY/RUNNING/
+      // REVIEW step means nothing is (or will be) progressing on its own.
+      const inflightSteps = await db.executionStep.count({
+        where: {
+          planId: plan.id,
+          status: {
+            in: [
+              ExecutionStepStatus.READY,
+              ExecutionStepStatus.RUNNING,
+              ExecutionStepStatus.REVIEW,
+            ],
+          },
+        },
+      });
+      if (inflightSteps === 0) {
+        const remaining = await db.executionStep.count({
+          where: {
+            planId: plan.id,
+            status: { in: [ExecutionStepStatus.TODO, ExecutionStepStatus.BLOCKED] },
+          },
+        });
+        if (remaining > 0) {
+          logger.warn(
+            { planId: plan.id, workspaceId: plan.workspaceId, remaining },
+            "orchestration-watchdog: plan RUNNING with no in-flight work but steps remain (possible wedge)",
+          );
+        }
+      }
+    } catch (err) {
+      logger.warn({ err, planId: plan.id }, "orchestration-watchdog: plan check failed");
+    }
+  }
+  return { blocked };
 }
