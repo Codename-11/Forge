@@ -148,6 +148,20 @@ function shouldUseRunsEngine(agent: {
 }
 
 /** Open AgentRuns + start provider runs for fresh RUNS-engine assignments. */
+/**
+ * True when the agent already has >= maxConcurrent in-flight provider runs.
+ * `maxConcurrent <= 0` means unlimited. Counts ACTIVE runs that carry an
+ * externalRunId (i.e. actually dialed a provider), mirroring the auto-dispatch
+ * cap in dispatcher.ts so the RUNS path can't blow past it.
+ */
+async function agentAtRunsCapacity(agentId: string, maxConcurrent: number): Promise<boolean> {
+  if (!maxConcurrent || maxConcurrent <= 0) return false;
+  const active = await db.agentRun.count({
+    where: { agentId, status: AgentRunStatus.ACTIVE, externalRunId: { not: null } },
+  });
+  return active >= maxConcurrent;
+}
+
 async function startNewRuns(): Promise<number> {
   const events = await db.activityEvent.findMany({
     where: {
@@ -191,6 +205,7 @@ async function startNewRuns(): Promise<number> {
             id: true,
             provider: true,
             runEngine: true,
+            maxConcurrent: true,
             runtime: {
               select: {
                 adapterKey: true,
@@ -211,6 +226,12 @@ async function startNewRuns(): Promise<number> {
     // disabled-sentinel connector would only fail). The assignment stays
     // queued and dispatches once the runtime is re-enabled.
     if (agent.runtime?.disabledAt) continue;
+    // Enforce the agent's concurrency cap on the RUNS path too. Auto-dispatch
+    // selection (dispatcher.ts) already respects maxConcurrent, but manual /
+    // @-mention / watcher / rule assignments funnel straight here — without
+    // this a maxConcurrent=1 agent could hold N concurrent provider runs. The
+    // assignment stays queued and re-dispatches on a later sweep as runs finish.
+    if (await agentAtRunsCapacity(agent.id, agent.maxConcurrent)) continue;
     if (!shouldUseRunsEngine(agent)) {
       continue;
     }
@@ -673,6 +694,28 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
 }
 
 /** Poll live provider runs and mirror status onto the AgentRun. */
+/**
+ * Apply a poll-observed cost delta to the run's execution plan + goal budget.
+ * Uses a dynamic import to avoid a static import cycle with the orchestration
+ * service (which imports the agent-run helpers this module also uses).
+ */
+async function applyPolledCostDelta(
+  run: { id: string; workspaceId: string },
+  costDelta: number,
+): Promise<void> {
+  if (Math.abs(costDelta) < 1e-9) return;
+  try {
+    const { applyRunCostToPlan } = await import("@/server/services/orchestration-service");
+    await applyRunCostToPlan(db, {
+      workspaceId: run.workspaceId,
+      runId: run.id,
+      costDelta,
+    });
+  } catch (err) {
+    logger.warn({ err, runId: run.id }, "runs-dispatch: plan-cost mirror failed");
+  }
+}
+
 async function pollActiveRuns(): Promise<number> {
   const runs = await db.agentRun.findMany({
     where: { status: AgentRunStatus.ACTIVE, externalRunId: { not: null } },
@@ -713,11 +756,30 @@ async function pollActiveRuns(): Promise<number> {
 
   let polled = 0;
   for (const run of runs) {
+    // A runtime paused mid-run is a dispatch kill-switch, not a run killer.
+    // Leave already-in-flight runs ALONE (they're live at the provider) —
+    // disabling only blocks NEW dispatch. Polling a disabled runtime would
+    // otherwise resolve the sentinel connector (getStatus → failed) and
+    // false-STALL live work. Re-enabling resumes polling on the next sweep.
+    if (run.agent.runtime?.disabledAt) continue;
+
     const connector = getRunsConnectorForAgent({
       provider: run.agent.provider,
       runtime: run.agent.runtime,
     });
-    if (!connector?.getStatus || !run.externalRunId) continue;
+    if (!connector?.getStatus || !run.externalRunId) {
+      // Unresolvable connector (runtime misconfigured / adapter missing). Don't
+      // silently spin forever — surface WHY on the run so the operator can see
+      // it, and deliberately don't bump lastEventAt so the stale watchdog can
+      // still reap it if it stays this way.
+      const note = "runtime unresolvable — check its adapter / endpoint config";
+      if (run.externalRunId && run.currentStep !== note) {
+        await db.agentRun
+          .update({ where: { id: run.id }, data: { currentStep: note } })
+          .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: annotate failed"));
+      }
+      continue;
+    }
     let status;
     try {
       status = await connector.getStatus(run.externalRunId);
@@ -726,6 +788,23 @@ async function pollActiveRuns(): Promise<number> {
       continue;
     }
     polled++;
+
+    // Mirror any newly-reported cost onto the plan/goal budget. RUNS agents
+    // don't call runs.recordUsage (that's the COMPLETIONS path), so without
+    // this the poll-reported cost never reaches applyRunCostToPlan and a RUNS
+    // agent could burn past the plan's maxTotalCostUsd. Persist the new cost so
+    // the next poll's delta is correct, then apply just the delta.
+    const polledCost = status.usage?.costUsd;
+    if (polledCost != null) {
+      const prev = run.costUsd == null ? 0 : Number(run.costUsd);
+      const delta = polledCost - prev;
+      if (Math.abs(delta) > 1e-9) {
+        await db.agentRun
+          .update({ where: { id: run.id }, data: { costUsd: polledCost } })
+          .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: cost persist failed"));
+        await applyPolledCostDelta(run, delta);
+      }
+    }
 
     if (status.state === "waiting_for_approval") {
       // Transition into a blocked state (set the flag + a BLOCKED event)
