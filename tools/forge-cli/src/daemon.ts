@@ -221,6 +221,71 @@ class SeenEvents {
   }
 }
 
+/** Minimal view of an `agent.inbox.list` run item (see agent-dispatch-inbox). */
+interface InboxReconcileItem {
+  kind: string;
+  runId: string;
+  workspaceId: string;
+  agentId: string;
+  issueId: string;
+  triggerEventId?: string | null;
+  issueSnapshot?: {
+    id: string;
+    number: number;
+    title: string;
+    priority: string;
+    statusId: string;
+    projectId: string | null;
+  };
+}
+
+/**
+ * Reconcile dropped dispatch on (re)connect. The daemon rides a live-only SSE
+ * with no replay, so any AGENT_ASSIGNED fired while it was stopped or mid-
+ * reconnect is otherwise lost forever. On every connect we pull the agent's
+ * UNACKED inbox (the assignments it still owes) and drive each through the same
+ * handler as a live event, deduped against `seenEvents` by the triggering event
+ * id so a later SSE delivery of the same event is a no-op (and vice-versa).
+ */
+async function reconcileInbox(
+  auth: AuthFile,
+  agent: AgentMe,
+  seenEvents: SeenEvents,
+  foreground: boolean,
+): Promise<void> {
+  const res = await callTool<{ items: InboxReconcileItem[] }>(auth, "agent.inbox.list", {
+    status: "unacked",
+    limit: 50,
+  });
+  if (res.isError || !res.data) return;
+  let dispatched = 0;
+  for (const item of res.data.items ?? []) {
+    if (item.kind !== "run" || !item.issueId) continue;
+    if (item.agentId !== agent.id) continue;
+    const key = item.triggerEventId ?? `run:${item.runId}`;
+    if (seenEvents.has(key)) continue;
+    seenEvents.add(key);
+    const evt: AgentAssignedEvent = {
+      id: item.triggerEventId ?? undefined,
+      workspaceId: item.workspaceId,
+      kind: "AGENT_ASSIGNED",
+      subjectType: "issue",
+      subjectId: item.issueId,
+      payload: {
+        agentId: item.agentId,
+        issueSnapshot: item.issueSnapshot
+          ? { ...item.issueSnapshot, labelNames: [] }
+          : undefined,
+      },
+    };
+    void handleAgentAssigned({ auth, agent, evt, foreground });
+    dispatched++;
+  }
+  if (dispatched && foreground) {
+    console.log(chalk.gray(`  reconciled ${dispatched} pending assignment(s) from inbox`));
+  }
+}
+
 /**
  * Acquire the daemon pid file as an atomic exclusive lock (O_CREAT|O_EXCL via
  * the "wx" flag). This closes the TOCTOU in `startDaemon`, whose liveness
@@ -345,8 +410,40 @@ async function runDaemon(opts: { foreground: boolean }) {
     headers: { Authorization: `Bearer ${auth.token}` },
   } as ConstructorParameters<typeof EventSource>[1]);
 
-  es.onopen = () => console.log(chalk.gray("  SSE connected"));
+  // Fatal-auth backstop: a revoked / expired token makes EventSource retry a
+  // 401 forever while `daemon status` still reads "running" — silently doing
+  // nothing. Count consecutive auth failures and exit non-zero past a threshold
+  // so a supervisor surfaces it ("run forge login").
+  let consecutiveAuthErrors = 0;
+  const FATAL_AUTH_THRESHOLD = 5;
+
+  es.onopen = () => {
+    consecutiveAuthErrors = 0;
+    console.log(chalk.gray("  SSE connected"));
+    // Reconcile anything missed while disconnected (dropped dispatch replay).
+    if (linkedAgent) {
+      void reconcileInbox(auth, linkedAgent, seenEvents, opts.foreground).catch((err) =>
+        console.error(chalk.yellow("reconcile failed:"), err),
+      );
+    }
+  };
   es.onerror = (err) => {
+    const status = (err as { status?: number } | undefined)?.status;
+    if (status === 401 || status === 403) {
+      consecutiveAuthErrors++;
+      console.error(
+        chalk.yellow(`SSE auth error (${status}) [${consecutiveAuthErrors}/${FATAL_AUTH_THRESHOLD}]`),
+      );
+      if (consecutiveAuthErrors >= FATAL_AUTH_THRESHOLD) {
+        console.error(
+          chalk.red("daemon: token invalid or expired — run `forge login`. Exiting."),
+        );
+        void fs.unlink(pidPath()).catch(() => {});
+        process.exit(1);
+      }
+      return;
+    }
+    // Transient / network error — EventSource will retry; don't treat as fatal.
     console.error(chalk.yellow("SSE error:"), err);
   };
   es.onmessage = (ev: MessageEvent) => {
