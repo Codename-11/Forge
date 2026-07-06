@@ -37,9 +37,13 @@ import {
  *      `getStatus` and mirror it onto the AgentRun (currentStep / token
  *      usage / terminal finish) so Mission Control reflects live progress.
  *
- * Polling (vs a live SSE subscription) fits the worker's short-job model
- * and is trivially restart-safe — there's no in-memory subscription state
- * to lose. The webhook path remains for COMPLETIONS / legacy agents; a
+ * Polling (vs a live SSE subscription) fits the worker's short-job model.
+ * Restart-safety depends on the connector: Hermes re-reads run state over
+ * HTTP (`getStatus`), so a worker restart self-heals. Codex keeps the whole
+ * run in worker-process memory, so after a restart `getStatus` returns
+ * `unknown` — which the poll loop now treats as NON-terminal (leaves the run
+ * ACTIVE, lets the stale watchdog arbitrate) rather than false-STALLing it.
+ * The webhook path remains for COMPLETIONS / legacy agents; a
  * RUNS agent simply shouldn't also carry a dispatch `webhookUrl` (that
  * would double-dispatch).
  */

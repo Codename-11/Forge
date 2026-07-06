@@ -55,8 +55,8 @@ function agentPresenceText(input: Date | string | null | undefined): string {
  * daemon block (LOCAL_DAEMON only when no agents are attached yet), plus
  * the rename / archive controls.
  *
- * Stream D will fill in the SSE channel id details once `forge daemon
- * start` is wired through. For now the connect block is a static recipe.
+ * The connect block is a static recipe the operator runs on the host; the
+ * daemon self-registers and heartbeats once `forge daemon start` runs.
  */
 export default function RuntimeDetailPage() {
   const ws = useWorkspace();
@@ -481,8 +481,7 @@ export default function RuntimeDetailPage() {
                     <>
                       The Forge CLI registers this runtime on{" "}
                       <code className="font-mono">forge daemon start</code>,
-                      then opens an SSE subscription scoped to it. Stream D
-                      will land the binary; the recipe stays the same.
+                      then opens an SSE subscription scoped to it.
                     </>
                   }
                 >
@@ -497,10 +496,7 @@ export default function RuntimeDetailPage() {
                       channel id is{" "}
                       <code className="rounded bg-subtle px-1 font-mono text-id">
                         runtime:{runtime.id}
-                      </code>{" "}
-                      <span className="text-muted-foreground/70">
-                        (final wire format pending Stream D)
-                      </span>
+                      </code>
                       .
                     </div>
                   </Card>

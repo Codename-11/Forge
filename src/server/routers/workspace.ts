@@ -163,6 +163,30 @@ export const workspaceRouter = router({
       });
       if (existing) throw new TRPCError({ code: "CONFLICT", message: "Slug or key in use." });
 
+      // Governance guardrail for self-service tenant creation. `workspace.create`
+      // is open to any signed-in user (intended for onboarding), which lets one
+      // user spin up unlimited tenants. `MAX_WORKSPACES_PER_USER` (env, default
+      // 0 = unlimited → no behavior change) caps how many a non-instance-admin
+      // may own; instance admins are never capped.
+      const cap = Number(process.env.MAX_WORKSPACES_PER_USER ?? 0);
+      if (cap > 0) {
+        const me = await ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { instanceRole: true },
+        });
+        if (me?.instanceRole !== "INSTANCE_ADMIN") {
+          const owned = await ctx.db.membership.count({
+            where: { userId: ctx.session.user.id, role: Role.OWNER },
+          });
+          if (owned >= cap) {
+            throw new TRPCError({
+              code: "FORBIDDEN",
+              message: `You've reached the limit of ${cap} workspace${cap === 1 ? "" : "s"} you can create. Ask an instance admin to raise it.`,
+            });
+          }
+        }
+      }
+
       const cycleLengthDays = input.cycleLengthDays ?? 7;
       const now = new Date();
       const cycleEndsAt = new Date(now.getTime());

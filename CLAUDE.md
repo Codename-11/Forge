@@ -269,10 +269,15 @@ Claude adapter spawn:
 `FORGE_CLAUDE_BIN`. Missing binary → `[OFFLINE]` reply via
 `chat.finalizeDraft`, no crash.
 
-Known v1 gaps: chat dispatch sees only `{threadId, messageId, agentId,
-role}` from SSE; there's no `chat.getThread` MCP yet, so the prompt to
-the local CLI is a placeholder. AGENT_ASSIGNED handler stubs a
-placeholder comment.
+Status (the old "v1 gaps" are closed): chat dispatch loads real thread
+history via `chat.getThread`; `AGENT_ASSIGNED` runs a full agent loop
+(`dispatch/issue-loop.ts`), not a stub; `runtimes.list` / `agents.list` /
+`chat.getThread` MCP tools are all shipped. On (re)connect the daemon now
+reconciles its unacked inbox (`agent.inbox.list`) so dispatch dropped
+during a deploy/reconnect is recovered, and repeated 401/403s exit the
+daemon non-zero ("run `forge login`") instead of looping. Real remaining
+gaps: one linked agent per runtime (no multi-agent-per-runtime fan-out),
+and ACP isn't wired for the issue-loop path.
 
 ## Attachments
 
