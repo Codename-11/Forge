@@ -1301,6 +1301,18 @@ export async function cascadeReadiness(
   tx: Tx,
   params: { workspaceId: string; planId: string; actorId: string | null },
 ): Promise<string[]> {
+  // A plan only dispatches while RUNNING. Once it is BLOCKED (budget /
+  // wall-time watchdog) or CANCELED (goal abandoned or superseded by a new
+  // decompose attempt), a step that finishes must NOT cascade its dependents
+  // into fresh dispatches — that would spend exactly the budget the operator
+  // was asked to approve, and un-pause a plan the operator deliberately
+  // stopped. DRAFT/APPROVED never dispatch either (activatePlan flips RUNNING
+  // first, then cascades).
+  const plan = await tx.executionPlan.findUnique({
+    where: { id: params.planId },
+    select: { status: true },
+  });
+  if (!plan || plan.status !== ExecutionPlanStatus.RUNNING) return [];
   const steps = await tx.executionStep.findMany({
     where: { planId: params.planId },
     select: { id: true, status: true, dependsOnStepIds: true },
@@ -1347,11 +1359,16 @@ async function transitionStepToReady(
       status: true,
       issueId: true,
       plan: {
-        select: { id: true, crewId: true, contextSetId: true, issueId: true },
+        select: { id: true, status: true, crewId: true, contextSetId: true, issueId: true },
       },
     },
   });
   if (!step) return;
+  // Defence in depth for callers other than cascadeReadiness (e.g. the
+  // recordVerdict RETRY path, which re-readies a step directly): never
+  // dispatch a step whose plan is no longer RUNNING. A late verdict on a
+  // step whose plan was CANCELED/BLOCKED mid-flight must not re-open work.
+  if (step.plan.status !== ExecutionPlanStatus.RUNNING) return;
 
   // Resolve the worker: explicit assignee > crew WORKER.
   let workerAgentId = step.assignedAgentId;
@@ -1770,6 +1787,22 @@ export async function recordVerdict(
   if (!step) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
   }
+  // A verdict may only land on an in-flight step (READY / RUNNING / REVIEW).
+  // Reject it on an already-settled step (DONE / BLOCKED / CANCELED): a stale
+  // or duplicated reviewer webhook posting FAIL on a DONE step would otherwise
+  // move it back to TODO, bump retryCount, and re-dispatch a worker —
+  // un-completing finished work and desyncing downstream steps. Also stops an
+  // auto-judge double-fire from double-recording.
+  if (
+    step.status === ExecutionStepStatus.DONE ||
+    step.status === ExecutionStepStatus.BLOCKED ||
+    step.status === ExecutionStepStatus.CANCELED
+  ) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Step is ${step.status} — a verdict can't be recorded on a settled step.`,
+    });
+  }
 
   const verdictJson: JudgeVerdictJson = {
     verdict: params.verdict,
@@ -2066,7 +2099,10 @@ export async function activatePlan(
   }
   await tx.executionPlan.update({
     where: { id: plan.id },
-    data: { status: ExecutionPlanStatus.RUNNING },
+    // Stamp startedAt so the wall-time budget clock starts at execution, not
+    // at decompose. activatePlan only runs from DRAFT/APPROVED, so startedAt
+    // is null here on the first (and only) activation.
+    data: { status: ExecutionPlanStatus.RUNNING, startedAt: new Date() },
   });
   await recordChange(tx, {
     workspaceId: params.workspaceId,
@@ -2173,6 +2209,7 @@ export async function applyRunCostToPlan(
         crewId: true,
         goalId: true,
         createdAt: true,
+        startedAt: true,
       },
     });
     if (plan.goalId) {
@@ -2195,6 +2232,7 @@ interface PlanBudgetRow {
   crewId: string | null;
   goalId: string | null;
   createdAt: Date;
+  startedAt: Date | null;
 }
 
 /**
@@ -2211,9 +2249,10 @@ export async function checkAndBlockBudget(
   if (plan.status !== ExecutionPlanStatus.RUNNING) return false;
   const overCost =
     plan.maxTotalCostUsd != null && plan.totalCostUsd > plan.maxTotalCostUsd;
+  const wallClockStart = plan.startedAt ?? plan.createdAt;
   const overTime =
     plan.maxWallTimeMinutes != null &&
-    Date.now() - plan.createdAt.getTime() > plan.maxWallTimeMinutes * 60_000;
+    Date.now() - wallClockStart.getTime() > plan.maxWallTimeMinutes * 60_000;
   if (!overCost && !overTime) return false;
 
   await tx.executionPlan.update({

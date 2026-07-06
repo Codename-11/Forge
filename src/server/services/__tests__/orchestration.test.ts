@@ -921,3 +921,145 @@ describe("orchestration: attach hand-authored plan to goal", () => {
     ).rejects.toThrow(/different goal/);
   });
 });
+
+describe("orchestration: audit phase-1 safety guards", () => {
+  // Build a 2-step plan (child depends on root), activated so root is READY.
+  async function build2StepRunning() {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "worker");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Crew",
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal",
+      crewId: crew.id,
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+    const { stepIds } = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [{ title: "root" }, { title: "child", dependsOnStepIndexes: [0] }],
+    });
+    await prisma.$transaction((tx) =>
+      activatePlan(tx, { workspaceId: fixture.workspace.id, actorId: fixture.user.id, planId }),
+    );
+    return { fixture, prisma, planId, rootId: stepIds[0], childId: stepIds[1] };
+  }
+
+  it("P1.1 — a BLOCKED plan does not cascade dependents into dispatch", async () => {
+    const { fixture, prisma, planId, rootId, childId } = await build2StepRunning();
+    // Simulate the budget watchdog blocking the plan mid-flight.
+    await prisma.executionPlan.update({
+      where: { id: planId },
+      data: { status: ExecutionPlanStatus.BLOCKED },
+    });
+    // Root finishes; a cascade must NOT ready the child while BLOCKED.
+    await prisma.executionStep.update({
+      where: { id: rootId },
+      data: { status: ExecutionStepStatus.DONE },
+    });
+    const flipped = await prisma.$transaction((tx) =>
+      cascadeReadiness(tx, { workspaceId: fixture.workspace.id, planId, actorId: fixture.user.id }),
+    );
+    expect(flipped).toEqual([]);
+    let child = await prisma.executionStep.findUniqueOrThrow({ where: { id: childId } });
+    expect(child.status).toBe(ExecutionStepStatus.TODO);
+
+    // Resuming the plan lets the cascade proceed — proves the gate was the
+    // only thing holding dispatch, not a stuck dependency.
+    await prisma.executionPlan.update({
+      where: { id: planId },
+      data: { status: ExecutionPlanStatus.RUNNING },
+    });
+    await prisma.$transaction((tx) =>
+      cascadeReadiness(tx, { workspaceId: fixture.workspace.id, planId, actorId: fixture.user.id }),
+    );
+    child = await prisma.executionStep.findUniqueOrThrow({ where: { id: childId } });
+    expect(child.status).toBe(ExecutionStepStatus.READY);
+  });
+
+  it("P1.1 — a CANCELED plan does not re-open work via a late retry verdict", async () => {
+    const { fixture, prisma, planId, rootId } = await build2StepRunning();
+    // Cancel the plan (as abandonGoal would), while root is still in flight.
+    await prisma.executionPlan.update({
+      where: { id: planId },
+      data: { status: ExecutionPlanStatus.CANCELED },
+    });
+    // A late FAIL verdict arrives on the still-READY root. It should record
+    // (root is not settled) but the RETRY re-dispatch must be a no-op on a
+    // CANCELED plan — the step lands TODO and is NOT re-readied.
+    const res = await recordVerdict(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: rootId,
+      verdict: "FAIL",
+      feedback: "late",
+    });
+    expect(res.outcome).toBe("RETRY");
+    const root = await prisma.executionStep.findUniqueOrThrow({ where: { id: rootId } });
+    expect(root.status).toBe(ExecutionStepStatus.TODO); // not re-READY
+  });
+
+  it("P1.2 — a stale verdict on a settled (DONE) step is rejected, keeping it DONE", async () => {
+    const { fixture, prisma, rootId } = await build2StepRunning();
+    // First verdict completes the step.
+    const first = await recordVerdict(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: rootId,
+      verdict: "PASS",
+      feedback: "ok",
+    });
+    expect(first.outcome).toBe("DONE");
+    // A stale/duplicate FAIL webhook must not reopen the finished step.
+    await expect(
+      recordVerdict(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        stepId: rootId,
+        verdict: "FAIL",
+        feedback: "stale",
+      }),
+    ).rejects.toThrow(/settled/);
+    const step = await prisma.executionStep.findUniqueOrThrow({ where: { id: rootId } });
+    expect(step.status).toBe(ExecutionStepStatus.DONE);
+    expect(step.retryCount).toBe(0);
+  });
+
+  it("P1.7 — activatePlan stamps startedAt for the wall-time clock", async () => {
+    const { fixture, prisma } = await setup();
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Goal",
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+    await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [{ title: "only" }],
+    });
+    const before = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(before.startedAt).toBeNull();
+    await prisma.$transaction((tx) =>
+      activatePlan(tx, { workspaceId: fixture.workspace.id, actorId: fixture.user.id, planId }),
+    );
+    const after = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    expect(after.startedAt).not.toBeNull();
+  });
+});

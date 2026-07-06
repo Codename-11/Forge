@@ -2594,6 +2594,15 @@ model AgentRun {
   /// Collapse stacked runs: list heads with `supersededByRunId IS NULL`,
   /// expand a thread by following the chain.
   @@index([supersededByRunId])
+  /// Cross-tenant worker sweeps (pollActiveRuns / ensureSubscriptions /
+  /// stale watchdog) filter on `status` with NO workspaceId, so the
+  /// workspaceId-leading indexes above can't serve them and they seq-scan
+  /// every 5s/60s. A status-leading index keeps those hot sweeps off a
+  /// sequential scan as AgentRun history grows.
+  @@index([status, lastEventAt])
+  /// Dedup lookup on the dispatch path: has this AGENT_ASSIGNED event
+  /// already opened a run for the agent?
+  @@index([assignmentEventId])
 }
 
 /// Append-only timeline for an AgentRun. Drives the live pulse strip and
@@ -3118,6 +3127,13 @@ model ExecutionPlan {
   maxTotalCostUsd    Float?
   maxWallTimeMinutes Int?
   totalCostUsd       Float               @default(0)
+  /// When execution actually began — activatePlan flips DRAFT/APPROVED →
+  /// RUNNING and stamps this. Wall-time budget is measured from here, NOT
+  /// createdAt, so planning + approval-wait time isn't charged against the
+  /// execution clock (a plan approved days after decompose shouldn't BLOCK
+  /// on its first cost record). Null until first activation; legacy rows
+  /// fall back to createdAt.
+  startedAt          DateTime?
   /// Marks the live decompose attempt for a goal. Prior attempts are
   /// flipped false when a new decompose runs.
   isActiveAttempt    Boolean             @default(true)
