@@ -148,9 +148,18 @@ async function registerOrReuseRuntime(
   return reg.data.id;
 }
 
-async function refreshLinkedAgent(auth: AuthFile): Promise<AgentMe | null> {
+/**
+ * Resolve the agent linked to this key. Distinguishes two null-ish cases so
+ * the heartbeat loop can react correctly:
+ *   - `undefined` → the call FAILED (transient rate-limit / network blip). The
+ *     caller should KEEP its last-known linkage rather than dropping dispatch.
+ *   - `null`      → the call succeeded but no agent is linked (a real unlink).
+ *   - `AgentMe`   → the current linkage.
+ */
+async function refreshLinkedAgent(auth: AuthFile): Promise<AgentMe | null | undefined> {
   const me = await callTool<AgentMe>(auth, "agents.me", {});
-  if (me.isError || !me.data) return null;
+  if (me.isError) return undefined;
+  if (!me.data) return null;
   return me.data;
 }
 
@@ -212,6 +221,47 @@ class SeenEvents {
   }
 }
 
+/**
+ * Acquire the daemon pid file as an atomic exclusive lock (O_CREAT|O_EXCL via
+ * the "wx" flag). This closes the TOCTOU in `startDaemon`, whose liveness
+ * check and the pid write were separated by the whole spawn, so two racing
+ * `forge daemon start` invocations could both pass the check and both open an
+ * SSE stream — double-dispatching every event. With an exclusive create, only
+ * one child wins the lock; a loser that finds a *live* holder refuses, and a
+ * *stale* holder is reclaimed.
+ */
+async function acquirePidLock(): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
+    try {
+      handle = await fs.open(pidPath(), "wx", 0o600); // wx = O_CREAT|O_EXCL|O_WRONLY
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      // Someone holds (or held) the lock.
+      const existing = await readPid();
+      if (existing && isPidAlive(existing)) {
+        console.error(
+          chalk.red(
+            `daemon already running (pid=${existing}). Run \`forge daemon stop\` first.`,
+          ),
+        );
+        process.exit(1);
+      }
+      // Dead or unreadable holder → reclaim and retry the exclusive create.
+      await fs.unlink(pidPath()).catch(() => {});
+      continue;
+    }
+    try {
+      await handle.writeFile(String(process.pid) + "\n");
+    } finally {
+      await handle.close();
+    }
+    return;
+  }
+  console.error(chalk.red("daemon: could not acquire pid lock (racing start?)."));
+  process.exit(1);
+}
+
 async function runDaemon(opts: { foreground: boolean }) {
   const auth = await requireAuth();
   const hostname = os.hostname();
@@ -227,7 +277,7 @@ async function runDaemon(opts: { foreground: boolean }) {
   const runtimeId = await registerOrReuseRuntime(auth, hostname, providers);
   console.log(chalk.green(`  ✓ runtime ${runtimeId} registered`));
 
-  let linkedAgent = await refreshLinkedAgent(auth);
+  let linkedAgent: AgentMe | null = (await refreshLinkedAgent(auth)) ?? null;
   if (linkedAgent) {
     console.log(
       chalk.gray(
@@ -244,9 +294,10 @@ async function runDaemon(opts: { foreground: boolean }) {
 
   const seenEvents = new SeenEvents();
 
-  // PID file (foreground only writes if requested too — `stop` works
-  // either way).
-  await fs.writeFile(pidPath(), String(process.pid) + "\n", { mode: 0o600 });
+  // PID file as an atomic exclusive lock, acquired BEFORE the SSE stream
+  // opens so a second racing daemon can't also start dispatching. `stop` /
+  // `status` read this file either way (foreground or backgrounded).
+  await acquirePidLock();
 
   let stopping = false;
   const stop = async () => {
@@ -267,9 +318,19 @@ async function runDaemon(opts: { foreground: boolean }) {
   const heartbeatTimer = setInterval(async () => {
     try {
       await callTool(auth, "runtimes.heartbeat", { runtimeId });
-      // Refresh agent linkage opportunistically — admins can swap the
-      // key's linkedAgentId without restarting the daemon.
-      linkedAgent = await refreshLinkedAgent(auth);
+      // Refresh agent linkage opportunistically — admins can swap the key's
+      // linkedAgentId without restarting the daemon. But only overwrite on a
+      // definitive answer: a transient agents.me failure returns `undefined`,
+      // and clobbering `linkedAgent` to null there would silently drop ALL
+      // chat + assignment dispatch until the next successful heartbeat.
+      const refreshed = await refreshLinkedAgent(auth);
+      if (refreshed !== undefined) {
+        linkedAgent = refreshed;
+      } else if (linkedAgent) {
+        console.error(
+          chalk.yellow("heartbeat: agent refresh failed (transient); keeping last-known linkage"),
+        );
+      }
     } catch (err) {
       console.error(chalk.yellow(`heartbeat failed:`), err);
     }
