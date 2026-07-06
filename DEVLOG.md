@@ -2,6 +2,45 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-06 — Agent-runtime audit: Phase 2 (integrity + security)
+
+Generalized the Phase-1 patches into their classes + fixed the two security holes.
+Commits on `worktree-audit-fixes`.
+
+- **Budget/lifecycle integrity (`orchestration-service.ts`).** `reapPlanRuns()`:
+  abandonGoal + re-decompose/re-generate cancel non-terminal steps and
+  stop/abandon in-flight runs (best-effort `connector.stop`); a superseded prior
+  RUNNING plan is CANCELED, not just demoted. `assertNoStepCycles()` (Kahn) rejects
+  dependency-cycle plans in both create paths. `sweepOrchestrationBudget()` — new
+  60s worker watchdog enforcing plan wall-time independent of cost events + logging
+  wedged plans.
+- **Dispatch (`run-dispatcher.ts`).** Poll-mirrored RUNS cost now flows into
+  `applyRunCostToPlan` (delta vs last-known, persisted per tick) so poll-only cost
+  trips `maxTotalCostUsd`. `maxConcurrent` enforced on the RUNS dispatch path
+  (`startNewRuns`). A disabled runtime's in-flight runs are left alone (disable
+  blocks new dispatch only) instead of being sentinel-STALLed. Unresolvable
+  connector annotates the run instead of silent-spin.
+- **Security.** `setMemberRole` owner-only gate (a non-owner ADMIN can't self-
+  promote to OWNER then delete the tenant). `ADMIN_EMAIL` env bootstrap honored
+  only while zero INSTANCE_ADMIN exist; `auth.ts` no longer re-stamps INSTANCE_ADMIN
+  every login — a demoted operator stays demoted (`trpc.ts` + `data.ts` + `auth.ts`).
+- **CLI (`daemon.ts`).** Reconcile-on-(re)connect via `agent.inbox.list` (recovers
+  dropped AGENT_ASSIGNED across a deploy) + fatal-auth exit on repeated 401/403.
+- **Atomicity/dedup.** `recordUsage` computes its cost delta under a
+  `SELECT … FOR UPDATE` row lock (no double-count). `runtimes.register` upserts on
+  (workspaceId, name, kind) instead of stacking duplicates.
+- **P2.7 Codex restart.** The confirmed false-STALL is resolved by the Phase-1
+  `unknown`-is-non-terminal fix (Codex `getStatus` returns `unknown` for a run lost
+  after a worker restart → stays ACTIVE, watchdog arbitrates). Full WebSocket-
+  session reattach (durable cross-process session state) is a Codex-connector
+  re-architecture, deliberately deferred — out of scope for a fix pass.
+
+Verification: `pnpm typecheck` clean; `pnpm build:cli` clean; orchestration (26) +
+members (18) + mcp (118) tests green; new regression tests for cycle-rejection,
+abandon-cancels-steps, and non-owner-can't-grant-OWNER. Phase 3 (cross-workspace
+move, UI consistency, connector parity, view-hierarchy legibility, housekeeping)
+pending.
+
 ## 2026-07-06 — Agent-runtime audit: Phase 1 safety fixes
 
 Acted on the 2026-07-06 agent-runtime audit (73 findings; report artifact +
