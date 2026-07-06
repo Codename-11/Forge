@@ -355,6 +355,11 @@ export function makeHermesRunsConnector(opts?: {
         usage: {
           tokensIn: num(usageRaw.input_tokens ?? usageRaw.prompt_tokens),
           tokensOut: num(usageRaw.output_tokens ?? usageRaw.completion_tokens),
+          tokensCached: num(
+            usageRaw.cached_tokens ??
+              usageRaw.cache_read_input_tokens ??
+              usageRaw.cached_input_tokens,
+          ),
           costUsd: num(usageRaw.cost_usd ?? usageRaw.costUsd),
         },
       };

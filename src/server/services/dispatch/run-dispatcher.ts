@@ -969,10 +969,11 @@ async function pollActiveRuns(): Promise<number> {
           data: {
             awaitingApprovalAt: null,
             pendingApproval: Prisma.DbNull,
-            ...(usage && (usage.tokensIn || usage.tokensOut || usage.costUsd)
+            ...(usage && (usage.tokensIn || usage.tokensOut || usage.tokensCached || usage.costUsd)
               ? {
                   tokensIn: usage.tokensIn ?? null,
                   tokensOut: usage.tokensOut ?? null,
+                  tokensCached: usage.tokensCached ?? null,
                   costUsd: usage.costUsd ?? null,
                 }
               : {}),

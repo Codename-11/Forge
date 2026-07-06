@@ -91,7 +91,7 @@ export type RunEvent =
       type: "approval_resolved";
       choice?: string;
     }
-  | { type: "usage"; tokensIn?: number; tokensOut?: number; costUsd?: number }
+  | { type: "usage"; tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number }
   | { type: "completed"; finalText?: string }
   | { type: "error"; message: string };
 
@@ -113,7 +113,7 @@ export interface RunStatus {
   lastEvent?: string;
   /** Final assistant text when terminal. */
   output?: string;
-  usage?: { tokensIn?: number; tokensOut?: number; costUsd?: number };
+  usage?: { tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number };
 }
 
 /**

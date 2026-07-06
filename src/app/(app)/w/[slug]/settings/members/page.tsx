@@ -5,6 +5,7 @@ import { ChevronRight, Send, Users, X } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { Kbd } from "@/components/ui/kbd";
 import { Confirm } from "@/components/ui/modal";
 import { CenterModal } from "@/components/ui/modal/center-modal";
@@ -257,22 +258,21 @@ export default function MembersPage() {
                           {" "}· joined {relativeTime(m.joinedAt)}
                         </div>
                       </div>
-                      <select
-                        value={m.role}
-                        disabled={setMemberRole.isPending}
-                        onChange={(e) =>
-                          setMemberRole.mutate({
-                            userId: m.userId,
-                            role: e.target.value as Role,
-                          })
-                        }
-                        className="focus-ring col-span-2 h-7 rounded-md border border-input bg-background px-2 text-xs text-foreground disabled:opacity-50 sm:col-span-1"
-                        aria-label={`Role for ${m.email}`}
-                      >
-                        {ROLES.map((r) => (
-                          <option key={r}>{r}</option>
-                        ))}
-                      </select>
+                      <div className="col-span-2 sm:col-span-1">
+                        <Combobox
+                          value={m.role}
+                          disabled={setMemberRole.isPending}
+                          onChange={(v) =>
+                            v && setMemberRole.mutate({ userId: m.userId, role: v as Role })
+                          }
+                          options={ROLES.map((r) => ({
+                            value: r,
+                            label: r.charAt(0) + r.slice(1).toLowerCase(),
+                          }))}
+                          matchTriggerWidth
+                          ariaLabel={`Role for ${m.email}`}
+                        />
+                      </div>
                       <Button
                         size="sm"
                         variant="ghost"
