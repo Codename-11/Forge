@@ -52,11 +52,11 @@ const credentialsProvider = Credentials({
 
       const user = await db.user.upsert({
         where: { email: adminEmail },
-        // The bootstrap operator is the instance admin. Stamp it on both
-        // paths so an existing pre-restructure admin row self-heals to
-        // INSTANCE_ADMIN on next sign-in (the env-based fallback in
-        // trpc.ts covers the gap before that happens).
-        update: { instanceRole: "INSTANCE_ADMIN" },
+        // Do NOT re-stamp instanceRole on every login. Re-stamping made the
+        // bootstrap operator un-revocable: setInstanceRole(MEMBER) was silently
+        // overwritten on their next sign-in. The role now lives in the DB and
+        // is managed via instance-admin.setInstanceRole.
+        update: {},
         create: {
           email: adminEmail,
           name: process.env.ADMIN_NAME ?? "Admin",
@@ -64,6 +64,21 @@ const credentialsProvider = Credentials({
           instanceRole: "INSTANCE_ADMIN",
         },
       });
+      // Bootstrap self-heal: promote this operator ONCE if no instance admin
+      // exists yet (e.g. a pre-restructure row, or a create that raced). Never
+      // re-promote after one exists, so a deliberate demotion sticks.
+      if (user.instanceRole !== "INSTANCE_ADMIN") {
+        const adminCount = await db.user.count({
+          where: { instanceRole: "INSTANCE_ADMIN" },
+        });
+        if (adminCount === 0) {
+          await db.user.update({
+            where: { id: user.id },
+            data: { instanceRole: "INSTANCE_ADMIN" },
+          });
+          user.instanceRole = "INSTANCE_ADMIN";
+        }
+      }
 
       const existing = await db.membership.findFirst({ where: { userId: user.id } });
       if (!existing) {

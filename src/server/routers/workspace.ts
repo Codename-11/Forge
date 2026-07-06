@@ -665,6 +665,21 @@ export const workspaceRouter = router({
           return { membershipId: target.id, userId: target.userId, role: target.role };
         }
 
+        // Owner-only gate: only an OWNER may GRANT the owner role or CHANGE an
+        // existing owner's role. Without this, a non-owner ADMIN could set its
+        // own row to OWNER (the server accepted any `Role`) and then call
+        // workspace.delete — making the OWNER-only archive/delete gate
+        // meaningless. Ownership transfer stays an owner-initiated act.
+        if (
+          (input.role === Role.OWNER || target.role === Role.OWNER) &&
+          ctx.membership.role !== Role.OWNER
+        ) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Only an owner can assign or change the owner role.",
+          });
+        }
+
         const wasAdmin = target.role === Role.OWNER || target.role === Role.ADMIN;
         const willBeAdmin = input.role === Role.OWNER || input.role === Role.ADMIN;
 

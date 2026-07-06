@@ -265,6 +265,39 @@ describe("workspaceRouter — admin member management", () => {
     expect(res.role).toBe(Role.MEMBER);
   });
 
+  it("setMemberRole forbids a non-owner admin from granting or touching OWNER", async () => {
+    const { caller, fixture } = await adminSetup();
+    // Promote secondUser to ADMIN, then act AS that (non-owner) admin.
+    await caller.setMemberRole({ userId: fixture.secondUser.id, role: Role.ADMIN });
+    const adminCtx = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const adminCaller = workspaceRouter.createCaller(adminCtx);
+    // Cannot self-promote to OWNER (the privilege-escalation → delete-tenant path).
+    await expect(
+      adminCaller.setMemberRole({ userId: fixture.secondUser.id, role: Role.OWNER }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // Cannot change the existing owner's role either.
+    await expect(
+      adminCaller.setMemberRole({ userId: fixture.user.id, role: Role.MEMBER }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    // The escalation did not happen.
+    const prisma = getPrisma();
+    const still = await prisma.membership.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+    });
+    expect(still?.role).toBe(Role.ADMIN);
+  });
+
+  it("setMemberRole lets an owner grant the OWNER role", async () => {
+    const { caller, fixture } = await adminSetup();
+    const res = await caller.setMemberRole({ userId: fixture.secondUser.id, role: Role.OWNER });
+    expect(res.role).toBe(Role.OWNER);
+  });
+
   it("removeMember deletes the membership and preserves the user row", async () => {
     const { caller, fixture } = await adminSetup();
     const prisma = getPrisma();

@@ -146,11 +146,21 @@ export const instanceAdminProcedure = protectedProcedure.use(async ({ ctx, next 
     select: { instanceRole: true, email: true },
   });
   const isAdmin = user?.instanceRole === "INSTANCE_ADMIN";
-  const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase();
-  const who = (user?.email ?? ctx.session.user?.email)?.toLowerCase();
-  const isBootstrap = !!adminEmail && !!who && who === adminEmail;
-  if (!isAdmin && !isBootstrap) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "Instance admin required." });
+  if (!isAdmin) {
+    // Env ADMIN_EMAIL is a BOOTSTRAP fallback ONLY — honored exclusively while
+    // no instance admin exists yet, so the very first operator can administer
+    // before their row is stamped. Once someone is INSTANCE_ADMIN, the DB is
+    // authoritative: a demoted operator stays demoted, and a shared / recycled /
+    // SSO-asserted ADMIN_EMAIL can't silently regain full instance control.
+    const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase();
+    const who = (user?.email ?? ctx.session.user?.email)?.toLowerCase();
+    const emailMatches = !!adminEmail && !!who && who === adminEmail;
+    const isBootstrap = emailMatches
+      ? (await ctx.db.user.count({ where: { instanceRole: "INSTANCE_ADMIN" } })) === 0
+      : false;
+    if (!isBootstrap) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Instance admin required." });
+    }
   }
   return next({ ctx: { ...ctx, instanceRole: "INSTANCE_ADMIN" as const } });
 });

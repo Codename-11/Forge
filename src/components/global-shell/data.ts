@@ -54,5 +54,12 @@ export async function requireInstanceAdmin(): Promise<boolean> {
     select: { instanceRole: true, email: true },
   });
   if (u?.instanceRole === "INSTANCE_ADMIN") return true;
-  return !!adminEmail && !!u?.email && u.email.toLowerCase() === adminEmail;
+  // Env ADMIN_EMAIL is a BOOTSTRAP fallback ONLY — honored while no instance
+  // admin exists yet, so the first operator can reach /admin before their row
+  // is stamped. Once one exists the DB is authoritative (a demoted operator
+  // stays demoted; a shared/recycled ADMIN_EMAIL can't regain control).
+  const emailMatches = !!adminEmail && !!u?.email && u.email.toLowerCase() === adminEmail;
+  if (!emailMatches) return false;
+  const adminCount = await db.user.count({ where: { instanceRole: "INSTANCE_ADMIN" } });
+  return adminCount === 0;
 }
