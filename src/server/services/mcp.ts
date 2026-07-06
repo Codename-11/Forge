@@ -6182,33 +6182,41 @@ export const mcpTools = {
       if (input.tokensOut !== undefined) data.tokensOut = input.tokensOut;
       if (input.tokensCached !== undefined) data.tokensCached = input.tokensCached;
       if (input.costUsd !== undefined) data.costUsd = input.costUsd;
-      const updated = await db.agentRun.update({
-        where: { id: run.id },
-        data,
-        select: {
-          id: true,
-          tokensIn: true,
-          tokensOut: true,
-          tokensCached: true,
-          costUsd: true,
-        },
-      });
-      // Budget watchdog: when this run finished a plan step, fold the
-      // cost delta into the plan + goal totals and BLOCK + open a gate
-      // if a cap is now breached. recordUsage is replace-not-add for the
-      // AgentRun row, so apply the prev→new delta to plan totals.
-      if (input.costUsd !== undefined) {
-        const prev = run.costUsd ? Number(run.costUsd) : 0;
-        const next = Number(updated.costUsd ?? 0);
-        const delta = next - prev;
-        if (delta !== 0) {
-          const { applyRunCostToPlan } = await import("@/server/services/orchestration-service");
-          await applyRunCostToPlan(db, {
-            workspaceId: ctx.workspaceId,
-            runId: run.id,
-            costDelta: delta,
-          });
+      // Compute the cost delta atomically: lock the run row (SELECT … FOR
+      // UPDATE) inside the same tx as the update so a concurrent recordUsage
+      // can't read the same `prev` and double-count against the plan budget.
+      // recordUsage is replace-not-add for the run, so the plan gets prev→new.
+      let costDelta = 0;
+      const updated = await db.$transaction(async (tx) => {
+        if (input.costUsd !== undefined) {
+          const locked = await tx.$queryRaw<Array<{ costUsd: Prisma.Decimal | null }>>`
+            SELECT "costUsd" FROM "AgentRun" WHERE id = ${run.id} FOR UPDATE`;
+          const prev = locked[0]?.costUsd != null ? Number(locked[0].costUsd) : 0;
+          costDelta = Number(input.costUsd) - prev;
         }
+        return tx.agentRun.update({
+          where: { id: run.id },
+          data,
+          select: {
+            id: true,
+            tokensIn: true,
+            tokensOut: true,
+            tokensCached: true,
+            costUsd: true,
+          },
+        });
+      });
+      // Budget watchdog: when this run finished a plan step, fold the cost
+      // delta into the plan + goal totals and BLOCK + open a gate if a cap is
+      // now breached. Runs after the tx commits (releases the row lock) so the
+      // plan-increment tx can't deadlock against it.
+      if (input.costUsd !== undefined && costDelta !== 0) {
+        const { applyRunCostToPlan } = await import("@/server/services/orchestration-service");
+        await applyRunCostToPlan(db, {
+          workspaceId: ctx.workspaceId,
+          runId: run.id,
+          costDelta,
+        });
       }
       // P0-2 run budget: after recording usage, pause/stop a runaway run
       // cleanly. Best-effort — never fail the usage write the agent's loop
