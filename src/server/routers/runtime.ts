@@ -237,6 +237,35 @@ export const runtimeRouter = router({
       // on a public host must use TLS. `register` previously skipped this, so
       // a plaintext public endpoint could slip in through this path.
       assertEndpointTransport(input.endpoint || null);
+      const now = new Date();
+      // LOCAL_DAEMON: "connected" the moment we register; REMOTE_HTTP gets
+      // connectedAt only on real heartbeats.
+      const liveTimes =
+        input.kind === RuntimeKind.LOCAL_DAEMON ? { connectedAt: now, heartbeatAt: now } : {};
+      // Upsert on the natural key (workspaceId + name + kind). There's no
+      // unique index to Prisma-upsert against, and the daemon can lose its
+      // cached runtime id (fresh clone / config wipe), so a plain create would
+      // stack a duplicate row for the same host every re-register. Reuse a
+      // non-archived match instead.
+      const existing = await ctx.db.runtime.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          name: input.name,
+          kind: input.kind,
+          archivedAt: null,
+        },
+        select: { id: true },
+      });
+      if (existing) {
+        return ctx.db.runtime.update({
+          where: { id: existing.id },
+          data: {
+            endpoint: input.endpoint || null,
+            providersAvailable: input.providersAvailable,
+            ...liveTimes,
+          },
+        });
+      }
       // For LOCAL_DAEMON the daemon registers itself and owns the row;
       // for REMOTE_HTTP an admin typically registers it but the same
       // attribution holds. ownerId is set from the calling user.
@@ -248,12 +277,7 @@ export const runtimeRouter = router({
           endpoint: input.endpoint || null,
           providersAvailable: input.providersAvailable,
           ownerId: ctx.session.user.id,
-          // LOCAL_DAEMON: "connected" the moment we register; REMOTE_HTTP
-          // gets connectedAt only on real heartbeats.
-          connectedAt:
-            input.kind === RuntimeKind.LOCAL_DAEMON ? new Date() : null,
-          heartbeatAt:
-            input.kind === RuntimeKind.LOCAL_DAEMON ? new Date() : null,
+          ...liveTimes,
         },
       });
     }),
