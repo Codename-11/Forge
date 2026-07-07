@@ -25,7 +25,10 @@
  * Recognized commands (case-insensitive on keyword; arg semantics
  * documented per command):
  *
- *   /assign @handle           — set assignedAgent by profileKey
+ *   /assign @handle           — set assignedAgent by profileKey. `mode` is
+ *                               UI-only (set via the assign badge's mode
+ *                               picker, not typed) — an unset `mode` falls
+ *                               back to the surface's resolved default.
  *   /due <when>               — set dueDate; "today" / "tomorrow" /
  *                               "in 3 days" / "in 1 week" / "next Monday"
  *                               / "2026-05-15" / "May 15"
@@ -41,9 +44,10 @@
  * keeps the body "what would I have typed without the command lines"
  * predictable.
  */
+import type { EngagementMode } from "@prisma/client";
 
 export type SlashCommand =
-  | { kind: "assign"; handle: string }
+  | { kind: "assign"; handle: string; mode?: EngagementMode }
   | { kind: "due"; date: Date }
   | { kind: "label"; name: string }
   | {

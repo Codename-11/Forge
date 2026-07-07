@@ -130,7 +130,7 @@ async function applySlashCommandsToIssue(opts: {
             });
             const resolved = resolveEngagementMode({
               surface: "assignment",
-              explicit: null,
+              explicit: cmd.mode ?? null,
               workspace: { ...ws, assignmentAgentEngagementMode: agent.engagementMode },
             });
             await recordChange(tx, {

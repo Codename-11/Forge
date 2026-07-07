@@ -37,6 +37,13 @@ import { NewProjectDialog } from "@/components/projects/new-project-dialog";
 import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
 import { PriorityGlyph } from "@/components/ui/priority-glyph";
 import {
+  EngagementModeGlyph,
+  MODE_LABEL,
+  MODE_ORDER,
+  MODE_SUBTITLE,
+  type EngagementModeValue,
+} from "@/components/ui/engagement-mode-glyph";
+import {
   matchTrailingCommand,
   parseDateExpression,
   parseSlashCommands,
@@ -1145,6 +1152,14 @@ export function QuickCreate() {
     setCommitted((prev) => prev.filter((c) => commandKey(c) !== key));
   }, []);
 
+  // Engagement mode for the committed /assign — unset means "use the
+  // surface's resolved default" (same as not touching the field at all).
+  const setAssignMode = useCallback((assignMode: EngagementModeValue) => {
+    setCommitted((prev) =>
+      prev.map((c) => (c.kind === "assign" ? { ...c, mode: assignMode } : c)),
+    );
+  }, []);
+
   const hasBadges =
     priority !== "NONE" || !!projectId || committed.length > 0;
 
@@ -1370,6 +1385,7 @@ export function QuickCreate() {
                   onRemovePriority={() => setPriority("NONE")}
                   onRemoveProject={() => setProjectId("")}
                   onRemoveCommitted={removeCommitted}
+                  onSetAssignMode={setAssignMode}
                 />
               )}
               <input
@@ -2001,6 +2017,7 @@ function TokenBadges({
   onRemovePriority,
   onRemoveProject,
   onRemoveCommitted,
+  onSetAssignMode,
 }: {
   priority: Priority;
   projectId: string;
@@ -2011,6 +2028,7 @@ function TokenBadges({
   onRemovePriority: () => void;
   onRemoveProject: () => void;
   onRemoveCommitted: (key: string) => void;
+  onSetAssignMode: (mode: EngagementModeValue) => void;
 }) {
   const project = projects?.find((p) => p.id === projectId) ?? null;
   return (
@@ -2030,20 +2048,65 @@ function TokenBadges({
       {committed.map((c) => {
         const key = commandKey(c);
         return (
-          <Badge
-            key={key}
-            onRemove={() => onRemoveCommitted(key)}
-            removeLabel={`Remove ${commandChipLabel(c)}`}
-          >
-            <CommittedBadgeContent
-              command={c}
-              agentByHandle={agentByHandle}
-              labelColorByName={labelColorByName}
-            />
-          </Badge>
+          <span key={key} className="contents">
+            <Badge
+              onRemove={() => onRemoveCommitted(key)}
+              removeLabel={`Remove ${commandChipLabel(c)}`}
+            >
+              <CommittedBadgeContent
+                command={c}
+                agentByHandle={agentByHandle}
+                labelColorByName={labelColorByName}
+              />
+            </Badge>
+            {c.kind === "assign" && (
+              <AssignModePicker mode={c.mode} onChange={onSetAssignMode} />
+            )}
+          </span>
         );
       })}
     </>
+  );
+}
+
+/** Compact mode picker shown next to a committed /assign badge — lets the
+ *  operator say how far to take the work at the moment they hand it over,
+ *  instead of always falling back to the workspace's assignment default. */
+function AssignModePicker({
+  mode,
+  onChange,
+}: {
+  mode: EngagementModeValue | undefined;
+  onChange: (mode: EngagementModeValue) => void;
+}) {
+  return (
+    <span
+      role="radiogroup"
+      aria-label="Engagement mode"
+      className="inline-flex h-6 items-center gap-0.5 rounded-md border border-border bg-card/30 px-0.5"
+    >
+      {MODE_ORDER.map((m) => {
+        const active = mode === m;
+        return (
+          <button
+            key={m}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            title={`${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}`}
+            onClick={() => onChange(m)}
+            className={cn(
+              "focus-ring grid h-5 w-5 place-items-center rounded transition-colors",
+              active
+                ? "bg-ember/15 text-ember"
+                : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+            )}
+          >
+            <EngagementModeGlyph mode={m} size={11} className={active ? "text-ember" : ""} />
+          </button>
+        );
+      })}
+    </span>
   );
 }
 
