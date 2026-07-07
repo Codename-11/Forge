@@ -149,10 +149,11 @@ export default function DashboardPage() {
     [setPrefsMut],
   );
 
-  // Zone-2 (Workspace & agents) widget stack. Agents lead the default
-  // order; the rest stays user-reorderable/hideable via Customize. The
-  // "Pick up where you left off" tile is gone — it's now a first-class
-  // Zone-1 section rendered as rich cards.
+  // Rail widget stack (the ambient "workspace & agents" column beside your
+  // work). Agents/standup/news lead the default order since they're the
+  // highest-signal glance items; the rest stays user-reorderable/hideable
+  // via Customize. The "Pick up where you left off" tile is gone — it's
+  // now a first-class primary-column section rendered as rich cards.
   const widgets: DashboardWidget[] = useMemo(
     () => [
       {
@@ -167,27 +168,7 @@ export default function DashboardPage() {
         defaultWidth: "half",
         node: <AgentAttentionPanel slug={slug} />,
       },
-      {
-        id: "today",
-        title: "Today",
-        defaultWidth: "half",
-        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
-      },
-      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
-      {
-        id: "workspace-activity",
-        title: "Workspace activity",
-        defaultWidth: "full",
-        node: <WorkspaceActivityTimeline limit={8} />,
-      },
       { id: "standup", title: "Standup", defaultWidth: "half", node: <StandupTile slug={slug} /> },
-      { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
-      {
-        id: "quick-notes",
-        title: "Notes & journal",
-        defaultWidth: "full",
-        node: <QuickNotesWidget />,
-      },
       {
         id: "whats-new",
         title: "What's new",
@@ -195,6 +176,26 @@ export default function DashboardPage() {
         node: (
           <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />
         ),
+      },
+      {
+        id: "quick-notes",
+        title: "Notes & journal",
+        defaultWidth: "full",
+        node: <QuickNotesWidget />,
+      },
+      {
+        id: "today",
+        title: "Today",
+        defaultWidth: "half",
+        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
+      },
+      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
+      { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
+      {
+        id: "workspace-activity",
+        title: "Workspace activity",
+        defaultWidth: "full",
+        node: <WorkspaceActivityTimeline limit={8} />,
       },
     ],
     [slug, workspaceKey, account?.changelogSeenAt],
@@ -258,7 +259,7 @@ export default function DashboardPage() {
         {/* Ambient background now lives once in the app shell <main>
             (.forge-page-bg, driven by the per-user data-bg pref). */}
         <div className="relative isolate">
-          <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">
+          <div className="mx-auto max-w-[100rem] space-y-6 p-4 sm:p-6">
           <GreetingBar
             greeting={greeting}
             name={firstName}
@@ -281,103 +282,76 @@ export default function DashboardPage() {
             skippedSteps={account?.onboardingSkippedSteps ?? []}
           />
 
-          {/* ── Zone 1 · YOU ─────────────────────────────────────────
-              Focus (assigned, priority-first) + Pick-up (recent). Both
-              render rich auto-height cards. If there's no personal work at
-              all, Suggestions takes the slot as the primary handoff. */}
-          {focusCards.length === 0 && resumeCards.length === 0 && !myWorkLoading ? (
-            <SuggestionsStrip
-              variant="primary"
-              workspaceKey={workspaceKey}
-              slug={slug}
-            />
-          ) : (
-            <div className="space-y-5">
-              {(focusCards.length > 0 || myWorkLoading) && (
-                <section>
-                  <SectionHeader
-                    title="Focus today"
-                    hint="Assigned to you, priority first."
-                  />
-                  <WorkCardGrid
-                    cards={focusCards}
-                    isLoading={myWorkLoading}
-                    workspaceKey={workspaceKey}
-                    tz={prefs.timezone ?? null}
-                    slug={slug}
-                  />
-                </section>
+          {/* ── Cockpit body: a wide work column + a compact ambient rail.
+              Primary (8/12) is "what should I do" — Focus, Pick-up,
+              Pipeline. The rail (4/12) is "what's going on around me" —
+              agents, standup, news — always visible beside your work
+              instead of scrolled past below it. */}
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
+            <div className="space-y-5 lg:col-span-8">
+              {/* Focus (assigned, priority-first) + Pick-up (recent). Both
+                  render rich auto-height cards. If there's no personal work
+                  at all, Suggestions takes the slot as the primary handoff. */}
+              {focusCards.length === 0 && resumeCards.length === 0 && !myWorkLoading ? (
+                <SuggestionsStrip
+                  variant="primary"
+                  workspaceKey={workspaceKey}
+                  slug={slug}
+                />
+              ) : (
+                <>
+                  {(focusCards.length > 0 || myWorkLoading) && (
+                    <section>
+                      <SectionHeader
+                        title="Focus today"
+                        hint="Assigned to you, priority first."
+                      />
+                      <WorkCardGrid
+                        cards={focusCards}
+                        isLoading={myWorkLoading}
+                        workspaceKey={workspaceKey}
+                        tz={prefs.timezone ?? null}
+                        slug={slug}
+                      />
+                    </section>
+                  )}
+                  {resumeCards.length > 0 && (
+                    <section>
+                      <SectionHeader
+                        title="Pick up where you left off"
+                        hint="Your most recently touched work."
+                      />
+                      <WorkCardGrid
+                        cards={resumeCards}
+                        isLoading={false}
+                        workspaceKey={workspaceKey}
+                        tz={prefs.timezone ?? null}
+                        slug={slug}
+                      />
+                    </section>
+                  )}
+                </>
               )}
-              {resumeCards.length > 0 && (
-                <section>
-                  <SectionHeader
-                    title="Pick up where you left off"
-                    hint="Your most recently touched work."
-                  />
-                  <WorkCardGrid
-                    cards={resumeCards}
-                    isLoading={false}
-                    workspaceKey={workspaceKey}
-                    tz={prefs.timezone ?? null}
-                    slug={slug}
-                  />
-                </section>
-              )}
+
+              <PipelineCard statusRows={statusRows} statusMax={statusMax} href={w("/issues")} />
+
+              <SuggestionsStrip
+                variant="secondary"
+                workspaceKey={workspaceKey}
+                slug={slug}
+              />
             </div>
-          )}
 
-          {/* ── Zone 2 · WORKSPACE & AGENTS ──────────────────────────
-              Agents, attention, and the rest of the customizable stack;
-              handoffs & stalled (the old under-Focus Suggestions, demoted
-              here); and a by-status pipeline. */}
-          <div className="space-y-5">
-            <ZoneDivider label="Workspace & agents" />
-
-            <DashboardStack
-              widgets={widgets}
-              layout={effLayout}
-              editing={editing}
-              onChange={persistLayout}
-            />
-
-            <SuggestionsStrip
-              variant="secondary"
-              workspaceKey={workspaceKey}
-              slug={slug}
-            />
-
-            <section>
-              <SectionHeader title="By status" hint="Active work across the pipeline" />
-              <ul className="grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-2">
-                {statusRows.map(({ status, count }) => (
-                  <li key={status.id}>
-                    <Link
-                      href={w("/issues")}
-                      className="flex items-center gap-2 text-xs hover:text-foreground"
-                    >
-                      <span
-                        className="h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: status.color }}
-                      />
-                      <span className="truncate">{status.name}</span>
-                      <div className="mx-1 h-1.5 flex-1 overflow-hidden rounded-full bg-subtle">
-                        <div
-                          className="h-full rounded-full"
-                          style={{
-                            width: `${Math.min(100, (count / statusMax) * 100)}%`,
-                            backgroundColor: status.color,
-                          }}
-                        />
-                      </div>
-                      <CountUp
-                        value={count}
-                        className="font-mono tabular-nums text-muted-foreground"
-                      />
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </section>
+            <div className="space-y-5 lg:col-span-4">
+              <ZoneDivider label="Workspace & agents" />
+              <DashboardStack
+                widgets={widgets}
+                layout={effLayout}
+                editing={editing}
+                onChange={persistLayout}
+                columns={1}
+              />
+            </div>
           </div>
           </div>
         </div>
@@ -488,6 +462,53 @@ function WorkCardGrid({
         </li>
       ))}
     </ul>
+  );
+}
+
+/** Active-work pipeline as proportional bars in a single card — replaces
+ *  the old two-column status link-list with something that reads at a
+ *  glance and doesn't leave a ragged column bottom next to Focus/Pick-up. */
+function PipelineCard({
+  statusRows,
+  statusMax,
+  href,
+}: {
+  statusRows: { status: { id: string; name: string; color: string }; count: number }[];
+  statusMax: number;
+  href: string;
+}) {
+  if (statusRows.length === 0) return null;
+  return (
+    <section className="rounded-lg border border-border bg-card/40 p-4">
+      <SectionHeader title="Pipeline" hint="Active work across the pipeline" />
+      <ul className="space-y-2">
+        {statusRows.map(({ status, count }) => (
+          <li key={status.id}>
+            <Link
+              href={href}
+              className="group flex items-center gap-3 text-xs hover:text-foreground"
+            >
+              <span className="w-28 shrink-0 truncate text-muted-foreground group-hover:text-foreground">
+                {status.name}
+              </span>
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-subtle">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${Math.min(100, (count / statusMax) * 100)}%`,
+                    backgroundColor: status.color,
+                  }}
+                />
+              </div>
+              <CountUp
+                value={count}
+                className="w-6 shrink-0 text-right font-mono tabular-nums text-muted-foreground"
+              />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

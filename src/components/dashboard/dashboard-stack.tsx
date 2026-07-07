@@ -86,11 +86,16 @@ export function DashboardStack({
   layout,
   editing,
   onChange,
+  columns = 2,
 }: {
   widgets: DashboardWidget[];
   layout: DashboardLayout;
   editing: boolean;
   onChange: (next: DashboardLayout) => void;
+  /** 1 forces a single-column stack (e.g. a narrow rail) — half/full width
+   *  then both render at the rail's full width, so the resize control is
+   *  hidden rather than offered with no visible effect. */
+  columns?: 1 | 2;
 }) {
   const ordered = orderWidgets(widgets, layout.order);
   const orderedIds = ordered.map((w) => w.id);
@@ -189,13 +194,20 @@ export function DashboardStack({
 
   return (
     <div>
-      <div ref={gridRef} className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+      <div
+        ref={gridRef}
+        className={cn(
+          "grid grid-cols-1 items-start gap-4",
+          columns === 2 && "lg:grid-cols-2",
+        )}
+      >
         {visible.map((w, index) => (
           <DashboardTile
             key={w.id}
             widget={w}
             width={widthOf(w)}
             editing={editing}
+            columns={columns}
             isFirst={index === 0}
             isLast={index === visible.length - 1}
             onDrag={(e) => handleDrag(w.id, e)}
@@ -234,6 +246,7 @@ function DashboardTile({
   widget,
   width,
   editing,
+  columns,
   isFirst,
   isLast,
   onDrag,
@@ -245,6 +258,7 @@ function DashboardTile({
   widget: DashboardWidget;
   width: WidgetWidth;
   editing: boolean;
+  columns: 1 | 2;
   isFirst: boolean;
   isLast: boolean;
   onDrag: (e: PointerEvent | MouseEvent | TouchEvent) => void;
@@ -312,7 +326,7 @@ function DashboardTile({
         // editing (in edit mode the control strip keeps it non-empty so it
         // stays hideable).
         !editing && "empty:hidden",
-        isFull && "lg:col-span-2",
+        isFull && columns === 2 && "lg:col-span-2",
         editing && "rounded-lg ring-1 ring-dashed ring-ember/40",
         dragging && "shadow-[0_18px_44px_rgba(0,0,0,0.20)]",
       )}
@@ -324,15 +338,17 @@ function DashboardTile({
             {widget.title}
           </span>
           <div className="ml-auto inline-flex shrink-0 items-center gap-0.5">
-            <button
-              type="button"
-              onClick={() => onSetWidth(isFull ? "half" : "full")}
-              className="focus-ring hidden h-7 w-7 place-items-center rounded hover:bg-subtle hover:text-foreground lg:grid"
-              title={isFull ? "Make half width" : "Make full width"}
-              aria-label={isFull ? `Make ${widget.title} half width` : `Make ${widget.title} full width`}
-            >
-              {isFull ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
-            </button>
+            {columns === 2 && (
+              <button
+                type="button"
+                onClick={() => onSetWidth(isFull ? "half" : "full")}
+                className="focus-ring hidden h-7 w-7 place-items-center rounded hover:bg-subtle hover:text-foreground lg:grid"
+                title={isFull ? "Make half width" : "Make full width"}
+                aria-label={isFull ? `Make ${widget.title} half width` : `Make ${widget.title} full width`}
+              >
+                {isFull ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onMove(-1)}
@@ -390,21 +406,23 @@ function DashboardTile({
             aria-hidden
           />
           {/* Right-edge resize: drag in/out past a threshold to snap width. */}
-          <div
-            onPointerDown={onResizePointerDown}
-            onPointerMove={onResizePointerMove}
-            onPointerUp={onResizePointerUp}
-            className="group/resize absolute -right-1.5 bottom-2 top-10 z-30 hidden w-4 cursor-ew-resize touch-none place-items-center lg:grid"
-            title={isFull ? "Drag in for half width" : "Drag out for full width"}
-            aria-hidden
-          >
-            <span
-              className={cn(
-                "h-12 w-1 rounded-full transition-colors",
-                resizing ? "bg-ember/70" : "bg-ember/25 group-hover/resize:bg-ember/50",
-              )}
-            />
-          </div>
+          {columns === 2 && (
+            <div
+              onPointerDown={onResizePointerDown}
+              onPointerMove={onResizePointerMove}
+              onPointerUp={onResizePointerUp}
+              className="group/resize absolute -right-1.5 bottom-2 top-10 z-30 hidden w-4 cursor-ew-resize touch-none place-items-center lg:grid"
+              title={isFull ? "Drag in for half width" : "Drag out for full width"}
+              aria-hidden
+            >
+              <span
+                className={cn(
+                  "h-12 w-1 rounded-full transition-colors",
+                  resizing ? "bg-ember/70" : "bg-ember/25 group-hover/resize:bg-ember/50",
+                )}
+              />
+            </div>
+          )}
         </>
       )}
     </motion.div>
