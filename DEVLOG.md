@@ -2,6 +2,42 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-06 — Agent-runtime audit: Phase 3 UI consistency (P3.2)
+
+Orchestration-surface polish on `worktree-audit-fixes`. Six sub-items, all
+typecheck + lint + build clean.
+
+- **Tokens.** Swept the last ad-hoc `emerald-*` / `amber-*` (+ the dead
+  `destructive` class on the review page) to the semantic `--success` /
+  `--warning` / `--danger` tokens across plans/goals/review pages,
+  `orchestration-ui/status.ts`, `orchestration/{crew-roster-panel,step-node}`,
+  and `settings/runtimes`. The tokens already flip light/dark so the redundant
+  `dark:` variants collapsed. `destructive` is **not** a defined token (Tailwind
+  emits nothing) — it's a latent app-wide bug in ~45 files; only fixed the
+  review-page instance here, noted the rest for P3.4.
+- **Live surfaces.** Plans index + review inbox now `useRealtime` (execution-
+  plan/step/agent-run and review-gate resp.), mirroring the goals index — no
+  more frozen list until manual Refresh.
+- **Inline run approval.** `RunRow` renders the shared `RunApprovalCard`
+  (Approve session/once + Reject) instead of the "open Command Center" dead-end
+  its own doc comment already claimed it hosted.
+- **Wall-time.** Plan detail budget meter now consumes the P1.7 `startedAt`
+  (elapsed / cap bar); `hasBudget` also trips on a wall-time-only cap.
+- **Selects → Combobox.** All 7 native `<select>` in the orchestration +
+  runtime-settings surfaces (adapter / sandbox / approval / crew / plan-status /
+  2× step-status) are now the themed `Combobox`. `runtime-management.spec.ts`
+  rewired from Playwright `selectOption` (native-only) to the role="combobox"
+  trigger + role="option" contract. The app-wide `react/forbid-elements` guard
+  stays `warn` (~58 sites remain, untouched).
+- **Modals → QuickForm.** The 3 hand-rolled orchestration modals (new-plan,
+  new-goal, GoalEditModal) now use `QuickForm` — one graphite scrim, Enter/Esc,
+  draft-safe, inline error banner. GoalEditModal `onSave` + the goal-router shim
+  gained `mutateAsync` so a failing save keeps the modal open with the server
+  message instead of a fire-and-forget toast.
+
+Left in P3.2 scope but intentionally out: the ~58 other native selects and the
+app-wide `destructive` dead-class (both broader than these surfaces).
+
 ## 2026-07-06 — Agent-runtime audit: Phase 2 (integrity + security)
 
 Generalized the Phase-1 patches into their classes + fixed the two security holes.

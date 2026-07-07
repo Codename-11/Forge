@@ -22,8 +22,13 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **Create a label without leaving the issue.** The label picker on an issue now has a search box — type to filter, and (if you're a workspace admin) pick **Create "&lt;name&gt;"** to make a new label with a name and color right there and apply it in one step. No more detour to Settings → Labels first.
 - **Move issues between workspaces (instance admin).** A new **Admin → Move issues** page re-homes issues into another workspace: pick source and target, paste the issue ids, and **Preview** shows exactly what will happen — the new keys (issues are renumbered into the target), how each status and label maps, which labels get dropped, and which issues are *blocked* (anything with agent runs, plans, or artifacts is refused so nothing is corrupted). Confirm to move; a record is written in both workspaces' audit logs.
 - **Cap self-service workspace creation.** Operators can set `MAX_WORKSPACES_PER_USER` to limit how many workspaces a single (non-admin) user can create; the default is unlimited, so nothing changes unless you set it.
+- **Approve or reject a paused agent run right where you see it.** When an agent pauses for permission (a Codex/Hermes run flagged a command or file change), the run row in Mission Control's Live tab now shows **Approve** / **Reject** inline — no detour to the Command Center.
+- **See a plan's wall-clock burn.** The plan cockpit's budget meter now shows elapsed time vs. the wall-time cap alongside cost, so a plan approaching its time budget is visible at a glance (matching the goal cockpit).
 
 ### Changed
+
+- **Plans and the review inbox update live.** The Plans list and the Review-gate inbox now refresh on their own as plans, steps, runs, and gates change — no manual **Refresh**, matching the Goals list.
+- **Orchestration screens are fully themed.** Every dropdown on the Plans, Goals, and Runtime-settings screens, plus the new-plan / new-goal / edit-goal dialogs, now use Forge's own pickers and one consistent dialog instead of native browser controls.
 
 - **Confirmations, prompts, and dropdowns use Forge's own UI, not the browser's.** "Are you sure?" confirmations (deleting a note, removing an admin, restarting a run), the GitHub App setup prompts, and a batch of dropdowns now use Forge's themed in-app dialogs and pickers instead of the operating system's native popups — consistent look, keyboard-friendly, on-brand. (More dropdowns are still being converted.)
 - **The label color picker is now in-app.** Choosing a label color (in Settings → Labels and the new inline create) uses themed swatches plus a hex field instead of the operating system's native color dialog — consistent with the rest of Forge.
