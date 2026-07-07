@@ -31,6 +31,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
+import { Combobox } from "@/components/ui/combobox";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
 import { StepComments } from "@/components/plans/step-comments";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
@@ -857,28 +858,23 @@ export default function PlanDetailPage() {
             <div className="mb-2 text-meta uppercase tracking-wide text-muted-foreground">
               Plan status
             </div>
-            <select
+            <Combobox
+              ariaLabel="Plan status"
+              className={cn("h-8 w-full", PLAN_STATUS_TONE[plan.status])}
+              matchTriggerWidth
+              disabled={activate.isPending || update.isPending}
               value={plan.status}
-              onChange={(e) => {
-                const next = e.target.value as ExecutionPlanStatus;
+              onChange={(v) => {
+                if (!v) return;
+                const next = v as ExecutionPlanStatus;
                 if (next === ExecutionPlanStatus.RUNNING) {
                   activate.mutate({ id: plan.id });
                   return;
                 }
                 update.mutate({ id: plan.id, status: next });
               }}
-              disabled={activate.isPending || update.isPending}
-              className={cn(
-                "w-full rounded-md border border-border bg-card/40 px-2 py-1 text-xs",
-                PLAN_STATUS_TONE[plan.status],
-              )}
-            >
-              {PLAN_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s.toLowerCase()}
-                </option>
-              ))}
-            </select>
+              options={PLAN_STATUSES.map((s) => ({ value: s, label: s.toLowerCase() }))}
+            />
           </div>
 
           {hasBudget ? (
@@ -1527,20 +1523,16 @@ function StepCard({
             <StepComments stepId={step.id} />
           </div>
         </div>
-        <select
-          value={step.status}
-          onChange={(e) => onTransition(e.target.value as ExecutionStepStatus)}
+        <Combobox
+          ariaLabel="Step status"
           className={cn(
-            "shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase",
+            "h-auto shrink-0 px-1.5 py-0.5 text-[10px] uppercase",
             STEP_STATUS_TONE[step.status],
           )}
-        >
-          {STEP_STATUSES.map((s) => (
-            <option key={s} value={s}>
-              {s.toLowerCase()}
-            </option>
-          ))}
-        </select>
+          value={step.status}
+          onChange={(v) => v && onTransition(v as ExecutionStepStatus)}
+          options={STEP_STATUSES.map((s) => ({ value: s, label: s.toLowerCase() }))}
+        />
       </div>
       <div className="flex items-center justify-end gap-2">
         <FieldSaveTick pending={dirty.title || dirty.body || dirty.expected} />
@@ -1873,20 +1865,16 @@ function TimelineRow({
               workspaceSlug={workspaceSlug}
             />
           </div>
-          <select
-            value={step.status}
-            onChange={(e) => onTransition(e.target.value as ExecutionStepStatus)}
+          <Combobox
+            ariaLabel="Step status"
             className={cn(
-              "shrink-0 rounded-md border border-border px-1.5 py-0.5 text-[10px] uppercase",
+              "h-auto shrink-0 px-1.5 py-0.5 text-[10px] uppercase",
               STEP_STATUS_TONE[step.status],
             )}
-          >
-            {STEP_STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s.toLowerCase()}
-              </option>
-            ))}
-          </select>
+            value={step.status}
+            onChange={(v) => v && onTransition(v as ExecutionStepStatus)}
+            options={STEP_STATUSES.map((s) => ({ value: s, label: s.toLowerCase() }))}
+          />
         </div>
         {step.judgeVerdict ? (
           <JudgeVerdictBlock verdict={step.judgeVerdict} agentName={agent?.name ?? null} />

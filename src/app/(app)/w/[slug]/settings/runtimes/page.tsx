@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
 import { Confirm, QuickForm } from "@/components/ui/modal";
+import { Combobox } from "@/components/ui/combobox";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
@@ -1253,17 +1254,14 @@ function CreateRuntimeModal({
         </div>
         <label className="block">
           <span className={fieldLabel}>Adapter</span>
-          <select
-            className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm"
-            value={adapterKey}
-            onChange={(e) => setAdapterKey(e.target.value)}
-          >
-            {adapters.map((a) => (
-              <option key={a.key} value={a.key}>
-                {a.title}
-              </option>
-            ))}
-          </select>
+          <Combobox
+            ariaLabel="Adapter"
+            className="mt-1 h-9 w-full"
+            matchTriggerWidth
+            value={adapterKey || null}
+            onChange={(v) => setAdapterKey(v ?? "")}
+            options={adapters.map((a) => ({ value: a.key, label: a.title }))}
+          />
           {adapter && (
             <>
               <span className="mt-1 block text-xs text-muted-foreground">{adapter.tagline}</span>
@@ -1555,8 +1553,6 @@ function CodexPolicyFields({
   value: CodexPolicy;
   onChange: (v: CodexPolicy) => void;
 }) {
-  const selectClass =
-    "focus-ring h-9 w-full rounded-md border border-input bg-background px-2.5 text-sm";
   return (
     <div
       data-testid="codex-sandbox-fields"
@@ -1602,36 +1598,35 @@ function CodexPolicyFields({
       </label>
       <label className="block">
         <span className={fieldLabel}>Sandbox mode</span>
-        <select
-          data-testid="codex-sandbox-mode"
-          className={selectClass}
+        <Combobox
+          ariaLabel="Sandbox mode"
+          className="mt-1 h-9 w-full"
+          matchTriggerWidth
           value={value.sandboxMode}
-          onChange={(e) =>
-            onChange({ ...value, sandboxMode: e.target.value as CodexPolicy["sandboxMode"] })
+          onChange={(v) =>
+            onChange({
+              ...value,
+              sandboxMode: (v ?? "workspace-write") as CodexPolicy["sandboxMode"],
+            })
           }
-        >
-          {SANDBOX_MODE_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          options={SANDBOX_MODE_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+        />
       </label>
       <label className="block">
         <span className={fieldLabel}>Approval policy</span>
-        <select
-          className={selectClass}
+        <Combobox
+          ariaLabel="Approval policy"
+          className="mt-1 h-9 w-full"
+          matchTriggerWidth
           value={value.approvalPolicy}
-          onChange={(e) =>
-            onChange({ ...value, approvalPolicy: e.target.value as CodexPolicy["approvalPolicy"] })
+          onChange={(v) =>
+            onChange({
+              ...value,
+              approvalPolicy: (v ?? "on-request") as CodexPolicy["approvalPolicy"],
+            })
           }
-        >
-          {APPROVAL_POLICY_OPTIONS.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+          options={APPROVAL_POLICY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
+        />
         <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
           Anything but “never” surfaces command/file approvals as cards in chat for you to
           accept or deny.

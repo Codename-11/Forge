@@ -21,6 +21,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm } from "@/components/ui/modal";
+import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -592,18 +593,17 @@ function GoalEditModal({
         />
 
         <label className="mt-3 block text-meta text-muted-foreground">Crew</label>
-        <select
-          value={crewId}
-          onChange={(e) => setCrewId(e.target.value)}
-          className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
-        >
-          <option value="">No crew</option>
-          {crews.map((crew) => (
-            <option key={crew.id} value={crew.id}>
-              {crew.name}
-            </option>
-          ))}
-        </select>
+        <Combobox
+          ariaLabel="Crew"
+          className="mt-1 h-9 w-full"
+          matchTriggerWidth
+          allowNone
+          noneLabel="No crew"
+          placeholder="No crew"
+          value={crewId || null}
+          onChange={(v) => setCrewId(v ?? "")}
+          options={crews.map((crew) => ({ value: crew.id, label: crew.name }))}
+        />
 
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
           <label className="block">

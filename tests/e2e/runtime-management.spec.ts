@@ -18,8 +18,9 @@ test.describe("Runtime management", () => {
 
     // Panel only renders for the codex-app-server adapter.
     await expect(page.getByTestId("codex-sandbox-fields")).toBeVisible();
-    const mode = page.getByTestId("codex-sandbox-mode");
-    await mode.selectOption("workspace-write");
+    const mode = page.getByRole("combobox", { name: "Sandbox mode" });
+    await mode.click();
+    await page.getByRole("option", { name: /Workspace-write/ }).click();
     await page.locator('input[placeholder="/work"]').fill("/work/agent-forge");
     await page.getByRole("button", { name: /save/i }).click();
     await expect(row).toContainText("repo tools");
@@ -30,7 +31,9 @@ test.describe("Runtime management", () => {
     // Reopen and confirm the choice persisted (round-trips Runtime.config).
     await expect(page.getByTestId("codex-sandbox-fields")).toBeHidden();
     await row.getByRole("button", { name: /^edit$/i }).click();
-    await expect(page.getByTestId("codex-sandbox-mode")).toHaveValue("workspace-write");
+    await expect(
+      page.getByRole("combobox", { name: "Sandbox mode" }),
+    ).toContainText("Workspace-write");
     await expect(page.locator('input[placeholder="/work"]')).toHaveValue(
       "/work/agent-forge",
     );
@@ -41,7 +44,8 @@ test.describe("Runtime management", () => {
     await page.getByRole("button", { name: /add runtime/i }).click();
 
     const dialog = page.getByRole("dialog");
-    await dialog.locator("select").selectOption("hermes");
+    await dialog.getByRole("combobox", { name: "Adapter" }).click();
+    await page.getByRole("option", { name: /hermes/i }).click();
     await dialog.locator("input").nth(0).fill(name);
     await dialog.locator("input").nth(1).fill("http://127.0.0.1:8642/v1");
     await expect(page.getByTestId("runtime-tool-surface-fields")).toBeVisible();
