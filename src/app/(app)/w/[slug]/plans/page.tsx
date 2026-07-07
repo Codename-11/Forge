@@ -13,6 +13,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { cn, relativeTime } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
 import {
   DagStepStrip,
   countBasedTones,
@@ -247,6 +248,13 @@ export default function PlansPage() {
   const invalidateLists = () => {
     void utils.executionPlan.list.invalidate();
   };
+
+  // Live-refresh the index as plans/steps/runs move — mirrors the goals
+  // index. Without this the list only updated on manual Refresh or the
+  // page's own mutations, so background dispatch progress looked frozen.
+  useRealtime(invalidateLists, {
+    subjectType: ["execution-plan", "execution-step", "agent-run"],
+  });
 
   // Open the New-plan modal pre-selected to a template. Reuses the same
   // modal + templateId state the Combobox drives — the rail cards are

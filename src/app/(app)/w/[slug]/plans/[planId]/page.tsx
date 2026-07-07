@@ -432,6 +432,8 @@ export default function PlanDetailPage() {
   const planX = plan as unknown as {
     totalCostUsd?: number | null;
     maxTotalCostUsd?: number | null;
+    maxWallTimeMinutes?: number | null;
+    startedAt?: string | Date | null;
     goalId?: string | null;
     goal?: { id: string; title: string; status: string } | null;
     autoJudge?: boolean;
@@ -439,9 +441,17 @@ export default function PlanDetailPage() {
   } | undefined;
   const totalCostUsd = planX?.totalCostUsd ?? 0;
   const maxTotalCostUsd = planX?.maxTotalCostUsd ?? null;
+  const maxWallTimeMinutes = planX?.maxWallTimeMinutes ?? null;
+  // Wall-clock since the plan started running (P1.7 added `startedAt`).
+  // Mirrors the goal cockpit; feeds the budget meter's wall-time bar.
+  const planStartedAt = planX?.startedAt ?? null;
+  const elapsedMinutes = planStartedAt
+    ? (Date.now() - new Date(planStartedAt).getTime()) / 60_000
+    : null;
   const goalId = planX?.goalId ?? planX?.goal?.id ?? null;
   const goalTitle = planX?.goal?.title ?? null;
-  const hasBudget = maxTotalCostUsd != null || totalCostUsd > 0;
+  const hasBudget =
+    maxTotalCostUsd != null || totalCostUsd > 0 || maxWallTimeMinutes != null;
 
   // Crew roster — embedded on `executionPlan.get`. Loosely read until
   // the Prisma client regenerates the `crew` relation onto the type.
@@ -873,7 +883,12 @@ export default function PlanDetailPage() {
 
           {hasBudget ? (
             <div className="rounded-lg border border-border bg-card/40 p-3">
-              <BudgetMeter spent={totalCostUsd} cap={maxTotalCostUsd} />
+              <BudgetMeter
+                spent={totalCostUsd}
+                cap={maxTotalCostUsd}
+                wallTimeMinutes={maxWallTimeMinutes}
+                elapsedMinutes={elapsedMinutes}
+              />
             </div>
           ) : null}
 

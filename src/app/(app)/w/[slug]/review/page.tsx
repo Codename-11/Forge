@@ -10,6 +10,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
 
 /** Deep-link a gate target where it can be acted on; null if not routable. */
 function gateTargetHref(slug: string, targetType: string, targetId: string): string | null {
@@ -26,9 +27,9 @@ function gateTargetHref(slug: string, targetType: string, targetId: string): str
 }
 
 const STATUS_TONE: Record<string, string> = {
-  PENDING: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
-  APPROVED: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
-  REJECTED: "bg-destructive/10 text-destructive",
+  PENDING: "bg-warning/10 text-warning",
+  APPROVED: "bg-success/10 text-success",
+  REJECTED: "bg-danger/10 text-danger",
   CANCELED: "bg-muted/40 text-muted-foreground line-through",
 };
 
@@ -70,6 +71,17 @@ export default function ReviewPage() {
     },
     onError: (e) => toast.error(e.message),
   });
+
+  // Live-refresh the inbox as gates are opened/resolved elsewhere (a crew
+  // member requests approval, or another operator acts). Previously the
+  // list was static until the viewer's own resolve or a manual reload.
+  useRealtime(
+    () => {
+      void utils.reviewGate.list.invalidate();
+      void utils.commandCenter.summary.invalidate();
+    },
+    { subjectType: "review-gate" },
+  );
 
   return (
     <>

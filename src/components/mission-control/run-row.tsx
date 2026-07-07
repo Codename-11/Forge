@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { ModeChip, MODE_LABEL } from "@/components/ui/engagement-mode-glyph";
 import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
+import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import { RunTimeline } from "./run-timeline";
 
 /**
@@ -317,8 +318,12 @@ export function RunRow({
         </div>
       )}
       {awaitingApproval && (
-        <div className="text-meta mt-1.5 rounded-md border border-warning/30 bg-background/50 px-2 py-1.5 text-warning">
-          Awaiting operator approval. Open Command Center to approve or reject the request.
+        <div className="mt-1.5 pl-6">
+          <RunApprovalCard
+            runId={run.id}
+            agentName={run.agent.name}
+            pendingApproval={run.pendingApproval}
+          />
         </div>
       )}
       {isStalled && !awaitingApproval && (
