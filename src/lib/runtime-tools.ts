@@ -87,6 +87,14 @@ export function runtimeHostEnforcesModeToolPolicy(config: unknown): boolean {
   return c.modeToolPolicyEnforced === true || c.hostEnforcedToolPolicy === true;
 }
 
+// Default tools a Research/Review run gets when the operator hasn't set an
+// explicit `modeToolProfiles` override: read/inspect-oriented capabilities
+// only. `terminal` is excluded even when declared — arbitrary command
+// execution isn't "read-only" per the documented mode contract
+// (docs/agents/engagement-modes.md: Research = "Read, search, run read-only
+// tools").
+const READ_ORIENTED_CAPABILITIES: readonly RuntimeToolCapability[] = ["filesystem", "git"];
+
 export function runtimeModeToolCapabilities(
   config: unknown,
   mode: RuntimeEngagementMode,
@@ -103,8 +111,12 @@ export function runtimeModeToolCapabilities(
     return RUNTIME_TOOL_CAPABILITIES.filter((tool) => tools.has(tool));
   }
 
-  if (mode !== "EXECUTE") return [];
-  return declaredRuntimeToolCapabilities(config);
+  const declared = declaredRuntimeToolCapabilities(config);
+  if (mode === "EXECUTE") return declared;
+  if (mode === "DISCUSS") return [];
+  // RESEARCH / REVIEW: never grant more than the runtime actually declared,
+  // and never terminal — just the read-oriented subset of what's available.
+  return declared.filter((tool) => READ_ORIENTED_CAPABILITIES.includes(tool));
 }
 
 export function runtimeToolGrantStrategy(
