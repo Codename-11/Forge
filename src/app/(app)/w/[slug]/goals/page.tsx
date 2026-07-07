@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { QuickForm } from "@/components/ui/modal";
 import { CrewSelector } from "@/components/crews/crew-selector";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -107,7 +108,8 @@ export default function GoalsPage() {
       // empty plan when the crew's planner couldn't be reached.
       if (result?.id) router.push(`/w/${ws.slug}/goals/${result.id}`);
     },
-    onError: (e) => toast.error(e.message),
+    // Errors surface in the QuickForm banner (onSubmit awaits mutateAsync),
+    // and the modal stays open for a retry.
   });
   const canCreate = Boolean(goalRouter?.create);
   const isStartingGoal = Boolean(createGoal?.isPending);
@@ -223,73 +225,52 @@ export default function GoalsPage() {
         )}
       </div>
 
-      {creating && createGoal ? (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
-          onClick={() => setCreating(false)}
-        >
-          <div
-            className="max-h-[90vh] w-full max-w-md overflow-y-auto rounded-lg border border-border bg-card p-4 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="text-sm font-medium">New goal</h2>
-            <p className="mb-3 mt-1 text-meta text-muted-foreground">
-              After creating, choose how to draft the plan: generate it with
-              Forge, or dispatch the crew&apos;s planner. Then approve, run, and
-              review it to completion.
-            </p>
-            <label className="block text-meta text-muted-foreground">
-              Objective
-            </label>
-            <input
-              autoFocus
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Migrate auth to NextAuth v5"
-              className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
-            />
-            <label className="mt-3 block text-meta text-muted-foreground">
-              Context for the planner (optional)
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              rows={3}
-              placeholder="Constraints, links, acceptance criteria…"
-              className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
-            />
-            <label className="mt-3 block text-meta text-muted-foreground">
-              Crew that runs it
-            </label>
-            <CrewSelector
-              className="mt-1"
-              value={crewId}
-              onChange={setCrewId}
-              noneLabel="No crew (assign later)"
-            />
-            <div className="mt-4 flex justify-end gap-2">
-              <Button variant="ghost" size="sm" onClick={() => setCreating(false)}>
-                Cancel
-              </Button>
-              <Button
-                variant="ember"
-                size="sm"
-                disabled={isStartingGoal || !title.trim()}
-                onClick={() =>
-                  createGoal.mutate({
-                    title: title.trim(),
-                    description: description.trim() || null,
-                    crewId: crewId ?? undefined,
-                  })
-                }
-              >
-                {createGoal.isPending ? "Creating…" : "Create goal"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <QuickForm
+        open={creating && canCreate}
+        onOpenChange={setCreating}
+        title="New goal"
+        description="After creating, choose how to draft the plan: generate it with Forge, or dispatch the crew's planner. Then approve, run, and review it to completion."
+        primaryLabel={isStartingGoal ? "Creating…" : "Create goal"}
+        loading={isStartingGoal}
+        onSubmit={async () => {
+          if (!title.trim()) return { error: "Give the goal an objective." };
+          if (!createGoal) return { error: "Goal creation is unavailable." };
+          await createGoal.mutateAsync({
+            title: title.trim(),
+            description: description.trim() || null,
+            crewId: crewId ?? undefined,
+          });
+        }}
+      >
+        <QuickForm.Field label="Objective">
+          <input
+            autoFocus
+            name="title"
+            type="text"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="e.g. Migrate auth to NextAuth v5"
+            className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Context for the planner (optional)">
+          <textarea
+            name="description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="Constraints, links, acceptance criteria…"
+            className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Crew that runs it">
+          <CrewSelector
+            value={crewId}
+            onChange={setCrewId}
+            noneLabel="No crew (assign later)"
+          />
+        </QuickForm.Field>
+      </QuickForm>
     </>
   );
 }

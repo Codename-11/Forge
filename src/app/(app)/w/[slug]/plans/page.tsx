@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
-import { Confirm } from "@/components/ui/modal";
+import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Combobox } from "@/components/ui/combobox";
 import { cn, relativeTime } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -589,74 +589,52 @@ export default function PlansPage() {
         </div>
       </div>
 
-      {creating && (
-        <div
-          className="fixed inset-0 z-40 flex items-center justify-center bg-black/40 px-4"
-          onClick={() => {
-            if (!seeding) setCreating(false);
-          }}
-        >
-          <div
-            className="w-full max-w-md rounded-lg border border-border bg-card p-4 shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <h2 className="mb-3 text-sm font-medium">New plan</h2>
-            <input
-              autoFocus
-              type="text"
-              value={draftTitle}
-              onChange={(e) => setDraftTitle(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && draftTitle.trim() && !seeding) {
-                  void submit();
-                }
-                if (e.key === "Escape" && !seeding) setCreating(false);
-              }}
-              placeholder="Plan title"
-              className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
-            />
-            <label className="mt-3 block text-meta uppercase tracking-wide text-muted-foreground">
-              Template
-            </label>
-            <Combobox
-              value={templateId}
-              onChange={(v) => setTemplateId(v ?? "blank")}
-              options={PLAN_TEMPLATES.map((t) => ({ value: t.id, label: t.label }))}
-              disabled={seeding}
-              ariaLabel="Plan template"
-              matchTriggerWidth
-              className="mt-1 w-full"
-            />
-            <p className="mt-1.5 text-meta text-muted-foreground">
-              {selectedTemplate.blurb}
-              {selectedTemplate.steps.length > 0 && (
-                <>
-                  {" "}· {selectedTemplate.steps.length} step
-                  {selectedTemplate.steps.length === 1 ? "" : "s"}
-                </>
-              )}
-            </p>
-            <div className="mt-3 flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setCreating(false)}
-                disabled={seeding}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="ember"
-                size="sm"
-                onClick={() => void submit()}
-                disabled={seeding || !draftTitle.trim()}
-              >
-                {seeding ? "Seeding…" : "Create"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <QuickForm
+        open={creating}
+        onOpenChange={(o) => {
+          if (seeding) return;
+          setCreating(o);
+        }}
+        title="New plan"
+        primaryLabel={seeding ? "Seeding…" : "Create"}
+        loading={seeding}
+        onSubmit={async () => {
+          if (!draftTitle.trim()) return { error: "Give the plan a title." };
+          await submit();
+        }}
+      >
+        <QuickForm.Field label="Plan title">
+          <input
+            autoFocus
+            name="title"
+            type="text"
+            value={draftTitle}
+            onChange={(e) => setDraftTitle(e.target.value)}
+            placeholder="Plan title"
+            className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Template">
+          <Combobox
+            value={templateId}
+            onChange={(v) => setTemplateId(v ?? "blank")}
+            options={PLAN_TEMPLATES.map((t) => ({ value: t.id, label: t.label }))}
+            disabled={seeding}
+            ariaLabel="Plan template"
+            matchTriggerWidth
+            className="w-full"
+          />
+        </QuickForm.Field>
+        <p className="text-meta text-muted-foreground">
+          {selectedTemplate.blurb}
+          {selectedTemplate.steps.length > 0 && (
+            <>
+              {" "}· {selectedTemplate.steps.length} step
+              {selectedTemplate.steps.length === 1 ? "" : "s"}
+            </>
+          )}
+        </p>
+      </QuickForm>
 
       <Confirm
         open={!!deleteTarget}

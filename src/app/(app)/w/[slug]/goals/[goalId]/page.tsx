@@ -5,7 +5,6 @@ import { useParams, useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
-  Check,
   ChevronLeft,
   Clock3,
   ExternalLink,
@@ -20,7 +19,7 @@ import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { EmptyState, SkeletonList } from "@/components/ui";
-import { Confirm } from "@/components/ui/modal";
+import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -113,7 +112,8 @@ export default function GoalDetailPage() {
       u.goal?.list?.invalidate?.();
       setEditingGoal(false);
     },
-    onError: (e: { message: string }) => toast.error(e.message),
+    // Errors surface in the GoalEditModal QuickForm banner (onSave awaits
+    // mutateAsync); the modal stays open for a retry.
   });
 
   const activatePlanM = trpc.executionPlan.activate.useMutation({
@@ -490,12 +490,12 @@ export default function GoalDetailPage() {
           crews={crewList?.items ?? []}
           busy={Boolean(updateM?.isPending)}
           onClose={() => setEditingGoal(false)}
-          onSave={(payload) =>
-            updateM?.mutate({
+          onSave={async (payload) => {
+            await updateM?.mutateAsync({
               id: goal.id,
               ...payload,
-            })
-          }
+            });
+          }}
         />
       ) : null}
     </>
@@ -541,7 +541,7 @@ function GoalEditModal({
     crewId: string | null;
     maxTotalCostUsd: number | null;
     maxWallTimeMinutes: number | null;
-  }) => void;
+  }) => void | Promise<void>;
 }) {
   const [title, setTitle] = useState(goal.title);
   const [description, setDescription] = useState(goal.description ?? "");
@@ -558,44 +558,56 @@ function GoalEditModal({
   const invalidCost = parsedCost != null && (!Number.isFinite(parsedCost) || parsedCost < 0);
   const invalidTime =
     parsedTime != null && (!Number.isInteger(parsedTime) || parsedTime <= 0);
-  const canSave = title.trim().length > 0 && !invalidCost && !invalidTime;
 
   return (
-    <div
-      className="fixed inset-0 z-40 flex items-center justify-center bg-foreground/20 px-4 backdrop-blur-sm"
-      onClick={onClose}
+    <QuickForm
+      open
+      onOpenChange={(o) => {
+        if (!o) onClose();
+      }}
+      title="Edit goal"
+      description="Budgets apply to the active plan"
+      primaryLabel={busy ? "Saving…" : "Save"}
+      loading={busy}
+      className="max-w-lg"
+      onSubmit={async () => {
+        if (!title.trim()) return { error: "Title is required." };
+        if (invalidCost || invalidTime)
+          return {
+            error:
+              "Cost must be zero or higher. Wall time must be a whole positive minute.",
+          };
+        await onSave({
+          title: title.trim(),
+          description: description.trim() || null,
+          crewId: crewId || null,
+          maxTotalCostUsd: parsedCost,
+          maxWallTimeMinutes: parsedTime,
+        });
+      }}
     >
-      <div
-        className="w-full max-w-lg rounded-lg border border-border bg-card p-4 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-medium">Edit goal</h2>
-          <span className="text-meta text-muted-foreground">Budgets apply to the active plan</span>
-        </div>
-
-        <label className="mt-3 block text-meta text-muted-foreground">Title</label>
+      <QuickForm.Field label="Title">
         <input
           autoFocus
+          name="title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
-          className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
         />
-
-        <label className="mt-3 block text-meta text-muted-foreground">
-          Description
-        </label>
+      </QuickForm.Field>
+      <QuickForm.Field label="Description">
         <textarea
+          name="description"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={4}
-          className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+          className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
         />
-
-        <label className="mt-3 block text-meta text-muted-foreground">Crew</label>
+      </QuickForm.Field>
+      <QuickForm.Field label="Crew">
         <Combobox
           ariaLabel="Crew"
-          className="mt-1 h-9 w-full"
+          className="h-9 w-full"
           matchTriggerWidth
           allowNone
           noneLabel="No crew"
@@ -604,64 +616,34 @@ function GoalEditModal({
           onChange={(v) => setCrewId(v ?? "")}
           options={crews.map((crew) => ({ value: crew.id, label: crew.name }))}
         />
-
-        <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="text-meta text-muted-foreground">Cost cap (USD)</span>
-            <input
-              type="number"
-              min={0}
-              step="0.01"
-              value={costCap}
-              onChange={(e) => setCostCap(e.target.value)}
-              placeholder="No cap"
-              className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm tabular-nums"
-            />
-          </label>
-          <label className="block">
-            <span className="text-meta text-muted-foreground">Wall-time cap (minutes)</span>
-            <input
-              type="number"
-              min={1}
-              step={1}
-              value={timeCap}
-              onChange={(e) => setTimeCap(e.target.value)}
-              placeholder="No cap"
-              className="mt-1 w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm tabular-nums"
-            />
-          </label>
-        </div>
-
-        {(invalidCost || invalidTime) ? (
-          <p className="mt-2 text-meta text-warning">
-            Cost must be zero or higher. Wall time must be a whole positive minute.
-          </p>
-        ) : null}
-
-        <div className="mt-4 flex justify-end gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            variant="ember"
-            size="sm"
-            disabled={busy || !canSave}
-            onClick={() =>
-              onSave({
-                title: title.trim(),
-                description: description.trim() || null,
-                crewId: crewId || null,
-                maxTotalCostUsd: parsedCost,
-                maxWallTimeMinutes: parsedTime,
-              })
-            }
-          >
-            <Check className="h-3.5 w-3.5" />
-            {busy ? "Saving…" : "Save"}
-          </Button>
-        </div>
+      </QuickForm.Field>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <QuickForm.Field label="Cost cap (USD)">
+          <input
+            type="number"
+            name="costCap"
+            min={0}
+            step="0.01"
+            value={costCap}
+            onChange={(e) => setCostCap(e.target.value)}
+            placeholder="No cap"
+            className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm tabular-nums"
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Wall-time cap (minutes)">
+          <input
+            type="number"
+            name="timeCap"
+            min={1}
+            step={1}
+            value={timeCap}
+            onChange={(e) => setTimeCap(e.target.value)}
+            placeholder="No cap"
+            className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm tabular-nums"
+          />
+        </QuickForm.Field>
       </div>
-    </div>
+    </QuickForm>
   );
 }
 

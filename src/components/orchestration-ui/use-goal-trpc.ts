@@ -141,7 +141,14 @@ type MutationHook<TInput, TOutput> = {
   useMutation: (opts?: {
     onSuccess?: (result: TOutput) => void;
     onError?: (e: { message: string }) => void;
-  }) => { mutate: (input: TInput) => void; isPending: boolean };
+  }) => {
+    mutate: (input: TInput) => void;
+    // The shim wraps a real tRPC mutation, which exposes the awaitable
+    // form too — surfaced so QuickForm can await the save and show its
+    // error banner instead of a fire-and-forget toast.
+    mutateAsync: (input: TInput) => Promise<TOutput>;
+    isPending: boolean;
+  };
 };
 
 type GoalPlannerInfo = {
