@@ -13,7 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
-- **A redesigned dashboard that gets you back to work faster.** The dashboard now opens with a **You** zone — *Focus today* (your assigned work, priority-first) and *Pick up where you left off* (your most recently touched issues) — followed by a **Workspace & agents** zone (agent activity, attention, handoffs, stalled, pipeline). The "Suggestions" strip (unassigned + stalled) moved out of your personal area down into the workspace zone, where it belongs.
+- **A redesigned dashboard cockpit — less scrolling, no gaps.** The dashboard is now a two-column cockpit: a wide work column on the left (*Focus today*, *Pick up where you left off*, and a compact **Pipeline** card) beside an always-visible rail on the right (agent activity, attention, standup, what's new) — instead of one long stacked column. The "Suggestions" strip (unassigned + stalled) stays in the work column, below Pipeline.
 - **Richer issue cards on the dashboard.** Focus and Pick-up cards now show who's on it (assignee + agent avatars with a presence dot), sub-issue progress, a live agent-run status (running / waiting / stalled), project / label / due / SLA context, and a one-line description when the title is short — each shown only when it applies. Cards size to their own content, so the empty gaps between sparse cards are gone.
 - **Set a per-issue SLA target — and let the Coach react to breaches.** Each issue's detail rail now has an **SLA target** field: pick a preset (1 hour, 4 hours, 1 day, 1 week…) or a custom number of minutes, or clear it. When **Enforce per-issue SLA** is on (Settings → Workspace → Agent SLA), an issue that ages past its target raises an SLA breach — which posts a Coach diagnostic comment and shows in your activity feed. Issues with no target are never breached, so turning enforcement on is safe.
 - **See your Coach agent's health at a glance.** Settings → Workspace → AI now shows whether the Coach is *armed*, whether it can reach a model, whether the Coach agent exists, which events trigger it (issue stalled / missed ack / SLA breach — and which are turned off), and when it last fired. No more guessing why it is or isn't commenting.
@@ -24,6 +24,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **Cap self-service workspace creation.** Operators can set `MAX_WORKSPACES_PER_USER` to limit how many workspaces a single (non-admin) user can create; the default is unlimited, so nothing changes unless you set it.
 - **Approve or reject a paused agent run right where you see it.** When an agent pauses for permission (a Codex/Hermes run flagged a command or file change), the run row in Mission Control's Live tab now shows **Approve** / **Reject** inline — no detour to the Command Center.
 - **See a plan's wall-clock burn.** The plan cockpit's budget meter now shows elapsed time vs. the wall-time cap alongside cost, so a plan approaching its time budget is visible at a glance (matching the goal cockpit).
+- **Set the engagement mode right when you assign an agent in Quick Create.** Type `/assign @handle` in the new-issue overlay and a small Execute / Research / Review / Discuss picker appears next to the assignee chip — pick one to override the workspace's default for that dispatch, or leave it alone to keep using the default.
 
 ### Changed
 
@@ -43,6 +44,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **Approving or stopping an agent run tells you if it didn't go through.** A failed Approve or Stop now surfaces an error instead of showing success while the run stays blocked at the runtime.
 - **Goals and Plans tell a load error apart from an empty list.** A network hiccup now shows "couldn't load … Retry" instead of "No goals yet" / "Goal not found — may have been abandoned", which looked like your work had been deleted.
 - **A freshly registered runtime is no longer a dead-end.** You can open a just-registered local daemon's settings — run its self-test, add credentials, bind a repo — straight from the global **Runtimes** page, without waiting for an agent to use it first.
+- **Research and Review dispatches can actually read the repo.** A Hermes runtime with no per-mode tool profile configured used to hand a Research or Review run zero local tools — even though the mode's own contract promises "read, search, run read-only tools." It now gets the read-oriented subset (filesystem + git, never terminal) of whatever the runtime declared, matching what was already documented.
 
 ### Changed
 

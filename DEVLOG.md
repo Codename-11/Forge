@@ -2,6 +2,72 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-07 — Dashboard Cockpit layout, RESEARCH/REVIEW tool-access default, Quick Create mode picker
+
+Three independent pieces from one session, all typecheck + lint clean.
+
+- **Dashboard: Cockpit layout (variant A of a 3-mockup comparison).** Replaced
+  the single stacked `max-w-6xl` column with a two-column cockpit at
+  `max-w-[100rem]`: primary work column (`lg:col-span-8` — Focus today, Pick up
+  where you left off, a new **Pipeline** card, Suggestions) beside an always-
+  visible rail (`lg:col-span-4` — the existing customizable widget stack,
+  forced to a single column). `DashboardStack` gained a `columns?: 1 | 2` prop
+  (default 2, back-compat — it's only used on this one page) that drops the
+  `lg:grid-cols-2` track and hides the half/full resize affordances when `1`,
+  since they'd have no visible effect in a forced single column. The old
+  "By status" link-list became `PipelineCard` — the same `statusRows`/
+  `statusMax` data as horizontal proportional bars in a card instead of a
+  2-column list, matching the mockup and removing the ragged-bottom gap next
+  to Focus/Pick-up. Default widget order in the rail now leads with
+  agent-activity/agent-attention/standup/whats-new/quick-notes (existing
+  per-user saved order still overrides via `orderWidgets()` — no regression
+  for anyone who already customized). Verified end-to-end against the local
+  `dev:local` stack with real seeded + assigned issues (3-col Focus grid,
+  populated agent-activity rail, real Standup counts) via a scripted
+  Playwright login — not just typecheck.
+- **RESEARCH/REVIEW tool-access default (`src/lib/runtime-tools.ts`).** Traced
+  a Hermes RESEARCH-mode run's "no filesystem/git/terminal, web search not
+  configured" complaint to two separate root causes: web search isn't a Forge
+  concept at all (not in `RUNTIME_TOOL_CAPABILITIES`, docs explicitly say it
+  stays available regardless of mode — that's a Hermes-gateway-config
+  question, not a Forge bug); but `runtimeModeToolCapabilities()` returned
+  `[]` for **any** non-EXECUTE mode with no explicit `modeToolProfiles`
+  override, contradicting `docs/agents/engagement-modes.md`'s own promise
+  ("Research: Read, search, run read-only tools"). Fixed: RESEARCH/REVIEW now
+  default to the read-oriented subset (`filesystem`, `git` — never
+  `terminal`) of whatever the runtime actually declared; EXECUTE and an
+  explicit `modeToolProfiles` override are unchanged; DISCUSS still gets
+  nothing. The Runtime settings page's per-mode checkbox matrix
+  (`settings/runtimes/page.tsx`) reads this function directly, so operators
+  now see the corrected default there too. New `tests/unit/runtime-tools.test.ts`
+  (7 cases). `modeToolPolicyEnforced` still defaults off — this only fixes
+  what's *advertised*/prompted; hard host enforcement stays opt-in per Runtime.
+- **Quick Create: engagement mode picker on `/assign`.** The new-issue global
+  overlay already assigned agents via `/assign @handle`, but had no way to set
+  the run's engagement mode — the server hardcoded `explicit: null`, so it
+  always fell back to the workspace's assignment default. `SlashCommand`'s
+  `assign` variant gained an optional `mode?: EngagementMode` (UI-only — never
+  parsed from typed text, matching the existing "mode is set via UI, not
+  slash-syntax" split with the @-mention grammar). `quick-create.tsx` renders a
+  compact 4-button mode picker (reusing `EngagementModeGlyph`/`MODE_ORDER` from
+  the issue-detail `AgentPickerModal`) right next to the committed assign
+  badge, unset by default (no button pre-highlighted — honest about "no
+  override yet" rather than guessing the resolved default). `issue.ts`'s
+  `applySlashCommandsToIssue` "assign" case now passes `cmd.mode ?? null` as
+  `explicit` to `resolveEngagementMode()` instead of the hardcoded `null`. No
+  Prisma migration — `Issue` never had an `engagementMode` column by design
+  (mode lives on the `AgentRun`); this just stops discarding an already-storable
+  value. Verified via a scripted Playwright run: typed `/assign victor`,
+  confirmed the picker appears unselected, clicked "Research," confirmed
+  `aria-checked` flips correctly and only on that button.
+
+Housekeeping: this worktree's `node_modules` was missing `server-only`,
+failing 21 unrelated `tests/unit/*.test.ts` files (none touched by this
+session) with `Cannot find module 'server-only'`; `pnpm install` didn't
+resolve it. Pre-existing environmental gap, not a regression — all tests in
+files actually touched here pass (`runtime-tools`, `slash-commands`,
+`chat-slash-command-gating` — 36/36).
+
 ## 2026-07-06 — Agent-runtime audit: Phase 3 UI consistency (P3.2)
 
 Orchestration-surface polish on `worktree-audit-fixes`. Six sub-items, all
