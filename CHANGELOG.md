@@ -11,6 +11,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-07] — v0.8.0 · Dashboard redesign, cross-workspace moves & agent-runtime hardening
+
 ### Added
 
 - **A redesigned dashboard cockpit — less scrolling, no gaps.** The dashboard is now a two-column cockpit: a wide work column on the left (*Focus today*, *Pick up where you left off*, and a compact **Pipeline** card) beside an always-visible rail on the right (agent activity, attention, standup, what's new) — instead of one long stacked column. The "Suggestions" strip (unassigned + stalled) stays in the work column, below Pipeline.
