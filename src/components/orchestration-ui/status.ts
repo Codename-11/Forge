@@ -16,9 +16,9 @@ export type GoalStatus =
 
 export const GOAL_STATUS_TONE: Record<GoalStatus, string> = {
   OPEN: "bg-subtle text-muted-foreground",
-  PLANNING: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  PLANNING: "bg-warning/10 text-warning",
   ACTIVE: "bg-ember/15 text-ember",
-  ACHIEVED: "bg-emerald-500/20 text-emerald-700 dark:text-emerald-300",
+  ACHIEVED: "bg-success/20 text-success",
   ABANDONED: "bg-muted/40 text-muted-foreground line-through",
 };
 

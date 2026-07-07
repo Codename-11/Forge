@@ -1683,7 +1683,7 @@ function JudgeVerdictBlock({
         "mt-1.5 rounded-md border px-2 py-1.5 text-meta transition-colors motion-safe:animate-in motion-safe:fade-in",
         fail
           ? "border-danger/40 bg-danger/[0.05]"
-          : "border-emerald-600/30 bg-emerald-500/[0.05]",
+          : "border-success/30 bg-success/[0.05]",
       )}
     >
       <button
@@ -1695,12 +1695,12 @@ function JudgeVerdictBlock({
         {fail ? (
           <XCircle className="h-3 w-3 shrink-0 text-danger" />
         ) : (
-          <CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+          <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
         )}
         <span
           className={cn(
             "font-medium uppercase tracking-wide",
-            fail ? "text-danger" : "text-emerald-700 dark:text-emerald-300",
+            fail ? "text-danger" : "text-success",
           )}
         >
           Judge · {verdict.verdict.toLowerCase()}

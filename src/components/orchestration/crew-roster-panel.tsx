@@ -54,9 +54,9 @@ export type ActiveStepByAgent = Map<
 const ROLE_TONE: Record<string, string> = {
   PLANNER: "bg-ember/10 text-ember",
   WORKER: "bg-subtle text-muted-foreground",
-  REVIEWER: "bg-amber-500/10 text-amber-700 dark:text-amber-300",
+  REVIEWER: "bg-warning/10 text-warning",
   OBSERVER: "bg-muted/40 text-muted-foreground",
-  OPERATOR_PROXY: "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+  OPERATOR_PROXY: "bg-success/10 text-success",
 };
 
 export function CrewRosterPanel({

@@ -31,10 +31,10 @@ const STATUS_TONE: Record<ExecutionPlanStatus, string> = {
 // Status-legend dot color, mirroring STATUS_TONE's semantic intent.
 const STATUS_DOT: Record<ExecutionPlanStatus, string> = {
   DRAFT: "bg-muted-foreground/40",
-  APPROVED: "bg-emerald-500",
+  APPROVED: "bg-success",
   RUNNING: "bg-ember",
   BLOCKED: "bg-warning",
-  COMPLETED: "bg-emerald-500",
+  COMPLETED: "bg-success",
   CANCELED: "bg-muted-foreground/30",
 };
 

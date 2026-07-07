@@ -70,7 +70,7 @@ export const StepNode = forwardRef<
         running && "forge-active-node",
         active && "ring-1 ring-ember/30",
         // Blocked on a human approve/reject — amber overrides the active glow.
-        step.awaitingApproval && "border-amber-500/60 ring-1 ring-amber-500/40",
+        step.awaitingApproval && "border-warning/60 ring-1 ring-warning/40",
       )}
     >
       {/* status flip highlight — keyed remount on status change in parent
@@ -98,7 +98,7 @@ export const StepNode = forwardRef<
         <span className="ml-auto flex items-center gap-1">
           {step.awaitingApproval && (
             <span
-              className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/10 px-1 font-mono text-[0.5625rem] text-amber-600 dark:text-amber-400"
+              className="inline-flex items-center rounded border border-warning/40 bg-warning/10 px-1 font-mono text-[0.5625rem] text-warning"
               title="Blocked — needs approval to run a command"
             >
               ✋ approval

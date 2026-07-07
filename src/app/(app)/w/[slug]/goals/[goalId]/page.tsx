@@ -1027,7 +1027,7 @@ function PlanAttemptCard({
         <div className="mt-2 flex flex-col gap-1">
           <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-subtle">
             <div
-              className="h-full bg-emerald-700 transition-all duration-500"
+              className="h-full bg-success transition-all duration-500"
               style={{ width: `${(done / total) * 100}%` }}
             />
           </div>

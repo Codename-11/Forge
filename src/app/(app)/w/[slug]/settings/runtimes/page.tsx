@@ -161,7 +161,7 @@ function ChatModeBadge({ chatMode }: { chatMode: string }) {
       className={cn(
         "rounded-md border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider",
         servesChat
-          ? "border-emerald-500/30 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+          ? "border-success/30 bg-success/5 text-success"
           : "border-border bg-subtle/40 text-muted-foreground",
       )}
       title={
@@ -342,7 +342,7 @@ export default function RuntimesPage() {
                         {isDisabled && !isArchived && (
                           <span
                             data-testid="runtime-disabled-badge"
-                            className="rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-amber-700 dark:text-amber-400"
+                            className="rounded-md border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-warning"
                             title="Disabled — stays configured but won't dial; dispatch skips it and chat reports it disabled"
                           >
                             disabled
@@ -556,7 +556,7 @@ function TierExplainer() {
       n: 1,
       title: "First-class",
       body: "Managed runtimes (Hermes, Codex app server). Always-on, full member: chat, dispatch, orchestration. Runs as itself.",
-      tone: "border-emerald-500/30 bg-emerald-500/5",
+      tone: "border-success/30 bg-success/5",
     },
     {
       n: 2,
