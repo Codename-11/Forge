@@ -1,0 +1,68 @@
+name: Release CLI
+
+# Builds the standalone `forge` binaries (Bun-compiled, no Node needed) and
+# publishes them to a `cli-v*` GitHub release that the install scripts pull
+# from. Kept separate from the app `release.yml` and marked not-latest so the
+# CLI releases don't hijack the app's "latest" pointer.
+
+on:
+  push:
+    tags: ["cli-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re)build binaries for, e.g. cli-v0.1.1"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-cli
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - uses: oven-sh/setup-bun@v2
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build:cli
+
+      - name: Build standalone binaries
+        run: sh tools/forge-cli/scripts/build-binaries.sh
+        env:
+          OUT: ${{ github.workspace }}/cli-binaries
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # Pass refs via env (never interpolate untrusted input into run:).
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_TAG: ${{ github.ref_name }}
+        run: |
+          tag="${INPUT_TAG:-$REF_TAG}"
+          # Validate shape before use — refuse anything that isn't a cli tag.
+          case "$tag" in
+            cli-v[0-9]*) ;;
+            *) echo "refusing to release non-cli tag: '$tag'" >&2; exit 1 ;;
+          esac
+          gh release create "$tag" \
+              cli-binaries/forge-* cli-binaries/SHA256SUMS \
+              --title "forge-cli $tag" \
+              --latest=false \
+              --generate-notes \
+            || gh release upload "$tag" \
+              cli-binaries/forge-* cli-binaries/SHA256SUMS --clobber

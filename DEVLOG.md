@@ -2,6 +2,34 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-08 — CLI: standalone binaries + one-line installers (curl|bash / irm|iex)
+
+Made the `forge` CLI installable without cloning the repo or publishing to npm.
+Bun compiles the built `dist/index.js` to standalone per-platform executables
+(no Node needed) — smoke-tested the Linux binary end-to-end under `env -i`
+(runs `--version`, `whoami` → graceful "not logged in", `daemon status`).
+
+- **Binaries** (`tools/forge-cli/scripts/build-binaries.sh`): Bun cross-compile
+  → `forge-{linux,darwin}-{x64,arm64}` + `forge-windows-x64.exe` + `SHA256SUMS`
+  (59–111 MB each; bundled runtime).
+- **Release**: cut `cli-v0.1.0` (marked **not-latest** so it doesn't hijack the
+  app's `v0.6.0` "latest"). Install scripts resolve the newest `cli-v*` via the
+  GitHub API — no fixed URL to bump per release.
+- **Installers** (`install.sh` POSIX + `install.ps1`): detect OS/arch, download
+  the matching binary from the latest `cli-v*` release, verify checksum, drop on
+  PATH. `install.sh` tested against the live release (downloaded + ran, no Node).
+  URL: `curl -fsSL <raw>/tools/forge-cli/install.sh | bash` /
+  `irm <raw>/tools/forge-cli/install.ps1 | iex`.
+- **CI** (`.github/workflows/release-cli.yml`): on a `cli-v*` tag → build +
+  attach. Tag input passed via `env:` + validated `cli-v[0-9]*` (workflow-
+  injection-safe per the security hook).
+- **Docs**: README Install section now leads with the binary install (npm +
+  from-source below); maintainer binary-release notes added.
+
+Not done (offered): a branded app route (`forge.axiom-labs.dev/cli/install.sh`)
+that bakes the instance origin — needs a deploy; github-raw works today. And an
+in-app one-liner on the Agent Clients page.
+
 ## 2026-07-08 — Ephemeral quickstart: idle auto-archive, runtimes.archive, `forge task`, `runs.open`
 
 The agreed "ephemeral quickstart" set (Bailey chose: **(B)** auto-tidy over

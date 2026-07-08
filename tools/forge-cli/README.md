@@ -8,21 +8,34 @@ SSE subscription to the workspace event stream, and bridges chat replies
 
 ## Install
 
-Once published to npm:
+**Standalone binary — recommended, no Node required:**
 
 ```bash
-npm install -g @axiom-labs/forge-cli    # puts `forge` on your PATH
-forge --help
+# Linux / macOS
+curl -fsSL https://raw.githubusercontent.com/Codename-11/Forge/main/tools/forge-cli/install.sh | bash
+
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/Codename-11/Forge/main/tools/forge-cli/install.ps1 | iex
 ```
 
-Or from the Forge repo (workspace install):
+Downloads the `forge` binary for your OS/arch from the latest
+[`cli-v*` release](https://github.com/Codename-11/Forge/releases), verifies its
+checksum, and drops it on your PATH (`FORGE_INSTALL_DIR` to override the target).
+Binaries are Bun-compiled, so there's nothing else to install.
+
+**Via npm** (once published):
+
+```bash
+npm install -g @axiom-labs/forge-cli
+```
+
+**From source** (repo checkout):
 
 ```bash
 pnpm install                 # picks up tools/forge-cli via the workspace
 pnpm build:cli               # compiles tools/forge-cli/dist
 pnpm forge --help            # convenience script
-# or directly:
-node tools/forge-cli/dist/index.js --help
+# or directly: node tools/forge-cli/dist/index.js --help
 ```
 
 For everyday use add an alias:
@@ -188,3 +201,18 @@ cd tools/forge-cli && npm publish     # publishConfig.access = public
 Requires publish rights to the `@axiom-labs` npm org (`npm login`, or an
 `NPM_TOKEN` in CI). `files` ships only `dist/` + `README.md`, so `src/` and
 tsconfig stay out of the tarball; `prepublishOnly` rebuilds `dist/` first.
+
+### Standalone binaries (what `install.sh` / `install.ps1` pull from)
+
+Pushing a `cli-v*` tag runs `.github/workflows/release-cli.yml`, which
+Bun-cross-compiles `forge-{linux,darwin}-{x64,arm64}` + `forge-windows-x64.exe`
++ `SHA256SUMS` and attaches them to the release:
+
+```bash
+git tag cli-v0.1.1 && git push origin cli-v0.1.1
+# or locally: pnpm build:cli && sh tools/forge-cli/scripts/build-binaries.sh
+```
+
+Releases are tagged `cli-v*` and marked **not-latest**, so they stay separate
+from the app's `release.yml` / "latest" pointer. The install scripts resolve the
+newest `cli-v*` release via the GitHub API, so no fixed URL to bump per release.
