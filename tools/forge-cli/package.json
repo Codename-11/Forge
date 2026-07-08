@@ -1,17 +1,41 @@
 {
   "name": "@axiom-labs/forge-cli",
   "version": "0.1.0",
-  "private": true,
   "description": "Forge CLI + local daemon. Auto-detects local agent CLIs, registers a Runtime, and bridges chat/dispatch events to the right provider.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "forge": "./dist/index.js"
   },
   "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "keywords": [
+    "forge",
+    "cli",
+    "agents",
+    "mcp",
+    "project-management"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Codename-11/Forge.git",
+    "directory": "tools/forge-cli"
+  },
+  "homepage": "https://github.com/Codename-11/Forge/tree/main/tools/forge-cli#readme",
+  "bugs": {
+    "url": "https://github.com/Codename-11/Forge/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p .",
     "dev": "tsx src/index.ts",
-    "typecheck": "tsc -p . --noEmit"
+    "typecheck": "tsc -p . --noEmit",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "chalk": "^5.3.0",

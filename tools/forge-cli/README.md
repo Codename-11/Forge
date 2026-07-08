@@ -8,7 +8,14 @@ SSE subscription to the workspace event stream, and bridges chat replies
 
 ## Install
 
-From the Forge repo (workspace install):
+Once published to npm:
+
+```bash
+npm install -g @axiom-labs/forge-cli    # puts `forge` on your PATH
+forge --help
+```
+
+Or from the Forge repo (workspace install):
 
 ```bash
 pnpm install                 # picks up tools/forge-cli via the workspace
@@ -167,3 +174,17 @@ If you don't have a token handy, the easiest path is:
 - No automatic `IN_PROGRESS` status transition on dispatch — the
   daemon doesn't yet have a `statuses.list` MCP tool to discover the
   workspace's "started" status mapping.
+
+## Publishing (maintainers)
+
+The package is publish-ready as public `@axiom-labs/forge-cli`. To cut a
+release:
+
+```bash
+pnpm build:cli                        # (prepublishOnly re-runs this anyway)
+cd tools/forge-cli && npm publish     # publishConfig.access = public
+```
+
+Requires publish rights to the `@axiom-labs` npm org (`npm login`, or an
+`NPM_TOKEN` in CI). `files` ships only `dist/` + `README.md`, so `src/` and
+tsconfig stay out of the tarball; `prepublishOnly` rebuilds `dist/` first.
