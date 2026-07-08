@@ -25,18 +25,18 @@ $dest = Join-Path $InstallDir "forge.exe"
 Write-Host "forge-install: downloading $asset ($($rel.tag_name))..."
 Invoke-WebRequest -Uri "$base/$asset" -OutFile $dest -UseBasicParsing
 
-# verify checksum (best-effort)
-try {
-  $sums = (Invoke-WebRequest -Uri "$base/SHA256SUMS" -UseBasicParsing).Content
-  $want = $sums -split "`n" |
-    Where-Object { $_ -match ([regex]::Escape($asset) + '$') } |
-    ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1
-  $got = (Get-FileHash -Algorithm SHA256 $dest).Hash.ToLower()
-  if ($want -and $got -ne $want.Trim().ToLower()) {
-    Remove-Item $dest -Force
-    Write-Error "forge-install: checksum mismatch for $asset"
-  }
-} catch { }
+# verify checksum (REQUIRED — fail closed; $ErrorActionPreference=Stop aborts on
+# a failed fetch, so a stripped/blocked SHA256SUMS can't bypass verification)
+$sums = (Invoke-WebRequest -Uri "$base/SHA256SUMS" -UseBasicParsing).Content
+$want = $sums -split "`n" |
+  Where-Object { $_ -match ([regex]::Escape($asset) + '$') } |
+  ForEach-Object { ($_ -split '\s+')[0] } | Select-Object -First 1
+if (-not $want) { Remove-Item $dest -Force; Write-Error "forge-install: no published checksum for $asset — aborting" }
+$got = (Get-FileHash -Algorithm SHA256 $dest).Hash.ToLower()
+if ($got -ne $want.Trim().ToLower()) {
+  Remove-Item $dest -Force
+  Write-Error "forge-install: checksum mismatch for $asset — aborting"
+}
 
 # add to user PATH if missing
 $userPath = [Environment]::GetEnvironmentVariable("Path", "User")

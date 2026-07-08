@@ -45,17 +45,15 @@ trap 'rm -f "$tmp"' EXIT
 err "downloading ${asset} (${tag})…"
 curl -fsSL "${base}/${asset}" -o "$tmp" || { err "download failed: ${base}/${asset}"; exit 1; }
 
-# --- verify checksum (best-effort; sha256sum or shasum) ---
-sums=$(curl -fsSL "${base}/SHA256SUMS" 2>/dev/null || true)
-if [ -n "$sums" ]; then
-  if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp" | awk '{print $1}');
-  elif command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$tmp" | awk '{print $1}');
-  else got=""; fi
-  want=$(echo "$sums" | grep " ${asset}\$" | awk '{print $1}')
-  if [ -n "$got" ] && [ -n "$want" ] && [ "$got" != "$want" ]; then
-    err "checksum mismatch for ${asset} — aborting"; exit 1
-  fi
-fi
+# --- verify checksum (REQUIRED — fail closed: abort if we can't verify) ---
+sums=$(curl -fsSL "${base}/SHA256SUMS") \
+  || { err "could not fetch SHA256SUMS — refusing to install an unverified binary"; exit 1; }
+want=$(echo "$sums" | grep " ${asset}\$" | awk '{print $1}')
+[ -n "$want" ] || { err "no published checksum for ${asset} — aborting"; exit 1; }
+if command -v sha256sum >/dev/null 2>&1; then got=$(sha256sum "$tmp" | awk '{print $1}')
+elif command -v shasum >/dev/null 2>&1; then got=$(shasum -a 256 "$tmp" | awk '{print $1}')
+else err "need sha256sum or shasum to verify the download — aborting"; exit 1; fi
+[ "$got" = "$want" ] || { err "checksum mismatch for ${asset} — aborting"; exit 1; }
 
 # --- install ---
 mkdir -p "$INSTALL_DIR"
