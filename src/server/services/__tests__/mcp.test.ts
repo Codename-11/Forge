@@ -3602,6 +3602,101 @@ describe("mcp runs.complete + completion contract", () => {
     expect(audit.actorAgentId).toBe(agent.id);
   });
 
+  it("runs.complete auto-transitions the issue to reviewStatusId when EXECUTE completes", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC4" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    // The default fixture doesn't seed an IN_REVIEW-category status.
+    const inReview = await prisma.status.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "In Review",
+        category: "IN_REVIEW",
+        color: "#0ea5e9",
+        position: 5,
+      },
+    });
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { reviewStatusId: inReview.id },
+    });
+
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: `cc4-${Date.now()}`, name: "Runner" },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        engagementMode: EngagementMode.EXECUTE,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    await call("runs.complete", { runId: run.id, summary: "Done." }, scopedCtx);
+
+    const after = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { statusId: true, status: { select: { category: true } } },
+    });
+    expect(after.statusId).toBe(inReview.id);
+    expect(after.status?.category).toBe("IN_REVIEW");
+  });
+
+  it("runs.complete does not auto-transition RESEARCH-mode completions even with reviewStatusId set", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CC5" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    // The default fixture doesn't seed an IN_REVIEW-category status.
+    const inReview = await prisma.status.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "In Review",
+        category: "IN_REVIEW",
+        color: "#0ea5e9",
+        position: 5,
+      },
+    });
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { reviewStatusId: inReview.id },
+    });
+
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, profileKey: `cc5-${Date.now()}`, name: "Researcher" },
+    });
+    const issue = await createIssue(fixture);
+    const before = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { statusId: true },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        engagementMode: EngagementMode.RESEARCH,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    await call(
+      "runs.complete",
+      { runId: run.id, summary: "Findings posted.", confidence: "HIGH" },
+      scopedCtx,
+    );
+
+    const after = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { statusId: true },
+    });
+    expect(after.statusId).toBe(before.statusId);
+  });
+
   it("runs.complete requires a linked agent key and rejects terminal rewrites", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CC3" });
     fixtures.push(fixture);
