@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentStatus, AutoDispatchMode, EventKind } from "@prisma/client";
+import { AgentStatus, AutoDispatchMode, EngagementMode, EventKind } from "@prisma/client";
 import { sweepStaleWork } from "@/server/services/stale-work";
 import {
   createWorkspaceFixture,
@@ -73,6 +73,18 @@ async function backdateIssue(issueId: string, to: Date): Promise<void> {
   );
 }
 
+async function createRun(
+  workspaceId: string,
+  issueId: string,
+  agentId: string,
+  engagementMode: (typeof EngagementMode)[keyof typeof EngagementMode],
+): Promise<void> {
+  const prisma = getPrisma();
+  await prisma.agentRun.create({
+    data: { workspaceId, issueId, agentId, engagementMode },
+  });
+}
+
 describe("stale-work — sweepStaleWork", () => {
   it("is a no-op when assignmentSlaMinutes == 0", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "SWA" });
@@ -140,6 +152,57 @@ describe("stale-work — sweepStaleWork", () => {
     expect(payload.agentProfileKey).toBe("swb-a1");
     expect(payload.slaMinutes).toBe(30);
     expect(typeof payload.lastUpdate).toBe("string");
+  });
+
+  it("does not flag a RESEARCH-mode assignment past the cutoff", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "SWG" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await setSla(fixture.workspace.id, 30);
+
+    const agent = await createAgent(fixture.workspace.id, "swg-a1");
+    const issue = await createIssue(fixture, { statusCategory: "TODO" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await createRun(fixture.workspace.id, issue.id, agent.id, EngagementMode.RESEARCH);
+    // A real Research reply doesn't touch Issue.updatedAt (only a status/
+    // field write does) — back-date to prove the mode gate, not staleness
+    // math, is what's protecting this issue.
+    await backdateIssue(issue.id, new Date(Date.now() - 90 * 60_000));
+
+    const res = await sweepStaleWork();
+    expect(res.stalled).not.toContain(issue.id);
+
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: EventKind.ISSUE_STALLED,
+      },
+    });
+    expect(events.length).toBe(0);
+  });
+
+  it("still flags an EXECUTE-mode assignment past the cutoff even with a run attached", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "SWH" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await setSla(fixture.workspace.id, 30);
+
+    const agent = await createAgent(fixture.workspace.id, "swh-a1");
+    const issue = await createIssue(fixture, { statusCategory: "TODO" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await createRun(fixture.workspace.id, issue.id, agent.id, EngagementMode.EXECUTE);
+    await backdateIssue(issue.id, new Date(Date.now() - 90 * 60_000));
+
+    const res = await sweepStaleWork();
+    expect(res.stalled).toContain(issue.id);
   });
 
   it("leaves a freshly-updated issue alone", async () => {

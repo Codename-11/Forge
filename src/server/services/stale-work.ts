@@ -1,6 +1,6 @@
 import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { EventKind } from "@prisma/client";
+import { EngagementMode, EventKind } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { recordChange } from "@/server/audit";
@@ -15,6 +15,17 @@ import { coachOnEvent } from "@/server/services/ai-coach";
  * call drops mid-thought, nothing notices. The watchdog catches that
  * shape of failure: an issue sitting in BACKLOG/TODO past its workspace
  * `assignmentSlaMinutes` with an agent assigned but no movement.
+ *
+ * Mode-aware (2026-07-07 fix): "no movement" only means something for an
+ * EXECUTE dispatch — per docs/agents/engagement-modes.md, Research/Review/
+ * Discuss runs are never supposed to move the issue at all, and posting a
+ * reply doesn't touch `Issue.updatedAt` (only a status/field write does).
+ * Without this check every non-EXECUTE assignment that outlives the SLA
+ * window gets false-flagged regardless of real replies, and — if
+ * `autoRedispatchOnStall` is on — the redispatch resets `updatedAt` just
+ * long enough to repeat the exact same false stall every SLA window,
+ * forever. So a candidate is skipped when its most recent `AgentRun` is
+ * anything other than EXECUTE.
  *
  * Per-workspace knobs:
  *   - `assignmentSlaMinutes` — 0 disables; otherwise the cutoff in mins.
@@ -88,11 +99,26 @@ export async function sweepStaleWork(
     });
     const recentlyStalled = new Set(recentStalls.map((e) => e.subjectId));
 
+    // Mode gate — one query for the whole batch. `distinct` + `orderBy`
+    // gives the most recent run per issue; an issue with no run yet
+    // (dispatch may have silently failed to start at all — the original
+    // failure mode this watchdog exists for) has no entry here and is
+    // NOT skipped, since that's exactly the case worth flagging.
+    const latestRuns = await client.agentRun.findMany({
+      where: { issueId: { in: candidates.map((c) => c.id) } },
+      orderBy: { startedAt: "desc" },
+      distinct: ["issueId"],
+      select: { issueId: true, engagementMode: true },
+    });
+    const latestModeByIssueId = new Map(latestRuns.map((r) => [r.issueId, r.engagementMode]));
+
     for (const issue of candidates) {
       if (recentlyStalled.has(issue.id)) continue;
       // Defensive: the where clause already filters this, but the
       // assignedAgentId nullable in Prisma's typed shape requires a guard.
       if (!issue.assignedAgentId) continue;
+      const latestMode = latestModeByIssueId.get(issue.id);
+      if (latestMode && latestMode !== EngagementMode.EXECUTE) continue;
 
       const payload = {
         assignedAgentId: issue.assignedAgentId,
