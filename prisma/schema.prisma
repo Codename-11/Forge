@@ -841,6 +841,16 @@ model Workspace {
   /// terminal category (DONE / CANCELED). Null disables — agents must
   /// transition client-side via statuses.list + issues.transition.
   startedStatusId               String?
+  /// Optional Status row id to auto-transition into when an EXECUTE run
+  /// completes successfully via `runs.complete` (must be in IN_REVIEW
+  /// category, validated at write time). An agent finishing EXECUTE work
+  /// is a "ready for human review" signal, not a "mark done" signal —
+  /// Done stays a human (or explicitly-instructed) action. Skipped if the
+  /// issue is already IN_REVIEW or in a terminal category (DONE /
+  /// CANCELED); NOT skipped for BACKLOG/TODO/IN_PROGRESS since completing
+  /// work should surface for review regardless of prior state. Null
+  /// disables — no auto-transition on completion.
+  reviewStatusId                String?
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
@@ -934,6 +944,7 @@ model Workspace {
   canvasInstances         CanvasComponentInstance[]
   canvasStyles            CanvasStyle[]
   startedStatus           Status?                   @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
+  reviewStatus            Status?                   @relation("WorkspaceReviewStatus", fields: [reviewStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
   @@index([defaultIssueAssigneeUserId])
@@ -1020,6 +1031,7 @@ model Status {
   workspace           Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issues              Issue[]
   workspaceStartedFor Workspace[] @relation("WorkspaceStartedStatus")
+  workspaceReviewFor  Workspace[] @relation("WorkspaceReviewStatus")
 
   @@unique([workspaceId, name])
   @@index([workspaceId, category])

@@ -368,6 +368,65 @@ async function maybeAutoTransitionOnAssign(
 }
 
 /**
+ * Server-side auto-transition on a successful EXECUTE completion. When the
+ * workspace has `reviewStatusId` set and the issue isn't already IN_REVIEW
+ * or terminal, flip it to that status row. Completing EXECUTE work is a
+ * "ready for human review" signal, not a "mark done" signal — Done stays a
+ * human (or explicitly-instructed) action, so this only ever lands on the
+ * review status, never further. Returns the new statusId if it
+ * transitioned, null otherwise. Skipped when:
+ *   - mode isn't EXECUTE (Research/Review/Discuss never transition)
+ *   - workspace has no `reviewStatusId` (opt-in feature)
+ *   - target status missing or doesn't belong to the workspace
+ *   - target status is not in IN_REVIEW category (defensive)
+ *   - issue is already IN_REVIEW / DONE / CANCELED
+ *
+ * Unlike `maybeAutoTransitionOnAssign`, BACKLOG / TODO / IN_PROGRESS are
+ * NOT skipped — completing work should surface for review regardless of
+ * what state the issue was in beforehand (including if it was never even
+ * auto-started).
+ */
+export async function maybeAutoTransitionOnComplete(
+  tx: PrismaClient | Prisma.TransactionClient,
+  workspaceId: string,
+  issueId: string,
+  engagementMode: string,
+): Promise<string | null> {
+  if (engagementMode !== "EXECUTE") return null;
+  const ws = await tx.workspace.findUnique({
+    where: { id: workspaceId },
+    select: { reviewStatusId: true },
+  });
+  if (!ws?.reviewStatusId) return null;
+
+  const [target, issue] = await Promise.all([
+    tx.status.findUnique({
+      where: { id: ws.reviewStatusId },
+      select: { id: true, workspaceId: true, category: true },
+    }),
+    tx.issue.findUnique({
+      where: { id: issueId },
+      select: { id: true, statusId: true, status: { select: { category: true } } },
+    }),
+  ]);
+  if (!target || target.workspaceId !== workspaceId) return null;
+  if (target.category !== "IN_REVIEW") return null;
+  if (!issue) return null;
+
+  const currentCat = issue.status?.category;
+  if (currentCat === "IN_REVIEW" || currentCat === "DONE" || currentCat === "CANCELED") {
+    return null;
+  }
+  if (issue.statusId === target.id) return null;
+
+  await tx.issue.update({
+    where: { id: issueId },
+    data: { statusId: target.id },
+  });
+  return target.id;
+}
+
+/**
  * Lazily upsert the synthetic Webhook row for a given dispatch url. One
  * row per (workspace, url). `events` is set to the union of agent-routed
  * kinds so that the worker's `webhook.active` gate stays meaningful.

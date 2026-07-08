@@ -27,7 +27,7 @@ import { db } from "@/server/db";
 import { decryptSecret } from "@/server/crypto";
 import { getInstallationTokenForApp } from "@/server/services/github-app";
 import { deriveRepoPath } from "@/server/services/repo-path";
-import { recordChange } from "@/server/audit";
+import { recordChange, maybeAutoTransitionOnComplete } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
@@ -6265,9 +6265,13 @@ export const mcpTools = {
    * `runs.complete` is the agent-owned lifecycle close for issue runs:
    * it stores the completion contract fields, marks the AgentRun
    * COMPLETED with `finishedAt`, and emits the standard
-   * AGENT_RUN_COMPLETED audit/activity event via `finishRun()`. The
-   * issue itself is not transitioned; an agent can finish its response
-   * on an issue that should remain open for the human/operator.
+   * AGENT_RUN_COMPLETED audit/activity event via `finishRun()`. For
+   * Research/Review/Discuss the issue itself is not transitioned — an
+   * agent can finish its response on an issue that should remain open.
+   * For EXECUTE, if the workspace has `reviewStatusId` configured, a
+   * successful completion auto-transitions the issue to that IN_REVIEW
+   * status (`maybeAutoTransitionOnComplete`) — completing EXECUTE work is
+   * a "ready for human review" signal, never a "mark done" signal.
    */
   "runs.complete": {
     scopes: ["WRITE_ISSUES"] as const,
@@ -6423,6 +6427,15 @@ export const mcpTools = {
           actorId: ctx.userId,
           actorAgentId: linkedAgentId ?? null,
         });
+        // A genuinely successful EXECUTE completion (this path only, not
+        // abandons/stops that also emit AGENT_RUN_COMPLETED elsewhere) is a
+        // "ready for review" signal when the workspace opted in.
+        await maybeAutoTransitionOnComplete(
+          tx,
+          ctx.workspaceId,
+          run.issueId,
+          run.engagementMode,
+        );
         return tx.agentRun.findUniqueOrThrow({
           where: { id: run.id },
           select: {
