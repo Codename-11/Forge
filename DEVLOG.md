@@ -2,6 +2,34 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-08 — Ephemeral quick-fixes: `forge issue assign` param + SESSION-key auto-purge
+
+From the ephemeral / quick-CLI gap analysis (agent-mapped, evidence-cited). Two
+concrete bugs, fixed ahead of the larger "ephemeral quickstart" work:
+
+1. **`forge issue assign` was broken.** The CLI sent
+   `issues.assign({ id, profileKey })` (`tools/forge-cli/src/commands/issues.ts`)
+   but the MCP tool requires `issueId` (`mcp.ts:2075`) with no alias — every
+   assign failed Zod "issueId Required". Renamed the param. Users need
+   `pnpm build:cli` to pick it up (CLI isn't part of the docker image).
+2. **SESSION keys weren't actually auto-purged.** `CLAUDE.md` promised
+   "auto-purged when expired," but expiry was only enforced lazily at auth
+   (`api-key-auth.ts:58` rejects an expired key but never deletes the row), so
+   expired rows lingered in the DB + Clients UI forever. Added
+   `purgeExpiredSessionKeys` (`src/server/services/api-key-purge.ts`) + an hourly
+   worker sweep `expired-key-purge-sweep`. Scoped to SESSION only (PERSONAL/AGENT
+   expiry stays a deliberate admin action). Delete is FK-safe — nothing holds an
+   inbound FK to `ApiKey`.
+
+Test `api-key-purge.test.ts`: expired SESSION purged; live SESSION + expired
+PERSONAL + permanent AGENT kept. typecheck + lint clean; CLI compiles
+(`pnpm build:cli`). Note: worker sweep takes effect only after the
+`forge-worker` image is rebuilt/redeployed.
+
+Reconciliation note: the worktree branched from `origin/main` (missing the
+unpushed agent-removal commit), so this was rebased onto local `main` before
+landing.
+
 ## 2026-07-08 — Agent removal: smart delete for agents + profiles (both surfaces)
 
 Gap report from Bailey: the workspace Agents settings + Instance Admin could

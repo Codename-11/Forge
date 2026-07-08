@@ -23,6 +23,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **`forge issue assign` now works.** The CLI command was sending the wrong parameter name and always failed with a validation error; it now assigns correctly. (Rebuild the CLI with `pnpm build:cli` to pick it up.)
+- **Expired ephemeral (session) API keys are now cleaned up automatically.** Session keys are TTL-bounded and were meant to be auto-purged when they expire, but expired ones actually lingered in your Access / Agent Clients list; a background sweep now removes them shortly after expiry. Personal and agent keys are untouched.
 - **Turning off a runtime's "Local workspace tools" no longer silently wipes its per-mode tool grants.** That toggle clears the runtime's declared tools and every per-mode allowlist (including Research/Review read access), so it now asks you to confirm first — a stray click can't quietly erase the configuration.
 
 - **A Research/Review/Discuss-mode agent no longer gets marked "stalled" after it replies.** Those modes are designed to never move the issue's status — only to comment — but the stalled-work check was watching for a status change regardless, so a well-behaved research reply looked identical to a dead assignment once enough time passed. It could even repeat indefinitely on workspaces with auto-redispatch on. Fixed to skip the stalled check entirely for non-Execute dispatches, matching the documented behavior.

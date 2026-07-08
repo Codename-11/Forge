@@ -29,6 +29,7 @@ import { sweepStalledRuns } from "@/server/services/agent-run-stale";
 import { recordWakeAttempt } from "@/server/services/agent-dispatch-inbox";
 import { sweepChatCompaction } from "@/server/services/chat-compaction";
 import { ingestRunsDispatch } from "@/server/services/dispatch/run-dispatcher";
+import { purgeExpiredSessionKeys } from "@/server/services/api-key-purge";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -54,6 +55,8 @@ const RUNTIME_HEALTH_SWEEP_INTERVAL_MS = 60_000;
 const RUNTIME_HEALTH_SWEEP_JOB_ID = "runtime-health-sweep";
 const ORCH_WATCHDOG_SWEEP_INTERVAL_MS = 60_000;
 const ORCH_WATCHDOG_SWEEP_JOB_ID = "orchestration-watchdog-sweep";
+const EXPIRED_KEY_PURGE_INTERVAL_MS = 60 * 60_000;
+const EXPIRED_KEY_PURGE_JOB_ID = "expired-key-purge-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -292,6 +295,10 @@ export const maintenanceWorker = new Worker(
         const res = await sweepOrchestrationBudget();
         return res;
       }
+      case "expired-key-purge-sweep": {
+        const res = await purgeExpiredSessionKeys();
+        return res;
+      }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;
         if (!eventId) return null;
@@ -502,6 +509,24 @@ export async function registerOrchestrationWatchdogSweepJob(): Promise<void> {
   );
 }
 
+/**
+ * Periodic purge of expired SESSION keys. Makes the documented "SESSION keys
+ * are auto-purged when expired" contract real — expiry is otherwise only
+ * enforced lazily at auth, so expired rows would linger in the DB + Clients UI.
+ */
+export async function registerExpiredKeyPurgeSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "expired-key-purge-sweep",
+    {},
+    {
+      jobId: EXPIRED_KEY_PURGE_JOB_ID,
+      repeat: { every: EXPIRED_KEY_PURGE_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -531,6 +556,9 @@ void registerRuntimeHealthSweepJob().catch((err) => {
 });
 void registerOrchestrationWatchdogSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register orchestration-watchdog-sweep job");
+});
+void registerExpiredKeyPurgeSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register expired-key-purge-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

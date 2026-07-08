@@ -117,7 +117,7 @@ export async function issueAssignCommand(
     issueId = match.id;
   }
   const r = await callTool(auth, "issues.assign", {
-    id: issueId,
+    issueId,
     profileKey,
   });
   if (r.isError) {
