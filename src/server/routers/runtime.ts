@@ -358,7 +358,13 @@ export const runtimeRouter = router({
    * operator picks "what manages this" rather than a low-level kind. The
    * `forge` daemon still self-registers LOCAL_DAEMON rows via `register`.
    */
-  create: workspaceProcedure
+  // Admin-gated: create/update write `config`, which carries the host tool
+  // policy (whether an agent gets terminal/filesystem/git on the host). That's
+  // a privilege-granting control, so it matches the ADMIN gate on this
+  // runtime's secrets/repos and the MCP `runtimes.configure` mirror — rather
+  // than the member-level `workspaceProcedure` used for daemon self-registration
+  // (`register`) and read/diagnostic paths.
+  create: adminProcedure
     .input(
       z.object({
         adapterKey: z.string().min(1).max(60),
@@ -395,7 +401,7 @@ export const runtimeRouter = router({
       return withRuntimeHealth(row);
     }),
 
-  update: workspaceProcedure
+  update: adminProcedure
     .input(
       z.object({
         id: runtimeId,

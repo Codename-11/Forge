@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-08 — Runtime settings: admin-gate config writes + confirm destructive tool-reset
+
+Follow-up from the `rt_hermes_gateway` RESEARCH/REVIEW tool-profile fix (Victor
+couldn't inspect the repo during research because those mode profiles were
+explicit empty `[]`, which Hermes reads as "disable all host toolsets"). While
+auditing the runtimes settings surface, found two rough edges — both fixed here.
+Forge-side only; **holding for deploy** (more changes coming).
+
+- **Gating asymmetry (privilege boundary).** `runtime.create` / `runtime.update`
+  were `workspaceProcedure` (any member), but they write `config` — which
+  carries `modeToolProfiles` / `localWorkspaceTools`, i.e. the host tool policy
+  that decides whether an agent gets terminal/filesystem/git on the host. The
+  same runtime's secrets/repos/githubApp and the MCP `runtimes.configure`
+  mirror are all `adminProcedure`/ADMIN, and the `/settings` layout has no role
+  gate — so a non-admin member could reach Settings → Runtimes and widen host
+  access. Fixed: `create`/`update` → `adminProcedure`. Daemon self-registration
+  is unaffected (uses `register`, still `workspaceProcedure`); read/diagnostic
+  paths (list, heartbeat, verifyConnection, runSelfTest) unchanged. New
+  regression `runtime-admin-gating.test.ts`: OWNER updates; MEMBER gets
+  FORBIDDEN on create + update; row untouched.
+- **Destructive master-toggle footgun.** In `RuntimeToolPolicyFields`, the
+  "Local workspace tools enabled" checkbox, when switched OFF, wiped
+  `toolCapabilities` → `[]` and reset every `modeToolProfiles` entry to empty —
+  silently dropping RESEARCH/REVIEW read grants with no confirm. Wrapped the
+  off-path in `useConfirm()` (destructive variant) when there's a non-empty
+  policy to lose; on-path unchanged. Controlled checkbox reverts on cancel.
+
+Verification: typecheck + lint clean; `runtime-admin-gating` (2) +
+`runtime-secrets` (5) + `runtime-github-app` (8) + `runtime-dispatch-contract`
+(10) + `action-request-accept` (15) + `mcp` (120) all green. UI confirm is
+typecheck-verified + follows the established `useConfirm` pattern; not
+live-clicked (no prod login from this runtime; dev:local boot deferred).
+
 ## 2026-07-07 — Auto-transition to review on EXECUTE completion (`reviewStatusId`)
 
 Follow-up to today's "does a successful run properly resolve the issue" gap

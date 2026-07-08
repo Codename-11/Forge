@@ -18,8 +18,11 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Changed
 
 - **The dashboard cockpit now adapts to your screen width.** The two-column layout only splits into a work column + rail once there's genuinely room for it, so a laptop-width window doesn't squeeze your issue cards uncomfortably narrow — it stays single-column a little longer instead. The rail's widgets also use the space better on medium-width screens instead of stacking one-per-row.
+- **Configuring a runtime now requires workspace admin.** Creating or editing a runtime in Settings → Runtimes — including its host tool permissions (whether an agent may use terminal / filesystem / git on the host) — is now restricted to workspace owners and admins, matching the existing admin-only gate on that runtime's secrets and repositories. Regular members could previously change it.
 
 ### Fixed
+
+- **Turning off a runtime's "Local workspace tools" no longer silently wipes its per-mode tool grants.** That toggle clears the runtime's declared tools and every per-mode allowlist (including Research/Review read access), so it now asks you to confirm first — a stray click can't quietly erase the configuration.
 
 - **A Research/Review/Discuss-mode agent no longer gets marked "stalled" after it replies.** Those modes are designed to never move the issue's status — only to comment — but the stalled-work check was watching for a status change regardless, so a well-behaved research reply looked identical to a dead assignment once enough time passed. It could even repeat indefinitely on workspaces with auto-redispatch on. Fixed to skip the stalled check entirely for non-Execute dispatches, matching the documented behavior.
 

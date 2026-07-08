@@ -26,7 +26,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Avatar } from "@/components/ui/avatar";
-import { Confirm, QuickForm } from "@/components/ui/modal";
+import { Confirm, QuickForm, useConfirm } from "@/components/ui/modal";
 import { Combobox } from "@/components/ui/combobox";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
@@ -985,6 +985,44 @@ function RuntimeToolPolicyFields({
   onChange: (v: RuntimeToolPolicy) => void;
 }) {
   const declaredTools = new Set(value.toolCapabilities);
+  const { confirm, confirmElement } = useConfirm();
+
+  // Toggling the master "local workspace tools" flag OFF clears declared tools
+  // AND every per-mode allowlist — a destructive reset that silently drops any
+  // RESEARCH/REVIEW read grants. Confirm before wiping a non-empty policy.
+  async function handleLocalWorkspaceToggle(checked: boolean) {
+    if (checked) {
+      onChange({
+        ...value,
+        localWorkspaceTools: true,
+        toolCapabilities: [...RUNTIME_TOOL_CAPABILITIES],
+        modeToolProfiles: {
+          ...value.modeToolProfiles,
+          EXECUTE: [...RUNTIME_TOOL_CAPABILITIES],
+        },
+      });
+      return;
+    }
+    const hasPolicy =
+      value.toolCapabilities.length > 0 ||
+      RUNTIME_ENGAGEMENT_MODES.some((mode) => (value.modeToolProfiles[mode] ?? []).length > 0);
+    if (hasPolicy) {
+      const ok = await confirm({
+        title: "Disable local workspace tools?",
+        description:
+          "This clears the runtime's declared tools and every per-mode allowlist — including RESEARCH/REVIEW read access. You'll have to re-grant them.",
+        primaryLabel: "Disable & clear",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
+    onChange({
+      ...value,
+      localWorkspaceTools: false,
+      toolCapabilities: [],
+      modeToolProfiles: emptyModeToolProfiles(),
+    });
+  }
 
   function toggleTool(tool: RuntimeToolCapability, checked: boolean) {
     const next = new Set(value.toolCapabilities);
@@ -1041,21 +1079,7 @@ function RuntimeToolPolicyFields({
           type="checkbox"
           className="mt-0.5"
           checked={value.localWorkspaceTools}
-            onChange={(e) =>
-              onChange({
-                ...value,
-                localWorkspaceTools: e.target.checked,
-                toolCapabilities: e.target.checked
-                  ? [...RUNTIME_TOOL_CAPABILITIES]
-                  : [],
-                modeToolProfiles: e.target.checked
-                  ? {
-                      ...value.modeToolProfiles,
-                      EXECUTE: [...RUNTIME_TOOL_CAPABILITIES],
-                    }
-                  : emptyModeToolProfiles(),
-              })
-            }
+            onChange={(e) => void handleLocalWorkspaceToggle(e.target.checked)}
           />
         <span className="min-w-0">
           <span className="block font-medium text-foreground">Local workspace tools enabled</span>
@@ -1167,6 +1191,7 @@ function RuntimeToolPolicyFields({
           className="font-mono"
         />
       </label>
+      {confirmElement}
     </div>
   );
 }
