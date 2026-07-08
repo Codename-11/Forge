@@ -5982,6 +5982,33 @@ export const mcpTools = {
     },
   },
 
+  // --------------------------------------------------------------------- Runtime deregister
+  // Archive (deregister) a runtime — the teardown counterpart of
+  // `runtimes.register`. A local daemon calls this on shutdown so its
+  // LOCAL_DAEMON runtime stops showing as live; `register` reuses/unarchives
+  // the row on next start. Archived runtimes drop out of the runtimes list.
+  "runtimes.archive": {
+    scopes: ["ADMIN"] as const,
+    input: z.object({
+      runtimeId: z.string().min(1).max(40).describe("Runtime.id to archive (deregister)."),
+    }),
+    async run(input: { runtimeId: string }, ctx: McpContext) {
+      const row = await db.runtime.findFirst({
+        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
+        select: { id: true, name: true, archivedAt: true },
+      });
+      if (!row) throw new Error("Runtime not found in this workspace.");
+      if (row.archivedAt) {
+        return { id: row.id, name: row.name, alreadyArchived: true };
+      }
+      await db.runtime.update({
+        where: { id: row.id },
+        data: { archivedAt: new Date() },
+      });
+      return { id: row.id, name: row.name, alreadyArchived: false };
+    },
+  },
+
   // --------------------------------------------------------------------- Runtime self-provisioning
   // The runtime (authenticating with an agent-linked API key) fetches the
   // DECRYPTED secrets + repo bindings for ITS OWN runtime so it can export
@@ -6100,6 +6127,62 @@ export const mcpTools = {
         repos,
         githubAppTokenExpiresAt,
       };
+    },
+  },
+
+  // --------------------------------------------------------------------- Agent opens a run on itself
+  // Lets an agent (a linked-agent key — e.g. a local CLI session) proactively
+  // open a tracked AgentRun on an issue it's working, instead of only getting
+  // one as a dispatch side-effect. Reuses openOrTouchRun, so it resumes an
+  // existing ACTIVE/WAITING run for (issue, agent) rather than stacking a
+  // duplicate, and stamps the STARTED event so it shows in Mission Control.
+  // Issue-anchored by design; drive it afterward with runs.recordUsage /
+  // runs.setWaiting / runs.complete.
+  "runs.open": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().min(1).max(40).describe("Issue this run is doing work on."),
+      summary: z
+        .string()
+        .max(2_000)
+        .optional()
+        .describe("Optional first step / what you're about to do (shown as currentStep)."),
+      mode: z
+        .enum(["EXECUTE", "RESEARCH", "REVIEW", "DISCUSS"])
+        .optional()
+        .describe("Engagement mode for this run (default EXECUTE)."),
+    }),
+    async run(
+      input: {
+        issueId: string;
+        summary?: string;
+        mode?: "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
+      },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error(
+          "runs.open requires an API key with linkedAgentId set (an agent opening a run on itself).",
+        );
+      }
+      const issue = await db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        select: { id: true },
+      });
+      if (!issue) throw new Error("Issue not found in this workspace.");
+      const { run, isNew } = await db.$transaction((tx) =>
+        openOrTouchRun(tx, {
+          workspaceId: ctx.workspaceId,
+          issueId: issue.id,
+          agentId: linkedAgentId,
+          actorId: ctx.userId ?? null,
+          actorAgentId: linkedAgentId,
+          engagementMode: (input.mode as EngagementMode | undefined) ?? "EXECUTE",
+          currentStep: input.summary ?? "opened by agent",
+        }),
+      );
+      return { runId: run.id, isNew, status: run.status, issueId: issue.id };
     },
   },
 

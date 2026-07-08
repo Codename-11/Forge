@@ -126,3 +126,61 @@ export async function issueAssignCommand(
   }
   console.log(chalk.green(`assigned ${key} → ${profileKey}`));
 }
+
+/**
+ * `forge task "<description>"` — create an issue and dispatch it in one shot.
+ * With `--agent <profileKey>` it assigns straight to that agent; otherwise it
+ * queues the issue so the workspace auto-dispatcher picks one (a no-op if
+ * auto-dispatch is off — the issue still lands in the queue).
+ */
+export async function taskCommand(
+  description: string,
+  opts: { agent?: string; project?: string; priority?: string; title?: string },
+): Promise<void> {
+  const auth = await requireAuth();
+  const title =
+    (opts.title ?? description).split("\n")[0].slice(0, 120).trim() || "Untitled task";
+
+  const created = await callTool<{ id: string; identifier?: string; url?: string }>(
+    auth,
+    "issues.create",
+    {
+      title,
+      description,
+      ...(opts.project ? { projectId: opts.project } : {}),
+      ...(opts.priority ? { priority: opts.priority.toUpperCase() } : {}),
+    },
+  );
+  if (created.isError || !created.data) {
+    console.error(chalk.red(created.text || "issues.create failed"));
+    process.exit(1);
+  }
+  const issue = created.data;
+  const label = issue.identifier ?? issue.id;
+  console.log(chalk.green(`created ${label}`));
+
+  if (opts.agent) {
+    // NB: issues.assign takes `issueId`; issues.setQueued takes `id` (yes,
+    // the two tools disagree on the param name).
+    const assigned = await callTool(auth, "issues.assign", {
+      issueId: issue.id,
+      profileKey: opts.agent,
+    });
+    if (assigned.isError) {
+      console.error(chalk.red(`created ${label}, but assign to ${opts.agent} failed: ${assigned.text}`));
+      process.exit(1);
+    }
+    console.log(chalk.green(`assigned ${label} → ${opts.agent}`));
+  } else {
+    const queued = await callTool(auth, "issues.setQueued", {
+      id: issue.id,
+      queued: true,
+    });
+    if (queued.isError) {
+      console.error(chalk.red(`created ${label}, but queueing failed: ${queued.text}`));
+      process.exit(1);
+    }
+    console.log(chalk.green(`queued ${label} for auto-dispatch`));
+  }
+  if (issue.url) console.log(chalk.dim(issue.url));
+}

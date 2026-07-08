@@ -4,6 +4,7 @@ import chalk from "chalk";
 import { loginCommand } from "./login.js";
 import { whoamiCommand } from "./commands/whoami.js";
 import {
+  runtimesArchiveCommand,
   runtimesConfigureCommand,
   runtimesListCommand,
   runtimeToolCollector,
@@ -12,6 +13,7 @@ import { agentsListCommand } from "./commands/agents.js";
 import {
   issuesListCommand,
   issueAssignCommand,
+  taskCommand,
 } from "./commands/issues.js";
 import { startDaemon, statusDaemon, stopDaemon } from "./daemon.js";
 
@@ -138,6 +140,20 @@ runtimes
     }
   });
 
+runtimes
+  .command("archive")
+  .description("Deregister (archive) a runtime by id.")
+  .argument("<runtimeId>", "Runtime id to archive")
+  .option("--json", "emit raw JSON")
+  .action(async (runtimeId: string, opts: { json?: boolean }) => {
+    try {
+      await runtimesArchiveCommand(runtimeId, { json: opts.json });
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
 const agents = program
   .command("agents")
   .description(
@@ -174,6 +190,32 @@ issues
   .action(async (opts) => {
     try {
       await issuesListCommand(opts);
+    } catch (err) {
+      console.error(chalk.red(err instanceof Error ? err.message : String(err)));
+      process.exit(1);
+    }
+  });
+
+program
+  .command("task")
+  .description("Create an issue and dispatch it — assign with --agent, else queue for auto-dispatch.")
+  .argument("<description>", "what needs doing (first line becomes the title unless --title)")
+  .option("--agent <profileKey>", "assign directly to this agent (e.g. victor)")
+  .option("--project <id>", "project id to file the issue under")
+  .option("--priority <level>", "NONE | LOW | MEDIUM | HIGH | URGENT")
+  .option("--title <title>", "explicit title (default: first line of the description)")
+  .action(
+    async (
+      description: string,
+      opts: { agent?: string; project?: string; priority?: string; title?: string },
+    ) => {
+    try {
+      await taskCommand(description, {
+        agent: opts.agent,
+        project: opts.project,
+        priority: opts.priority,
+        title: opts.title,
+      });
     } catch (err) {
       console.error(chalk.red(err instanceof Error ? err.message : String(err)));
       process.exit(1);

@@ -816,6 +816,12 @@ model Workspace {
   /// enough that a finished turn an agent didn't close via `runs.complete`
   /// stops lingering as a live run on the issue page. 0 disables the sweep.
   agentRunStaleMinutes          Int                      @default(30)
+  /// Auto-archive idle EPHEMERAL agents after this many minutes with no
+  /// heartbeat (a session CLI that vanished). 0 = disabled (default). Only
+  /// EPHEMERAL agents are touched; PERSISTENT agents (Hermes, etc.) are never
+  /// reaped by this sweep. Archive is reversible (unarchive / re-bind), so
+  /// this just keeps abandoned session rows out of the lists.
+  ephemeralAgentIdleMinutes     Int                      @default(0)
   /// Per-run safety budgets (added 2026-06-23). Opt-in: null = no cap.
   /// A run that exceeds any set cap triggers `runBudgetAction` (default
   /// PAUSE → stop the provider + park WAITING + notify). Distinct from

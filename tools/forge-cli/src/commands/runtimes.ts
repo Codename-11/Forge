@@ -203,3 +203,33 @@ export async function runtimesConfigureCommand(
     console.log(`  root:    ${root.trim()}`);
   }
 }
+
+/**
+ * `forge runtimes archive <id>` — deregister a runtime via `runtimes.archive`.
+ * Archived runtimes drop out of the list; `forge daemon start` re-registers a
+ * fresh one for this host. Handy for clearing a stale/abandoned runtime row.
+ */
+export async function runtimesArchiveCommand(
+  runtimeId: string,
+  opts: { json?: boolean },
+): Promise<void> {
+  const auth = await requireAuth();
+  const r = await callTool<{ id: string; name: string; alreadyArchived: boolean }>(
+    auth,
+    "runtimes.archive",
+    { runtimeId },
+  );
+  if (r.isError || !r.data) {
+    console.error(chalk.red(`runtimes.archive failed: ${r.text}`));
+    process.exit(1);
+  }
+  if (opts.json) {
+    console.log(JSON.stringify(r.data, null, 2));
+    return;
+  }
+  console.log(
+    r.data.alreadyArchived
+      ? chalk.gray(`Runtime already archived: ${r.data.name} (${r.data.id})`)
+      : chalk.green(`Runtime archived: ${r.data.name} (${r.data.id})`),
+  );
+}

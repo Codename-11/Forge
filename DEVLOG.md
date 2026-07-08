@@ -2,6 +2,44 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-08 — Ephemeral quickstart: idle auto-archive, runtimes.archive, `forge task`, `runs.open`
+
+The agreed "ephemeral quickstart" set (Bailey chose: **(B)** auto-tidy over
+register-on-connect; **admin-gated** throughout; runs opened both **by agents on
+themselves AND by us** via the CLI). Four slices, deploy-held on main.
+
+- **1a — auto-archive idle EPHEMERAL agents.** New `Workspace.ephemeralAgentIdleMinutes`
+  (migration `0093`, default `0` = disabled, per the "0 disables the sweep"
+  convention). `sweepIdleEphemeralAgents` (`src/server/services/ephemeral-idle.ts`)
+  + worker job `ephemeral-idle-sweep` (5-min). Archives EPHEMERAL agents idle
+  past the window (reversible); skips BUSY; a never-heartbeated agent is only
+  reaped once `createdAt < cutoff` (grace to connect). PERSISTENT agents never
+  touched. Wired into `workspace.get` + `workspace.update` (0..10080). Test:
+  `ephemeral-idle.test.ts`.
+- **1b — `runtimes.archive` (deregister).** New MCP tool (ADMIN), the teardown
+  counterpart of `runtimes.register`; sets `archivedAt`. Exposed as
+  `forge runtimes archive <id>`. **Deferred:** did NOT auto-wire the daemon to
+  archive-on-stop — `register` does a plain create (reuse is via the daemon's
+  cached id), so a clean archive→restart cycle needs unarchive-on-register
+  first. Manual deregister works now.
+- **2 — `forge task`.** `forge task "<desc>" [--agent X] [--project P] [--priority]
+  [--title]` → `issues.create` then `issues.assign` (`--agent`) or
+  `issues.setQueued` (else → auto-dispatch). NB: `issues.assign` takes `issueId`,
+  `issues.setQueued` takes `id` — the tools disagree; the command handles both.
+- **3 — `runs.open` (agent opens a run on itself).** New MCP tool (WRITE_ISSUES,
+  linked-agent required), **issue-anchored** per the AXI-55-avoidance decision.
+  Delegates to `openOrTouchRun` → resumes an existing ACTIVE/WAITING run for
+  (issue, agent) rather than duplicating, stamps STARTED for Mission Control.
+  Drive with `runs.recordUsage` / `setWaiting` / `complete`. Test:
+  `runs-open.test.ts` (opens+resumes, rejects no-linkedAgentId, rejects foreign
+  issue).
+
+Verification: typecheck + lint clean; CLI builds; mcp registry (120) +
+runs-open (3) + ephemeral-idle (1) + api-key-purge (1) green. (Worktree env
+needed a `server-only` stub + a `tools/forge-cli/node_modules` copy to
+build/test.) Migration `0093` is a plain ADD COLUMN (default 0) — safe/online;
+worker sweeps activate only after `forge-worker` is redeployed.
+
 ## 2026-07-08 — Ephemeral quick-fixes: `forge issue assign` param + SESSION-key auto-purge
 
 From the ephemeral / quick-CLI gap analysis (agent-mapped, evidence-cited). Two
