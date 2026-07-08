@@ -130,6 +130,7 @@ export const workspaceRouter = router({
         runBudgetWarnPct: true,
         runBudgetAction: true,
         startedStatusId: true,
+        reviewStatusId: true,
         stalledThresholdDays: true,
         agentHeartbeatWarnMinutes: true,
         agentHeartbeatCriticalMinutes: true,
@@ -281,6 +282,7 @@ export const workspaceRouter = router({
         aiProvider: z.enum(["hermes", "openai", "anthropic", "custom"]).optional(),
         aiModel: z.string().min(1).max(80).nullable().optional(),
         startedStatusId: z.string().nullable().optional(),
+        reviewStatusId: z.string().nullable().optional(),
         assignmentEngagementMode: z.nativeEnum(EngagementMode).optional(),
         mentionEngagementPolicy: z.nativeEnum(MentionEngagementPolicy).optional(),
         mentionDefaultMode: z.nativeEnum(EngagementMode).optional(),
@@ -307,6 +309,26 @@ export const workspaceRouter = router({
             code: "BAD_REQUEST",
             message:
               "startedStatusId must point at an IN_PROGRESS-category status.",
+          });
+        }
+      }
+      // Validate reviewStatusId belongs to this workspace and is in the
+      // IN_REVIEW category. Setting null to disable is fine.
+      if (input.reviewStatusId) {
+        const status = await ctx.db.status.findUnique({
+          where: { id: input.reviewStatusId },
+          select: { workspaceId: true, category: true },
+        });
+        if (!status || status.workspaceId !== ctx.workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "reviewStatusId does not belong to this workspace.",
+          });
+        }
+        if (status.category !== "IN_REVIEW") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "reviewStatusId must point at an IN_REVIEW-category status.",
           });
         }
       }

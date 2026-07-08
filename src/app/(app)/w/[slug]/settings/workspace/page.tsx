@@ -7,6 +7,7 @@ import { Topbar } from "@/components/topbar";
 import { CoachStatusPanel } from "@/components/settings/coach-status-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { Kbd } from "@/components/ui/kbd";
 import { Confirm } from "@/components/ui/modal";
 import { Section } from "@/components/ui";
@@ -53,6 +54,7 @@ export default function WorkspaceSettingsPage() {
   >("hermes");
   const [aiModel, setAiModel] = useState("");
   const [startedStatusId, setStartedStatusId] = useState<string | null>(null);
+  const [reviewStatusId, setReviewStatusId] = useState<string | null>(null);
   const [defaultIssueAssigneeMode, setDefaultIssueAssigneeMode] =
     useState<DefaultIssueAssigneeMode>("NONE");
   const [defaultIssueAssigneeUserId, setDefaultIssueAssigneeUserId] =
@@ -98,6 +100,7 @@ export default function WorkspaceSettingsPage() {
     );
     setAiModel(current.aiModel ?? "");
     setStartedStatusId(current.startedStatusId ?? null);
+    setReviewStatusId(current.reviewStatusId ?? null);
     setDefaultIssueAssigneeMode(
       (current.defaultIssueAssigneeMode ?? "NONE") as DefaultIssueAssigneeMode,
     );
@@ -173,6 +176,7 @@ export default function WorkspaceSettingsPage() {
       ["aiProvider", aiProvider !== (current.aiProvider ?? "hermes")],
       ["aiModel", (aiModel.trim() || "") !== (current.aiModel ?? "")],
       ["startedStatusId", (startedStatusId ?? null) !== (current.startedStatusId ?? null)],
+      ["reviewStatusId", (reviewStatusId ?? null) !== (current.reviewStatusId ?? null)],
       [
         "defaultIssueAssigneeMode",
         defaultIssueAssigneeMode !==
@@ -213,6 +217,7 @@ export default function WorkspaceSettingsPage() {
     aiProvider,
     aiModel,
     startedStatusId,
+    reviewStatusId,
     defaultIssueAssigneeMode,
     normalizedDefaultIssueAssigneeUserId,
   ]);
@@ -253,6 +258,7 @@ export default function WorkspaceSettingsPage() {
       aiProvider,
       aiModel: aiModel.trim() ? aiModel.trim() : null,
       startedStatusId,
+      reviewStatusId,
       defaultIssueAssigneeMode,
       defaultIssueAssigneeUserId: normalizedDefaultIssueAssigneeUserId,
     });
@@ -284,6 +290,7 @@ export default function WorkspaceSettingsPage() {
     aiProvider,
     aiModel,
     startedStatusId,
+    reviewStatusId,
     defaultIssueAssigneeMode,
     defaultIssueAssigneeUserId,
     normalizedDefaultIssueAssigneeUserId,
@@ -695,6 +702,37 @@ export default function WorkspaceSettingsPage() {
                   <code>autoTransitionedTo</code> field so receivers can
                   distinguish a server-driven transition from a pre-existing
                   status.
+                </div>
+              )}
+            </FormCard>
+          </Section>
+
+          <Section
+            title="Auto-transition on completion"
+            hint="When an agent finishes EXECUTE work via runs.complete, the server can flip the issue into a chosen IN_REVIEW status — a finished EXECUTE run is a signal to review, not a signal to mark done. Done stays a human call."
+          >
+            <FormCard className="space-y-4 p-5">
+              <Field
+                label="Review status"
+                hint="The IN_REVIEW-category status to transition into. Off = no auto-transition. Skipped when the issue is already IN_REVIEW or in DONE / CANCELED. Never applies to Research/Review/Discuss runs — those never move the issue."
+              >
+                <Combobox
+                  ariaLabel="Review status"
+                  value={reviewStatusId}
+                  onChange={setReviewStatusId}
+                  disabled={!canEdit}
+                  allowNone
+                  noneLabel="Off — no auto-transition on completion"
+                  placeholder="Off — no auto-transition on completion"
+                  options={(current?.statuses ?? [])
+                    .filter((s) => s.category === "IN_REVIEW")
+                    .map((s) => ({ value: s.id, label: s.name, color: s.color }))}
+                />
+              </Field>
+              {reviewStatusId && (
+                <div className="rounded-md border border-border bg-background/40 px-3 py-2 text-meta text-muted-foreground">
+                  When an EXECUTE run completes successfully, the issue
+                  auto-transitions to this status for human review.
                 </div>
               )}
             </FormCard>
