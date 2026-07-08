@@ -2,6 +2,72 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-07 — Cockpit responsive breakpoints + false-STALLED root-cause fix
+
+Two pieces, following up the same-day Cockpit ship.
+
+- **Dashboard: responsive breakpoints.** The 8/4 primary/rail split
+  (`dashboard/page.tsx`) waited for `lg` (1024px), which put an 8/12 primary
+  column at only ~640px right at that threshold — squeezing the 3-column
+  Focus grid down to ~200px cards, worse than staying single-column a
+  little longer. Moved the split to `xl` (1280px, where 8/12 is ~808px —
+  comfortable) and added `xl:items-start` so a sparser rail doesn't stretch
+  to match a taller primary column (CSS Grid's default `stretch` was
+  reading as dead space on the shorter side). `DashboardStack` (the rail's
+  widget grid, `columns` prop) now flips 1↔2↔1 non-monotonically:
+  `sm:grid-cols-2 xl:grid-cols-1` — 1 col on phones, 2 cols in the
+  900-1279px range where the stack renders as a full-width section (not
+  yet a rail), back to 1 at `xl` where it truly becomes a narrow rail.
+  `DashboardTile`'s `isFull` span mirrors this (`sm:col-span-2 xl:col-span-1`).
+  Verified via scripted Playwright at 900/1100/1280/1680px against the
+  real app (dev:local, seeded data) — confirmed via the actual scroll
+  container's `scrollHeight` (not `document.documentElement`, which this
+  app's flex-shell scroll pattern doesn't touch): 900px→4248px,
+  1100px→3353px, 1280px→2642px (a 21% drop right at the split), 1680px→2318px.
+- **Fix: false `ISSUE_STALLED` on RESEARCH/REVIEW/DISCUSS assignments
+  (`stale-work.ts`).** Audited three live AXI issues (#91/92/93) Bailey
+  flagged as showing STALLED despite real agent replies. Root cause,
+  traced via `events.recent` + code read: `sweepStaleWork()`'s candidate
+  query keys entirely off `Issue.updatedAt`, but posting a comment (the
+  correct RESEARCH/REVIEW/DISCUSS behavior — these modes are documented to
+  never move the issue) never touches that column — only a status/field
+  write does. So the watchdog is completely mode-blind: `docs/agents/
+  engagement-modes.md` explicitly claims *"the SLA/watchdog applies the
+  'must move the issue' expectation only to Execute… a Research run is
+  never falsely marked stalled"* — but the code implementing that promise
+  was never written. Confirmed live on AXI-91: `ISSUE_STALLED` fired at
+  22:29:00 and again at 23:30:00 UTC, both with `lastUpdate` frozen at the
+  21:58:17 assignment timestamp despite a real reply at 21:58:50 and a
+  completed run at 21:59:52. Worse: with `autoRedispatchOnStall` on (as
+  AXI has it), the sweep's own writes (`assignedAgentId: null`, then the
+  redispatch's reassignment) bump `updatedAt` as a Prisma `@updatedAt`
+  side effect, resetting the clock — so it's a genuine infinite loop
+  (one wasted research run per SLA window, matching Victor's own
+  "avoid repeated research-only stalled loops" comment on that issue).
+  Fixed: one extra batched query (`AgentRun.findMany({distinct:
+  ["issueId"], orderBy: {startedAt: "desc"}})`, one index-backed round
+  trip for the whole candidate batch) resolves each candidate's most
+  recent run mode; skip entirely when it's anything but EXECUTE. An
+  issue with **no** run yet is NOT skipped — that's the watchdog's
+  original failure mode (dispatch silently never started) and must
+  keep firing. Added 2 integration tests (RESEARCH-mode skipped past
+  cutoff; EXECUTE-mode still flags with a run attached) to the existing
+  `stale-work.test.ts` — typecheck/lint/build clean, but this worktree
+  (like the two before it today) can't actually *run* the integration
+  suite: `Cannot find module 'server-only'`, confirmed pre-existing and
+  unrelated (every test in the file, including ones I didn't touch,
+  fails to even collect; copying the package in by hand didn't fix it —
+  a deeper pnpm/vitest resolution quirk in freshly-created worktrees).
+- **Separate finding, not yet fixed:** a completed **EXECUTE** run also
+  doesn't auto-transition the issue — `runs.complete`
+  (`src/server/services/mcp.ts`) only ever updates `AgentRun`, never
+  `Issue.status`; the agent's own turn is solely responsible for calling
+  `issues.transition`. Docs confirm this is intentional (mode's "done"
+  signal is deliberately left to the agent), but there's no safety-net
+  watchdog for "run completed, issue never moved" the way there is for
+  "run never started" — worth a decision on whether to add one, not
+  implemented here.
+
 ## 2026-07-07 — Dashboard Cockpit layout, RESEARCH/REVIEW tool-access default, Quick Create mode picker
 
 Three independent pieces from one session, all typecheck + lint clean.

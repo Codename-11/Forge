@@ -11,6 +11,14 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Changed
+
+- **The dashboard cockpit now adapts to your screen width.** The two-column layout only splits into a work column + rail once there's genuinely room for it, so a laptop-width window doesn't squeeze your issue cards uncomfortably narrow — it stays single-column a little longer instead. The rail's widgets also use the space better on medium-width screens instead of stacking one-per-row.
+
+### Fixed
+
+- **A Research/Review/Discuss-mode agent no longer gets marked "stalled" after it replies.** Those modes are designed to never move the issue's status — only to comment — but the stalled-work check was watching for a status change regardless, so a well-behaved research reply looked identical to a dead assignment once enough time passed. It could even repeat indefinitely on workspaces with auto-redispatch on. Fixed to skip the stalled check entirely for non-Execute dispatches, matching the documented behavior.
+
 ## [2026-07-07] — v0.8.0 · Dashboard redesign, cross-workspace moves & agent-runtime hardening
 
 ### Added
