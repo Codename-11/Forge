@@ -728,6 +728,87 @@ export const agentRouter = router({
       return ctx.db.agent.delete({ where: { id: row.id } });
     }),
 
+  /**
+   * Smart remove — what the settings UI's "Delete" action calls. Hard-deletes a
+   * genuinely unused agent (no runs, comments, keys, assignments, artifacts,
+   * plans, goals, steps, review gates, action requests, or crew memberships);
+   * otherwise ARCHIVES it (hidden + offline) so its history survives. This
+   * matters because `AgentRun.agentId` is `onDelete: Cascade` — a raw delete of
+   * an agent with runs would silently destroy that run history. `delete`/
+   * `archive` above stay as the explicit raw variants.
+   */
+  remove: adminProcedure
+    .input(z.object({ id: agentId }))
+    .mutation(async ({ ctx, input }) => {
+      const row = await ctx.db.agent.findFirst({
+        where: { id: input.id, workspaceId: ctx.workspaceId },
+        select: {
+          id: true,
+          name: true,
+          profileKey: true,
+          _count: {
+            select: {
+              runs: true,
+              authoredComments: true,
+              apiKeys: true,
+              assignedIssues: true,
+              claimedIssues: true,
+              authoredArtifacts: true,
+              createdExecutionPlans: true,
+              createdGoals: true,
+              executionSteps: true,
+              requestedReviewGates: true,
+              resolvedReviewGates: true,
+              requestedActionRequests: true,
+              assignedActionRequests: true,
+              crewMemberships: true,
+            },
+          },
+        },
+      });
+      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+
+      const references = Object.fromEntries(
+        Object.entries(row._count).filter(([, n]) => n > 0),
+      );
+      const hasHistory = Object.keys(references).length > 0;
+
+      if (hasHistory) {
+        await ctx.db.agent.update({
+          where: { id: row.id },
+          data: { archivedAt: new Date(), status: AgentStatus.OFFLINE },
+        });
+      } else {
+        await ctx.db.agent.delete({ where: { id: row.id } });
+      }
+
+      await recordChange(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        entity: "Agent",
+        entityId: row.id,
+        action: "delete",
+        before: { profileKey: row.profileKey, name: row.name },
+        eventKind: EventKind.AGENT_DELETED,
+        subjectType: "agent",
+        subjectId: row.id,
+        payload: {
+          profileKey: row.profileKey,
+          removed: hasHistory ? "archived" : "deleted",
+          references,
+        },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+
+      return {
+        action: hasHistory ? ("archived" as const) : ("deleted" as const),
+        name: row.name,
+        references,
+      };
+    }),
+
   testWebhook: adminProcedure
     .input(
       z.object({

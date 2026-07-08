@@ -11,6 +11,7 @@ import {
   MessageSquare,
   Plus,
   Terminal,
+  Trash2,
   X,
 } from "lucide-react";
 import type { EngagementMode } from "@prisma/client";
@@ -62,6 +63,10 @@ export default function AgentsBindingPage() {
     agentId: string;
     name: string;
   } | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<{
+    agentId: string;
+    name: string;
+  } | null>(null);
   const [requestOpen, setRequestOpen] = useState(false);
 
   function invalidate() {
@@ -88,6 +93,18 @@ export default function AgentsBindingPage() {
   const unbind = trpc.agents.bindings.unbind.useMutation({
     onSuccess: () => {
       toast.success("Agent unbound. History is preserved.");
+      invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const remove = trpc.agent.remove.useMutation({
+    onSuccess: (res) => {
+      toast.success(
+        res.action === "deleted"
+          ? `Deleted ${res.name}.`
+          : `Archived ${res.name} — it has history, so it was hidden instead of deleted.`,
+      );
       invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -169,6 +186,9 @@ export default function AgentsBindingPage() {
                     }
                     onUnbind={() =>
                       setUnbindTarget({ agentId: a.id, name: a.name })
+                    }
+                    onDelete={() =>
+                      setRemoveTarget({ agentId: a.id, name: a.name })
                     }
                   />
                 ))}
@@ -321,6 +341,21 @@ export default function AgentsBindingPage() {
           setUnbindTarget(null);
         }}
       />
+
+      <Confirm
+        open={!!removeTarget}
+        onOpenChange={(v) => !v && setRemoveTarget(null)}
+        variant="destructive"
+        title={`Delete ${removeTarget?.name}?`}
+        description="Permanently deletes the agent when it has no history. If it has runs, comments, keys, or past assignments, it's archived instead (hidden, history kept) — the same result as Unbind, but not reversible by re-binding once deleted."
+        primaryLabel="Delete"
+        loading={remove.isPending}
+        onConfirm={async () => {
+          if (!removeTarget) return;
+          await remove.mutateAsync({ id: removeTarget.agentId });
+          setRemoveTarget(null);
+        }}
+      />
     </>
   );
 }
@@ -388,6 +423,7 @@ function BoundAgentRow({
   saving,
   onSavePolicy,
   onUnbind,
+  onDelete,
 }: {
   agent: BoundAgent;
   first: boolean;
@@ -402,6 +438,7 @@ function BoundAgentRow({
     capabilities?: string[];
   }) => void;
   onUnbind: () => void;
+  onDelete: () => void;
 }) {
   // Local mirror of max-concurrent so the input is editable, committed on blur.
   const [maxConcurrent, setMaxConcurrent] = useState(String(agent.maxConcurrent));
@@ -480,11 +517,21 @@ function BoundAgentRow({
           size="sm"
           variant="ghost"
           disabled={!isAdmin}
-          title={!isAdmin ? "Admins only." : undefined}
+          title={!isAdmin ? "Admins only." : "Remove from this workspace — reversible, history kept"}
           onClick={onUnbind}
         >
           <X className="h-3.5 w-3.5" />
           Unbind
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!isAdmin}
+          title={!isAdmin ? "Admins only." : "Delete permanently if unused, otherwise archive"}
+          onClick={onDelete}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Delete
         </Button>
       </header>
 

@@ -13,6 +13,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
+- **Remove agents you no longer need — not just disable them.** Both **Settings → Agents** (in a workspace) and **Instance Admin → Agents** can now remove an agent or profile. It's smart about history: a genuinely unused agent — or a profile no workspace has bound (e.g. a throwaway CLI or test agent) — is deleted outright, while one that has runs, comments, keys, or past assignments is archived instead — hidden from the list but with its history kept, never silently destroyed. In a workspace, **Delete** sits next to **Unbind** (which stays the reversible option); in Instance Admin, **Remove** sits next to Enable/Disable.
 - **A finished agent run can auto-move the issue to review.** Settings → Workspace has a new **Review status** option (under "Auto-transition on completion"): pick an In Review-category status, and whenever an agent finishes Execute work successfully, the issue moves there automatically — no more agents leaving completed work sitting untouched in whatever status it started in. Off by default. It only ever lands on your chosen review status, never Done — marking something Done stays your call (or an explicit instruction elsewhere). Research/Review/Discuss dispatches are unaffected, since those never move the issue.
 
 ### Changed

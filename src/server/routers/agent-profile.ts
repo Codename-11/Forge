@@ -304,4 +304,31 @@ export const agentProfileRouter = router({
         data: { archivedAt: new Date() },
       });
     }),
+
+  /**
+   * Instance admin: smart remove — what the admin UI's "Remove" action calls.
+   * Hard-deletes a profile that no workspace has ever bound (the throwaway /
+   * mistake case); if any Agent binding still references it, ARCHIVES instead so
+   * those bindings aren't orphaned (profile delete is SetNull on the Agent).
+   * Archived profiles drop out of the admin list and the bindable catalog.
+   */
+  remove: instanceAdminProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const profile = await ctx.db.agentProfile.findUnique({
+        where: { id: input.id },
+        select: { id: true, name: true, _count: { select: { bindings: true } } },
+      });
+      if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+      const boundAgents = profile._count.bindings;
+      if (boundAgents > 0) {
+        await ctx.db.agentProfile.update({
+          where: { id: profile.id },
+          data: { archivedAt: new Date() },
+        });
+        return { action: "archived" as const, name: profile.name, boundAgents };
+      }
+      await ctx.db.agentProfile.delete({ where: { id: profile.id } });
+      return { action: "deleted" as const, name: profile.name, boundAgents: 0 };
+    }),
 });

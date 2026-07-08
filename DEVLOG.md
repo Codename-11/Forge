@@ -2,6 +2,45 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-08 — Agent removal: smart delete for agents + profiles (both surfaces)
+
+Gap report from Bailey: the workspace Agents settings + Instance Admin could
+disable/unbind agents but never *remove* them (esp. ephemeral CLI / temp
+agents, a mistakenly-created "claude"). Root cause: the `agent.*` router had
+`archive`/`unarchive`/`delete`, but the only wired client call was
+`agent.update` (chat engine) — no UI surfaced removal. Instance Admin only
+wired `agents.profiles.setDisabled`. And `agent.delete` was a raw
+`db.agent.delete()`, which is dangerous because `AgentRun.agentId` is
+`onDelete: Cascade` — deleting an agent with runs silently destroys its run
+history.
+
+Design (per Bailey: "smart remove", both surfaces):
+- **`agent.remove`** (adminProcedure) — counts references (runs, comments,
+  apiKeys, assigned/claimed issues, artifacts, plans, goals, steps, review
+  gates, action requests, crew). Zero → hard delete; any → archive
+  (`archivedAt` + status OFFLINE). Returns `{ action, name, references }`.
+  `bindings.list` already filters `archivedAt: null`, so archived agents drop
+  out of the list. Raw `delete`/`archive` stay as explicit variants.
+- **`agents.profiles.remove`** (instanceAdminProcedure) — counts bindings; 0 →
+  delete the profile, else archive (`profiles.list` filters `archivedAt`, so it
+  leaves the admin list + bindable catalog). Avoids orphaning bindings
+  (profile→agent FK is SetNull).
+
+UI:
+- Workspace Agents (`/settings/agents`): a "Delete" button on each
+  BoundAgentRow beside Unbind — Unbind stays the reversible archive, Delete is
+  the smart remove. Destructive `Confirm`; toast reports deleted vs archived.
+- Instance Admin (`admin-agents.tsx`): a "Remove" button beside Enable/Disable
+  with a `useConfirm()` destructive dialog; toast reports action + bound count.
+
+Tests (`agent-remove.test.ts`, 5): agent clean→deleted, agent w/ assigned
+issue→archived (+references), MEMBER→FORBIDDEN; profile no-bindings→deleted,
+profile w/ binding→archived. typecheck + lint clean; agent-transport (5),
+action-request-accept (15), runtime-admin-gating (2) green.
+
+Built in an isolated worktree (the bg-job guard blocks direct main edits), then
+fast-forwarded onto local main. Deploy held.
+
 ## 2026-07-08 — Runtime settings: admin-gate config writes + confirm destructive tool-reset
 
 Follow-up from the `rt_hermes_gateway` RESEARCH/REVIEW tool-profile fix (Victor

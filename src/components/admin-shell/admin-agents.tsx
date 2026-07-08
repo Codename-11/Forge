@@ -1,8 +1,9 @@
 "use client";
 import { useState } from "react";
-import { Check, Globe, GlobeLock, Power, PowerOff, UserPlus, X } from "lucide-react";
+import { Check, Globe, GlobeLock, Power, PowerOff, Trash2, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
+import { useConfirm } from "@/components/ui/modal";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } from "./admin-ui";
 
 /**
@@ -15,6 +16,7 @@ import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } fro
  */
 export function AdminAgents() {
   const utils = trpc.useUtils();
+  const { confirm, confirmElement } = useConfirm();
   const profiles = trpc.agents.profiles.list.useQuery();
   const pending = trpc.agents.profiles.listPending.useQuery();
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -60,6 +62,19 @@ export function AdminAgents() {
     onSuccess: async () => {
       await utils.agents.profiles.list.invalidate();
       toast.success("Profile state updated.");
+    },
+    onError: (e) => toast.error(e.message),
+    onSettled: () => setPendingId(null),
+  });
+  const removeProfile = trpc.agents.profiles.remove.useMutation({
+    onMutate: (v) => setPendingId(v.id),
+    onSuccess: async (res) => {
+      await invalidateAll();
+      toast.success(
+        res.action === "deleted"
+          ? `Removed ${res.name}.`
+          : `Archived ${res.name} — ${res.boundAgents} workspace binding${res.boundAgents === 1 ? "" : "s"} still reference it, so it was hidden instead of deleted.`,
+      );
     },
     onError: (e) => toast.error(e.message),
     onSettled: () => setPendingId(null),
@@ -235,12 +250,33 @@ export function AdminAgents() {
                   >
                     {disabled ? "Enable" : "Disable"}
                   </AdminButton>
+                  <AdminButton
+                    icon={Trash2}
+                    tone="danger"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (
+                        await confirm({
+                          title: `Remove ${p.name}?`,
+                          description:
+                            "If any workspace still has this profile bound, it's archived (hidden, bindings kept intact). If nothing references it, it's permanently deleted. You can re-create a profile with the same key later.",
+                          primaryLabel: "Remove",
+                          variant: "destructive",
+                        })
+                      ) {
+                        removeProfile.mutate({ id: p.id });
+                      }
+                    }}
+                  >
+                    Remove
+                  </AdminButton>
                 </span>
               </div>
             );
           })
         )}
       </AdminPanel>
+      {confirmElement}
     </div>
   );
 }
