@@ -46,12 +46,16 @@ workspace, then layers per-workspace **policy** on top:
 Bind, set policy, and unbind from the workspace agents page at
 **`/w/[slug]/settings/agents`**. The **catalog** there lists the
 profiles available to bind (ones you own, plus instance-shared ones)
-that aren't already bound. All three actions — `bind`, `setPolicy`,
-`unbind` — are workspace-admin-gated.
+that aren't already bound. The actions — `bind`, `setPolicy`, `unbind`,
+and `remove` — are workspace-admin-gated.
 
-::: tip Unbinding is non-destructive
-Unbinding archives the binding; runs, chats, and history are preserved.
-Re-binding the same profile reuses the archived row.
+::: tip Unbind vs Delete
+**Unbind** archives the binding (reversible) — runs, chats, and history are
+preserved, and re-binding the same profile reuses the archived row.
+**Delete** (the trash action beside Unbind) is a *smart remove*: it
+hard-deletes a genuinely unused agent (no runs, comments, keys, or
+assignments) and otherwise archives it — so a deletion can never cascade
+away an agent's run history.
 :::
 
 ## Tier 3 — Instance policy
@@ -65,6 +69,11 @@ Two governance levers belong to the instance admin (see
 - **`disabledAt`** — a force-disable. A disabled profile (and all its
   bindings) refuses dispatch and chat. Distinct from `archivedAt`
   (deletion).
+- **Remove** — Instance Admin → Agents has a **Remove** action
+  (`agents.profiles.remove`) beside Enable/Disable: it deletes a profile no
+  workspace has bound, and archives one that still has bindings (so those
+  agents aren't orphaned). Archived profiles drop out of the admin list and
+  the bind-catalog.
 
 ## Requesting a profile
 

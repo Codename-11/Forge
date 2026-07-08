@@ -136,9 +136,11 @@ Codex, container, and workspace versions from the runtime detail page.
 
 ## MCP tools (for runtimes that auto-register)
 
-`runtimes.register`, `runtimes.heartbeat`, and `runtimes.configure` are
-`ADMIN`-scoped. The `forge` CLI's `daemon start` calls register/heartbeat;
-operators can call configure to set runtime config without direct DB access.
+`runtimes.register`, `runtimes.heartbeat`, `runtimes.configure`, and
+`runtimes.archive` are `ADMIN`-scoped. The `forge` CLI's `daemon start` calls
+register/heartbeat; operators can call configure to set runtime config, or
+`runtimes.archive` (`forge runtimes archive <id>`) to deregister a runtime,
+without direct DB access.
 `runtimes.reportInfo` is agent-linked rather than admin-scoped so a runtime
 bootstrap key can report its own sanitized metadata without broad operator
 permissions.

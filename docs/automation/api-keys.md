@@ -14,7 +14,7 @@ wire format and auth path are identical for all kinds.
 |---|---|---|
 | `AGENT` | Linked to a specific agent via `linkedAgentId`. Permanent until revoked. | Hermes/runtime daemons, custom always-on bridges. |
 | `PERSONAL` | No agent link. Permanent until revoked. | Local Claude Code sessions, scripts, personal terminal access. |
-| `SESSION` | TTL-bounded via `expiresAt`. Auto-rejected after expiry. | Ephemeral Claude Code sessions, one-off Codex CLI runs. |
+| `SESSION` | TTL-bounded via `expiresAt`. Rejected at auth after expiry, then purged from the DB by an hourly sweep. | Ephemeral Claude Code sessions, one-off Codex CLI runs. |
 
 `kind` is inferred automatically when using `access.create`: if `linkedAgentId` is
 provided, kind defaults to `AGENT`; otherwise `PERSONAL`. To create a session key,
@@ -231,7 +231,9 @@ Three tRPC mutations create workspace keys:
 - **`access.createPersonal`** — shorthand for `kind: PERSONAL` with no agent
   link. Suitable for scripts and local dev access.
 - **`access.createSession`** — shorthand for `kind: SESSION` with a required
-  `ttlHours` (1–168, default 24). Auto-rejected after expiry.
+  `ttlHours` (1–168, default 24). Rejected at auth after expiry, and purged
+  from the DB by an hourly worker sweep so expired session keys don't
+  accumulate (PERSONAL/AGENT keys with an expiry are left for an admin).
 
 All three return `rawKey` in the response. Copy it immediately — the plaintext is
 shown exactly once and never stored.

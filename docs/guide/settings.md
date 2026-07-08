@@ -25,6 +25,10 @@ The top-level identity panel.
   `agentIdleTimeoutMinutes`, `requiredAckSeconds`,
   `autoRedispatchOnStall`, `autoRedispatchOnNoack`,
   `slaEnforcementEnabled`.
+- **Ephemeral agent cleanup** — `ephemeralAgentIdleMinutes` (0 = off):
+  auto-archive an EPHEMERAL (session/CLI) agent that hasn't heartbeated for
+  this long, so abandoned session rows don't pile up. Reversible; PERSISTENT
+  agents (Hermes, etc.) are never touched.
 
 The full table of knobs lives in
 [Workspaces → Workspace knobs](/guide/workspaces.html).

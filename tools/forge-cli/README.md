@@ -94,19 +94,28 @@ On start the daemon:
   there's no `statuses.list` MCP tool to discover the workspace's
   category-mapped started status.
 
-## Read-only commands
+## Commands
 
 ```bash
+# Read-only
 forge runtimes list                  # via runtimes.list MCP; --json, --archived
-forge runtimes configure <id> \
-  --local-workspace-tools \
-  --tool terminal --tool filesystem --tool git \
-  --workspace-root /home/bailey/forge
 forge agents list                    # workspace bindings via agents.list; --json, --archived, --runtime <id>
 forge agents list --global           # global AgentProfile defs via agents.profiles.list; --mine, --json, --archived
 forge issues list                    # most recent 25 issues
 forge issues list --mine             # issues assigned to your linked agent
-forge issue assign AXI-42 victor
+
+# Runtime config / teardown (ADMIN)
+forge runtimes configure <id> \
+  --local-workspace-tools \
+  --tool terminal --tool filesystem --tool git \
+  --workspace-root /home/bailey/forge
+forge runtimes archive <id>          # deregister (archive) a runtime via runtimes.archive
+
+# Work
+forge issue assign AXI-42 victor     # assign an existing issue to an agent
+forge task "Add a wake-word toggle" --agent victor   # create an issue AND dispatch it
+forge task "Fix the flaky sprint test"               # no --agent → queue for auto-dispatch
+#   task also accepts --project <id>, --priority NONE|LOW|MEDIUM|HIGH|URGENT, --title "<title>"
 ```
 
 ## Provider matrix

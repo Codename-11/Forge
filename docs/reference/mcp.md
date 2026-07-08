@@ -470,7 +470,8 @@ the broader Runtime primitive.
 | `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable, info? }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
 | `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId, info? }`. Optional `info` updates sanitized runtime version/environment metadata. |
 | `list` | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. Secrets are redacted to `hasSecret`. |
-| `configure` | Update adapter config. `{ runtimeId, config, merge? = true }`. Hermes accepts `localWorkspaceTools`, `toolCapabilities`, `workspaceRoot`, and `modeToolPolicyEnforced`; Codex app-server also accepts sandbox/approval config. |
+| `configure` | Update adapter config. `{ runtimeId, config, merge? = true }`. Hermes accepts `localWorkspaceTools`, `toolCapabilities`, `workspaceRoot`, and `modeToolPolicyEnforced`; Codex app-server also accepts sandbox/approval config. Scope `ADMIN`. |
+| `archive` | Deregister (archive) a runtime — `{ runtimeId }` sets `archivedAt`, so it drops out of `list` (unless `includeArchived`). The teardown counterpart of `register`; exposed as `forge runtimes archive <id>`. Scope `ADMIN`. |
 | `reportInfo` | Agent-linked runtime metadata report. `{ runtimeId?, info }`; omitted `runtimeId` resolves to the calling agent's attached Runtime. Stores a sanitized whitelist such as `runtimeVersion`, `bridgeVersion`, `codexVersion`, `containerImage`, `hostname`, `os`, `arch`, and `workspaceRoot`. |
 
 **`register`** is intentionally not deduping server-side — the CLI caches
@@ -484,6 +485,7 @@ heartbeat returns a missing-row error.
 
 | Tool | Summary |
 |---|---|
+| `open` | Open (or resume) a tracked run on an issue **you** are working — `{ issueId, summary?, mode? }`. Requires an agent-linked key; the run belongs to the key's `linkedAgentId`. Resumes an existing ACTIVE/WAITING run for the `(issue, agent)` pair instead of stacking a duplicate, and stamps a STARTED event so it shows in Mission Control. Lets an agent (e.g. a local CLI session) proactively self-report work rather than only getting a run as a dispatch side-effect. Issue-anchored; drive it afterward with `recordUsage` / `setWaiting` / `complete`. Scope `WRITE_ISSUES`. |
 | `recordUsage` | Update token + cost columns on an `AgentRun`. `{ runId, tokensIn?, tokensOut?, tokensCached?, costUsd? }`. Idempotent — latest call replaces (cumulative as reported by the agent). |
 | `complete` | Close an active/waiting run. `{ runId, summary, producedArtifactIds?, verificationResult?, followUps?, confidence?, verdict? }`. Requires an agent-linked key matching the run. Execute enforces issue artifact/checklist gates; Research requires `confidence`; Review requires `verdict`; Discuss is reply-only. Stores `completionMeta` with the Forge run contract version. |
 | `setWaiting` / `resumeWork` | Mark a run blocked on the operator, or resume it. Requires an agent-linked key matching the run. |
