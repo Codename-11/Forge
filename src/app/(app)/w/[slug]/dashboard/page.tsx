@@ -286,9 +286,17 @@ export default function DashboardPage() {
               Primary (8/12) is "what should I do" — Focus, Pick-up,
               Pipeline. The rail (4/12) is "what's going on around me" —
               agents, standup, news — always visible beside your work
-              instead of scrolled past below it. */}
-          <div className="grid grid-cols-1 gap-5 lg:grid-cols-12">
-            <div className="space-y-5 lg:col-span-8">
+              instead of scrolled past below it.
+
+              The split waits for `xl` (1280px), not `lg` (1024px): at 1024px
+              an 8/12 primary column is only ~640px, which squeezes the
+              3-column Focus grid down to ~200px cards — worse than just
+              staying single-column full-width a little longer. `xl:items-start`
+              stops a sparser rail from stretching to match a taller primary
+              column (the CSS Grid default is stretch), which otherwise reads
+              as dead space on the shorter side once content volumes differ. */}
+          <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start">
+            <div className="space-y-5 xl:col-span-8">
               {/* Focus (assigned, priority-first) + Pick-up (recent). Both
                   render rich auto-height cards. If there's no personal work
                   at all, Suggestions takes the slot as the primary handoff. */}
@@ -342,7 +350,7 @@ export default function DashboardPage() {
               />
             </div>
 
-            <div className="space-y-5 lg:col-span-4">
+            <div className="space-y-5 xl:col-span-4">
               <ZoneDivider label="Workspace & agents" />
               <DashboardStack
                 widgets={widgets}

@@ -198,7 +198,14 @@ export function DashboardStack({
         ref={gridRef}
         className={cn(
           "grid grid-cols-1 items-start gap-4",
-          columns === 2 && "lg:grid-cols-2",
+          // `columns=1` (the rail) still opens up to 2 columns in the
+          // sm..xl range, where the outer page hasn't split into the
+          // primary/rail layout yet and this stack is rendering as a
+          // full-width section — forcing it to 1 column there just adds
+          // unnecessary scroll. It collapses back to 1 at `xl`, matching
+          // the page's own primary/rail breakpoint, where this really is
+          // a narrow rail.
+          columns === 1 ? "sm:grid-cols-2 xl:grid-cols-1" : "lg:grid-cols-2",
         )}
       >
         {visible.map((w, index) => (
@@ -326,7 +333,7 @@ function DashboardTile({
         // editing (in edit mode the control strip keeps it non-empty so it
         // stays hideable).
         !editing && "empty:hidden",
-        isFull && columns === 2 && "lg:col-span-2",
+        isFull && (columns === 1 ? "sm:col-span-2 xl:col-span-1" : "lg:col-span-2"),
         editing && "rounded-lg ring-1 ring-dashed ring-ember/40",
         dragging && "shadow-[0_18px_44px_rgba(0,0,0,0.20)]",
       )}
