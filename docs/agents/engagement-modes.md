@@ -143,6 +143,12 @@ Mode is what stops the silent "always execute" assumptions:
 
 - **Auto-transition on assign** (`startedStatusId`) fires **only for Execute**.
   Research / Review / Discuss leave issue status alone.
+- **Auto-transition on complete** (`reviewStatusId`, Settings → Workspace)
+  fires **only for Execute**, on a genuinely successful `runs.complete` (not
+  on abandons/stops). A finished Execute run is a "ready for human review"
+  signal, not a "mark done" signal — it lands on the workspace's configured
+  IN_REVIEW status, never further. Done stays a human (or explicitly
+  instructed) action.
 - **SLA / watchdog** applies the "must move the issue" expectation **only to
   Execute**. A Research run is "done" when it posts findings, so it's never
   falsely marked stalled for not moving the issue.

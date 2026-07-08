@@ -2,6 +2,58 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-07 — Auto-transition to review on EXECUTE completion (`reviewStatusId`)
+
+Follow-up to today's "does a successful run properly resolve the issue" gap
+(found in the Cockpit/false-STALLED session earlier today). Bailey's policy:
+an agent should be inclined to move work to In Review when it believes it's
+done, never straight to Done — Done stays a human call (or an explicit
+instruction) unless confirmed.
+
+- **Schema** (migration `0092`): `Workspace.reviewStatusId String?` +
+  `reviewStatus` relation, mirroring the existing `startedStatusId` /
+  `maybeAutoTransitionOnAssign` pattern exactly (same shape, same validation
+  style, same opt-in-null-disables semantics).
+- **`maybeAutoTransitionOnComplete()`** (`src/server/audit.ts`, new, exported
+  — sits right beside `maybeAutoTransitionOnAssign`): EXECUTE-only; skips if
+  the workspace has no `reviewStatusId`, the target isn't an IN_REVIEW-
+  category status, or the issue is already IN_REVIEW/DONE/CANCELED. Unlike
+  the assign-time version, BACKLOG/TODO/IN_PROGRESS are **not** skipped —
+  completing work should surface for review regardless of prior state
+  (including issues that were never auto-started at all).
+- **Hooked into `runs.complete` directly** (`mcp.ts`), not the generic
+  `recordChange`/`AGENT_RUN_COMPLETED` audit fan-out — verified live data
+  shows `AGENT_RUN_COMPLETED` fires for abandons/stops too (e.g. "Stopped by
+  operator to restart as RESEARCH"), so gating on that event kind alone would
+  have wrongly auto-transitioned stopped runs. `runs.complete`'s own handler
+  already has `run.issueId` + `run.engagementMode` in scope, so this needed
+  zero extra plumbing.
+- **Settings UI**: new "Auto-transition on completion" section on
+  Settings → Workspace, right after the existing "Auto-transition on
+  assignment" one. Used the themed `Combobox` (not a native `<select>`, even
+  though its neighbor still is — one of the pre-existing ~58-site backlog;
+  didn't touch it, but wrote the new field correctly from the start).
+- **Tests**: 2 new cases in `mcp.test.ts`'s `runs.complete` describe block
+  (EXECUTE transitions; RESEARCH does not, even with `reviewStatusId` set).
+  The default test fixture doesn't seed an IN_REVIEW-category status, so
+  both create one ad-hoc, matching an existing code comment in this file
+  that already called that gap out.
+- **Docs**: `docs/agents/engagement-modes.md`'s "What each mode changes"
+  list gains a sibling bullet next to the `startedStatusId` one.
+
+**Big unblock, unrelated to the feature itself:** finally root-caused why
+every worktree this session could typecheck/lint/build but never actually
+*run* its test suite (`Cannot find module 'server-only'`, seen 3x already
+today). `pnpm-workspace.yaml` is gitignored and a fresh worktree checkout
+never has it — without it, `pnpm install` silently skips linking a chunk of
+real dependencies (not just `server-only`; eslint/vitest/prisma/typescript/
+tailwindcss/tsx were missing too) while still reporting success. Copying the
+file in from the main checkout, then `pnpm install` + `pnpm exec prisma
+generate` + exporting `AUTH_SECRET` alongside `DATABASE_URL`/`REDIS_URL`, gets
+a genuinely clean `pnpm test` run — 1067/1068 passing (1 pre-existing skip),
+confirmed zero regressions from this change specifically by running the full
+suite, not just the new tests. Documented in memory for future sessions.
+
 ## 2026-07-07 — Cockpit responsive breakpoints + false-STALLED root-cause fix
 
 Two pieces, following up the same-day Cockpit ship.

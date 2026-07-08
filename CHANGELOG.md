@@ -11,6 +11,10 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- **A finished agent run can auto-move the issue to review.** Settings → Workspace has a new **Review status** option (under "Auto-transition on completion"): pick an In Review-category status, and whenever an agent finishes Execute work successfully, the issue moves there automatically — no more agents leaving completed work sitting untouched in whatever status it started in. Off by default. It only ever lands on your chosen review status, never Done — marking something Done stays your call (or an explicit instruction elsewhere). Research/Review/Discuss dispatches are unaffected, since those never move the issue.
+
 ### Changed
 
 - **The dashboard cockpit now adapts to your screen width.** The two-column layout only splits into a work column + rail once there's genuinely room for it, so a laptop-width window doesn't squeeze your issue cards uncomfortably narrow — it stays single-column a little longer instead. The rail's widgets also use the space better on medium-width screens instead of stacking one-per-row.
