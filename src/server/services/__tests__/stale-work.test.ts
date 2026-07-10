@@ -28,11 +28,7 @@ afterAll(async () => {
   await disconnectPrisma();
 });
 
-async function setSla(
-  workspaceId: string,
-  minutes: number,
-  redispatch = false,
-): Promise<void> {
+async function setSla(workspaceId: string, minutes: number, redispatch = false): Promise<void> {
   const prisma = getPrisma();
   await prisma.workspace.update({
     where: { id: workspaceId },
@@ -231,7 +227,7 @@ describe("stale-work — sweepStaleWork", () => {
     expect(events.length).toBe(0);
   });
 
-  it("does not double-stall an issue stalled in the last hour", async () => {
+  it("does not double-stall an unchanged assignment after the old one-hour grace window", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "SWD" });
     fixtures.push(fixture);
     const prisma = getPrisma();
@@ -248,10 +244,38 @@ describe("stale-work — sweepStaleWork", () => {
     const first = await sweepStaleWork();
     expect(first.stalled).toContain(issue.id);
 
-    // Re-backdate — recordChange may have bumped updatedAt via the audit
-    // write side effects (it doesn't, but be safe so the second sweep
-    // still considers the issue stale).
-    await backdateIssue(issue.id, new Date(Date.now() - 60 * 60_000));
+    const originalUpdatedAt = new Date(Date.now() - 60 * 60_000);
+    await backdateIssue(issue.id, originalUpdatedAt);
+    // Prove idempotency is state-based, not time-based: make the immutable
+    // event older than the former one-hour re-stall window while preserving
+    // the assignment fingerprint stored in its payload.
+    await prisma.activityEvent.updateMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: EventKind.ISSUE_STALLED,
+      },
+      data: { createdAt: new Date(Date.now() - 2 * 60 * 60_000) },
+    });
+    const originalEvent = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: EventKind.ISSUE_STALLED,
+      },
+    });
+    const payload = originalEvent.payload as Record<string, unknown>;
+    await prisma.activityEvent.update({
+      where: { id: originalEvent.id },
+      data: {
+        payload: {
+          ...payload,
+          lastUpdate: originalUpdatedAt.toISOString(),
+        },
+      },
+    });
 
     const second = await sweepStaleWork();
     expect(second.stalled).not.toContain(issue.id);
@@ -265,6 +289,42 @@ describe("stale-work — sweepStaleWork", () => {
       },
     });
     expect(events.length).toBe(1);
+  });
+
+  it("emits a fresh stall after the issue state changes and goes quiet again", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "SWI" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await setSla(fixture.workspace.id, 15);
+
+    const agent = await createAgent(fixture.workspace.id, "swi-a1");
+    const issue = await createIssue(fixture, { statusCategory: "TODO" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await backdateIssue(issue.id, new Date(Date.now() - 90 * 60_000));
+
+    expect((await sweepStaleWork()).stalled).toContain(issue.id);
+
+    // A real edit changes the fingerprint. Once that new state itself ages
+    // past the SLA, it deserves one new warning.
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { title: "Changed, then quiet again" },
+    });
+    await backdateIssue(issue.id, new Date(Date.now() - 60 * 60_000));
+
+    expect((await sweepStaleWork()).stalled).toContain(issue.id);
+    const events = await prisma.activityEvent.findMany({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "issue",
+        subjectId: issue.id,
+        kind: EventKind.ISSUE_STALLED,
+      },
+    });
+    expect(events).toHaveLength(2);
   });
 
   it("clears assignedAgentId and re-runs dispatcher when autoRedispatchOnStall is true", async () => {

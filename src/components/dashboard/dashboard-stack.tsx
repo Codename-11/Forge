@@ -1,5 +1,6 @@
 "use client";
 import {
+  useLayoutEffect,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -80,6 +81,10 @@ export function orderWidgets(
 const RESIZE_THRESHOLD = 56;
 // Min gap (ms) between live reorders so tiles can settle (kills thrash).
 const REORDER_COOLDOWN_MS = 90;
+// Compact implicit rows let a measured tile span only the height it needs,
+// producing a masonry-style pack without changing DOM/keyboard order.
+const MASONRY_ROW_HEIGHT = 4;
+const MASONRY_GAP = 16;
 
 export function DashboardStack({
   widgets,
@@ -196,16 +201,19 @@ export function DashboardStack({
     <div>
       <div
         ref={gridRef}
+        style={editing ? undefined : { gridAutoRows: `${MASONRY_ROW_HEIGHT}px` }}
         className={cn(
           "grid grid-cols-1 items-start gap-4",
           // `columns=1` (the rail) still opens up to 2 columns in the
           // sm..xl range, where the outer page hasn't split into the
           // primary/rail layout yet and this stack is rendering as a
           // full-width section — forcing it to 1 column there just adds
-          // unnecessary scroll. It collapses back to 1 at `xl`, matching
-          // the page's own primary/rail breakpoint, where this really is
-          // a narrow rail.
-          columns === 1 ? "sm:grid-cols-2 xl:grid-cols-1" : "lg:grid-cols-2",
+          // unnecessary scroll. It collapses back to 1 at `xl`, then opens
+          // to 2 again at `2xl` where the page gives the ambient rail 5/12
+          // of the canvas. This is the wide-screen gap-filling layout.
+          columns === 1
+            ? "sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2"
+            : "lg:grid-cols-2",
         )}
       >
         {visible.map((w, index) => (
@@ -214,6 +222,7 @@ export function DashboardStack({
             widget={w}
             width={widthOf(w)}
             editing={editing}
+            masonry={!editing}
             columns={columns}
             isFirst={index === 0}
             isLast={index === visible.length - 1}
@@ -253,6 +262,7 @@ function DashboardTile({
   widget,
   width,
   editing,
+  masonry,
   columns,
   isFirst,
   isLast,
@@ -265,6 +275,7 @@ function DashboardTile({
   widget: DashboardWidget;
   width: WidgetWidth;
   editing: boolean;
+  masonry: boolean;
   columns: 1 | 2;
   isFirst: boolean;
   isLast: boolean;
@@ -278,12 +289,33 @@ function DashboardTile({
   const reduce = useReducedMotion();
   const [resizing, setResizing] = useState(false);
   const [dragging, setDragging] = useState(false);
+  const [rowSpan, setRowSpan] = useState(1);
+  const tileRef = useRef<HTMLDivElement>(null);
   const resizeStartX = useRef(0);
 
   const isFull = width === "full";
   const spring = reduce
     ? { duration: 0 }
     : ({ type: "spring", stiffness: 520, damping: 40, mass: 0.8 } as const);
+
+  useLayoutEffect(() => {
+    if (!masonry) return;
+    const node = tileRef.current;
+    if (!node) return;
+    const measure = () => {
+      const height = node.getBoundingClientRect().height;
+      const next = Math.max(
+        1,
+        Math.ceil((height + MASONRY_GAP) / (MASONRY_ROW_HEIGHT + MASONRY_GAP)),
+      );
+      setRowSpan((current) => (current === next ? current : next));
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [masonry, widget.node]);
 
   function onResizePointerDown(e: ReactPointerEvent) {
     e.preventDefault();
@@ -310,6 +342,7 @@ function DashboardTile({
 
   return (
     <motion.div
+      ref={tileRef}
       layout
       data-widget-id={widget.id}
       drag={editing && !resizing}
@@ -325,7 +358,10 @@ function DashboardTile({
         onDragEnd();
       }}
       transition={spring}
-      style={{ zIndex: dragging ? 40 : undefined }}
+      style={{
+        zIndex: dragging ? 40 : undefined,
+        gridRowEnd: masonry ? `span ${rowSpan}` : undefined,
+      }}
       whileDrag={reduce ? undefined : { scale: 1.03 }}
       className={cn(
         "relative min-w-0",
@@ -333,7 +369,10 @@ function DashboardTile({
         // editing (in edit mode the control strip keeps it non-empty so it
         // stays hideable).
         !editing && "empty:hidden",
-        isFull && (columns === 1 ? "sm:col-span-2 xl:col-span-1" : "lg:col-span-2"),
+        isFull &&
+          (columns === 1
+            ? "sm:col-span-2 xl:col-span-1 2xl:col-span-2"
+            : "lg:col-span-2"),
         editing && "rounded-lg ring-1 ring-dashed ring-ember/40",
         dragging && "shadow-[0_18px_44px_rgba(0,0,0,0.20)]",
       )}

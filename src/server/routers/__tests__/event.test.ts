@@ -157,6 +157,49 @@ describe("eventRouter", () => {
     expect(row?.detail).toContain("Refresh token");
   });
 
+  it("groups recurring attention signals for one subject into the newest timeline row", async () => {
+    const { fixture, prisma, agent, caller } = await setup();
+    const issue = await createIssue(fixture, { title: "Wake-word follow-through" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+
+    const events = await Promise.all(
+      Array.from({ length: 7 }, (_, index) =>
+        prisma.activityEvent.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            kind: EventKind.ISSUE_STALLED,
+            actorId: null,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: {
+              issueId: issue.id,
+              assignedAgentId: agent.id,
+              lastUpdate: new Date().toISOString(),
+              sequence: index,
+            },
+          },
+        }),
+      ),
+    );
+
+    const result = await caller.timeline({ filter: "decisions", limit: 5 });
+    const matching = result.items.filter(
+      (item) => item.kind === EventKind.ISSUE_STALLED && item.subject.id === issue.id,
+    );
+
+    expect(matching).toHaveLength(1);
+    expect(events.map((event) => event.id)).toContain(matching[0]?.id);
+    expect(matching[0]).toMatchObject({
+      occurrences: 7,
+      category: "decision",
+      tone: "warning",
+    });
+    expect(matching[0]?.detail).toContain("open the issue to choose the next step");
+  });
+
   it("rolls up agent attention by questions and blocked runs", async () => {
     const { fixture, prisma, agent, caller } = await setup();
     const issue = await createIssue(fixture, { title: "Review runtime access" });

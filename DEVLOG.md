@@ -11859,3 +11859,39 @@ when the title is short).
 
 Verification: `pnpm typecheck` clean; `pnpm lint` 0 errors; new unit (5) +
 integration (3) tests green; local `STAGE_ONLY=1 pnpm build` clean.
+
+## 2026-07-10 — Dashboard masonry + actionable stalled follow-through
+
+Audited the day-to-day dashboard and Command Center from operator screenshots,
+then traced AXI-91 against production data. The issue was Todo, assigned to
+Victor, and had completed repeated Research runs; an unchanged assignment
+timestamp had also produced hourly `ISSUE_STALLED` events, so the Decisions
+activity rail looked like an unresolved queue while the issue detail offered no
+explanation or next action.
+
+- **Dashboard packing:** the ambient rail shifts from 4/12 to 5/12 at `2xl`,
+  opens into two columns only at that width, and uses measured CSS-grid row spans
+  to pack variable-height widgets without changing DOM/keyboard order. Narrower
+  widths and zoomed layouts retain the existing one-/two-column breakpoints;
+  Customize mode keeps the normal grid so drag/resize remains predictable.
+- **State-based stale idempotency:** `sweepStaleWork` now fingerprints the
+  assigned agent + `Issue.updatedAt` recorded in the latest stall event. The
+  same unchanged state can never emit hourly duplicates; a genuinely changed
+  issue/assignment can emit one fresh signal if it goes quiet again.
+- **Legacy feed cleanup:** workspace activity over-fetches then groups recurring
+  stall/no-ack/SLA signals by kind + subject. The newest row survives with an
+  explicit `N signals grouped` label and a direct instruction to open the issue.
+- **Issue recovery:** new `IssueFollowThroughBanner` covers the gap between a
+  successful non-Execute run and an unchanged Backlog/Todo issue. It states that
+  Forge is waiting for an operator choice, shows the latest result, and offers
+  `Run in Execute`, `Snooze 1 day`, and `Review activity`. Terminal failures keep
+  using the existing failure banner, avoiding duplicate warnings. The banner
+  also keeps the existing mode/tool-surface distinction explicit: Execute does
+  not grant repository or terminal access.
+- **Coverage:** added unit coverage for follow-through states and integration
+  coverage for grouped activity plus state-based stall re-emission.
+
+Verification: `pnpm lint` (0 errors; pre-existing native-select warnings),
+`pnpm typecheck`, `pnpm test` (1,074 passed / 12 skipped), and
+`pnpm build:app` all complete. `pnpm test:e2e` reached 28/34; six existing chat,
+native-select interaction, and roadmap tests failed outside this change set.

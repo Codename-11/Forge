@@ -38,6 +38,7 @@ import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { IssueAgentPanel } from "@/components/issue-detail/issue-agent-panel";
 import { TerminalRunFailureBanner } from "@/components/issue-detail/run-failure-banner";
+import { IssueFollowThroughBanner } from "@/components/issue-detail/issue-follow-through-banner";
 import { RuntimePreflightBanner } from "@/components/issue-detail/runtime-preflight-banner";
 import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
@@ -507,6 +508,27 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
             <AiTriageCard issue={issue} slug={slug} />
 
+            <IssueFollowThroughBanner
+              issueId={issue.id}
+              activityHref={`/w/${slug}/issues/${issue.id}?tab=activity`}
+              input={{
+                issueLabel: issueKey,
+                statusName: issue.status.name,
+                statusCategory: issue.status.category,
+                updatedAt: issue.updatedAt,
+                snoozedUntil: issue.snoozedUntil,
+                assignmentSlaMinutes: ws?.assignmentSlaMinutes ?? 0,
+                assignedAgent: issue.assignedAgent
+                  ? {
+                      id: issue.assignedAgent.id,
+                      name: issue.assignedAgent.name,
+                      profileKey: issue.assignedAgent.profileKey,
+                    }
+                  : null,
+                latestRun: issue.agentRuns?.[0] ?? null,
+                hasActiveRun: !!issue.currentAgentRun,
+              }}
+            />
             <TerminalRunFailureBanner
               run={issue.agentRuns?.[0] ?? null}
               activityHref={`/w/${slug}/issues/${issue.id}?tab=activity`}

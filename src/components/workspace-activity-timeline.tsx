@@ -184,6 +184,17 @@ function ActivityRow({ item }: { item: TimelineRow }) {
             </span>
             <span aria-hidden>·</span>
             <span className="capitalize">{item.category}</span>
+            {item.occurrences > 1 ? (
+              <>
+                <span aria-hidden>·</span>
+                <span
+                  className="rounded-sm border border-warning/25 bg-warning/5 px-1 py-px text-warning"
+                  title={`${item.occurrences} matching signals grouped into the newest entry`}
+                >
+                  {item.occurrences} signals grouped
+                </span>
+              </>
+            ) : null}
           </span>
         </span>
         <span className="shrink-0 pt-0.5 text-meta tabular-nums text-muted-foreground">

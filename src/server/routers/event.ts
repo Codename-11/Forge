@@ -89,6 +89,18 @@ const DECISION_TIMELINE_KINDS = new Set<EventKind>([
   EventKind.PLAN_BUDGET_EXCEEDED,
 ]);
 
+/**
+ * State signals that a periodic watchdog may record more than once. The
+ * immutable event stream keeps every occurrence, but the compact timeline
+ * groups repeats so one subject cannot monopolize the whole pane.
+ */
+const COLLAPSIBLE_TIMELINE_KINDS = new Set<EventKind>([
+  EventKind.ISSUE_STALLED,
+  EventKind.ISSUE_SLA_BREACH,
+  EventKind.AGENT_NOACK,
+  EventKind.AGENT_RUN_STALLED,
+]);
+
 const timelineFilterSchema = z.enum(["all", "mine", "agents", "decisions"]);
 
 export const eventRouter = router({
@@ -334,7 +346,8 @@ export const eventRouter = router({
       const rows = await ctx.db.activityEvent.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: Math.min(input.limit * 2, 100),
+        // Over-fetch so grouped watchdog signals do not leave a short pane.
+        take: Math.min(input.limit * 5, 100),
         include: {
           actor: { select: { id: true, name: true, handle: true, image: true } },
           actorAgent: {
@@ -348,10 +361,10 @@ export const eventRouter = router({
         rows,
       });
 
-      const items = rows
+      const mapped = rows
         .map((row) => mapTimelineRow(row, hydrated, workspace))
-        .filter((row): row is NonNullable<typeof row> => Boolean(row))
-        .slice(0, input.limit);
+        .filter((row): row is NonNullable<typeof row> => Boolean(row));
+      const items = collapseRecurringTimelineRows(mapped).slice(0, input.limit);
 
       return { items };
     }),
@@ -921,7 +934,17 @@ function mapTimelineRow(
       break;
     case EventKind.ISSUE_STALLED:
       title = `${targetLabel ?? "Issue"} stalled`;
-      detail = targetIssue?.title ?? detail;
+      detail = targetIssue
+        ? [
+            targetIssue.title,
+            issue?.assignedAgent?.profileKey
+              ? `assigned to @${issue.assignedAgent.profileKey}`
+              : null,
+            "open the issue to choose the next step",
+          ]
+            .filter(Boolean)
+            .join(" · ")
+        : detail;
       tone = "warning";
       category = "decision";
       break;
@@ -1071,7 +1094,33 @@ function mapTimelineRow(
       id: row.subjectId,
       label: targetLabel ?? goal?.title ?? plan?.title ?? step?.title ?? targetAgent?.profileKey ?? row.subjectType,
     },
+    occurrences: 1,
   };
+}
+
+type MappedTimelineRow = NonNullable<ReturnType<typeof mapTimelineRow>>;
+
+function collapseRecurringTimelineRows(items: MappedTimelineRow[]): MappedTimelineRow[] {
+  const out: MappedTimelineRow[] = [];
+  const indexByKey = new Map<string, number>();
+
+  for (const item of items) {
+    if (!COLLAPSIBLE_TIMELINE_KINDS.has(item.kind)) {
+      out.push(item);
+      continue;
+    }
+    const key = `${item.kind}:${item.subject.type}:${item.subject.id}`;
+    const existingIndex = indexByKey.get(key);
+    if (existingIndex === undefined) {
+      indexByKey.set(key, out.length);
+      out.push(item);
+      continue;
+    }
+    const existing = out[existingIndex];
+    out[existingIndex] = { ...existing, occurrences: existing.occurrences + 1 };
+  }
+
+  return out;
 }
 
 function actorLabel(row: ActivityRow): string {

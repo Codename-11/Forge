@@ -22,11 +22,13 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
+- **The dashboard's ambient rail now fills wide screens instead of forming one long uneven stack.** At large widths, variable-height workspace and agent widgets pack into two columns; narrower and zoomed layouts still collapse cleanly, and keyboard reading order stays intact.
 - **The dashboard cockpit now adapts to your screen width.** The two-column layout only splits into a work column + rail once there's genuinely room for it, so a laptop-width window doesn't squeeze your issue cards uncomfortably narrow — it stays single-column a little longer instead. The rail's widgets also use the space better on medium-width screens instead of stacking one-per-row.
 - **Configuring a runtime now requires workspace admin.** Creating or editing a runtime in Settings → Runtimes — including its host tool permissions (whether an agent may use terminal / filesystem / git on the host) — is now restricted to workspace owners and admins, matching the existing admin-only gate on that runtime's secrets and repositories. Regular members could previously change it.
 
 ### Fixed
 
+- **A stalled issue no longer floods Command Center or leave you guessing what to do.** Repeated watchdog signals group into one activity row and unchanged assignments stop re-emitting the same event; on the issue itself, Forge now explains when Research/Review finished without moving the issue and offers Execute, snooze, and activity actions while keeping runtime tool limits explicit.
 - **`forge issue assign` now works.** The CLI command was sending the wrong parameter name and always failed with a validation error; it now assigns correctly. (Rebuild the CLI with `pnpm build:cli` to pick it up.)
 - **Expired ephemeral (session) API keys are now cleaned up automatically.** Session keys are TTL-bounded and were meant to be auto-purged when they expire, but expired ones actually lingered in your Access / Agent Clients list; a background sweep now removes them shortly after expiry. Personal and agent keys are untouched.
 - **Turning off a runtime's "Local workspace tools" no longer silently wipes its per-mode tool grants.** That toggle clears the runtime's declared tools and every per-mode allowlist (including Research/Review read access), so it now asks you to confirm first — a stray click can't quietly erase the configuration.

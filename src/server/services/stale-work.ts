@@ -32,8 +32,12 @@ import { coachOnEvent } from "@/server/services/ai-coach";
  *   - `autoRedispatchOnStall` — when true, also clears `assignedAgentId`
  *     and runs `maybeAutoDispatch` so the next agent picks it up.
  *
- * Idempotent: skips any issue that already received an `ISSUE_STALLED`
- * event in the last hour, so a 60s sweep cadence doesn't fire repeatedly.
+ * Idempotent by assignment state: once an issue receives `ISSUE_STALLED`,
+ * the same assigned-agent + `Issue.updatedAt` fingerprint is never emitted
+ * again. A new warning is only valid after the issue or assignment changes.
+ * This keeps immutable activity history from becoming an hourly reminder
+ * stream while preserving a fresh signal when work genuinely restarts and
+ * stalls again.
  *
  * Scheduled by `src/server/worker.ts` as a repeatable BullMQ job, mirroring
  * the heartbeat-sweep + delivery-drain pattern.
@@ -44,8 +48,6 @@ export interface StaleWorkSweepResult {
   stalled: string[];
   redispatched: string[];
 }
-
-const RESTALL_GRACE_MS = 60 * 60_000;
 
 export async function sweepStaleWork(
   client: PrismaClient | Prisma.TransactionClient = db,
@@ -65,8 +67,6 @@ export async function sweepStaleWork(
 
   for (const ws of workspaces) {
     const cutoff = new Date(now.getTime() - ws.assignmentSlaMinutes * 60_000);
-    const restallSince = new Date(now.getTime() - RESTALL_GRACE_MS);
-
     const candidates = await client.issue.findMany({
       where: {
         workspaceId: ws.id,
@@ -85,19 +85,34 @@ export async function sweepStaleWork(
 
     if (!candidates.length) continue;
 
-    // Idempotency guard — fetch any ISSUE_STALLED events within the
-    // grace window for this batch in one round-trip rather than N.
-    const recentStalls = await client.activityEvent.findMany({
+    // Idempotency guard — the event stream is immutable history, not a
+    // reminder queue. Keep only the latest prior stall per issue and compare
+    // the assignment fingerprint written into its payload. If neither the
+    // issue nor assignee changed, another event would be pure noise.
+    const priorStalls = await client.activityEvent.findMany({
       where: {
         workspaceId: ws.id,
         kind: EventKind.ISSUE_STALLED,
         subjectType: "issue",
         subjectId: { in: candidates.map((c) => c.id) },
-        createdAt: { gte: restallSince },
       },
-      select: { subjectId: true },
+      orderBy: { createdAt: "desc" },
+      distinct: ["subjectId"],
+      select: { subjectId: true, payload: true },
     });
-    const recentlyStalled = new Set(recentStalls.map((e) => e.subjectId));
+    const priorFingerprintByIssueId = new Map(
+      priorStalls.map((event) => {
+        const payload = asRecord(event.payload);
+        return [
+          event.subjectId,
+          {
+            assignedAgentId:
+              typeof payload.assignedAgentId === "string" ? payload.assignedAgentId : null,
+            lastUpdate: typeof payload.lastUpdate === "string" ? payload.lastUpdate : null,
+          },
+        ] as const;
+      }),
+    );
 
     // Mode gate — one query for the whole batch. `distinct` + `orderBy`
     // gives the most recent run per issue; an issue with no run yet
@@ -113,10 +128,16 @@ export async function sweepStaleWork(
     const latestModeByIssueId = new Map(latestRuns.map((r) => [r.issueId, r.engagementMode]));
 
     for (const issue of candidates) {
-      if (recentlyStalled.has(issue.id)) continue;
       // Defensive: the where clause already filters this, but the
       // assignedAgentId nullable in Prisma's typed shape requires a guard.
       if (!issue.assignedAgentId) continue;
+      const priorFingerprint = priorFingerprintByIssueId.get(issue.id);
+      if (
+        priorFingerprint?.assignedAgentId === issue.assignedAgentId &&
+        priorFingerprint.lastUpdate === issue.updatedAt.toISOString()
+      ) {
+        continue;
+      }
       const latestMode = latestModeByIssueId.get(issue.id);
       if (latestMode && latestMode !== EngagementMode.EXECUTE) continue;
 
@@ -199,4 +220,10 @@ export async function sweepStaleWork(
     stalled,
     redispatched,
   };
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
