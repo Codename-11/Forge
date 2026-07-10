@@ -22,8 +22,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Changed
 
-- **The dashboard's ambient rail now fills wide screens instead of forming one long uneven stack.** At large widths, variable-height workspace and agent widgets pack into two columns; narrower and zoomed layouts still collapse cleanly, and keyboard reading order stays intact.
-- **The dashboard cockpit now adapts to your screen width.** The two-column layout only splits into a work column + rail once there's genuinely room for it, so a laptop-width window doesn't squeeze your issue cards uncomfortably narrow — it stays single-column a little longer instead. The rail's widgets also use the space better on medium-width screens instead of stacking one-per-row.
+- **The dashboard now has a bounded priority cockpit and a shared responsive workspace board.** Focus work and live agent signals stay together at the top; Pipeline, Suggestions, What's New, Notes, Today, Pulse, and Workspace activity then reflow across three, two, or one columns instead of growing as independent uneven stacks. Long ambient feeds are capped with a direct **View all** path, and visual/keyboard order stays aligned at every breakpoint.
 - **Configuring a runtime now requires workspace admin.** Creating or editing a runtime in Settings → Runtimes — including its host tool permissions (whether an agent may use terminal / filesystem / git on the host) — is now restricted to workspace owners and admins, matching the existing admin-only gate on that runtime's secrets and repositories. Regular members could previously change it.
 
 ### Fixed

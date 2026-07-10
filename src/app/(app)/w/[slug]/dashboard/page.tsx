@@ -1,14 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from "react";
 import { toast } from "sonner";
 import {
   ArrowRight,
@@ -76,11 +69,46 @@ const PRIORITY_GLYPH: Record<string, string> = {
 };
 const ONBOARDING_KEY = "forge:onboarding:dismissed";
 const ONBOARDING_DONE_TOAST = "forge:onboarding:done-toast";
+type DashboardFlowBreakpoint = "mobile" | "tablet" | "desktop";
+const FLOW_ORDER: Record<DashboardFlowBreakpoint, readonly string[]> = {
+  // Three tracks: pair every wide module with a compact third-column tile.
+  desktop: [
+    "pipeline",
+    "whats-new",
+    "suggestions",
+    "today",
+    "quick-notes",
+    "pulse",
+    "workspace-activity",
+    "ideas",
+  ],
+  // Two tracks: wide modules take complete rows; compact modules pair up.
+  tablet: [
+    "pipeline",
+    "suggestions",
+    "whats-new",
+    "today",
+    "quick-notes",
+    "workspace-activity",
+    "pulse",
+    "ideas",
+  ],
+  // One track: preserve the operational reading order.
+  mobile: [
+    "pipeline",
+    "whats-new",
+    "today",
+    "suggestions",
+    "quick-notes",
+    "workspace-activity",
+    "pulse",
+    "ideas",
+  ],
+};
 
 export default function DashboardPage() {
   const workspace = useWorkspace();
   const slug = workspace.slug;
-  const w = (p: string) => `/w/${slug}${p}`;
   const { data: me } = trpc.workspace.me.useQuery();
   const { data: account } = trpc.user.me.useQuery();
   const { data: ws } = trpc.workspace.current.useQuery();
@@ -104,6 +132,9 @@ export default function DashboardPage() {
   const focusCards = myWork.data?.focus ?? [];
   const resumeCards = myWork.data?.resume ?? [];
   const myWorkLoading = myWork.isLoading || !me;
+  const flowBreakpoint = useDashboardFlowBreakpoint();
+  const showPrimarySuggestions =
+    focusCards.length === 0 && resumeCards.length === 0 && !myWorkLoading;
 
   const statusRows = useMemo(() => {
     const map = new Map<string, number>();
@@ -113,11 +144,7 @@ export default function DashboardPage() {
       .map((s) => ({ status: s, count: map.get(s.id) ?? 0 }));
   }, [active.data, statuses]);
 
-  const statusMax = useMemo(
-    () => Math.max(1, ...statusRows.map((r) => r.count)),
-    [statusRows],
-  );
-
+  const statusMax = useMemo(() => Math.max(1, ...statusRows.map((r) => r.count)), [statusRows]);
 
   // ---- Customizable widget stack -------------------------------------
   // Layout (order + hidden) persists on the user via `dashboardPrefs`.
@@ -130,10 +157,22 @@ export default function DashboardPage() {
   useEffect(() => {
     if (layoutSeeded.current || !account) return;
     layoutSeeded.current = true;
-    const p = account.dashboardPrefs as
-      | { order?: string[]; hidden?: string[]; widths?: Record<string, "half" | "full"> }
-      | null;
-    setLayout({ order: p?.order ?? [], hidden: p?.hidden ?? [], widths: p?.widths ?? {} });
+    const p = account.dashboardPrefs as {
+      order?: string[];
+      hidden?: string[];
+      widths?: Record<string, "half" | "full">;
+    } | null;
+    const savedOrder = p?.order ?? [];
+    // Pipeline + Suggestions moved into the customizable shared board in
+    // this layout generation. An older saved order would append both after
+    // every ambient widget and recreate the imbalance we are removing, so
+    // start that one-time migration from the new registry order.
+    const order =
+      savedOrder.length > 0 &&
+      (!savedOrder.includes("pipeline") || !savedOrder.includes("suggestions"))
+        ? []
+        : savedOrder;
+    setLayout({ order, hidden: p?.hidden ?? [], widths: p?.widths ?? {} });
   }, [account]);
   const effLayout: DashboardLayout = layout ?? { order: [], hidden: [], widths: {} };
   const persistLayout = useCallback(
@@ -149,39 +188,47 @@ export default function DashboardPage() {
     [setPrefsMut],
   );
 
-  // Rail widget stack (the ambient "workspace & agents" column beside your
-  // work). Agents/standup/news lead the default order since they're the
-  // highest-signal glance items; the rest stays user-reorderable/hideable
-  // via Customize. The "Pick up where you left off" tile is gone — it's
-  // now a first-class primary-column section rendered as rich cards.
-  const widgets: DashboardWidget[] = useMemo(
+  // The top cockpit is deliberately bounded: personal work on the left,
+  // live operational signals on the right. These widgets stay customizable,
+  // but do not drag the ambient feeds into a permanently reserved rail.
+  const priorityWidgets: DashboardWidget[] = useMemo(
     () => [
+      {
+        id: "agent-attention",
+        title: "Agent attention",
+        defaultWidth: "full",
+        node: <AgentAttentionPanel slug={slug} />,
+      },
       {
         id: "agent-activity",
         title: "Agent activity",
         defaultWidth: "half",
         node: <AgentActivityTile slug={slug} />,
       },
-      {
-        id: "agent-attention",
-        title: "Agent attention",
-        defaultWidth: "half",
-        node: <AgentAttentionPanel slug={slug} />,
-      },
       { id: "standup", title: "Standup", defaultWidth: "half", node: <StandupTile slug={slug} /> },
+    ],
+    [slug],
+  );
+
+  // Everything that can flex, fold, or recede lives in one shared board.
+  // At wide viewports it has three columns; `full` widgets span two so the
+  // pipeline and activity feeds remain scannable while compact widgets fill
+  // the third track. DOM order remains the priority/keyboard order.
+  const flowWidgets: DashboardWidget[] = useMemo(() => {
+    const registry: DashboardWidget[] = [
+      {
+        id: "pipeline",
+        title: "Pipeline",
+        defaultWidth: "full",
+        node: (
+          <PipelineCard statusRows={statusRows} statusMax={statusMax} href={`/w/${slug}/issues`} />
+        ),
+      },
       {
         id: "whats-new",
         title: "What's new",
         defaultWidth: "half",
-        node: (
-          <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />
-        ),
-      },
-      {
-        id: "quick-notes",
-        title: "Notes & journal",
-        defaultWidth: "full",
-        node: <QuickNotesWidget />,
+        node: <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />,
       },
       {
         id: "today",
@@ -189,17 +236,47 @@ export default function DashboardPage() {
         defaultWidth: "half",
         node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
       },
-      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
-      { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
+      ...(!showPrimarySuggestions
+        ? [
+            {
+              id: "suggestions",
+              title: "Suggestions",
+              defaultWidth: "full" as const,
+              node: (
+                <SuggestionsStrip variant="secondary" workspaceKey={workspaceKey} slug={slug} />
+              ),
+            },
+          ]
+        : []),
+      {
+        id: "quick-notes",
+        title: "Notes & journal",
+        defaultWidth: "full",
+        node: <QuickNotesWidget />,
+      },
       {
         id: "workspace-activity",
         title: "Workspace activity",
         defaultWidth: "full",
-        node: <WorkspaceActivityTimeline limit={8} />,
+        node: <WorkspaceActivityTimeline limit={5} viewAllHref={`/w/${slug}/command-center`} />,
       },
-    ],
-    [slug, workspaceKey, account?.changelogSeenAt],
-  );
+      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
+      { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
+    ];
+    const byId = new Map(registry.map((widget) => [widget.id, widget] as const));
+    return FLOW_ORDER[flowBreakpoint].flatMap((id) => {
+      const widget = byId.get(id);
+      return widget ? [widget] : [];
+    });
+  }, [
+    account?.changelogSeenAt,
+    flowBreakpoint,
+    showPrimarySuggestions,
+    slug,
+    statusMax,
+    statusRows,
+    workspaceKey,
+  ]);
 
   return (
     <>
@@ -225,9 +302,7 @@ export default function DashboardPage() {
               onClick={() => setEditing((v) => !v)}
               className={cn(
                 "focus-ring inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.6875rem]",
-                editing
-                  ? "bg-ember/15 text-ember"
-                  : "text-muted-foreground hover:text-foreground",
+                editing ? "bg-ember/15 text-ember" : "text-muted-foreground hover:text-foreground",
               )}
               title="Reorder or hide dashboard widgets"
             >
@@ -259,110 +334,111 @@ export default function DashboardPage() {
         {/* Ambient background now lives once in the app shell <main>
             (.forge-page-bg, driven by the per-user data-bg pref). */}
         <div className="relative isolate">
-          <div className="mx-auto max-w-[100rem] space-y-6 p-4 sm:p-6">
-          <GreetingBar
-            greeting={greeting}
-            name={firstName}
-            slug={slug}
-            isAdmin={!!isAdmin}
-            hasProjects={(projects?.items.length ?? 0) > 0}
-          />
+          <div
+            className="mx-auto max-w-[100rem] space-y-6 p-4 sm:p-6"
+            data-testid="dashboard-content"
+          >
+            <GreetingBar
+              greeting={greeting}
+              name={firstName}
+              slug={slug}
+              isAdmin={!!isAdmin}
+              hasProjects={(projects?.items.length ?? 0) > 0}
+            />
 
-          <NeedsYouTile slug={slug} />
+            <NeedsYouTile slug={slug} />
 
-          <OnboardingCard
-            projectsCount={projects?.items.length ?? 0}
-            issuesCount={anyIssue.data?.items.length ?? 0}
-            membersCount={members?.length ?? 0}
-            apiKeysCount={access?.length ?? 0}
-            hasTimezone={!!me?.user.timezone}
-            ready={!!me && !!projects && !!access && !!members && !!account}
-            slug={slug}
-            serverDismissedAt={account?.onboardingDismissedAt ?? null}
-            skippedSteps={account?.onboardingSkippedSteps ?? []}
-          />
+            <OnboardingCard
+              projectsCount={projects?.items.length ?? 0}
+              issuesCount={anyIssue.data?.items.length ?? 0}
+              membersCount={members?.length ?? 0}
+              apiKeysCount={access?.length ?? 0}
+              hasTimezone={!!me?.user.timezone}
+              ready={!!me && !!projects && !!access && !!members && !!account}
+              slug={slug}
+              serverDismissedAt={account?.onboardingDismissedAt ?? null}
+              skippedSteps={account?.onboardingSkippedSteps ?? []}
+            />
 
-          {/* ── Cockpit body: a wide work column + a compact ambient rail.
-              Primary (8/12) is "what should I do" — Focus, Pick-up,
-              Pipeline. The rail (4/12) is "what's going on around me" —
-              agents, standup, news — always visible beside your work
-              instead of scrolled past below it. At 2xl the balance shifts
-              to 7/5 so the rail can pack into two masonry columns rather
-              than becoming one very long, ragged stack.
-
-              The split waits for `xl` (1280px), not `lg` (1024px): at 1024px
-              an 8/12 primary column is only ~640px, which squeezes the
-              3-column Focus grid down to ~200px cards — worse than just
-              staying single-column full-width a little longer. `xl:items-start`
-              stops a sparser rail from stretching to match a taller primary
-              column (the CSS Grid default is stretch), which otherwise reads
-              as dead space on the shorter side once content volumes differ. */}
-          <div className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start">
-            <div className="space-y-5 xl:col-span-8 2xl:col-span-7">
-              {/* Focus (assigned, priority-first) + Pick-up (recent). Both
+            <div className="space-y-6" data-testid="dashboard-layout">
+              {/* Stage 1 — a bounded priority cockpit. The split waits for `xl`
+                  so Focus cards keep useful widths at tablet sizes. Crucially,
+                  this is no longer the page's permanent macro layout: once the
+                  priority band ends, every secondary module returns to a shared
+                  full-width board below. */}
+              <div
+                className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start"
+                data-testid="dashboard-priority-cockpit"
+              >
+                <div className="space-y-5 xl:col-span-8 2xl:col-span-7">
+                  {/* Focus (assigned, priority-first) + Pick-up (recent). Both
                   render rich auto-height cards. If there's no personal work
                   at all, Suggestions takes the slot as the primary handoff. */}
-              {focusCards.length === 0 && resumeCards.length === 0 && !myWorkLoading ? (
-                <SuggestionsStrip
-                  variant="primary"
-                  workspaceKey={workspaceKey}
-                  slug={slug}
+                  {showPrimarySuggestions ? (
+                    <SuggestionsStrip variant="primary" workspaceKey={workspaceKey} slug={slug} />
+                  ) : (
+                    <>
+                      {(focusCards.length > 0 || myWorkLoading) && (
+                        <section>
+                          <SectionHeader
+                            title="Focus today"
+                            hint="Assigned to you, priority first."
+                          />
+                          <WorkCardGrid
+                            cards={focusCards}
+                            isLoading={myWorkLoading}
+                            workspaceKey={workspaceKey}
+                            tz={prefs.timezone ?? null}
+                            slug={slug}
+                          />
+                        </section>
+                      )}
+                      {resumeCards.length > 0 && (
+                        <section>
+                          <SectionHeader
+                            title="Pick up where you left off"
+                            hint="Your most recently touched work."
+                          />
+                          <WorkCardGrid
+                            cards={resumeCards}
+                            isLoading={false}
+                            workspaceKey={workspaceKey}
+                            tz={prefs.timezone ?? null}
+                            slug={slug}
+                          />
+                        </section>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                <div className="space-y-5 xl:col-span-4 2xl:col-span-5">
+                  <ZoneDivider label="Live operations" />
+                  <DashboardStack
+                    widgets={priorityWidgets}
+                    layout={effLayout}
+                    editing={editing}
+                    onChange={persistLayout}
+                    columns={1}
+                  />
+                </div>
+              </div>
+
+              {/* Stage 2 — one responsive board for everything that may fold or
+                  move. Two columns begin at tablet width; wide screens gain a
+                  third track. Measured row spans pack unequal content without
+                  changing the DOM or keyboard reading order. */}
+              <section className="space-y-3" data-testid="dashboard-flow-board">
+                <ZoneDivider label="Workspace flow" />
+                <DashboardStack
+                  widgets={flowWidgets}
+                  layout={effLayout}
+                  editing={editing}
+                  onChange={persistLayout}
+                  columns={3}
                 />
-              ) : (
-                <>
-                  {(focusCards.length > 0 || myWorkLoading) && (
-                    <section>
-                      <SectionHeader
-                        title="Focus today"
-                        hint="Assigned to you, priority first."
-                      />
-                      <WorkCardGrid
-                        cards={focusCards}
-                        isLoading={myWorkLoading}
-                        workspaceKey={workspaceKey}
-                        tz={prefs.timezone ?? null}
-                        slug={slug}
-                      />
-                    </section>
-                  )}
-                  {resumeCards.length > 0 && (
-                    <section>
-                      <SectionHeader
-                        title="Pick up where you left off"
-                        hint="Your most recently touched work."
-                      />
-                      <WorkCardGrid
-                        cards={resumeCards}
-                        isLoading={false}
-                        workspaceKey={workspaceKey}
-                        tz={prefs.timezone ?? null}
-                        slug={slug}
-                      />
-                    </section>
-                  )}
-                </>
-              )}
-
-              <PipelineCard statusRows={statusRows} statusMax={statusMax} href={w("/issues")} />
-
-              <SuggestionsStrip
-                variant="secondary"
-                workspaceKey={workspaceKey}
-                slug={slug}
-              />
+              </section>
             </div>
-
-            <div className="space-y-5 xl:col-span-4 2xl:col-span-5">
-              <ZoneDivider label="Workspace & agents" />
-              <DashboardStack
-                widgets={widgets}
-                layout={effLayout}
-                editing={editing}
-                onChange={persistLayout}
-                columns={1}
-              />
-            </div>
-          </div>
           </div>
         </div>
       </div>
@@ -578,9 +654,7 @@ function useOnboardingDismissed(): [boolean, (next: boolean) => void] {
     } catch {
       /* ignore */
     }
-    window.dispatchEvent(
-      new CustomEvent("forge:onboarding-dismissed", { detail: next }),
-    );
+    window.dispatchEvent(new CustomEvent("forge:onboarding-dismissed", { detail: next }));
   }, []);
 
   return [dismissed, update];
@@ -646,11 +720,46 @@ function OnboardingCard({
 
   const allSteps: OnboardingStep[] = useMemo(
     () => [
-      { id: "project", label: "Create your first project", hint: "Group related issues.", done: projectsCount > 0, href: `/w/${slug}/projects`, icon: Rocket },
-      { id: "issue", label: "Create an issue", hint: "Capture work. Press C anywhere.", done: issuesCount > 0, action: "quick-create", icon: Plus },
-      { id: "member", label: "Invite a teammate", hint: "Work is better with others.", done: membersCount > 1, href: `/w/${slug}/settings/members`, icon: Mail },
-      { id: "api", label: "Create an API key", hint: "Wire Forge into Hermes, Claude, or Codex.", done: apiKeysCount > 0, href: `/w/${slug}/settings/access`, icon: KeyRound },
-      { id: "tz", label: "Set your timezone", hint: "Makes due dates sane.", done: hasTimezone, href: `/w/${slug}/settings/account`, icon: Globe },
+      {
+        id: "project",
+        label: "Create your first project",
+        hint: "Group related issues.",
+        done: projectsCount > 0,
+        href: `/w/${slug}/projects`,
+        icon: Rocket,
+      },
+      {
+        id: "issue",
+        label: "Create an issue",
+        hint: "Capture work. Press C anywhere.",
+        done: issuesCount > 0,
+        action: "quick-create",
+        icon: Plus,
+      },
+      {
+        id: "member",
+        label: "Invite a teammate",
+        hint: "Work is better with others.",
+        done: membersCount > 1,
+        href: `/w/${slug}/settings/members`,
+        icon: Mail,
+      },
+      {
+        id: "api",
+        label: "Create an API key",
+        hint: "Wire Forge into Hermes, Claude, or Codex.",
+        done: apiKeysCount > 0,
+        href: `/w/${slug}/settings/access`,
+        icon: KeyRound,
+      },
+      {
+        id: "tz",
+        label: "Set your timezone",
+        hint: "Makes due dates sane.",
+        done: hasTimezone,
+        href: `/w/${slug}/settings/account`,
+        icon: Globe,
+      },
     ],
     [projectsCount, issuesCount, membersCount, apiKeysCount, hasTimezone, slug],
   );
@@ -768,12 +877,7 @@ function ResumeSetupPill({
   const [dismissed, setDismissed] = useOnboardingDismissed();
   const memberDone = membersCount > 1 || skippedSteps.includes("member");
   const allDone =
-    ready &&
-    projectsCount > 0 &&
-    issuesCount > 0 &&
-    memberDone &&
-    apiKeysCount > 0 &&
-    hasTimezone;
+    ready && projectsCount > 0 && issuesCount > 0 && memberDone && apiKeysCount > 0 && hasTimezone;
   if (!ready || serverDismissedAt || !dismissed || allDone) return null;
   return (
     <button
@@ -788,13 +892,7 @@ function ResumeSetupPill({
   );
 }
 
-function OnboardingRow({
-  step,
-  onSkip,
-}: {
-  step: OnboardingStep;
-  onSkip?: () => void;
-}) {
+function OnboardingRow({ step, onSkip }: { step: OnboardingStep; onSkip?: () => void }) {
   const Icon = step.icon;
   const inner = (
     <div
@@ -880,6 +978,29 @@ function useGreeting() {
   return greeting;
 }
 
+/** Match the same breakpoints used by the shared CSS grid so its registry
+ * order packs wide and compact widgets without dense visual reordering. The
+ * DOM therefore remains the visual and keyboard order at every viewport. */
+function useDashboardFlowBreakpoint(): DashboardFlowBreakpoint {
+  const [breakpoint, setBreakpoint] = useState<DashboardFlowBreakpoint>("mobile");
+
+  useEffect(() => {
+    const desktop = window.matchMedia("(min-width: 1536px)");
+    const tablet = window.matchMedia("(min-width: 768px)");
+    const update = () =>
+      setBreakpoint(desktop.matches ? "desktop" : tablet.matches ? "tablet" : "mobile");
+    update();
+    desktop.addEventListener("change", update);
+    tablet.addEventListener("change", update);
+    return () => {
+      desktop.removeEventListener("change", update);
+      tablet.removeEventListener("change", update);
+    };
+  }, []);
+
+  return breakpoint;
+}
+
 // ---------------------------------------------------------------------------
 // Standup tile
 // ---------------------------------------------------------------------------
@@ -900,10 +1021,7 @@ function StandupTile({ slug }: { slug: string }) {
     !data.groups.blocked.length;
 
   const total = data
-    ? data.counts.closed +
-      data.counts.opened +
-      data.counts.inProgress +
-      data.counts.blocked
+    ? data.counts.closed + data.counts.opened + data.counts.inProgress + data.counts.blocked
     : 0;
 
   return (
@@ -927,18 +1045,13 @@ function StandupTile({ slug }: { slug: string }) {
           <div className="text-muted-foreground">Composing…</div>
         ) : empty ? (
           <div className="text-muted-foreground">
-            Quiet 24 hours. Close issues, leave comments, or move tickets and
-            it&apos;ll fill in.
+            Quiet 24 hours. Close issues, leave comments, or move tickets and it&apos;ll fill in.
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-4">
             <StandupCount label="Closed" n={data.counts.closed} tone="success" />
             <StandupCount label="Opened" n={data.counts.opened} tone="info" />
-            <StandupCount
-              label="Continuing"
-              n={data.counts.inProgress}
-              tone="warning"
-            />
+            <StandupCount label="Continuing" n={data.counts.inProgress} tone="warning" />
             <StandupCount label="Blocked" n={data.counts.blocked} tone="danger" />
           </div>
         )}
@@ -1038,8 +1151,8 @@ function SuggestionsStrip({
         </div>
         <div className="mt-3 text-sm font-medium">You&apos;re caught up.</div>
         <p className="mx-auto mt-1 max-w-sm text-xs text-muted-foreground">
-          No assigned work, no orphan issues in your projects, nothing
-          stalled. Start a new project to keep momentum.
+          No assigned work, no orphan issues in your projects, nothing stalled. Start a new project
+          to keep momentum.
         </p>
         <div className="mt-4 flex flex-wrap justify-center gap-2">
           <Link href={`/w/${slug}/projects`}>
@@ -1108,9 +1221,7 @@ function SuggestionsStrip({
                 <FallbackHeader
                   label="Stalled"
                   hint={
-                    data.stalledThresholdDays
-                      ? `> ${data.stalledThresholdDays}d quiet`
-                      : undefined
+                    data.stalledThresholdDays ? `> ${data.stalledThresholdDays}d quiet` : undefined
                   }
                 />
               }
@@ -1170,9 +1281,7 @@ function SuggestionsStrip({
               <FallbackHeader
                 label="Stalled"
                 hint={
-                  data.stalledThresholdDays
-                    ? `> ${data.stalledThresholdDays}d quiet`
-                    : undefined
+                  data.stalledThresholdDays ? `> ${data.stalledThresholdDays}d quiet` : undefined
                 }
               />
             }
@@ -1194,15 +1303,19 @@ type SuggestionItem = {
   priority: string;
   updatedAt: Date | string;
   status: { id: string; name: string; category: string; color: string };
-  project: { id: string; key: string; name: string; color: string | null; icon: string | null } | null;
+  project: {
+    id: string;
+    key: string;
+    name: string;
+    color: string | null;
+    icon: string | null;
+  } | null;
 };
 
 function FallbackHeader({ label, hint }: { label: string; hint?: string }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="truncate text-xs font-semibold text-foreground/90">
-        {label}
-      </span>
+      <span className="truncate text-xs font-semibold text-foreground/90">{label}</span>
       {hint && <span className="text-meta text-muted-foreground/70">{hint}</span>}
     </div>
   );
@@ -1257,10 +1370,7 @@ function SuggestionsCard({
                   {relativeTime(issue.updatedAt)}
                 </span>
               ) : (
-                <Badge
-                  className="ml-auto shrink-0"
-                  color={issue.status.color}
-                >
+                <Badge className="ml-auto shrink-0" color={issue.status.color}>
                   {issue.status.name}
                 </Badge>
               )}
@@ -1278,7 +1388,9 @@ function DashboardViewToggle({ slug }: { slug: string }) {
     staleTime: 5 * 60_000,
   });
   const setView = trpc.user.setDashboardView.useMutation({
-    onError: () => {/* silent — view toggle is best-effort persistence */},
+    onError: () => {
+      /* silent — view toggle is best-effort persistence */
+    },
   });
   const onCanvas = useCallback(() => {
     const id = personalCanvas.data?.id;
@@ -1293,7 +1405,10 @@ function DashboardViewToggle({ slug }: { slug: string }) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "\\") return;
       const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+      if (
+        target &&
+        (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)
+      ) {
         return;
       }
       e.preventDefault();

@@ -28,8 +28,7 @@ export function WhatsNewTile({
 
   // Newest dated entry vs. last-seen timestamp → "unseen" indicator.
   const latestDate = data?.entries.find((e) => e.date)?.date ?? null;
-  const hasUnseen =
-    !!latestDate && (!seenAt || new Date(latestDate) > new Date(seenAt));
+  const hasUnseen = !!latestDate && (!seenAt || new Date(latestDate) > new Date(seenAt));
 
   if (isLoading || !data) {
     return (
@@ -61,22 +60,15 @@ export function WhatsNewTile({
             aria-label="New changes since you last looked"
           />
         )}
-        <span className="min-w-0 text-meta text-muted-foreground/70">
-          recent changes
-        </span>
+        <span className="text-meta min-w-0 text-muted-foreground/70">recent changes</span>
       </header>
 
-      <div className="mb-2 text-meta font-medium text-foreground">
-        {first.heading}
-      </div>
+      <div className="text-meta mb-2 font-medium text-foreground">{first.heading}</div>
       <ul className="flex flex-col gap-1">
         {first.items.slice(0, 4).map((item, i) => (
-          <li
-            key={i}
-            className="flex items-start gap-2 text-xs text-muted-foreground"
-          >
+          <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
             <ItemTypeChip type={item.type} />
-            <span className="min-w-0 flex-1 leading-snug text-foreground/90">
+            <span className="line-clamp-2 min-w-0 flex-1 leading-snug text-foreground/90">
               {item.text}
             </span>
           </li>
@@ -88,7 +80,7 @@ export function WhatsNewTile({
           {rest.slice(0, 3).map((entry, i) => (
             <li
               key={`${entry.version}-${entry.heading}-${i}`}
-              className="truncate text-meta text-muted-foreground"
+              className="text-meta truncate text-muted-foreground"
               title={entry.heading}
             >
               {entry.heading}
@@ -99,7 +91,7 @@ export function WhatsNewTile({
 
       <Link
         href={`/w/${slug}/whats-new`}
-        className="mt-3 inline-block text-meta text-muted-foreground hover:text-foreground"
+        className="text-meta mt-3 inline-block text-muted-foreground hover:text-foreground"
       >
         View all →
       </Link>
@@ -107,21 +99,14 @@ export function WhatsNewTile({
   );
 }
 
-const TYPE_TONE: Record<
-  "added" | "changed" | "fixed" | "removed",
-  string
-> = {
+const TYPE_TONE: Record<"added" | "changed" | "fixed" | "removed", string> = {
   added: "border-success/40 bg-success/10 text-success",
   changed: "border-ember/40 bg-ember/10 text-ember",
   fixed: "border-border bg-subtle text-muted-foreground",
   removed: "border-danger/40 bg-danger/10 text-danger",
 };
 
-function ItemTypeChip({
-  type,
-}: {
-  type: "added" | "changed" | "fixed" | "removed";
-}) {
+function ItemTypeChip({ type }: { type: "added" | "changed" | "fixed" | "removed" }) {
   return (
     <span
       className={cn(

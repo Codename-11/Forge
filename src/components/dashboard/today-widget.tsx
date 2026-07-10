@@ -28,13 +28,7 @@ import { cn, formatIssueId } from "@/lib/utils";
  * Density-aware text utilities (`text-meta`, `text-id`) are used for
  * primary content so the Appearance setting cascades correctly.
  */
-export function TodayWidget({
-  slug,
-  workspaceKey,
-}: {
-  slug: string;
-  workspaceKey: string;
-}) {
+export function TodayWidget({ slug, workspaceKey }: { slug: string; workspaceKey: string }) {
   const { data, isLoading } = trpc.dashboard.today.useQuery();
 
   if (isLoading || !data) {
@@ -52,14 +46,16 @@ export function TodayWidget({
 
   if (allEmpty) {
     return (
-      <section className="rounded-lg border border-dashed border-border bg-card/30 p-5 text-center">
-        <div className="mx-auto grid h-9 w-9 place-items-center rounded-full bg-subtle text-muted-foreground">
+      <section className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-card/30 px-4 py-3">
+        <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-subtle text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5" />
         </div>
-        <div className="mt-2 text-sm font-medium">Nothing scheduled</div>
-        <p className="mx-auto mt-0.5 max-w-sm text-meta text-muted-foreground">
-          No active sprint, no due dates this week. Fluid week ahead.
-        </p>
+        <div className="min-w-0">
+          <div className="text-sm font-medium">Nothing scheduled</div>
+          <p className="text-meta truncate text-muted-foreground">
+            No active sprint or due dates this week — fluid week ahead.
+          </p>
+        </div>
       </section>
     );
   }
@@ -69,26 +65,13 @@ export function TodayWidget({
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         <Calendar className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
         <span className="text-sm font-medium">Today</span>
-        <span className="min-w-0 text-meta text-muted-foreground/70">
-          this week at a glance
-        </span>
+        <span className="text-meta min-w-0 text-muted-foreground/70">this week at a glance</span>
       </header>
 
       <div className="divide-y divide-border">
-        {hasSprint && (
-          <SprintCountdown
-            cycle={data.activeCycle!}
-            slug={slug}
-          />
-        )}
+        {hasSprint && <SprintCountdown cycle={data.activeCycle!} slug={slug} />}
 
-        {hasDueSoon && (
-          <DueSoonList
-            items={data.dueSoon}
-            slug={slug}
-            workspaceKey={workspaceKey}
-          />
-        )}
+        {hasDueSoon && <DueSoonList items={data.dueSoon} slug={slug} workspaceKey={workspaceKey} />}
 
         <WeekPeek weekPeek={data.weekPeek} slug={slug} />
       </div>
@@ -141,7 +124,7 @@ function SprintCountdown({
           <span className="ml-2 text-muted-foreground">— {label}</span>
         </div>
       </div>
-      <span className="hidden shrink-0 text-meta text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 sm:inline">
+      <span className="text-meta hidden shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 sm:inline">
         Open →
       </span>
     </Link>
@@ -167,7 +150,13 @@ type DueSoonItem = {
   priority: string;
   dueDate: Date | string | null;
   status: { id: string; name: string; category: string; color: string };
-  project: { id: string; key: string; name: string; color: string | null; icon: string | null } | null;
+  project: {
+    id: string;
+    key: string;
+    name: string;
+    color: string | null;
+    icon: string | null;
+  } | null;
 };
 
 function DueSoonList({
@@ -201,10 +190,7 @@ function DueSoonList({
                 {issue.title}
               </span>
               <DueChip dueDate={issue.dueDate!} />
-              <Badge
-                className="ml-1 shrink-0"
-                color={issue.status.color}
-              >
+              <Badge className="ml-1 shrink-0" color={issue.status.color}>
                 {issue.status.name}
               </Badge>
             </Link>
@@ -218,9 +204,7 @@ function DueSoonList({
 function DueChip({ dueDate }: { dueDate: Date | string }) {
   const date = useMemo(() => new Date(dueDate), [dueDate]);
   const now = new Date();
-  const diffDays = Math.round(
-    (date.getTime() - now.getTime()) / (24 * 60 * 60 * 1000),
-  );
+  const diffDays = Math.round((date.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
   const overdue = diffDays < 0;
   const today = diffDays === 0;
   let label: string;
@@ -278,7 +262,7 @@ function WeekPeek({
               <Link
                 href={`/w/${slug}/issues?dueOn=${d.date}`}
                 className={cn(
-                  "focus-ring group flex flex-col items-center gap-1 rounded-md border px-1 py-1.5 text-meta transition-colors",
+                  "focus-ring text-meta group flex flex-col items-center gap-1 rounded-md border px-1 py-1.5 transition-colors",
                   isToday
                     ? "border-ember/50 bg-ember/10 text-foreground"
                     : "border-border/60 hover:border-ember/30 hover:bg-subtle/40",
@@ -292,10 +276,7 @@ function WeekPeek({
                   {d.date.slice(8, 10)}
                 </span>
                 <span
-                  className={cn(
-                    "h-1 w-1 rounded-full",
-                    hasDot ? "bg-ember" : "bg-transparent",
-                  )}
+                  className={cn("h-1 w-1 rounded-full", hasDot ? "bg-ember" : "bg-transparent")}
                   aria-hidden
                 />
               </Link>

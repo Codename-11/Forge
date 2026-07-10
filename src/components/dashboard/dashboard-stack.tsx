@@ -20,9 +20,9 @@ import { cn } from "@/lib/utils";
 
 /**
  * Customizable dashboard widget grid. Renders widgets in a user-defined
- * order across a responsive 2-column grid; each widget is `half` (one
- * column) or `full` (spans both). Order + hidden set + per-widget width
- * persist server-side via `dashboardPrefs`.
+ * order across a responsive grid; each widget is `half` (one column) or
+ * `full` (a two-column span). Order + hidden set + per-widget width persist
+ * server-side via `dashboardPrefs`.
  *
  * Customize mode (`editing`) layers in:
  * - **Drag to reorder** — grab anywhere on a tile (a full-body overlay is
@@ -59,10 +59,7 @@ export type DashboardLayout = {
 /** Resolve the effective widget order: saved order first (known ids only),
  *  then any widgets the saved order didn't mention, appended in registry
  *  order. */
-export function orderWidgets(
-  widgets: DashboardWidget[],
-  order: string[],
-): DashboardWidget[] {
+export function orderWidgets(widgets: DashboardWidget[], order: string[]): DashboardWidget[] {
   const known = new Map(widgets.map((w) => [w.id, w] as const));
   const seen = new Set<string>();
   const out: DashboardWidget[] = [];
@@ -75,6 +72,47 @@ export function orderWidgets(
   }
   for (const w of widgets) if (!seen.has(w.id)) out.push(w);
   return out;
+}
+
+/** Replace only this stack's ids inside a workspace-wide saved order.
+ *
+ * The dashboard renders more than one stack (the priority cockpit and the
+ * shared flow board), but both deliberately share one persisted preference
+ * object. Reordering one stack must therefore retain ids owned by the other
+ * stack instead of overwriting the global order with a scoped subset. */
+export function mergeScopedOrder(
+  globalOrder: string[],
+  scopedOrder: string[],
+  scopeIds: Iterable<string>,
+): string[] {
+  const scope = new Set(scopeIds);
+  const seenScoped = new Set<string>();
+  const nextScoped = scopedOrder.filter((id) => {
+    if (!scope.has(id) || seenScoped.has(id)) return false;
+    seenScoped.add(id);
+    return true;
+  });
+
+  for (const id of globalOrder) {
+    if (scope.has(id) && !seenScoped.has(id)) {
+      seenScoped.add(id);
+      nextScoped.push(id);
+    }
+  }
+
+  const merged: string[] = [];
+  let scopedIndex = 0;
+  for (const id of globalOrder) {
+    if (scope.has(id)) {
+      const replacement = nextScoped[scopedIndex++];
+      if (replacement) merged.push(replacement);
+    } else {
+      merged.push(id);
+    }
+  }
+  merged.push(...nextScoped.slice(scopedIndex));
+
+  return merged.filter((id, index) => merged.indexOf(id) === index);
 }
 
 // Pointer travel (px) on the edge handle before a width flip commits.
@@ -100,7 +138,7 @@ export function DashboardStack({
   /** 1 forces a single-column stack (e.g. a narrow rail) — half/full width
    *  then both render at the rail's full width, so the resize control is
    *  hidden rather than offered with no visible effect. */
-  columns?: 1 | 2;
+  columns?: 1 | 2 | 3;
 }) {
   const ordered = orderWidgets(widgets, layout.order);
   const orderedIds = ordered.map((w) => w.id);
@@ -114,11 +152,18 @@ export function DashboardStack({
   const visible = ordered.filter((w) => !hidden.has(w.id));
   const hiddenWidgets = ordered.filter((w) => hidden.has(w.id));
 
-  const widthOf = (w: DashboardWidget): WidgetWidth =>
-    widths[w.id] ?? w.defaultWidth ?? "full";
+  const widthOf = (w: DashboardWidget): WidgetWidth => widths[w.id] ?? w.defaultWidth ?? "full";
 
   function commitOrder(nextOrder: string[]) {
-    onChange({ order: nextOrder, hidden: [...hidden], widths });
+    onChange({
+      order: mergeScopedOrder(
+        layout.order,
+        nextOrder,
+        widgets.map((widget) => widget.id),
+      ),
+      hidden: [...hidden],
+      widths,
+    });
   }
 
   /** Move `sourceId` before `targetId` (or to the end of the visible run
@@ -180,18 +225,22 @@ export function DashboardStack({
     const from = visibleIds.indexOf(id);
     const to = from + delta;
     if (from < 0 || to < 0 || to >= visibleIds.length) return;
-    reorder(id, delta < 0 ? visibleIds[to] : visibleIds[to + 1] ?? null);
+    reorder(id, delta < 0 ? visibleIds[to] : (visibleIds[to + 1] ?? null));
   }
 
   function setWidth(id: string, width: WidgetWidth) {
-    onChange({ order: orderedIds, hidden: [...hidden], widths: { ...widths, [id]: width } });
+    onChange({
+      order: layout.order,
+      hidden: [...hidden],
+      widths: { ...widths, [id]: width },
+    });
   }
   function hide(id: string) {
-    onChange({ order: orderedIds, hidden: [...hidden, id], widths });
+    onChange({ order: layout.order, hidden: [...hidden, id], widths });
   }
   function show(id: string) {
     onChange({
-      order: orderedIds,
+      order: layout.order,
       hidden: [...hidden].filter((h) => h !== id),
       widths,
     });
@@ -201,6 +250,7 @@ export function DashboardStack({
     <div>
       <div
         ref={gridRef}
+        data-dashboard-columns={columns}
         style={editing ? undefined : { gridAutoRows: `${MASONRY_ROW_HEIGHT}px` }}
         className={cn(
           "grid grid-cols-1 items-start gap-4",
@@ -208,12 +258,13 @@ export function DashboardStack({
           // sm..xl range, where the outer page hasn't split into the
           // primary/rail layout yet and this stack is rendering as a
           // full-width section — forcing it to 1 column there just adds
-          // unnecessary scroll. It collapses back to 1 at `xl`, then opens
-          // to 2 again at `2xl` where the page gives the ambient rail 5/12
-          // of the canvas. This is the wide-screen gap-filling layout.
+          // unnecessary scroll. It collapses back to 1 at `xl`, where the
+          // priority cockpit gives the operational stack a narrow rail.
           columns === 1
-            ? "sm:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2"
-            : "lg:grid-cols-2",
+            ? "sm:grid-cols-2 xl:grid-cols-1"
+            : columns === 3
+              ? "md:grid-cols-2 2xl:grid-cols-3"
+              : "lg:grid-cols-2",
         )}
       >
         {visible.map((w, index) => (
@@ -246,7 +297,7 @@ export function DashboardStack({
                 key={w.id}
                 type="button"
                 onClick={() => show(w.id)}
-                className="focus-ring inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-2 py-1 text-meta hover:border-ember/40 hover:text-foreground"
+                className="focus-ring text-meta inline-flex items-center gap-1 rounded-md border border-border bg-card/40 px-2 py-1 hover:border-ember/40 hover:text-foreground"
               >
                 <Plus className="h-3 w-3" /> {w.title}
               </button>
@@ -276,7 +327,7 @@ function DashboardTile({
   width: WidgetWidth;
   editing: boolean;
   masonry: boolean;
-  columns: 1 | 2;
+  columns: 1 | 2 | 3;
   isFirst: boolean;
   isLast: boolean;
   onDrag: (e: PointerEvent | MouseEvent | TouchEvent) => void;
@@ -371,28 +422,39 @@ function DashboardTile({
         !editing && "empty:hidden",
         isFull &&
           (columns === 1
-            ? "sm:col-span-2 xl:col-span-1 2xl:col-span-2"
-            : "lg:col-span-2"),
-        editing && "rounded-lg ring-1 ring-dashed ring-ember/40",
+            ? "sm:col-span-2 xl:col-span-1"
+            : columns === 3
+              ? "md:col-span-2"
+              : "lg:col-span-2"),
+        editing && "ring-dashed rounded-lg ring-1 ring-ember/40",
         dragging && "shadow-[0_18px_44px_rgba(0,0,0,0.20)]",
       )}
     >
       {editing && (
-        <div className="relative z-20 flex flex-wrap items-center gap-1.5 rounded-t-lg border-b border-dashed border-ember/30 bg-ember/5 px-2.5 py-1.5 text-meta text-muted-foreground">
+        <div className="text-meta relative z-20 flex flex-wrap items-center gap-1.5 rounded-t-lg border-b border-dashed border-ember/30 bg-ember/5 px-2.5 py-1.5 text-muted-foreground">
           <GripVertical className="h-3.5 w-3.5 shrink-0 text-muted-foreground/70" aria-hidden />
           <span className="min-w-0 flex-1 truncate font-medium text-foreground/80">
             {widget.title}
           </span>
           <div className="ml-auto inline-flex shrink-0 items-center gap-0.5">
-            {columns === 2 && (
+            {columns !== 1 && (
               <button
                 type="button"
                 onClick={() => onSetWidth(isFull ? "half" : "full")}
-                className="focus-ring hidden h-7 w-7 place-items-center rounded hover:bg-subtle hover:text-foreground lg:grid"
+                className={cn(
+                  "focus-ring hidden h-7 w-7 place-items-center rounded hover:bg-subtle hover:text-foreground",
+                  columns === 3 ? "md:grid" : "lg:grid",
+                )}
                 title={isFull ? "Make half width" : "Make full width"}
-                aria-label={isFull ? `Make ${widget.title} half width` : `Make ${widget.title} full width`}
+                aria-label={
+                  isFull ? `Make ${widget.title} half width` : `Make ${widget.title} full width`
+                }
               >
-                {isFull ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+                {isFull ? (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
               </button>
             )}
             <button
@@ -428,12 +490,10 @@ function DashboardTile({
 
       {editing ? (
         <>
-          <div className="peer pointer-events-none select-none p-2 opacity-90">
-            {widget.node}
-          </div>
+          <div className="peer pointer-events-none select-none p-2 opacity-90">{widget.node}</div>
           {/* Shown only when the widget rendered nothing — so an unused tile
               reads as "hide me" instead of a mysterious empty box. */}
-          <div className="hidden px-3 py-6 text-center text-meta text-muted-foreground/70 peer-empty:block">
+          <div className="text-meta hidden px-3 py-6 text-center text-muted-foreground/70 peer-empty:block">
             Not in use right now — hide it to declutter.
           </div>
         </>
@@ -452,12 +512,15 @@ function DashboardTile({
             aria-hidden
           />
           {/* Right-edge resize: drag in/out past a threshold to snap width. */}
-          {columns === 2 && (
+          {columns !== 1 && (
             <div
               onPointerDown={onResizePointerDown}
               onPointerMove={onResizePointerMove}
               onPointerUp={onResizePointerUp}
-              className="group/resize absolute -right-1.5 bottom-2 top-10 z-30 hidden w-4 cursor-ew-resize touch-none place-items-center lg:grid"
+              className={cn(
+                "group/resize absolute -right-1.5 bottom-2 top-10 z-30 hidden w-4 cursor-ew-resize touch-none place-items-center",
+                columns === 3 ? "md:grid" : "lg:grid",
+              )}
               title={isFull ? "Drag in for half width" : "Drag out for full width"}
               aria-hidden
             >

@@ -11895,3 +11895,36 @@ Verification: `pnpm lint` (0 errors; pre-existing native-select warnings),
 `pnpm typecheck`, `pnpm test` (1,074 passed / 12 skipped), and
 `pnpm build:app` all complete. `pnpm test:e2e` reached 28/34; six existing chat,
 native-select interaction, and roadmap tests failed outside this change set.
+
+## 2026-07-10 — Dashboard priority cockpit + responsive workspace flow
+
+Followed the first masonry pass with a structural dashboard fix after the
+wide/zoomed-out production capture still showed essentially the same problem:
+two independent page columns could each pack internally, but the shorter work
+column still ended early while the ambient rail continued far below it.
+
+- **Two-stage layout:** the top is now a bounded priority cockpit (personal
+  Focus/Pick-up on the left; agent attention, agent activity, and standup on
+  the right). Once that band ends, every secondary widget returns to one
+  full-width **Workspace flow** board instead of retaining a permanent rail.
+- **Responsive shared board:** Pipeline, Suggestions, What's New, Today, Notes,
+  Workspace activity, Pulse, and Ideas render in a 3/2/1-column grid at
+  desktop/tablet/mobile widths. Wide modules span two desktop tracks; compact
+  modules fill the third. Breakpoint-specific registry order keeps visual,
+  DOM, and keyboard order aligned without CSS dense packing.
+- **Bounded ambient content:** What's New clamps entry summaries; Today uses a
+  compact empty state; Workspace activity shows five recent rows on the
+  dashboard and links directly to the full Command Center feed.
+- **Customization safety:** the priority cockpit and shared flow board keep one
+  persisted preference object, but scoped reorder operations now preserve the
+  other stack's ids. Older saved layouts migrate once so the new Pipeline and
+  Suggestions positions do not get appended at the bottom.
+- **Responsive coverage:** added a Playwright layout check at 1600, 1024, and
+  390 px, including expected column counts, DOM order, horizontal overflow,
+  and visual evidence. Added unit coverage for scoped order merging.
+
+Verification: `pnpm lint` (0 errors; pre-existing warnings), `pnpm typecheck`,
+`pnpm test` (1,089 passed / 1 skipped), full `pnpm test:e2e` (35 passed), and a
+final focused responsive dashboard E2E pass (1 passed). Production builds
+completed through the E2E build path. Visual QA passed and is recorded in
+`design-qa.md`.
