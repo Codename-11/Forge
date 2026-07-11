@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   mergeScopedOrder,
   orderWidgets,
+  priorityColumnsForWorkCount,
   type DashboardWidget,
 } from "@/components/dashboard/dashboard-stack";
+import { formatPulseCount } from "@/components/dashboard/pulse-tile";
 
 const widget = (id: string): DashboardWidget => ({
   id,
@@ -52,5 +54,23 @@ describe("mergeScopedOrder", () => {
         ["pipeline", "today"],
       ),
     ).toEqual(["pipeline", "today", "agent-activity"]);
+  });
+});
+
+describe("formatPulseCount", () => {
+  it("keeps operational metrics bounded without losing the exact title value", () => {
+    expect(formatPulseCount(0)).toBe("0");
+    expect(formatPulseCount(999)).toBe("999");
+    expect(formatPulseCount(1_000)).toBe("999+");
+    expect(formatPulseCount(Number.POSITIVE_INFINITY)).toBe("0");
+  });
+});
+
+describe("priorityColumnsForWorkCount", () => {
+  it("stacks operations beside a tall work canvas and compacts sparse states", () => {
+    expect(priorityColumnsForWorkCount(6)).toBe(2);
+    expect(priorityColumnsForWorkCount(8)).toBe(2);
+    expect(priorityColumnsForWorkCount(9)).toBe(1);
+    expect(priorityColumnsForWorkCount(12)).toBe(1);
   });
 });

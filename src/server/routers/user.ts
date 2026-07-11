@@ -47,6 +47,10 @@ const ME_SELECT = {
  * widget registry), so a removed widget id just lingers harmlessly.
  */
 const DASHBOARD_PREFS = z.object({
+  // Incremented when the default composition changes structurally. The
+  // client can then migrate stale order/width overrides once without a DB
+  // migration because this preference object already lives in JSON.
+  version: z.number().int().min(1).max(10).optional(),
   order: z.array(z.string()).max(64).default([]),
   collapsed: z.array(z.string()).max(64).default([]),
   hidden: z.array(z.string()).max(64).default([]),
@@ -100,15 +104,13 @@ export const userRouter = router({
     }),
 
   /** Persist the user's dashboard layout (widget order + collapsed/hidden). */
-  setDashboardPrefs: protectedProcedure
-    .input(DASHBOARD_PREFS)
-    .mutation(async ({ ctx, input }) => {
-      return ctx.db.user.update({
-        where: { id: ctx.session.user.id },
-        data: { dashboardPrefs: input },
-        select: ME_SELECT,
-      });
-    }),
+  setDashboardPrefs: protectedProcedure.input(DASHBOARD_PREFS).mutation(async ({ ctx, input }) => {
+    return ctx.db.user.update({
+      where: { id: ctx.session.user.id },
+      data: { dashboardPrefs: input },
+      select: ME_SELECT,
+    });
+  }),
 
   /** Stamp the changelog as seen now (clears the What's New "unseen" dot). */
   markChangelogSeen: protectedProcedure.mutation(async ({ ctx }) => {
@@ -129,10 +131,7 @@ export const userRouter = router({
   updateMissionControlPrefs: protectedProcedure
     .input(
       z.object({
-        missionControlDefaultTab: z
-          .enum(["live", "queue", "agents", "chat"])
-          .nullable()
-          .optional(),
+        missionControlDefaultTab: z.enum(["live", "queue", "agents", "chat"]).nullable().optional(),
         /**
          * Optional workspace scope. When supplied, the pref is
          * written to the caller's Membership row in that workspace
@@ -199,8 +198,7 @@ export const userRouter = router({
         }),
       ]);
       return {
-        resolved:
-          membership?.missionControlDefaultTab ?? user?.missionControlDefaultTab ?? null,
+        resolved: membership?.missionControlDefaultTab ?? user?.missionControlDefaultTab ?? null,
         membership: membership?.missionControlDefaultTab ?? null,
         user: user?.missionControlDefaultTab ?? null,
       };

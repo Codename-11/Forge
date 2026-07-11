@@ -47,7 +47,10 @@ export function WhatsNewTile({
   // there's more without taking the whole tile.
   const [first, ...rest] = data.entries;
   return (
-    <div className="rounded-lg border border-border bg-card/40 p-4">
+    <div
+      className="min-w-0 overflow-hidden rounded-lg border border-border bg-card/40 p-4"
+      data-testid="dashboard-whats-new"
+    >
       <header className="mb-2 flex flex-wrap items-center gap-2">
         <Sparkles className="h-3.5 w-3.5 text-ember" aria-hidden />
         <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -63,10 +66,14 @@ export function WhatsNewTile({
         <span className="text-meta min-w-0 text-muted-foreground/70">recent changes</span>
       </header>
 
-      <div className="text-meta mb-2 font-medium text-foreground">{first.heading}</div>
+      <div className="text-meta mb-2 line-clamp-2 font-medium text-foreground">{first.heading}</div>
       <ul className="flex flex-col gap-1">
         {first.items.slice(0, 4).map((item, i) => (
-          <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground">
+          <li
+            key={i}
+            className="flex min-w-0 items-start gap-2 text-xs text-muted-foreground"
+            data-whats-new-item
+          >
             <ItemTypeChip type={item.type} />
             <span className="line-clamp-2 min-w-0 flex-1 leading-snug text-foreground/90">
               {item.text}
@@ -82,6 +89,7 @@ export function WhatsNewTile({
               key={`${entry.version}-${entry.heading}-${i}`}
               className="text-meta truncate text-muted-foreground"
               title={entry.heading}
+              data-whats-new-history
             >
               {entry.heading}
             </li>

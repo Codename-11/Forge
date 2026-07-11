@@ -36,6 +36,7 @@ import { AgentAttentionPanel } from "@/components/agent-attention-panel";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import {
   DashboardStack,
+  priorityColumnsForWorkCount,
   type DashboardLayout,
   type DashboardWidget,
 } from "@/components/dashboard/dashboard-stack";
@@ -69,41 +70,15 @@ const PRIORITY_GLYPH: Record<string, string> = {
 };
 const ONBOARDING_KEY = "forge:onboarding:dismissed";
 const ONBOARDING_DONE_TOAST = "forge:onboarding:done-toast";
+const DASHBOARD_LAYOUT_VERSION = 2;
 type DashboardFlowBreakpoint = "mobile" | "tablet" | "desktop";
 const FLOW_ORDER: Record<DashboardFlowBreakpoint, readonly string[]> = {
   // Three tracks: pair every wide module with a compact third-column tile.
-  desktop: [
-    "pipeline",
-    "whats-new",
-    "suggestions",
-    "today",
-    "quick-notes",
-    "pulse",
-    "workspace-activity",
-    "ideas",
-  ],
+  desktop: ["pipeline", "whats-new", "suggestions", "quick-notes", "workspace-activity", "ideas"],
   // Two tracks: wide modules take complete rows; compact modules pair up.
-  tablet: [
-    "pipeline",
-    "suggestions",
-    "whats-new",
-    "today",
-    "quick-notes",
-    "workspace-activity",
-    "pulse",
-    "ideas",
-  ],
+  tablet: ["pipeline", "suggestions", "whats-new", "ideas", "quick-notes", "workspace-activity"],
   // One track: preserve the operational reading order.
-  mobile: [
-    "pipeline",
-    "whats-new",
-    "today",
-    "suggestions",
-    "quick-notes",
-    "workspace-activity",
-    "pulse",
-    "ideas",
-  ],
+  mobile: ["pipeline", "whats-new", "suggestions", "quick-notes", "workspace-activity", "ideas"],
 };
 
 export default function DashboardPage() {
@@ -133,6 +108,7 @@ export default function DashboardPage() {
   const resumeCards = myWork.data?.resume ?? [];
   const myWorkLoading = myWork.isLoading || !me;
   const flowBreakpoint = useDashboardFlowBreakpoint();
+  const priorityColumnCount = priorityColumnsForWorkCount(focusCards.length + resumeCards.length);
   const showPrimarySuggestions =
     focusCards.length === 0 && resumeCards.length === 0 && !myWorkLoading;
 
@@ -158,27 +134,37 @@ export default function DashboardPage() {
     if (layoutSeeded.current || !account) return;
     layoutSeeded.current = true;
     const p = account.dashboardPrefs as {
+      version?: number;
       order?: string[];
       hidden?: string[];
       widths?: Record<string, "half" | "full">;
     } | null;
     const savedOrder = p?.order ?? [];
-    // Pipeline + Suggestions moved into the customizable shared board in
-    // this layout generation. An older saved order would append both after
-    // every ambient widget and recreate the imbalance we are removing, so
-    // start that one-time migration from the new registry order.
+    // Layout v2 moves Pulse + Schedule into the priority cockpit and gives
+    // What's New the compact right-hand slot in Workspace flow. Reset order
+    // and width overrides once so older preferences cannot recreate the
+    // previous composition; hidden choices remain intentional and survive.
+    const currentVersion = p?.version === DASHBOARD_LAYOUT_VERSION;
     const order =
+      currentVersion &&
       savedOrder.length > 0 &&
       (!savedOrder.includes("pipeline") || !savedOrder.includes("suggestions"))
         ? []
-        : savedOrder;
-    setLayout({ order, hidden: p?.hidden ?? [], widths: p?.widths ?? {} });
+        : currentVersion
+          ? savedOrder
+          : [];
+    setLayout({
+      order,
+      hidden: p?.hidden ?? [],
+      widths: currentVersion ? (p?.widths ?? {}) : {},
+    });
   }, [account]);
   const effLayout: DashboardLayout = layout ?? { order: [], hidden: [], widths: {} };
   const persistLayout = useCallback(
     (next: DashboardLayout) => {
       setLayout(next);
       setPrefsMut.mutate({
+        version: DASHBOARD_LAYOUT_VERSION,
         order: next.order,
         hidden: next.hidden,
         collapsed: [],
@@ -206,14 +192,21 @@ export default function DashboardPage() {
         node: <AgentActivityTile slug={slug} />,
       },
       { id: "standup", title: "Standup", defaultWidth: "half", node: <StandupTile slug={slug} /> },
+      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
+      {
+        id: "today",
+        title: "Schedule",
+        defaultWidth: "half",
+        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} maxDueSoon={3} />,
+      },
     ],
-    [slug],
+    [slug, workspaceKey],
   );
 
   // Everything that can flex, fold, or recede lives in one shared board.
-  // At wide viewports it has three columns; `full` widgets span two so the
-  // pipeline and activity feeds remain scannable while compact widgets fill
-  // the third track. DOM order remains the priority/keyboard order.
+  // At wide viewports it has three columns: Pipeline + What's New form the
+  // bounded 2+1 lead row, then substantial flow modules reclaim all three
+  // tracks. DOM order remains the priority/keyboard order.
   const flowWidgets: DashboardWidget[] = useMemo(() => {
     const registry: DashboardWidget[] = [
       {
@@ -230,18 +223,13 @@ export default function DashboardPage() {
         defaultWidth: "half",
         node: <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />,
       },
-      {
-        id: "today",
-        title: "Today",
-        defaultWidth: "half",
-        node: <TodayWidget slug={slug} workspaceKey={workspaceKey} />,
-      },
       ...(!showPrimarySuggestions
         ? [
             {
               id: "suggestions",
               title: "Suggestions",
               defaultWidth: "full" as const,
+              fullBleedAtDesktop: true,
               node: (
                 <SuggestionsStrip variant="secondary" workspaceKey={workspaceKey} slug={slug} />
               ),
@@ -252,15 +240,16 @@ export default function DashboardPage() {
         id: "quick-notes",
         title: "Notes & journal",
         defaultWidth: "full",
+        fullBleedAtDesktop: true,
         node: <QuickNotesWidget />,
       },
       {
         id: "workspace-activity",
         title: "Workspace activity",
         defaultWidth: "full",
+        fullBleedAtDesktop: true,
         node: <WorkspaceActivityTimeline limit={5} viewAllHref={`/w/${slug}/command-center`} />,
       },
-      { id: "pulse", title: "Pulse", defaultWidth: "half", node: <PulseTile slug={slug} /> },
       { id: "ideas", title: "Ideas", defaultWidth: "half", node: <IdeasTile slug={slug} /> },
     ];
     const byId = new Map(registry.map((widget) => [widget.id, widget] as const));
@@ -412,14 +401,14 @@ export default function DashboardPage() {
                   )}
                 </div>
 
-                <div className="space-y-5 xl:col-span-4 2xl:col-span-5">
+                <div className="min-w-0 space-y-5 xl:col-span-4 2xl:col-span-5">
                   <ZoneDivider label="Live operations" />
                   <DashboardStack
                     widgets={priorityWidgets}
                     layout={effLayout}
                     editing={editing}
                     onChange={persistLayout}
-                    columns={1}
+                    columns={priorityColumnCount}
                   />
                 </div>
               </div>
@@ -428,7 +417,7 @@ export default function DashboardPage() {
                   move. Two columns begin at tablet width; wide screens gain a
                   third track. Measured row spans pack unequal content without
                   changing the DOM or keyboard reading order. */}
-              <section className="space-y-3" data-testid="dashboard-flow-board">
+              <section className="min-w-0 space-y-3" data-testid="dashboard-flow-board">
                 <ZoneDivider label="Workspace flow" />
                 <DashboardStack
                   widgets={flowWidgets}
@@ -1048,7 +1037,7 @@ function StandupTile({ slug }: { slug: string }) {
             Quiet 24 hours. Close issues, leave comments, or move tickets and it&apos;ll fill in.
           </div>
         ) : (
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
             <StandupCount label="Closed" n={data.counts.closed} tone="success" />
             <StandupCount label="Opened" n={data.counts.opened} tone="info" />
             <StandupCount label="Continuing" n={data.counts.inProgress} tone="warning" />

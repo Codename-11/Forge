@@ -28,14 +28,11 @@ export function PulseTile({ slug }: { slug: string }) {
 
   const openCount = active.data?.items.length ?? 0;
   const inProgress =
-    active.data?.items.filter((i) => i.status.category === "IN_PROGRESS")
-      .length ?? 0;
+    active.data?.items.filter((i) => i.status.category === "IN_PROGRESS").length ?? 0;
   const weekAgo = Date.now() - 7 * 86_400_000;
   const doneThisWeek =
     done.data?.items.filter(
-      (i) =>
-        i.status.category === "DONE" &&
-        new Date(i.updatedAt).getTime() >= weekAgo,
+      (i) => i.status.category === "DONE" && new Date(i.updatedAt).getTime() >= weekAgo,
     ).length ?? 0;
 
   const cycle = sprint.data ?? null;
@@ -50,10 +47,7 @@ export function PulseTile({ slug }: { slug: string }) {
     endsAt = new Date(cycle.endsAt);
     const span = endsAt.getTime() - startsAt.getTime();
     if (span > 0) {
-      progress = Math.min(
-        1,
-        Math.max(0, (Date.now() - startsAt.getTime()) / span),
-      );
+      progress = Math.min(1, Math.max(0, (Date.now() - startsAt.getTime()) / span));
     }
   }
 
@@ -62,46 +56,60 @@ export function PulseTile({ slug }: { slug: string }) {
   const tiles = [
     { label: "Open", value: openCount, hint: "active issues", href: `/w/${slug}/issues` },
     { label: "In progress", value: inProgress, hint: "agents + humans", href: `/w/${slug}/issues` },
-    { label: "Done / wk", value: doneThisWeek, hint: "last 7 days", href: `/w/${slug}/issues?status=done` },
-    { label: "Sprint", value: sprintName, hint: cycle ? "active" : "none", href: `/w/${slug}/cycles`, mono: false },
+    {
+      label: "Done / wk",
+      value: doneThisWeek,
+      hint: "last 7 days",
+      href: `/w/${slug}/issues?status=done`,
+    },
+    {
+      label: "Sprint",
+      value: sprintName,
+      hint: cycle ? "active" : "none",
+      href: `/w/${slug}/cycles`,
+      mono: false,
+    },
   ];
 
   return (
-    <section className="rounded-lg border border-border bg-card/40 p-4">
+    <section
+      className="min-w-0 overflow-hidden rounded-lg border border-border bg-card/40 p-4"
+      data-testid="dashboard-pulse"
+    >
       <header className="mb-3 flex flex-wrap items-center gap-2">
         <Activity className="h-3.5 w-3.5 text-muted-foreground" />
         <h3 className="text-sm font-semibold">Pulse</h3>
-        <span className="ml-auto shrink-0 text-meta text-muted-foreground">
-          last 7 days
-        </span>
+        <span className="text-meta ml-auto shrink-0 text-muted-foreground">last 7 days</span>
       </header>
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-2">
         {tiles.map((t) => (
           <Link
             key={t.label}
             href={t.href}
-            className="focus-ring rounded-md border border-border bg-background px-2 py-2 transition-colors hover:border-ember/40"
+            className="focus-ring min-w-0 overflow-hidden rounded-md border border-border bg-background px-2 py-2 transition-colors hover:border-ember/40"
           >
-            <div className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+            <div className="truncate text-[0.625rem] uppercase tracking-wider text-muted-foreground">
               {t.label}
             </div>
             <div
               className={
-                "mt-0.5 text-xl font-semibold tracking-tight" +
+                "mt-0.5 truncate text-xl font-semibold tracking-tight" +
                 (t.mono === false ? "" : " tabular-nums") +
                 (loading ? " animate-pulse text-muted-foreground/40" : "")
               }
+              data-pulse-stat={t.label}
+              title={loading ? undefined : String(t.value)}
             >
-              {loading ? "—" : t.value}
+              {loading ? "—" : typeof t.value === "number" ? formatPulseCount(t.value) : t.value}
             </div>
-            <div className="text-meta text-muted-foreground">{t.hint}</div>
+            <div className="text-meta truncate text-muted-foreground">{t.hint}</div>
           </Link>
         ))}
       </div>
       {/* Sprint progress bar — startsAt → endsAt */}
       {cycle && progress !== null && startsAt && endsAt ? (
         <div className="mt-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 text-meta text-muted-foreground">
+          <div className="text-meta flex flex-wrap items-center justify-between gap-2 text-muted-foreground">
             <span className="min-w-0 truncate">{sprintName}</span>
             <span className="shrink-0">
               {fmtDate(startsAt)} → {fmtDate(endsAt)}
@@ -117,6 +125,14 @@ export function PulseTile({ slug }: { slug: string }) {
       ) : null}
     </section>
   );
+}
+
+/** Keep metric labels to four characters at extreme counts so the compact
+ * operational rail never stretches or wraps. The exact value remains in the
+ * stat's title attribute. */
+export function formatPulseCount(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return "0";
+  return value > 999 ? "999+" : String(Math.floor(value));
 }
 
 function fmtDate(d: Date): string {

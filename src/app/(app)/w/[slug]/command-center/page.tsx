@@ -32,6 +32,9 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
 import { cn } from "@/lib/utils";
 
+const COMMAND_MODULE_LIMIT = 4;
+const COMMAND_ARTIFACT_LIMIT = 6;
+
 /**
  * Command Center — the operator's **decisions + live agent operations**
  * surface. It is the canonical place to *act on decisions*: action
@@ -141,6 +144,11 @@ export default function CommandCenterPage() {
   const attentionCount = data
     ? data.actionRequests.length + data.reviewGates.length + data.stalledRuns.length
     : 0;
+  const activeAttentionGroups = data
+    ? Number(data.actionRequests.length > 0) +
+      Number(data.stalledRuns.length > 0) +
+      Number(data.reviewGates.length > 0)
+    : 0;
 
   return (
     <>
@@ -165,247 +173,282 @@ export default function CommandCenterPage() {
             description="The command center couldn't fetch its summary."
           />
         ) : (
-          <div className="mx-auto grid max-w-7xl grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
-            <div className="min-w-0 space-y-4">
+          <div className="mx-auto max-w-7xl space-y-5" data-testid="command-center-content">
+            <section data-testid="command-center-priority">
               <Section
                 icon={<Inbox className="h-3.5 w-3.5" />}
                 title="Attention queue"
                 empty="Nothing waiting on you."
                 count={attentionCount}
                 className="min-w-0"
-                bodyClassName="p-0"
+                bodyClassName={attentionCount > 0 ? "p-0" : undefined}
               >
-                <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-3">
-                  <AttentionGroup
-                    title="Asks"
-                    count={data.actionRequests.length}
-                    empty="No agent asks."
+                {attentionCount > 0 ? (
+                  <div
+                    className={cn(
+                      "grid grid-cols-1 gap-3 p-3",
+                      activeAttentionGroups === 2 && "lg:grid-cols-2",
+                      activeAttentionGroups >= 3 && "lg:grid-cols-3",
+                    )}
+                    data-testid="command-center-attention-groups"
                   >
-                    {data.actionRequests.map((row) => (
-                      <ActionRequestDecisionCard
-                        key={row.id}
-                        request={row}
-                        slug={ws.slug}
-                        onResolved={() => dropActionRequest(row.id)}
-                      />
-                    ))}
-                  </AttentionGroup>
-                  <AttentionGroup
-                    title="Stalled runs"
-                    count={data.stalledRuns.length}
-                    empty="No recoverable runs."
-                    action={
-                      data.stalledRuns.length > 0 && canRecoverRuns ? (
-                        <RunRecoveryBulkActions
-                          runs={data.stalledRuns}
-                          pending={recoverRuns.isPending}
-                          onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
-                        />
-                      ) : null
-                    }
-                  >
-                    {data.stalledRuns.map((row) => (
-                      <RunFailureCard
-                        key={row.id}
-                        run={row}
-                        slug={ws.slug}
-                        canRecover={canRecoverRuns}
-                        pending={recoverRuns.isPending}
-                        onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
-                      />
-                    ))}
-                  </AttentionGroup>
-                  <AttentionGroup
-                    title="Review gates"
-                    count={data.reviewGates.length}
-                    empty="No review gates."
-                  >
-                    {data.reviewGates.map((row) => (
-                      <ReviewGateDecisionCard
-                        key={row.id}
-                        gate={row}
-                        slug={ws.slug}
-                        onResolved={() => dropReviewGate(row.id)}
-                      />
-                    ))}
-                  </AttentionGroup>
-                </div>
+                    {data.actionRequests.length > 0 ? (
+                      <AttentionGroup
+                        title="Asks"
+                        count={data.actionRequests.length}
+                        empty="No agent asks."
+                      >
+                        {data.actionRequests.map((row) => (
+                          <ActionRequestDecisionCard
+                            key={row.id}
+                            request={row}
+                            slug={ws.slug}
+                            onResolved={() => dropActionRequest(row.id)}
+                          />
+                        ))}
+                      </AttentionGroup>
+                    ) : null}
+                    {data.stalledRuns.length > 0 ? (
+                      <AttentionGroup
+                        title="Stalled runs"
+                        count={data.stalledRuns.length}
+                        empty="No recoverable runs."
+                        action={
+                          canRecoverRuns ? (
+                            <RunRecoveryBulkActions
+                              runs={data.stalledRuns}
+                              pending={recoverRuns.isPending}
+                              onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
+                            />
+                          ) : null
+                        }
+                      >
+                        {data.stalledRuns.map((row) => (
+                          <RunFailureCard
+                            key={row.id}
+                            run={row}
+                            slug={ws.slug}
+                            canRecover={canRecoverRuns}
+                            pending={recoverRuns.isPending}
+                            onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
+                          />
+                        ))}
+                      </AttentionGroup>
+                    ) : null}
+                    {data.reviewGates.length > 0 ? (
+                      <AttentionGroup
+                        title="Review gates"
+                        count={data.reviewGates.length}
+                        empty="No review gates."
+                      >
+                        {data.reviewGates.map((row) => (
+                          <ReviewGateDecisionCard
+                            key={row.id}
+                            gate={row}
+                            slug={ws.slug}
+                            onResolved={() => dropReviewGate(row.id)}
+                          />
+                        ))}
+                      </AttentionGroup>
+                    ) : null}
+                  </div>
+                ) : null}
               </Section>
+            </section>
 
+            <section className="space-y-3" data-testid="command-center-live-operations">
+              <CommandZoneDivider label="Live operations" />
               <AgentAttentionPanel
                 slug={ws.slug}
                 showEmpty
                 limit={6}
                 itemLimit={2}
+                excludeRunIds={data.stalledRuns.map((run) => run.id)}
                 bodyClassName="max-h-[24rem] overflow-y-auto"
               />
 
-              <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-            <Section
-              icon={<Target className="h-3.5 w-3.5" />}
-              title="Live goals"
-              empty="No goals running."
-              count={data.liveGoals.length}
-            >
-              {data.liveGoals.map((row) => (
-                <Link
-                  key={row.id}
-                  href={`/w/${ws.slug}/goals/${row.id}`}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+              <div
+                className="grid grid-cols-1 items-start gap-4 md:grid-cols-2 xl:grid-cols-3"
+                data-testid="command-center-live-modules"
+              >
+                <Section
+                  icon={<Target className="h-3.5 w-3.5" />}
+                  title="Live goals"
+                  empty="No goals running."
+                  count={data.liveGoals.length}
+                  action={<SectionLink href={`/w/${ws.slug}/goals`} label="Open all" />}
                 >
-                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <span className="truncate text-sm font-medium">{row.title}</span>
-                    <span className="shrink-0 rounded bg-subtle px-1 py-0.5 text-[10px] uppercase text-muted-foreground">
-                      {row.status.toLowerCase()}
-                    </span>
-                  </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 text-meta text-muted-foreground">
-                    <span className="min-w-0 flex-1 truncate">
-                      {row.crew ? `${row.crew.name} · ` : ""}
-                      {row._count.plans} plan{row._count.plans === 1 ? "" : "s"}
-                    </span>
-                    {row.maxTotalCostUsd != null && (
-                      <span className="ml-auto shrink-0 font-mono tabular-nums">
-                        ${row.totalCostUsd.toFixed(2)} / ${row.maxTotalCostUsd.toFixed(2)}
-                      </span>
-                    )}
-                  </div>
-                  {row.maxTotalCostUsd != null && row.maxTotalCostUsd > 0 && (
-                    <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-subtle">
-                      <div
-                        className="h-full rounded-full bg-ember"
-                        style={{
-                          width: `${Math.min(100, (row.totalCostUsd / row.maxTotalCostUsd) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  )}
-                  {row.totalSteps > 0 && (
-                    <>
-                      <div className="flex items-center justify-between text-meta text-muted-foreground">
-                        <span>steps</span>
-                        <span className="font-mono tabular-nums">
-                          {row.doneSteps}/{row.totalSteps} steps
+                  {data.liveGoals.slice(0, COMMAND_MODULE_LIMIT).map((row) => (
+                    <Link
+                      key={row.id}
+                      data-command-module-item="goals"
+                      href={`/w/${ws.slug}/goals/${row.id}`}
+                      className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium">{row.title}</span>
+                        <span className="shrink-0 rounded bg-subtle px-1 py-0.5 text-[10px] uppercase text-muted-foreground">
+                          {row.status.toLowerCase()}
                         </span>
                       </div>
-                      <div className="h-1 overflow-hidden rounded-full bg-subtle">
-                        <div
-                          className="h-full rounded-full bg-ember"
-                          style={{
-                            width: `${Math.min(100, (row.doneSteps / row.totalSteps) * 100)}%`,
-                          }}
-                        />
+                      <div className="text-meta flex min-w-0 flex-wrap items-center gap-2 text-muted-foreground">
+                        <span className="min-w-0 flex-1 truncate">
+                          {row.crew ? `${row.crew.name} · ` : ""}
+                          {row._count.plans} plan{row._count.plans === 1 ? "" : "s"}
+                        </span>
+                        {row.maxTotalCostUsd != null && (
+                          <span className="ml-auto shrink-0 font-mono tabular-nums">
+                            ${row.totalCostUsd.toFixed(2)} / ${row.maxTotalCostUsd.toFixed(2)}
+                          </span>
+                        )}
                       </div>
-                    </>
-                  )}
-                </Link>
-              ))}
-            </Section>
+                      {row.maxTotalCostUsd != null && row.maxTotalCostUsd > 0 && (
+                        <div className="mt-0.5 h-1 overflow-hidden rounded-full bg-subtle">
+                          <div
+                            className="h-full rounded-full bg-ember"
+                            style={{
+                              width: `${Math.min(100, (row.totalCostUsd / row.maxTotalCostUsd) * 100)}%`,
+                            }}
+                          />
+                        </div>
+                      )}
+                      {row.totalSteps > 0 && (
+                        <>
+                          <div className="text-meta flex items-center justify-between text-muted-foreground">
+                            <span>steps</span>
+                            <span className="font-mono tabular-nums">
+                              {row.doneSteps}/{row.totalSteps} steps
+                            </span>
+                          </div>
+                          <div className="h-1 overflow-hidden rounded-full bg-subtle">
+                            <div
+                              className="h-full rounded-full bg-ember"
+                              style={{
+                                width: `${Math.min(100, (row.doneSteps / row.totalSteps) * 100)}%`,
+                              }}
+                            />
+                          </div>
+                        </>
+                      )}
+                    </Link>
+                  ))}
+                </Section>
 
-            <Section
-              icon={<Workflow className="h-3.5 w-3.5" />}
-              title="Active runs"
-              empty="No agents running."
-              count={data.activeRuns.length}
-            >
-              {data.activeRuns.map((row) => (
-                <Link
-                  key={row.id}
-                  href={`/w/${ws.slug}/i/${row.issue.workspace.key}-${row.issue.number}`}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                <Section
+                  icon={<Workflow className="h-3.5 w-3.5" />}
+                  title="Active runs"
+                  empty="No agents running."
+                  count={data.activeRuns.length}
+                  action={<SectionLink href={`/w/${ws.slug}/agents`} label="Open all" />}
                 >
-                  <div className="flex min-w-0 flex-wrap items-center gap-2">
-                    <Bot className="h-3 w-3 text-ember" />
-                    <span className="text-sm font-medium">
-                      @{row.agent.profileKey}
-                    </span>
-                    <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                    <span className="min-w-0 truncate text-sm text-muted-foreground">
-                      {row.issue.workspace.key}-{row.issue.number}
-                    </span>
-                  </div>
-                  {row.currentStep ? (
-                    <span className="text-meta text-muted-foreground">
-                      {row.currentStep}
-                    </span>
-                  ) : null}
-                </Link>
-              ))}
-            </Section>
+                  {data.activeRuns.slice(0, COMMAND_MODULE_LIMIT).map((row) => (
+                    <Link
+                      key={row.id}
+                      data-command-module-item="runs"
+                      href={`/w/${ws.slug}/i/${row.issue.workspace.key}-${row.issue.number}`}
+                      className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <Bot className="h-3 w-3 text-ember" />
+                        <span className="text-sm font-medium">@{row.agent.profileKey}</span>
+                        <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                        <span className="min-w-0 truncate text-sm text-muted-foreground">
+                          {row.issue.workspace.key}-{row.issue.number}
+                        </span>
+                      </div>
+                      {row.currentStep ? (
+                        <span className="text-meta text-muted-foreground">{row.currentStep}</span>
+                      ) : null}
+                    </Link>
+                  ))}
+                </Section>
 
-            <Section
-              icon={<CalendarClock className="h-3.5 w-3.5" />}
-              title="Due soon"
-              empty="Nothing due in the next week."
-              count={data.dueIssues.length}
-            >
-              {data.dueIssues.map((row) => (
-                <Link
-                  key={row.id}
-                  href={`/w/${ws.slug}/i/${row.workspace.key}-${row.number}`}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                <Section
+                  icon={<CalendarClock className="h-3.5 w-3.5" />}
+                  title="Due soon"
+                  empty="Nothing due in the next week."
+                  count={data.dueIssues.length}
+                  action={<SectionLink href={`/w/${ws.slug}/issues`} label="Open all" />}
                 >
-                  <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
-                    <span className="text-sm font-medium truncate">{row.title}</span>
-                    <PriorityChip priority={row.priority} />
-                  </div>
-                  <span className="text-meta text-muted-foreground">
-                    {row.workspace.key}-{row.number} · due {row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "—"}
-                  </span>
-                </Link>
-              ))}
-            </Section>
+                  {data.dueIssues.slice(0, COMMAND_MODULE_LIMIT).map((row) => (
+                    <Link
+                      key={row.id}
+                      data-command-module-item="due"
+                      href={`/w/${ws.slug}/i/${row.workspace.key}-${row.number}`}
+                      className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium">{row.title}</span>
+                        <PriorityChip priority={row.priority} />
+                      </div>
+                      <span className="text-meta text-muted-foreground">
+                        {row.workspace.key}-{row.number} · due{" "}
+                        {row.dueDate ? new Date(row.dueDate).toLocaleDateString() : "—"}
+                      </span>
+                    </Link>
+                  ))}
+                </Section>
 
-            <Section
-              icon={<FileText className="h-3.5 w-3.5" />}
-              title="Recent artifacts"
-              empty="No artifacts yet."
-              count={data.recentArtifacts.length}
-            >
-              {data.recentArtifacts.map((row) => (
-                <Link
-                  key={row.id}
-                  href={`/w/${ws.slug}/artifacts/${row.slug}`}
-                  className="flex flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
-                >
-                  <span className="text-sm font-medium">{row.title}</span>
-                  <span className="text-meta text-muted-foreground">
-                    {row.type.toLowerCase()} · {row.status.replace("_", " ").toLowerCase()}
-                  </span>
-                </Link>
-              ))}
-            </Section>
+                {data.runningTimer && data.runningTimer.issue ? (
+                  <Section
+                    icon={<Clock className="h-3.5 w-3.5" />}
+                    title="Timer"
+                    empty=""
+                    count={1}
+                  >
+                    <Link
+                      href={`/w/${ws.slug}/i/${data.runningTimer.issue.workspace.key}-${data.runningTimer.issue.number}`}
+                      className="flex flex-col gap-1 rounded-md border border-ember/40 bg-ember/5 p-2 hover:border-ember"
+                    >
+                      <span className="text-sm font-medium">
+                        {data.runningTimer.issue.workspace.key}-{data.runningTimer.issue.number}
+                      </span>
+                      <span className="text-meta text-muted-foreground">
+                        Started {new Date(data.runningTimer.startedAt).toLocaleTimeString()}
+                      </span>
+                    </Link>
+                  </Section>
+                ) : null}
+              </div>
+            </section>
 
-            {data.runningTimer && data.runningTimer.issue ? (
-              <Section
-                icon={<Clock className="h-3.5 w-3.5" />}
-                title="Timer"
-                empty=""
-                count={1}
+            <section className="space-y-3" data-testid="command-center-context">
+              <CommandZoneDivider label="Workspace context" />
+              <div
+                className="grid grid-cols-1 items-start gap-4 xl:grid-cols-12"
+                data-testid="command-center-context-grid"
               >
-                <Link
-                  href={`/w/${ws.slug}/i/${data.runningTimer.issue.workspace.key}-${data.runningTimer.issue.number}`}
-                  className="flex flex-col gap-1 rounded-md border border-ember/40 bg-ember/5 p-2 hover:border-ember"
+                <WorkspaceActivityTimeline
+                  limit={8}
+                  defaultFilter="agents"
+                  className="min-w-0 xl:col-span-8"
+                  bodyClassName="max-h-[28rem] overflow-y-auto"
+                />
+                <Section
+                  icon={<FileText className="h-3.5 w-3.5" />}
+                  title="Recent artifacts"
+                  empty="No artifacts yet."
+                  count={data.recentArtifacts.length}
+                  action={<SectionLink href={`/w/${ws.slug}/artifacts`} label="Open all" />}
+                  className="xl:col-span-4"
+                  bodyClassName="max-h-[28rem] overflow-y-auto"
                 >
-                  <span className="text-sm font-medium">
-                    {data.runningTimer.issue.workspace.key}-{data.runningTimer.issue.number}
-                  </span>
-                  <span className="text-meta text-muted-foreground">
-                    Started {new Date(data.runningTimer.startedAt).toLocaleTimeString()}
-                  </span>
-                </Link>
-              </Section>
-            ) : null}
-            </div>
-          </div>
-          <aside className="min-w-0 xl:sticky xl:top-4 xl:self-start">
-            <WorkspaceActivityTimeline
-              limit={20}
-              defaultFilter="decisions"
-              className="min-w-0"
-              bodyClassName="max-h-[42rem] overflow-y-auto xl:max-h-[calc(100svh-14rem)]"
-            />
-          </aside>
+                  {data.recentArtifacts.slice(0, COMMAND_ARTIFACT_LIMIT).map((row) => (
+                    <Link
+                      key={row.id}
+                      data-command-module-item="artifacts"
+                      href={`/w/${ws.slug}/artifacts/${row.slug}`}
+                      className="flex min-w-0 flex-col gap-1 rounded-md border border-border bg-card/40 p-2 hover:border-ember/40"
+                    >
+                      <span className="truncate text-sm font-medium">{row.title}</span>
+                      <span className="text-meta truncate text-muted-foreground">
+                        {row.type.toLowerCase()} · {row.status.replace("_", " ").toLowerCase()}
+                      </span>
+                    </Link>
+                  ))}
+                </Section>
+              </div>
+            </section>
           </div>
         )}
       </div>
@@ -500,7 +543,7 @@ function ActionRequestDecisionCard({
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
       {request.requestedByAgent ? (
-        <div className="flex items-center gap-1.5 text-meta text-muted-foreground">
+        <div className="text-meta flex items-center gap-1.5 text-muted-foreground">
           <span
             aria-hidden
             className="grid h-4 w-4 shrink-0 place-items-center rounded-full bg-subtle text-[0.625rem]"
@@ -530,7 +573,7 @@ function ActionRequestDecisionCard({
         <SeverityChip severity={request.severity} />
       </div>
       {request.body ? (
-        <p className="line-clamp-2 text-meta text-muted-foreground">{request.body}</p>
+        <p className="text-meta line-clamp-2 text-muted-foreground">{request.body}</p>
       ) : null}
       {request.issue ? (
         <span className="text-meta break-words text-muted-foreground">
@@ -545,7 +588,7 @@ function ActionRequestDecisionCard({
             onChange={(e) => setReason(e.target.value)}
             placeholder="Reason (optional)"
             maxLength={2_000}
-            className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
+            className="focus-ring text-meta w-full rounded-md border border-input bg-background px-2 py-1"
             aria-label="Decline reason"
           />
           <div className="flex flex-wrap gap-2">
@@ -580,7 +623,7 @@ function ActionRequestDecisionCard({
             placeholder={`Answer ${request.requestedByAgent?.profileKey ? `@${request.requestedByAgent.profileKey}` : "the agent"}…`}
             maxLength={10_000}
             rows={3}
-            className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
+            className="focus-ring text-meta w-full rounded-md border border-input bg-background px-2 py-1"
             aria-label="Answer"
           />
           <div className="flex flex-wrap gap-2">
@@ -590,7 +633,11 @@ function ActionRequestDecisionCard({
               disabled={pending || !answer.trim()}
               onClick={() => accept.mutate({ id: request.id, resolution: answer.trim() })}
             >
-              {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              {pending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
               Send answer
             </Button>
             <Button
@@ -627,7 +674,11 @@ function ActionRequestDecisionCard({
               onClick={() => accept.mutate({ id: request.id })}
               aria-label="Accept this ask"
             >
-              {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              {pending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Sparkles className="h-3 w-3" />
+              )}
               Accept
             </Button>
           )}
@@ -690,9 +741,7 @@ function IssueStatusPicker({
   });
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
-  const items = (statuses ?? []).filter(
-    (s) => !q || s.name.toLowerCase().includes(q),
-  );
+  const items = (statuses ?? []).filter((s) => !q || s.name.toLowerCase().includes(q));
 
   const update = trpc.issue.update.useMutation({
     onError: (e) => toast.error(e.message),
@@ -804,7 +853,7 @@ function ReviewGateDecisionCard({
             onChange={(e) => setResolution(e.target.value)}
             placeholder="Resolution note (optional)"
             maxLength={10_000}
-            className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-meta"
+            className="focus-ring text-meta w-full rounded-md border border-input bg-background px-2 py-1"
             aria-label="Resolution note"
           />
           <div className="flex flex-wrap gap-2">
@@ -813,7 +862,11 @@ function ReviewGateDecisionCard({
               variant="ember"
               disabled={resolve.isPending}
               onClick={() =>
-                resolve.mutate({ id: gate.id, decision: "APPROVED", resolution: resolution || null })
+                resolve.mutate({
+                  id: gate.id,
+                  decision: "APPROVED",
+                  resolution: resolution || null,
+                })
               }
             >
               {resolve.isPending ? (
@@ -829,7 +882,11 @@ function ReviewGateDecisionCard({
               className="text-destructive"
               disabled={resolve.isPending}
               onClick={() =>
-                resolve.mutate({ id: gate.id, decision: "REJECTED", resolution: resolution || null })
+                resolve.mutate({
+                  id: gate.id,
+                  decision: "REJECTED",
+                  resolution: resolution || null,
+                })
               }
             >
               <X className="h-3 w-3" />
@@ -872,6 +929,28 @@ function ReviewGateDecisionCard({
   );
 }
 
+function CommandZoneDivider({ label }: { label: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 pt-1">
+      <span className="shrink-0 text-[0.625rem] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+        {label}
+      </span>
+      <span className="h-px min-w-0 flex-1 bg-border" />
+    </div>
+  );
+}
+
+function SectionLink({ href, label }: { href: string; label: string }) {
+  return (
+    <Link
+      href={href}
+      className="focus-ring rounded px-1 py-0.5 text-[0.6875rem] normal-case tracking-normal text-muted-foreground hover:text-foreground"
+    >
+      {label} →
+    </Link>
+  );
+}
+
 function Section({
   icon,
   title,
@@ -900,7 +979,7 @@ function Section({
         className,
       )}
     >
-      <header className="flex min-w-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5 text-meta uppercase tracking-wide text-muted-foreground">
+      <header className="text-meta flex min-w-0 items-center justify-between gap-2 border-b border-border px-4 py-2.5 uppercase tracking-wide text-muted-foreground">
         <div className="flex min-w-0 items-center gap-1.5">
           {icon}
           <span className="truncate">{title}</span>
@@ -922,7 +1001,7 @@ function Section({
       </header>
       <div className={cn("flex min-h-0 flex-col gap-2 p-3", bodyClassName)}>
         {count === 0 ? (
-          <div className="rounded-md border border-dashed border-border bg-card/20 p-3 text-meta text-muted-foreground">
+          <div className="text-meta rounded-md border border-dashed border-border bg-card/20 p-3 text-muted-foreground">
             {empty}
           </div>
         ) : (
@@ -947,7 +1026,10 @@ function AttentionGroup({
   children: React.ReactNode;
 }) {
   return (
-    <section className="min-h-0 rounded-md border border-border bg-background/35">
+    <section
+      className="min-h-0 rounded-md border border-border bg-background/35"
+      data-attention-group
+    >
       <header className="flex min-w-0 items-center gap-2 border-b border-border/70 px-3 py-2">
         <span className="truncate text-[0.6875rem] font-semibold uppercase tracking-wide text-muted-foreground">
           {title}
@@ -959,7 +1041,7 @@ function AttentionGroup({
       </header>
       <div className="max-h-[22rem] min-h-0 space-y-2 overflow-y-auto p-2">
         {count === 0 ? (
-          <div className="rounded-md border border-dashed border-border bg-card/20 p-3 text-meta text-muted-foreground">
+          <div className="text-meta rounded-md border border-dashed border-border bg-card/20 p-3 text-muted-foreground">
             {empty}
           </div>
         ) : (
@@ -1057,10 +1139,7 @@ function RunFailureCard({
   const ActionIcon = recoveryActionIcon(run.recommendedAction);
   return (
     <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
-      <Link
-        href={`/w/${slug}/issues/${run.issue.id}`}
-        className="min-w-0 flex-1"
-      >
+      <Link href={`/w/${slug}/issues/${run.issue.id}`} className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
           <span className="text-sm font-medium">
             {run.issue.workspace.key}-{run.issue.number}
@@ -1069,9 +1148,7 @@ function RunFailureCard({
             {run.recoveryReason.replace("-", " ")}
           </span>
         </div>
-        <span className="text-meta block font-medium text-foreground/80">
-          {run.recoveryTitle}
-        </span>
+        <span className="text-meta block font-medium text-foreground/80">{run.recoveryTitle}</span>
         <span className="text-meta line-clamp-2 text-muted-foreground">
           @{run.agent.profileKey} · {new Date(ts).toLocaleString()} · {excerpt}
         </span>
@@ -1086,7 +1163,11 @@ function RunFailureCard({
           title={`${recoveryActionLabel(run.recommendedAction)} this run from operational queues`}
           aria-label={`${recoveryActionLabel(run.recommendedAction)} run`}
         >
-          {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <ActionIcon className="h-3 w-3" />}
+          {pending ? (
+            <Loader2 className="h-3 w-3 animate-spin" />
+          ) : (
+            <ActionIcon className="h-3 w-3" />
+          )}
         </Button>
       ) : null}
     </div>
@@ -1099,11 +1180,7 @@ function RunFailureCard({
  * bare execution-step, which has no standalone page) — those render as
  * plain text.
  */
-function gateTargetHref(
-  slug: string,
-  targetType: string,
-  targetId: string,
-): string | null {
+function gateTargetHref(slug: string, targetType: string, targetId: string): string | null {
   switch (targetType) {
     case "execution-plan":
       return `/w/${slug}/plans/${targetId}`;

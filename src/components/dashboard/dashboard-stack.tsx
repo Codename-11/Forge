@@ -21,8 +21,9 @@ import { cn } from "@/lib/utils";
 /**
  * Customizable dashboard widget grid. Renders widgets in a user-defined
  * order across a responsive grid; each widget is `half` (one column) or
- * `full` (a two-column span). Order + hidden set + per-widget width persist
- * server-side via `dashboardPrefs`.
+ * `full` (two columns, or all three for selected desktop flow modules).
+ * Order + hidden set + per-widget width persist server-side via
+ * `dashboardPrefs`.
  *
  * Customize mode (`editing`) layers in:
  * - **Drag to reorder** — grab anywhere on a tile (a full-body overlay is
@@ -48,6 +49,9 @@ export type DashboardWidget = {
   node: ReactNode;
   /** Default column width when the user hasn't set one. */
   defaultWidth?: WidgetWidth;
+  /** In a three-column board, let a wide secondary module reclaim the full
+   * desktop row after the bounded 2+1 lead row. Tablet still spans two. */
+  fullBleedAtDesktop?: boolean;
 };
 export type DashboardLayout = {
   order: string[];
@@ -123,6 +127,13 @@ const REORDER_COOLDOWN_MS = 90;
 // producing a masonry-style pack without changing DOM/keyboard order.
 const MASONRY_ROW_HEIGHT = 4;
 const MASONRY_GAP = 16;
+
+/** A busy personal-work canvas is tall enough to support one stacked
+ * operations rail. Sparse work uses two compact operation columns so Pulse
+ * and Schedule do not create a large empty band before Workspace flow. */
+export function priorityColumnsForWorkCount(workCount: number): 1 | 2 {
+  return Number.isFinite(workCount) && workCount >= 9 ? 1 : 2;
+}
 
 export function DashboardStack({
   widgets,
@@ -275,6 +286,7 @@ export function DashboardStack({
             editing={editing}
             masonry={!editing}
             columns={columns}
+            fullBleedAtDesktop={w.fullBleedAtDesktop ?? false}
             isFirst={index === 0}
             isLast={index === visible.length - 1}
             onDrag={(e) => handleDrag(w.id, e)}
@@ -315,6 +327,7 @@ function DashboardTile({
   editing,
   masonry,
   columns,
+  fullBleedAtDesktop,
   isFirst,
   isLast,
   onDrag,
@@ -328,6 +341,7 @@ function DashboardTile({
   editing: boolean;
   masonry: boolean;
   columns: 1 | 2 | 3;
+  fullBleedAtDesktop: boolean;
   isFirst: boolean;
   isLast: boolean;
   onDrag: (e: PointerEvent | MouseEvent | TouchEvent) => void;
@@ -424,7 +438,9 @@ function DashboardTile({
           (columns === 1
             ? "sm:col-span-2 xl:col-span-1"
             : columns === 3
-              ? "md:col-span-2"
+              ? fullBleedAtDesktop
+                ? "md:col-span-2 2xl:col-span-3"
+                : "md:col-span-2"
               : "lg:col-span-2"),
         editing && "ring-dashed rounded-lg ring-1 ring-ember/40",
         dragging && "shadow-[0_18px_44px_rgba(0,0,0,0.20)]",

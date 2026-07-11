@@ -44,6 +44,7 @@ export function AgentAttentionPanel({
   limit = 5,
   itemLimit = 3,
   showEmpty = false,
+  excludeRunIds = [],
   className,
   bodyClassName,
 }: {
@@ -51,6 +52,9 @@ export function AgentAttentionPanel({
   limit?: number;
   itemLimit?: number;
   showEmpty?: boolean;
+  /** Suppress detail rows already represented by a canonical recovery card
+   * elsewhere on the same page. Aggregate agent counts remain visible. */
+  excludeRunIds?: string[];
   className?: string;
   bodyClassName?: string;
 }) {
@@ -68,7 +72,11 @@ export function AgentAttentionPanel({
     { kind: [...REALTIME_KINDS] },
   );
 
-  const rows = query.data?.agents ?? [];
+  const excludedItems = new Set(excludeRunIds.flatMap((id) => [`blocker:${id}`, `run:${id}`]));
+  const rows = (query.data?.agents ?? []).map((row) => ({
+    ...row,
+    items: row.items.filter((item) => !excludedItems.has(item.id)),
+  }));
   if (!showEmpty && !query.isLoading && rows.length === 0) return null;
 
   return (
@@ -81,7 +89,7 @@ export function AgentAttentionPanel({
         </span>
         <Link
           href={`/w/${slug}/agents`}
-          className="focus-ring ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+          className="focus-ring text-meta ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
         >
           Agents
           <ChevronRight className="h-3 w-3" />
@@ -125,11 +133,7 @@ function AgentAttentionCard({ row, slug }: { row: AgentAttentionRow; slug: strin
           <span className="truncate text-sm font-medium">{row.agent.name}</span>{" "}
           <span className="text-id text-muted-foreground">@{row.agent.profileKey}</span>
         </Link>
-        <AttentionCount
-          label="blocked"
-          value={row.counts.blocked}
-          tone="danger"
-        />
+        <AttentionCount label="blocked" value={row.counts.blocked} tone="danger" />
         <AttentionCount label="asks" value={row.counts.questions} tone="warning" />
         <AttentionCount label="approvals" value={row.counts.approvals} tone="warning" />
         <AttentionCount label="active" value={row.counts.activeRuns} tone="neutral" />
@@ -150,14 +154,12 @@ function AgentAttentionCard({ row, slug }: { row: AgentAttentionRow; slug: strin
                 <ItemIcon item={item} />
               </span>
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-[0.75rem] font-medium">
-                  {item.title}
-                </span>
-                <span className="block line-clamp-2 text-meta text-muted-foreground">
+                <span className="block truncate text-[0.75rem] font-medium">{item.title}</span>
+                <span className="text-meta line-clamp-2 block text-muted-foreground">
                   {item.detail}
                 </span>
               </span>
-              <span className="shrink-0 pt-0.5 text-meta tabular-nums text-muted-foreground">
+              <span className="text-meta shrink-0 pt-0.5 tabular-nums text-muted-foreground">
                 {relativeTime(item.createdAt)}
               </span>
             </Link>

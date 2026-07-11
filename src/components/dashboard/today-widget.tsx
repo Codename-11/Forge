@@ -28,7 +28,17 @@ import { cn, formatIssueId } from "@/lib/utils";
  * Density-aware text utilities (`text-meta`, `text-id`) are used for
  * primary content so the Appearance setting cascades correctly.
  */
-export function TodayWidget({ slug, workspaceKey }: { slug: string; workspaceKey: string }) {
+export function TodayWidget({
+  slug,
+  workspaceKey,
+  maxDueSoon = 5,
+}: {
+  slug: string;
+  workspaceKey: string;
+  /** Visual cap for the compact dashboard surface. The server already
+   * bounds the payload at five; this lets narrow placements show fewer. */
+  maxDueSoon?: number;
+}) {
   const { data, isLoading } = trpc.dashboard.today.useQuery();
 
   if (isLoading || !data) {
@@ -41,12 +51,18 @@ export function TodayWidget({ slug, workspaceKey }: { slug: string; workspaceKey
 
   const hasSprint = !!data.activeCycle;
   const hasDueSoon = data.dueSoon.length > 0;
+  const dueSoonLimit = Math.max(1, Math.min(5, Math.floor(maxDueSoon)));
+  const visibleDueSoon = data.dueSoon.slice(0, dueSoonLimit);
+  const hiddenDueSoon = Math.max(0, data.dueSoon.length - visibleDueSoon.length);
   const weekHasAnyDot = data.weekPeek.some((d) => d.count > 0);
   const allEmpty = !hasSprint && !hasDueSoon && !weekHasAnyDot;
 
   if (allEmpty) {
     return (
-      <section className="flex items-center gap-3 rounded-lg border border-dashed border-border bg-card/30 px-4 py-3">
+      <section
+        className="flex min-w-0 items-center gap-3 rounded-lg border border-dashed border-border bg-card/30 px-4 py-3"
+        data-testid="dashboard-schedule"
+      >
         <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-subtle text-muted-foreground">
           <Sparkles className="h-3.5 w-3.5" />
         </div>
@@ -61,7 +77,10 @@ export function TodayWidget({ slug, workspaceKey }: { slug: string; workspaceKey
   }
 
   return (
-    <section className="overflow-hidden rounded-lg border border-border bg-card/40">
+    <section
+      className="min-w-0 overflow-hidden rounded-lg border border-border bg-card/40"
+      data-testid="dashboard-schedule"
+    >
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2.5">
         <Calendar className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
         <span className="text-sm font-medium">Today</span>
@@ -71,7 +90,14 @@ export function TodayWidget({ slug, workspaceKey }: { slug: string; workspaceKey
       <div className="divide-y divide-border">
         {hasSprint && <SprintCountdown cycle={data.activeCycle!} slug={slug} />}
 
-        {hasDueSoon && <DueSoonList items={data.dueSoon} slug={slug} workspaceKey={workspaceKey} />}
+        {hasDueSoon && (
+          <DueSoonList
+            items={visibleDueSoon}
+            hiddenCount={hiddenDueSoon}
+            slug={slug}
+            workspaceKey={workspaceKey}
+          />
+        )}
 
         <WeekPeek weekPeek={data.weekPeek} slug={slug} />
       </div>
@@ -161,10 +187,12 @@ type DueSoonItem = {
 
 function DueSoonList({
   items,
+  hiddenCount,
   slug,
   workspaceKey,
 }: {
   items: DueSoonItem[];
+  hiddenCount: number;
   slug: string;
   workspaceKey: string;
 }) {
@@ -173,9 +201,9 @@ function DueSoonList({
       <div className="mb-1.5 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
         Due soon
       </div>
-      <ul className="flex flex-col">
+      <ul className="flex flex-col" data-testid="dashboard-schedule-due-list">
         {items.map((issue) => (
-          <li key={issue.id}>
+          <li key={issue.id} data-schedule-due-item>
             <Link
               href={`/w/${slug}/issues/${issue.id}`}
               className="group flex min-w-0 flex-wrap items-center gap-2 rounded-md py-1 hover:bg-subtle/50 sm:flex-nowrap"
@@ -197,6 +225,14 @@ function DueSoonList({
           </li>
         ))}
       </ul>
+      {hiddenCount > 0 && (
+        <Link
+          href={`/w/${slug}/issues`}
+          className="focus-ring text-meta mt-1 inline-flex rounded text-muted-foreground hover:text-foreground"
+        >
+          View {hiddenCount} more →
+        </Link>
+      )}
     </div>
   );
 }

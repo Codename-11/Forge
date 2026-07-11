@@ -173,11 +173,14 @@ export function QuickNotesWidget() {
   useEffect(() => {
     if (tab !== "journal") return;
     if (todayJournalId) return;
-    journalTodayM.mutateAsync(undefined as unknown as void).then((row) => {
-      setTodayJournalId(row.id);
-      setJournalDraft({ id: row.id, body: row.body });
-      void utils.note.listJournal.invalidate();
-    }).catch(() => {});
+    journalTodayM
+      .mutateAsync(undefined as unknown as void)
+      .then((row) => {
+        setTodayJournalId(row.id);
+        setJournalDraft({ id: row.id, body: row.body });
+        void utils.note.listJournal.invalidate();
+      })
+      .catch(() => {});
     // Run once per tab activation; subsequent dependencies handled inside.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab]);
@@ -234,17 +237,17 @@ export function QuickNotesWidget() {
   }, [draft]);
 
   return (
-    <section className="rounded-lg border border-border bg-card/40">
+    <section className="min-w-0 rounded-lg border border-border bg-card/40">
       <header
         className={cn(
-          "flex items-center gap-2 px-4 py-2.5",
+          "flex min-w-0 flex-wrap items-center gap-2 px-4 py-2.5",
           collapsed ? "" : "border-b border-border",
         )}
       >
         <button
           type="button"
           onClick={() => setCollapsed((c) => !c)}
-          className="focus-ring flex items-center gap-2 rounded text-sm font-medium hover:text-foreground"
+          className="focus-ring flex min-w-0 items-center gap-2 rounded text-sm font-medium hover:text-foreground"
           title={collapsed ? "Expand" : "Collapse"}
         >
           {collapsed ? (
@@ -304,7 +307,7 @@ export function QuickNotesWidget() {
               <button
                 type="button"
                 onClick={focusAdd}
-                className="focus-ring ml-auto inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:border-ember/40 hover:text-foreground"
+                className="focus-ring text-meta ml-auto inline-flex items-center gap-1 rounded-md border border-border px-1.5 py-0.5 text-muted-foreground hover:border-ember/40 hover:text-foreground"
                 title="Add a quick note (n)"
               >
                 <Plus className="h-3 w-3" />
@@ -316,16 +319,10 @@ export function QuickNotesWidget() {
                 type="button"
                 onClick={() => setShowArchived((v) => !v)}
                 className={cn(
-                  "focus-ring inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta",
-                  showArchived
-                    ? "text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
+                  "focus-ring text-meta inline-flex items-center gap-1 rounded-md px-1.5 py-0.5",
+                  showArchived ? "text-foreground" : "text-muted-foreground hover:text-foreground",
                 )}
-                title={
-                  showArchived
-                    ? "Show active notes"
-                    : "Show archived notes"
-                }
+                title={showArchived ? "Show active notes" : "Show archived notes"}
               >
                 <Archive className="h-3 w-3" />
                 <span>{showArchived ? "Active" : "Archived"}</span>
@@ -339,7 +336,7 @@ export function QuickNotesWidget() {
         <JournalBody
           today={
             todayJournalId
-              ? journalListQ.data?.items.find((n) => n.id === todayJournalId) ??
+              ? (journalListQ.data?.items.find((n) => n.id === todayJournalId) ??
                 (journalDraft
                   ? {
                       id: journalDraft.id,
@@ -351,7 +348,7 @@ export function QuickNotesWidget() {
                       archivedAt: null,
                       updatedAt: new Date(),
                     }
-                  : null)
+                  : null))
               : null
           }
           todayHeading={todayHeading}
@@ -401,7 +398,7 @@ export function QuickNotesWidget() {
                 className="focus-ring min-h-[2rem] w-full resize-none bg-transparent text-sm placeholder:text-muted-foreground/60 focus:outline-none"
               />
               {draft.trim() && (
-                <div className="flex items-center gap-2 text-meta text-muted-foreground">
+                <div className="text-meta flex items-center gap-2 text-muted-foreground">
                   <span>Enter to save · Esc to cancel</span>
                   <button
                     type="button"
@@ -421,10 +418,7 @@ export function QuickNotesWidget() {
           {!showArchived && items.length > 0 && (
             <div className="flex flex-wrap items-center gap-1 border-b border-border px-4 py-2">
               {STATUS_FILTERS.map((f) => {
-                const n =
-                  f.key === "ALL"
-                    ? items.length
-                    : statusCounts[f.key as NoteStatus];
+                const n = f.key === "ALL" ? items.length : statusCounts[f.key as NoteStatus];
                 const active = statusFilter === f.key;
                 return (
                   <button
@@ -432,7 +426,7 @@ export function QuickNotesWidget() {
                     type="button"
                     onClick={() => setStatusFilter(f.key)}
                     className={cn(
-                      "focus-ring inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-meta uppercase tracking-wider transition-colors",
+                      "focus-ring text-meta inline-flex items-center gap-1 rounded-full border px-2 py-0.5 uppercase tracking-wider transition-colors",
                       active
                         ? "border-ember/40 bg-ember/10 text-ember"
                         : "border-border bg-card/40 text-muted-foreground hover:text-foreground",
@@ -457,10 +451,7 @@ export function QuickNotesWidget() {
           {listQ.isLoading ? (
             <ul className="flex flex-col gap-1 p-3">
               {Array.from({ length: 3 }).map((_, i) => (
-                <li
-                  key={i}
-                  className="h-8 animate-pulse rounded bg-subtle/60"
-                />
+                <li key={i} className="h-8 animate-pulse rounded bg-subtle/60" />
               ))}
             </ul>
           ) : filteredItems.length === 0 ? (
@@ -482,9 +473,7 @@ export function QuickNotesWidget() {
                   expanded={expandedId === n.id}
                   editing={editingId === n.id}
                   editingValue={editingValue}
-                  onExpand={() =>
-                    setExpandedId((id) => (id === n.id ? null : n.id))
-                  }
+                  onExpand={() => setExpandedId((id) => (id === n.id ? null : n.id))}
                   onStartEdit={() => {
                     setEditingId(n.id);
                     setEditingValue(n.title ?? "");
@@ -499,19 +488,13 @@ export function QuickNotesWidget() {
                     setEditingValue("");
                   }}
                   onEditingChange={setEditingValue}
-                  onTogglePin={() =>
-                    update.mutate({ id: n.id, pinned: !n.pinned })
-                  }
+                  onTogglePin={() => update.mutate({ id: n.id, pinned: !n.pinned })}
                   onArchive={() => archive.mutate({ id: n.id })}
                   onUnarchive={() => unarchive.mutate({ id: n.id })}
                   onDelete={() => del.mutate({ id: n.id })}
                   onConvert={() => convertViaQuickCreate(n)}
-                  onSetStatus={(status) =>
-                    setStatus.mutate({ noteId: n.id, status })
-                  }
-                  onPromote={(kind) =>
-                    promote.mutate({ noteId: n.id, kind })
-                  }
+                  onSetStatus={(status) => setStatus.mutate({ noteId: n.id, status })}
+                  onPromote={(kind) => promote.mutate({ noteId: n.id, kind })}
                   promoting={promote.isPending}
                 />
               ))}
@@ -579,7 +562,7 @@ function JournalBody({
     <div className="flex flex-col">
       {/* Today's entry */}
       <div className="flex flex-col gap-2 border-b border-border px-4 py-3">
-        <div className="flex items-center gap-2 text-meta text-muted-foreground">
+        <div className="text-meta flex items-center gap-2 text-muted-foreground">
           <NotebookPen className="h-3 w-3" />
           <span className="font-mono uppercase tracking-wider">Today</span>
           <span className="text-muted-foreground/80">·</span>
@@ -597,10 +580,7 @@ function JournalBody({
               if (today && body !== today.body) onSaveBody(body);
             }}
             onKeyDown={(e) => {
-              if (
-                e.key === "Enter" &&
-                (e.metaKey || e.ctrlKey)
-              ) {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();
                 if (debounceRef.current) clearTimeout(debounceRef.current);
                 onSaveBody(body);
@@ -611,13 +591,9 @@ function JournalBody({
             className="focus-ring w-full resize-y rounded-md border border-input bg-background/40 p-2 text-sm placeholder:text-muted-foreground/60 focus:outline-none"
           />
         ) : (
-          <div className="text-meta text-muted-foreground">
-            Loading today&apos;s entry…
-          </div>
+          <div className="text-meta text-muted-foreground">Loading today&apos;s entry…</div>
         )}
-        <div className="text-meta text-muted-foreground">
-          Auto-saves on blur · ⌘⏎ to save now
-        </div>
+        <div className="text-meta text-muted-foreground">Auto-saves on blur · ⌘⏎ to save now</div>
       </div>
 
       {/* Past entries */}
@@ -656,7 +632,11 @@ function JournalPastRow({ note }: { note: JournalRow }) {
     });
   }, [note.journalDate]);
   const firstLine = useMemo(
-    () => note.body.split("\n").find((l) => l.trim().length > 0)?.trim() ?? "",
+    () =>
+      note.body
+        .split("\n")
+        .find((l) => l.trim().length > 0)
+        ?.trim() ?? "",
     [note.body],
   );
 
@@ -667,13 +647,9 @@ function JournalPastRow({ note }: { note: JournalRow }) {
         onClick={() => setOpen((v) => !v)}
         className="focus-ring flex w-full items-center gap-2 px-4 py-2 text-left hover:bg-subtle/40"
       >
-        <span className="text-id shrink-0 font-mono text-muted-foreground">
-          {dateLabel}
-        </span>
+        <span className="text-id shrink-0 font-mono text-muted-foreground">{dateLabel}</span>
         <span className="min-w-0 flex-1 truncate text-xs text-foreground">
-          {firstLine || (
-            <span className="text-muted-foreground italic">empty</span>
-          )}
+          {firstLine || <span className="italic text-muted-foreground">empty</span>}
         </span>
         {open ? (
           <ChevronDown className="h-3 w-3 text-muted-foreground" />
@@ -684,10 +660,7 @@ function JournalPastRow({ note }: { note: JournalRow }) {
       {open && (
         <div className="px-4 pb-3">
           <div className="rounded-md border border-border bg-background/40 p-2">
-            <MarkdownWithAttachments
-              body={note.body || "_(empty)_"}
-              className="text-xs"
-            />
+            <MarkdownWithAttachments body={note.body || "_(empty)_"} className="text-xs" />
           </div>
         </div>
       )}
@@ -757,9 +730,7 @@ function NoteRow({
   const excerpt = useMemo(() => {
     if (note.title) return note.body;
     const firstLine = note.body.split("\n")[0] ?? "";
-    return note.body.length > firstLine.length
-      ? note.body
-      : firstLine;
+    return note.body.length > firstLine.length ? note.body : firstLine;
   }, [note.body, note.title]);
   const displayTitle = note.title?.trim() || note.body.split("\n")[0]?.trim() || "Untitled";
   const alreadyPromoted = !!note.promotedToId && !!note.promotedToType;
@@ -772,17 +743,11 @@ function NoteRow({
           onClick={onTogglePin}
           className={cn(
             "focus-ring mt-1 shrink-0 rounded p-0.5",
-            note.pinned
-              ? "text-ember"
-              : "text-muted-foreground/60 hover:text-foreground",
+            note.pinned ? "text-ember" : "text-muted-foreground/60 hover:text-foreground",
           )}
           title={note.pinned ? "Unpin" : "Pin to top"}
         >
-          {note.pinned ? (
-            <Pin className="h-3 w-3 fill-current" />
-          ) : (
-            <Pin className="h-3 w-3" />
-          )}
+          {note.pinned ? <Pin className="h-3 w-3 fill-current" /> : <Pin className="h-3 w-3" />}
         </button>
         <div className="min-w-0 flex-1">
           {editing ? (
@@ -813,17 +778,10 @@ function NoteRow({
               {displayTitle}
             </button>
           )}
-          <button
-            type="button"
-            onClick={onExpand}
-            className="block w-full text-left"
-          >
+          <button type="button" onClick={onExpand} className="block w-full text-left">
             {expanded ? (
               <div className="mt-1 rounded-md border border-border bg-background/40 p-2">
-                <MarkdownWithAttachments
-                  body={note.body}
-                  className="text-xs"
-                />
+                <MarkdownWithAttachments body={note.body} className="text-xs" />
               </div>
             ) : (
               <div className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
@@ -832,7 +790,7 @@ function NoteRow({
               </div>
             )}
           </button>
-          <div className="mt-1 flex items-center gap-2 text-meta text-muted-foreground">
+          <div className="text-meta mt-1 flex items-center gap-2 text-muted-foreground">
             <span>{relativeTime(note.updatedAt)}</span>
             <span className="relative inline-flex">
               <button
@@ -856,24 +814,22 @@ function NoteRow({
                 role="menu"
                 className="flex flex-col rounded-md border border-border bg-card py-1 shadow-md"
               >
-                {(["IDEA", "SOMEDAY", "ACTIVE", "ARCHIVED"] as NoteStatus[]).map(
-                  (s) => (
-                    <button
-                      key={s}
-                      type="button"
-                      onClick={() => {
-                        onSetStatus(s);
-                        setStatusOpen(false);
-                      }}
-                      className={cn(
-                        "focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60",
-                        s === note.status && "text-foreground",
-                      )}
-                    >
-                      <NoteStatusChip status={s} />
-                    </button>
-                  ),
-                )}
+                {(["IDEA", "SOMEDAY", "ACTIVE", "ARCHIVED"] as NoteStatus[]).map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => {
+                      onSetStatus(s);
+                      setStatusOpen(false);
+                    }}
+                    className={cn(
+                      "focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60",
+                      s === note.status && "text-foreground",
+                    )}
+                  >
+                    <NoteStatusChip status={s} />
+                  </button>
+                ))}
               </AnchoredPopover>
             </span>
             {alreadyPromoted && (
@@ -918,52 +874,52 @@ function NoteRow({
               role="menu"
               className="flex w-44 flex-col rounded-md border border-border bg-card py-1 shadow-md"
             >
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPromote("issue");
-                    setConvertOpen(false);
-                  }}
-                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
-                >
-                  <FilePlus className="h-3 w-3 text-muted-foreground" />
-                  <span>Convert to Issue</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPromote("project");
-                    setConvertOpen(false);
-                  }}
-                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
-                >
-                  <Folder className="h-3 w-3 text-muted-foreground" />
-                  <span>Convert to Project</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPromote("initiative");
-                    setConvertOpen(false);
-                  }}
-                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
-                >
-                  <Rocket className="h-3 w-3 text-muted-foreground" />
-                  <span>Convert to Initiative</span>
-                </button>
-                <div className="my-1 border-t border-border" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    onConvert();
-                    setConvertOpen(false);
-                  }}
-                  className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
-                  title="Open the quick-create dialog so you can tweak title and description"
-                >
-                  <FilePlus className="h-3 w-3 text-muted-foreground" />
-                  <span>Open in Quick Create…</span>
-                </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onPromote("issue");
+                  setConvertOpen(false);
+                }}
+                className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+              >
+                <FilePlus className="h-3 w-3 text-muted-foreground" />
+                <span>Convert to Issue</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onPromote("project");
+                  setConvertOpen(false);
+                }}
+                className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+              >
+                <Folder className="h-3 w-3 text-muted-foreground" />
+                <span>Convert to Project</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onPromote("initiative");
+                  setConvertOpen(false);
+                }}
+                className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+              >
+                <Rocket className="h-3 w-3 text-muted-foreground" />
+                <span>Convert to Initiative</span>
+              </button>
+              <div className="my-1 border-t border-border" />
+              <button
+                type="button"
+                onClick={() => {
+                  onConvert();
+                  setConvertOpen(false);
+                }}
+                className="focus-ring flex items-center gap-2 px-2 py-1 text-left text-xs hover:bg-subtle/60"
+                title="Open the quick-create dialog so you can tweak title and description"
+              >
+                <FilePlus className="h-3 w-3 text-muted-foreground" />
+                <span>Open in Quick Create…</span>
+              </button>
             </AnchoredPopover>
           </div>
           {archived ? (
@@ -992,8 +948,7 @@ function NoteRow({
                 if (
                   await confirm({
                     title: "Delete this note?",
-                    description:
-                      "This can't be undone — use Archive for the soft path.",
+                    description: "This can't be undone — use Archive for the soft path.",
                     primaryLabel: "Delete",
                     variant: "destructive",
                   })
@@ -1028,7 +983,7 @@ function NoteStatusChip({ status }: { status: NoteStatus }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-full border px-1.5 text-meta uppercase tracking-wider",
+        "text-meta inline-flex items-center rounded-full border px-1.5 uppercase tracking-wider",
         STATUS_STYLES[status],
       )}
     >
@@ -1052,9 +1007,7 @@ function PromotedBadge({
   let label = "";
   if (note.promotedToType === "issue") {
     href = slug ? `/w/${slug}/issues/${note.promotedToId}` : null;
-    label = targetInfo?.number
-      ? `→ ${formatIssueId(workspaceKey, targetInfo.number)}`
-      : "→ issue";
+    label = targetInfo?.number ? `→ ${formatIssueId(workspaceKey, targetInfo.number)}` : "→ issue";
   } else if (note.promotedToType === "project") {
     href = slug ? `/w/${slug}/projects/${note.promotedToId}` : null;
     label = targetInfo?.key ? `→ ${targetInfo.key}` : "→ project";
