@@ -2,11 +2,15 @@
 import { Fragment, useId, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
+  EyeOff,
   FileText,
   File as FileIcon,
+  Bot,
+  Maximize2,
+  Minimize2,
+  MoreHorizontal,
   Paperclip,
   AlertTriangle,
-  Bot,
   ExternalLink,
 } from "lucide-react";
 import { trpc } from "@/lib/trpc";
@@ -333,9 +337,45 @@ type Block =
   | { type: "dataBlock"; block: DataBlock }
   | { type: "dataBlockInvalid"; raw: string; reason: string }
   | { type: "artifactEmbed"; artifactId: string }
+  | { type: "mediaPreview"; url: string; media: DirectMediaKind }
   | { type: "urlEmbed"; match: EmbedMatch };
 
 type Align = "left" | "center" | "right" | null;
+type DirectMediaKind = "image" | "video";
+
+const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpg", "jpeg", "png", "webp"]);
+const VIDEO_EXTENSIONS = new Set(["mp4", "ogg", "ogv", "webm"]);
+
+function directMediaKind(url: string): DirectMediaKind | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+  const last = parsed.pathname.split("/").pop() ?? "";
+  const ext = last.includes(".") ? last.split(".").pop()?.toLowerCase() : null;
+  if (!ext) return null;
+  if (IMAGE_EXTENSIONS.has(ext)) return "image";
+  if (VIDEO_EXTENSIONS.has(ext)) return "video";
+  return null;
+}
+
+function directMediaUrlsInText(text: string): Array<{ url: string; media: DirectMediaKind }> {
+  const seen = new Set<string>();
+  const out: Array<{ url: string; media: DirectMediaKind }> = [];
+  URL_RE.lastIndex = 0;
+  for (const m of text.matchAll(URL_RE)) {
+    const url = m[0];
+    if (seen.has(url)) continue;
+    const media = directMediaKind(url);
+    if (!media) continue;
+    seen.add(url);
+    out.push({ url, media });
+  }
+  return out;
+}
 
 function isHr(line: string): boolean {
   const t = line.trim();
@@ -445,6 +485,12 @@ function parseBlocks(body: string): Block[] {
     {
       const t = ln.trim();
       if (/^https?:\/\//i.test(t) && !/\s/.test(t)) {
+        const media = directMediaKind(t);
+        if (media) {
+          out.push({ type: "mediaPreview", url: t, media });
+          i++;
+          continue;
+        }
         const m = matchEmbedUrl(t);
         if (m) {
           out.push({ type: "urlEmbed", match: m });
@@ -784,6 +830,8 @@ export function MarkdownWithAttachments({
   );
 }
 
+export const RichContentRenderer = MarkdownWithAttachments;
+
 function renderBlock(
   block: Block,
   idx: number,
@@ -905,25 +953,47 @@ function renderBlock(
   if (block.type === "artifactEmbed") {
     return <ArtifactEmbed key={k} artifactId={block.artifactId} />;
   }
+  if (block.type === "mediaPreview") {
+    return (
+      <DirectMediaPreview
+        key={k}
+        url={block.url}
+        media={block.media}
+      />
+    );
+  }
   if (block.type === "urlEmbed") {
     const m = block.match;
     if (m.kind === "youtube")
-      return <YouTubeEmbed key={k} videoId={m.payload.videoId} url={m.payload.url} />;
+      return (
+        <PreviewControls key={k} url={m.payload.url} label="YouTube preview">
+          <YouTubeEmbed videoId={m.payload.videoId} url={m.payload.url} />
+        </PreviewControls>
+      );
     if (m.kind === "github")
       return (
-        <GithubEmbed
-          key={k}
-          owner={m.payload.owner}
-          repo={m.payload.repo}
-          number={m.payload.number}
-          type={m.payload.type}
-          url={m.payload.url}
-        />
+        <PreviewControls key={k} url={m.payload.url} label="GitHub preview">
+          <GithubEmbed
+            owner={m.payload.owner}
+            repo={m.payload.repo}
+            number={m.payload.number}
+            type={m.payload.type}
+            url={m.payload.url}
+          />
+        </PreviewControls>
       );
     if (m.kind === "loom")
-      return <LoomEmbed key={k} videoId={m.payload.videoId} url={m.payload.url} />;
+      return (
+        <PreviewControls key={k} url={m.payload.url} label="Loom preview">
+          <LoomEmbed videoId={m.payload.videoId} url={m.payload.url} />
+        </PreviewControls>
+      );
     if (m.kind === "figma")
-      return <FigmaEmbed key={k} embedUrl={m.payload.embedUrl} url={m.payload.url} />;
+      return (
+        <PreviewControls key={k} url={m.payload.url} label="Figma preview">
+          <FigmaEmbed embedUrl={m.payload.embedUrl} url={m.payload.url} />
+        </PreviewControls>
+      );
     return null;
   }
   if (block.type === "table") {
@@ -968,10 +1038,27 @@ function renderBlock(
   }
   // Paragraph — preserve hard newlines inside paragraphs (a real
   // newline in the source between paragraph lines stays as a <br/>).
+  const mediaUrls = directMediaUrlsInText(block.text);
+  if (mediaUrls.length === 0) {
+    return (
+      <p key={k} className="my-1.5 whitespace-pre-wrap leading-relaxed">
+        {renderInline(block.text, inlineList, k)}
+      </p>
+    );
+  }
   return (
-    <p key={k} className="my-1.5 whitespace-pre-wrap leading-relaxed">
-      {renderInline(block.text, inlineList, k)}
-    </p>
+    <Fragment key={k}>
+      <p className="my-1.5 whitespace-pre-wrap leading-relaxed">
+        {renderInline(block.text, inlineList, k)}
+      </p>
+      {mediaUrls.map((it, mediaIdx) => (
+        <DirectMediaPreview
+          key={`${k}-media-${mediaIdx}`}
+          url={it.url}
+          media={it.media}
+        />
+      ))}
+    </Fragment>
   );
 }
 
@@ -1017,6 +1104,182 @@ function CodeBlock({ code, lang }: { code: string; lang: string }) {
         <code>{code}</code>
       </pre>
     </div>
+  );
+}
+
+function hostLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./i, "");
+  } catch {
+    return "media";
+  }
+}
+
+function PreviewControls({
+  url,
+  label,
+  children,
+}: {
+  url: string;
+  label: string;
+  children: ReactNode;
+}) {
+  const [hidden, setHidden] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const host = hostLabel(url);
+
+  if (hidden) {
+    return (
+      <div className="my-2 flex min-w-0 items-center justify-between gap-2 rounded-md border border-border bg-card/40 px-2.5 py-1.5">
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="min-w-0 truncate text-meta text-ember underline-offset-2 hover:underline"
+        >
+          {url}
+        </a>
+        <button
+          type="button"
+          onClick={() => {
+            setHidden(false);
+            setCollapsed(false);
+          }}
+          className="focus-ring shrink-0 rounded border border-border bg-background/80 px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-background hover:text-foreground"
+        >
+          Show preview
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="group/preview relative my-2">
+      <div className="flex min-w-0 items-center justify-between gap-2 rounded-t-md border border-b-0 border-border bg-card/60 px-2 py-1">
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="min-w-0 truncate text-meta text-muted-foreground underline-offset-2 hover:text-ember hover:underline"
+          title={url}
+        >
+          {label} · {host}
+        </a>
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={menuOpen}
+            onClick={() => setMenuOpen((v) => !v)}
+            onBlur={() => window.setTimeout(() => setMenuOpen(false), 120)}
+            className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
+            title="Preview actions"
+          >
+            <MoreHorizontal className="h-4 w-4" />
+          </button>
+          {menuOpen && (
+            <div
+              role="menu"
+              className="absolute right-0 top-7 z-20 w-36 overflow-hidden rounded-md border border-border bg-popover p-1 shadow-lg"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setCollapsed((v) => !v);
+                  setMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-meta hover:bg-subtle"
+              >
+                {collapsed ? (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                ) : (
+                  <Minimize2 className="h-3.5 w-3.5" />
+                )}
+                {collapsed ? "Expand" : "Collapse"}
+              </button>
+              <a
+                role="menuitem"
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 rounded px-2 py-1.5 text-meta hover:bg-subtle"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open link
+              </a>
+              <button
+                type="button"
+                role="menuitem"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  setHidden(true);
+                  setMenuOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-meta hover:bg-subtle"
+              >
+                <EyeOff className="h-3.5 w-3.5" />
+                Hide
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+      {collapsed ? (
+        <div className="rounded-b-md border border-border bg-card/30 px-2 py-1.5">
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="block truncate text-meta text-ember underline-offset-2 hover:underline"
+          >
+            {url}
+          </a>
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-b-md border border-border bg-card/30">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DirectMediaPreview({
+  url,
+  media,
+}: {
+  url: string;
+  media: DirectMediaKind;
+}) {
+  return (
+    <PreviewControls
+      url={url}
+      label={media === "image" ? "Image preview" : "Video preview"}
+    >
+      {media === "image" ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={url}
+          alt=""
+          loading="lazy"
+          className="max-h-96 w-full object-contain"
+        />
+      ) : (
+        <video
+          src={url}
+          controls
+          preload="metadata"
+          className="max-h-96 w-full bg-subtle"
+        >
+          <a href={url} target="_blank" rel="noopener noreferrer">
+            Open video
+          </a>
+        </video>
+      )}
+    </PreviewControls>
   );
 }
 

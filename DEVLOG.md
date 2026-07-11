@@ -12293,3 +12293,24 @@ Verification: lint and typecheck passed; 1,126 unit/integration tests passed
 (one live-only test skipped); and a forced fresh production build plus all 37
 Playwright tests passed. This change is local only; production was inspected
 read-only and was not deployed or mutated.
+Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass;
+`git diff --check` clean. DB-backed tests were not run because this
+codex-bridge container has no Postgres/Redis service stack.
+
+---
+
+## 2026-07-11 — AXI-96 rich issue content renderer
+
+Extended the shared safe markdown renderer used by issue descriptions and
+comments into an explicit `RichContentRenderer` export while keeping the
+existing attachment-aware renderer API compatible for other surfaces.
+
+The renderer now detects direct image and browser-playable video URLs in issue
+content, keeps the original URL clickable/readable, and renders bounded inline
+previews. Generated media/provider previews have a compact Slack-style action
+menu for collapse, open, and hide/show controls, using existing tokens and
+density-aware text utilities.
+
+Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass.
+DB-backed tests were not run because this codex-bridge container has no
+Postgres/Redis service stack.
