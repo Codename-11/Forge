@@ -2,6 +2,40 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-11 — Goals + Plans live operations cockpit
+
+Reworked orchestration UI from record/status pages into run-aware operating
+surfaces, reusing the existing Mission Control event timeline and Forge tokens.
+
+- **Shared operational run model.** Added a reusable status/trace component
+  that derives operator-facing phases from the real AgentRun lifecycle:
+  queued, dispatched, acknowledged, working, waiting, quiet/stalled, review,
+  done, and stopped. Freshness re-evaluates every 30 seconds and run traces
+  subscribe to the existing AgentRunEvent SSE stream while expanded.
+- **Plan cockpit.** Added a live summary for agents active, work in progress,
+  operator attention, queued work, and last activity. Every list step now shows
+  the actual agent, current action, last-event freshness, and an expandable
+  event trace. Crew highlights use live runs instead of assuming that a step
+  assignment means the agent is working. Plan content is read-first; title,
+  body, expected-output, removal, and add-step controls sit behind an explicit
+  Edit plan mode.
+- **Goal operations.** Goal detail now leads with live counts and bounded
+  Working now / Needs you / Up next lanes (four visible items per lane, linked
+  to the exact Plan step). The Goals index carries the freshest active task and
+  agent state inline, while Goal crew presence is likewise derived from runs.
+- **Data contract.** Goal and Plan queries now include acknowledgement,
+  output-start, wake, and freshness fields needed to distinguish a sent wake
+  from real work. No schema migration was required.
+- **Coverage.** Added unit tests for phase derivation and a production-build
+  Playwright flow that creates a Goal and templated Plan, verifies the live
+  operations regions, checks read/edit mode, and asserts desktop/mobile
+  overflow constraints.
+
+Verification: `pnpm lint` (passes with existing repository warnings),
+`pnpm typecheck`, full Vitest suite (**1,099 passed; 1 skipped**), fresh Next.js
+production build, and full Playwright suite (**37 passed**). This iteration was
+committed and intentionally not deployed.
+
 ## 2026-07-11 — Review gates, actionable Plan comments, and outcome-driven Goals
 
 Closed the orchestration visibility gaps that made active work look stuck and

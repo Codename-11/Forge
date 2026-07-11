@@ -22,7 +22,7 @@ import { EmptyState, SkeletonList } from "@/components/ui";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
@@ -42,9 +42,16 @@ import {
   pickAttentionRun,
 } from "@/components/orchestration/run-attention-panel";
 import {
+  RunOperationalStatus,
+  deriveRunOperationalState,
+  type RunOperationalState,
+  useOperationalClock,
+} from "@/components/orchestration/run-operational-status";
+import {
   useGoalRouter,
   type GoalPlanRow,
   type GoalPlannerInfo,
+  type GoalStepRun,
 } from "@/components/orchestration-ui/use-goal-trpc";
 
 const STEP_DONE = "DONE";
@@ -62,6 +69,7 @@ export default function GoalDetailPage() {
   const router = useRouter();
   const ws = useWorkspace();
   const utils = trpc.useUtils();
+  const operationalNow = useOperationalClock();
   const goalRouter = useGoalRouter();
 
   const available = Boolean(goalRouter?.get);
@@ -255,14 +263,40 @@ export default function GoalDetailPage() {
     : null;
   const activeByAgent: ActiveStepByAgent = new Map();
   for (const step of activePlan?.steps ?? []) {
-    if (step.assignedAgentId && ["READY", "RUNNING", "REVIEW"].includes(step.status)) {
+    const run = step.runs?.[0] ?? step.issue?.agentRuns?.[0] ?? null;
+    const agentId = run?.agentId ?? step.assignedAgentId;
+    const operational = deriveRunOperationalState(run, step.status, operationalNow);
+    if (agentId && (operational.live || operational.phase === "WAITING")) {
+      activeByAgent.set(agentId, {
+        id: step.id,
+        title: step.title ?? "Step",
+        status: operational.label,
+      });
+    } else if (step.assignedAgentId && step.status === "READY") {
       activeByAgent.set(step.assignedAgentId, {
         id: step.id,
         title: step.title ?? "Step",
-        status: step.status,
+        status: "Queued",
       });
     }
   }
+  const operationalRows = (activePlan?.steps ?? []).map((step) => {
+    const run = step.runs?.[0] ?? step.issue?.agentRuns?.[0] ?? null;
+    return {
+      step,
+      run,
+      state: deriveRunOperationalState(run, step.status, operationalNow),
+    };
+  });
+  const workingRows = operationalRows.filter((row) => row.state.live && !row.state.needsAttention);
+  const attentionRows = operationalRows.filter((row) => row.state.needsAttention);
+  const nextRows = operationalRows.filter(
+    (row) => row.state.phase === "QUEUED" && row.step.status !== "DONE",
+  );
+  const latestGoalActivity = operationalRows
+    .map((row) => row.run?.lastEventAt)
+    .filter((value): value is string | Date => Boolean(value))
+    .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
 
   return (
     <>
@@ -317,6 +351,13 @@ export default function GoalDetailPage() {
               ) : null}
             </div>
           ) : null}
+          <GoalOperationsSummary
+            working={workingRows.length}
+            needsYou={attentionRows.length}
+            queued={nextRows.length}
+            activeAgents={activeByAgent.size}
+            latestActivity={latestGoalActivity ?? null}
+          />
           <header className="rounded-lg border border-border bg-card/40 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -370,6 +411,16 @@ export default function GoalDetailPage() {
             ) : null}
             <GoalLoopExplainerCollapsible className="mt-3" />
           </header>
+
+          {activePlan && operationalRows.length > 0 ? (
+            <GoalOperationsBoard
+              planId={activePlan.id}
+              slug={ws.slug}
+              working={workingRows}
+              attention={attentionRows}
+              next={nextRows}
+            />
+          ) : null}
 
           {/* Active attempt */}
           {activePlan ? (
@@ -571,6 +622,183 @@ function Row({ label, value }: { label: string; value: string }) {
     <div className="flex items-center justify-between gap-2">
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-mono tabular-nums">{value}</dd>
+    </div>
+  );
+}
+
+type GoalOperationalRow = {
+  step: NonNullable<GoalPlanRow["steps"]>[number];
+  run: GoalStepRun | null;
+  state: RunOperationalState;
+};
+
+function GoalOperationsSummary({
+  working,
+  needsYou,
+  queued,
+  activeAgents,
+  latestActivity,
+}: {
+  working: number;
+  needsYou: number;
+  queued: number;
+  activeAgents: number;
+  latestActivity: string | Date | null;
+}) {
+  const cells = [
+    { label: "Agents active", value: activeAgents, tone: "text-ember" },
+    { label: "Working now", value: working, tone: "text-ember" },
+    {
+      label: "Needs you",
+      value: needsYou,
+      tone: needsYou > 0 ? "text-warning" : "text-muted-foreground",
+    },
+    { label: "Queued", value: queued, tone: "text-muted-foreground" },
+  ];
+  return (
+    <section
+      aria-label="Live goal operations"
+      className="rounded-lg border border-border bg-card/40"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="relative flex h-2 w-2">
+            {working > 0 ? (
+              <span className="absolute inline-flex h-full w-full rounded-full bg-ember opacity-50 motion-safe:animate-ping" />
+            ) : null}
+            <span
+              className={cn(
+                "relative inline-flex h-2 w-2 rounded-full",
+                working > 0 ? "bg-ember" : "bg-muted-foreground/40",
+              )}
+            />
+          </span>
+          Goal operations
+        </div>
+        <span className="text-meta text-muted-foreground">
+          {latestActivity ? `last activity ${relativeTime(latestActivity)}` : "no run activity yet"}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-4 sm:divide-y-0">
+        {cells.map((cell) => (
+          <div key={cell.label} className="px-3 py-2.5">
+            <div className={cn("font-mono text-lg tabular-nums", cell.tone)}>{cell.value}</div>
+            <div className="text-meta text-muted-foreground">{cell.label}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function GoalOperationsBoard({
+  planId,
+  slug,
+  working,
+  attention,
+  next,
+}: {
+  planId: string;
+  slug: string;
+  working: GoalOperationalRow[];
+  attention: GoalOperationalRow[];
+  next: GoalOperationalRow[];
+}) {
+  return (
+    <section className="grid grid-cols-1 gap-3 xl:grid-cols-3" aria-label="Goal work lanes">
+      <GoalOperationsLane
+        title="Working now"
+        description="Fresh agent activity"
+        rows={working}
+        empty="No agents are actively producing output."
+        planId={planId}
+        slug={slug}
+      />
+      <GoalOperationsLane
+        title="Needs you"
+        description="Review, waiting, or stalled"
+        rows={attention}
+        empty="Nothing currently needs operator attention."
+        planId={planId}
+        slug={slug}
+        attention
+      />
+      <GoalOperationsLane
+        title="Up next"
+        description="Queued or dependency-bound"
+        rows={next}
+        empty="No additional work is queued."
+        planId={planId}
+        slug={slug}
+      />
+    </section>
+  );
+}
+
+function GoalOperationsLane({
+  title,
+  description,
+  rows,
+  empty,
+  planId,
+  slug,
+  attention = false,
+}: {
+  title: string;
+  description: string;
+  rows: GoalOperationalRow[];
+  empty: string;
+  planId: string;
+  slug: string;
+  attention?: boolean;
+}) {
+  const visible = rows.slice(0, 4);
+  return (
+    <div
+      className={cn(
+        "min-w-0 rounded-lg border bg-card/40",
+        attention && rows.length > 0 ? "border-warning/35" : "border-border",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2 border-b border-border px-3 py-2.5">
+        <div>
+          <div className="text-sm font-medium">{title}</div>
+          <div className="text-meta text-muted-foreground">{description}</div>
+        </div>
+        <span className="text-meta rounded bg-subtle px-1.5 py-0.5 font-mono text-muted-foreground">
+          {rows.length}
+        </span>
+      </div>
+      <div className="flex max-h-[28rem] flex-col gap-2 overflow-y-auto p-2">
+        {visible.length === 0 ? (
+          <p className="text-meta px-1 py-3 text-muted-foreground">{empty}</p>
+        ) : (
+          visible.map((row) => (
+            <div key={row.step.id} className="rounded-md border border-border bg-background/20 p-2">
+              <Link
+                href={`/w/${slug}/plans/${planId}#step-${row.step.id}`}
+                className="block truncate text-sm font-medium hover:text-ember"
+              >
+                {row.step.title || "Untitled step"}
+              </Link>
+              <RunOperationalStatus
+                run={row.run}
+                stepStatus={row.step.status}
+                showTrace={Boolean(row.run)}
+                className="mt-1.5 border-0 bg-transparent"
+              />
+            </div>
+          ))
+        )}
+      </div>
+      {rows.length > visible.length ? (
+        <Link
+          href={`/w/${slug}/plans/${planId}`}
+          className="text-meta block border-t border-border px-3 py-2 text-muted-foreground hover:text-ember"
+        >
+          {rows.length - visible.length} more in plan →
+        </Link>
+      ) : null}
     </div>
   );
 }

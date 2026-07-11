@@ -25,6 +25,11 @@ import {
 } from "@/components/orchestration/goal-loop-explainer";
 import { trpc } from "@/lib/trpc";
 import { useGoalRouter, type GoalRow } from "@/components/orchestration-ui/use-goal-trpc";
+import {
+  RunOperationalStatus,
+  deriveRunOperationalState,
+  useOperationalClock,
+} from "@/components/orchestration/run-operational-status";
 
 type Filter = "all" | GoalStatus;
 
@@ -310,6 +315,7 @@ function FilterPill({
 }
 
 function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
+  const operationalNow = useOperationalClock();
   const status = goal.status as GoalStatus;
   const live = isGoalLive(goal.status);
 
@@ -337,6 +343,21 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
   const needsAttention = ["NEEDS_REVIEW", "BLOCKED", "WAITING_REVIEW"].includes(
     goal.operating?.health ?? "",
   );
+  const activePlan = goal.activePlan ?? goal.plans?.[0] ?? null;
+  const liveStep = activePlan?.steps
+    ?.map((step) => {
+      const run = step.runs?.[0] ?? step.issue?.agentRuns?.[0] ?? null;
+      return {
+        step,
+        run,
+        state: deriveRunOperationalState(run, step.status, operationalNow),
+      };
+    })
+    .sort((a, b) => {
+      const rank = (row: typeof a) =>
+        row.state.needsAttention ? 0 : row.state.live ? 1 : row.state.phase === "QUEUED" ? 2 : 3;
+      return rank(a) - rank(b);
+    })[0];
 
   return (
     <Link
@@ -385,6 +406,18 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
             {goal.operating.health.replaceAll("_", " ").toLowerCase()}
           </div>
           <div className="line-clamp-2">{goal.operating.nextAction}</div>
+        </div>
+      ) : null}
+      {liveStep?.run ? (
+        <div>
+          <div className="text-meta mb-1 truncate font-medium text-foreground">
+            {liveStep.step.title}
+          </div>
+          <RunOperationalStatus
+            run={liveStep.run}
+            stepStatus={liveStep.step.status}
+            showTrace={false}
+          />
         </div>
       ) : null}
 

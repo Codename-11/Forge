@@ -21,13 +21,7 @@ import { STALE_RUN_MS } from "@/lib/agent-stale";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 
-type AttentionRunStatus =
-  | "ACTIVE"
-  | "WAITING"
-  | "COMPLETED"
-  | "ABANDONED"
-  | "STALLED"
-  | string;
+type AttentionRunStatus = "ACTIVE" | "WAITING" | "COMPLETED" | "ABANDONED" | "STALLED" | string;
 
 export type OrchestrationAttentionRun = {
   id: string;
@@ -36,6 +30,10 @@ export type OrchestrationAttentionRun = {
   currentStep?: string | null;
   startedAt?: string | Date | null;
   lastEventAt?: string | Date | null;
+  acknowledgedAt?: string | Date | null;
+  outputStartedAt?: string | Date | null;
+  lastWakeAt?: string | Date | null;
+  wakeAttempts?: number | null;
   finishedAt?: string | Date | null;
   awaitingApprovalAt?: string | Date | null;
   pendingApproval?: unknown;
@@ -141,9 +139,7 @@ export function RunAttentionPanel({
 
   const issue = run.issue ?? step.issue ?? null;
   const agent = run.agent;
-  const idleMs = run.lastEventAt
-    ? Date.now() - new Date(run.lastEventAt).getTime()
-    : 0;
+  const idleMs = run.lastEventAt ? Date.now() - new Date(run.lastEventAt).getTime() : 0;
   const isActive = run.status === "ACTIVE";
   const isWaiting = run.status === "WAITING";
   const isTerminalFailure = run.status === "STALLED" || run.status === "ABANDONED";
@@ -165,12 +161,7 @@ export function RunAttentionPanel({
     approval.isPending;
 
   return (
-    <div
-      className={cn(
-        "rounded-lg border border-warning/35 bg-warning/[0.06] p-3",
-        className,
-      )}
-    >
+    <div className={cn("rounded-lg border border-warning/35 bg-warning/[0.06] p-3", className)}>
       <div className="flex items-start gap-2">
         <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
         <div className="min-w-0 flex-1">
@@ -186,14 +177,14 @@ export function RunAttentionPanel({
             ) : null}
           </div>
 
-          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-meta text-muted-foreground">
+          <div className="text-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
             <span className="truncate">
               Step {step.status.toLowerCase()} · {step.title}
             </span>
             {agent ? (
               <>
                 <span>·</span>
-                <span className="font-mono text-id">@{agent.profileKey}</span>
+                <span className="text-id font-mono">@{agent.profileKey}</span>
               </>
             ) : null}
             {run.lastEventAt ? (
@@ -205,29 +196,31 @@ export function RunAttentionPanel({
           </div>
 
           {run.summary ? (
-            <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/90">
-              {run.summary}
-            </p>
+            <p className="mt-2 whitespace-pre-wrap text-sm text-foreground/90">{run.summary}</p>
           ) : run.currentStep ? (
             <p className="mt-2 text-sm text-foreground/90">{run.currentStep}</p>
           ) : null}
 
           {run.awaitingApprovalAt ? (
-            <div className="mt-2 rounded-md border border-ember/30 bg-ember/10 p-2 text-meta">
+            <div className="text-meta mt-2 rounded-md border border-ember/30 bg-ember/10 p-2">
               <div className="font-medium text-foreground">Runtime approval needed</div>
               <div className="mt-0.5 text-muted-foreground">
-                {approvalText ?? "The runtime paused until an operator approves or rejects the request."}
+                {approvalText ??
+                  "The runtime paused until an operator approves or rejects the request."}
               </div>
             </div>
           ) : null}
 
           {authHint ? (
-            <div className="mt-2 flex items-start gap-1.5 rounded-md border border-warning/30 bg-card/40 p-2 text-meta">
+            <div className="text-meta mt-2 flex items-start gap-1.5 rounded-md border border-warning/30 bg-card/40 p-2">
               <KeyRound className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <div>
-                <div className="font-medium text-foreground">Credential attention likely needed</div>
+                <div className="font-medium text-foreground">
+                  Credential attention likely needed
+                </div>
                 <div className="text-muted-foreground">
-                  Reconnect the runtime/profile, then retry this step so the new run stays attached to the plan.
+                  Reconnect the runtime/profile, then retry this step so the new run stays attached
+                  to the plan.
                 </div>
               </div>
             </div>
@@ -331,7 +324,7 @@ export function RunAttentionPanel({
                 </Button>
               ) : null}
 
-              {(isActive || isWaiting) ? (
+              {isActive || isWaiting ? (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -343,7 +336,7 @@ export function RunAttentionPanel({
                 </Button>
               ) : null}
 
-              {(isActive || isWaiting) ? (
+              {isActive || isWaiting ? (
                 <Button
                   size="sm"
                   variant="ghost"
@@ -407,12 +400,19 @@ export function pickAttentionRun<
     title: string;
     status: string;
     runs?: OrchestrationAttentionRun[] | null;
-    issue?: (NonNullable<OrchestrationAttentionRun["issue"]> & {
-      agentRuns?: OrchestrationAttentionRun[] | null;
-    }) | null;
+    issue?:
+      | (NonNullable<OrchestrationAttentionRun["issue"]> & {
+          agentRuns?: OrchestrationAttentionRun[] | null;
+        })
+      | null;
   },
 >(steps: TStep[]): { step: TStep; run: OrchestrationAttentionRun } | null {
-  const candidates: Array<{ step: TStep; run: OrchestrationAttentionRun; rank: number; ts: number }> = [];
+  const candidates: Array<{
+    step: TStep;
+    run: OrchestrationAttentionRun;
+    rank: number;
+    ts: number;
+  }> = [];
   for (const step of steps) {
     const runs = [...(step.runs ?? []), ...(step.issue?.agentRuns ?? [])];
     for (const run of runs) {

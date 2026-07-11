@@ -11,6 +11,7 @@ import {
   LayoutList,
   ListTree,
   Network,
+  Pencil,
   Plus,
   RotateCcw,
   Target,
@@ -45,11 +46,16 @@ import {
   pickAttentionRun,
   type OrchestrationAttentionRun,
 } from "@/components/orchestration/run-attention-panel";
+import {
+  RunOperationalStatus,
+  deriveRunOperationalState,
+  useOperationalClock,
+} from "@/components/orchestration/run-operational-status";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 
 const PLAN_STATUSES: ExecutionPlanStatus[] = [
   ExecutionPlanStatus.DRAFT,
@@ -175,6 +181,7 @@ export default function PlanDetailPage() {
   const router = useRouter();
   const ws = useWorkspace();
   const utils = trpc.useUtils();
+  const operationalNow = useOperationalClock();
 
   const {
     data: plan,
@@ -355,6 +362,7 @@ export default function PlanDetailPage() {
 
   // View toggle.
   const [view, setView] = useState<ViewMode>("list");
+  const [editingPlan, setEditingPlan] = useState(false);
 
   type ConfirmState =
     | { kind: "remove-step"; stepId: string }
@@ -491,12 +499,45 @@ export default function PlanDetailPage() {
   const activeByAgent = useMemo<ActiveStepByAgent>(() => {
     const m: ActiveStepByAgent = new Map();
     for (const s of orderedSteps) {
-      if (ROSTER_ACTIVE_STEP_STATUSES.has(s.status) && s.assignedAgentId) {
-        m.set(s.assignedAgentId, { id: s.id, title: s.title, status: s.status });
+      const run = latestRunForStep(s);
+      const agentId = run?.agentId ?? s.assignedAgentId;
+      const operational = deriveRunOperationalState(run, s.status, operationalNow);
+      if (agentId && (operational.live || operational.phase === "WAITING")) {
+        m.set(agentId, { id: s.id, title: s.title, status: operational.label });
+      } else if (s.status === ExecutionStepStatus.READY && s.assignedAgentId) {
+        m.set(s.assignedAgentId, { id: s.id, title: s.title, status: "Queued" });
       }
     }
     return m;
-  }, [orderedSteps]);
+  }, [orderedSteps, operationalNow]);
+
+  const operationalSummary = useMemo(() => {
+    const rows = orderedSteps.map((step) => {
+      const run = latestRunForStep(step);
+      return {
+        step,
+        run,
+        state: deriveRunOperationalState(run, step.status, operationalNow),
+      };
+    });
+    const live = rows.filter((row) => row.state.live && !row.state.needsAttention);
+    const attentionRows = rows.filter((row) => row.state.needsAttention);
+    const queued = rows.filter((row) => row.state.phase === "QUEUED");
+    const agents = new Set(
+      live.map((row) => row.run?.agentId ?? row.step.assignedAgentId).filter(Boolean),
+    );
+    const latest = rows
+      .map((row) => row.run?.lastEventAt)
+      .filter((value): value is string | Date => Boolean(value))
+      .sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0];
+    return {
+      liveCount: live.length,
+      attentionCount: attentionRows.length,
+      queuedCount: queued.length,
+      activeAgentCount: agents.size,
+      latestActivity: latest ?? null,
+    };
+  }, [orderedSteps, operationalNow]);
 
   const attention = useMemo(() => pickAttentionRun(orderedSteps), [orderedSteps]);
 
@@ -626,7 +667,14 @@ export default function PlanDetailPage() {
             <Button size="sm" variant="ghost" onClick={() => router.push(`/w/${ws.slug}/plans`)}>
               <ChevronLeft className="h-3.5 w-3.5" /> Back
             </Button>
-            <SaveIndicator pending={savePending} />
+            {editingPlan ? <SaveIndicator pending={savePending} /> : null}
+            <Button
+              size="sm"
+              variant={editingPlan ? "outline" : "ghost"}
+              onClick={() => setEditingPlan((value) => !value)}
+            >
+              <Pencil className="h-3.5 w-3.5" /> {editingPlan ? "Done editing" : "Edit plan"}
+            </Button>
             <Button
               size="sm"
               variant="ghost"
@@ -664,6 +712,8 @@ export default function PlanDetailPage() {
               </div>
             </div>
           ) : null}
+
+          <PlanOperationsSummary summary={operationalSummary} />
 
           {plan.status === ExecutionPlanStatus.DRAFT ? (
             <PlanApproval
@@ -715,19 +765,23 @@ export default function PlanDetailPage() {
           ) : null}
 
           <header className="rounded-lg border border-border bg-card/40 p-4">
-            <input
-              value={headTitle}
-              onChange={(e) => {
-                setHeadTitle(e.target.value);
-                setHeadDirty(true);
-              }}
-              onFocus={() => setHeadEditing("title")}
-              onBlur={() => setHeadEditing(null)}
-              className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-base font-semibold leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
-              aria-label="Plan title"
-            />
+            {editingPlan ? (
+              <input
+                value={headTitle}
+                onChange={(e) => {
+                  setHeadTitle(e.target.value);
+                  setHeadDirty(true);
+                }}
+                onFocus={() => setHeadEditing("title")}
+                onBlur={() => setHeadEditing(null)}
+                className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-base font-semibold leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
+                aria-label="Plan title"
+              />
+            ) : (
+              <h1 className="px-2 py-1 text-base font-semibold leading-snug">{headTitle}</h1>
+            )}
             <div className="mt-2">
-              {headEditing === "description" ? (
+              {editingPlan && headEditing === "description" ? (
                 <textarea
                   autoFocus
                   value={headDescription}
@@ -752,7 +806,7 @@ export default function PlanDetailPage() {
                   placeholder="Description (markdown supported)…"
                   className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
                 />
-              ) : (
+              ) : editingPlan ? (
                 <button
                   type="button"
                   onClick={() => setHeadEditing("description")}
@@ -769,6 +823,12 @@ export default function PlanDetailPage() {
                     </p>
                   )}
                 </button>
+              ) : headDescription.trim() ? (
+                <div className="px-2 py-1 text-sm text-muted-foreground">
+                  <ChatMarkdown body={headDescription} />
+                </div>
+              ) : (
+                <p className="text-meta px-2 py-1 text-muted-foreground">No description yet.</p>
               )}
             </div>
 
@@ -846,6 +906,7 @@ export default function PlanDetailPage() {
               materializingStepId={
                 materializeStep.isPending ? (materializeStep.variables?.stepId ?? null) : null
               }
+              editable={editingPlan}
             />
           ) : view === "timeline" ? (
             <TimelineView
@@ -868,10 +929,12 @@ export default function PlanDetailPage() {
             </div>
           )}
 
-          <AddStepForm
-            disabled={addStep.isPending}
-            onAdd={(payload) => addStep.mutate({ planId: plan.id, ...payload })}
-          />
+          {editingPlan ? (
+            <AddStepForm
+              disabled={addStep.isPending}
+              onAdd={(payload) => addStep.mutate({ planId: plan.id, ...payload })}
+            />
+          ) : null}
         </section>
 
         <aside className="flex flex-col gap-3">
@@ -1194,6 +1257,65 @@ function SaveIndicator({ pending }: { pending: boolean }) {
   );
 }
 
+function PlanOperationsSummary({
+  summary,
+}: {
+  summary: {
+    liveCount: number;
+    attentionCount: number;
+    queuedCount: number;
+    activeAgentCount: number;
+    latestActivity: string | Date | null;
+  };
+}) {
+  const cells = [
+    { label: "Agents active", value: summary.activeAgentCount, tone: "text-ember" },
+    { label: "Working now", value: summary.liveCount, tone: "text-ember" },
+    {
+      label: "Needs you",
+      value: summary.attentionCount,
+      tone: summary.attentionCount > 0 ? "text-warning" : "text-muted-foreground",
+    },
+    { label: "Queued", value: summary.queuedCount, tone: "text-muted-foreground" },
+  ];
+  return (
+    <section
+      aria-label="Live plan operations"
+      className="rounded-lg border border-border bg-card/40"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+        <div className="flex items-center gap-2 text-sm font-medium">
+          <span className="relative flex h-2 w-2">
+            {summary.liveCount > 0 ? (
+              <span className="absolute inline-flex h-full w-full rounded-full bg-ember opacity-50 motion-safe:animate-ping" />
+            ) : null}
+            <span
+              className={cn(
+                "relative inline-flex h-2 w-2 rounded-full",
+                summary.liveCount > 0 ? "bg-ember" : "bg-muted-foreground/40",
+              )}
+            />
+          </span>
+          Live execution
+        </div>
+        <span className="text-meta text-muted-foreground">
+          {summary.latestActivity
+            ? `last activity ${relativeTime(summary.latestActivity)}`
+            : "no run activity yet"}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 divide-x divide-y divide-border sm:grid-cols-4 sm:divide-y-0">
+        {cells.map((cell) => (
+          <div key={cell.label} className="px-3 py-2.5">
+            <div className={cn("font-mono text-lg tabular-nums", cell.tone)}>{cell.value}</div>
+            <div className="text-meta text-muted-foreground">{cell.label}</div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 function ProgressBar({
   counts,
   total,
@@ -1249,6 +1371,7 @@ function StepsList({
   onRemoveStep,
   onMaterializeStep,
   materializingStepId,
+  editable,
 }: {
   steps: StepRow[];
   positionById: Map<string, number>;
@@ -1264,6 +1387,7 @@ function StepsList({
   onRemoveStep: (id: string) => void;
   onMaterializeStep: (id: string) => void;
   materializingStepId: string | null;
+  editable: boolean;
 }) {
   if (steps.length === 0) {
     return (
@@ -1293,6 +1417,7 @@ function StepsList({
             onRemove={() => onRemoveStep(step.id)}
             onMaterialize={() => onMaterializeStep(step.id)}
             materializing={step.id === materializingStepId}
+            editable={editable}
           />
         </li>
       ))}
@@ -1313,6 +1438,7 @@ function StepCard({
   onRemove,
   onMaterialize,
   materializing,
+  editable,
 }: {
   step: StepRow;
   index: number;
@@ -1330,6 +1456,7 @@ function StepCard({
   onRemove: () => void;
   onMaterialize: () => void;
   materializing: boolean;
+  editable: boolean;
 }) {
   const [title, setTitle] = useState(step.title);
   const [body, setBody] = useState(step.body ?? "");
@@ -1416,17 +1543,21 @@ function StepCard({
           {index + 1}
         </span>
         <div className="min-w-0 flex-1">
-          <input
-            value={title}
-            onChange={(e) => {
-              setTitle(e.target.value);
-              setDirty((d) => ({ ...d, title: true }));
-            }}
-            onFocus={() => setEditingField("title")}
-            onBlur={() => setEditingField(null)}
-            className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
-            aria-label={`Step ${index + 1} title`}
-          />
+          {editable ? (
+            <input
+              value={title}
+              onChange={(e) => {
+                setTitle(e.target.value);
+                setDirty((d) => ({ ...d, title: true }));
+              }}
+              onFocus={() => setEditingField("title")}
+              onBlur={() => setEditingField(null)}
+              className="w-full rounded-md border border-transparent bg-transparent px-2 py-1 text-sm font-medium leading-snug outline-none transition-colors hover:border-border focus:border-border focus:bg-card/40"
+              aria-label={`Step ${index + 1} title`}
+            />
+          ) : (
+            <div className="px-2 py-1 text-sm font-medium leading-snug">{title}</div>
+          )}
 
           <StepMetaStrip
             agent={agent}
@@ -1439,10 +1570,16 @@ function StepCard({
             materializing={materializing}
           />
 
+          <RunOperationalStatus
+            run={step.runs?.[0] ?? step.issue?.agentRuns?.[0] ?? null}
+            stepStatus={step.status}
+            className="mt-2"
+          />
+
           {step.judgeVerdict ? (
             <JudgeVerdictBlock verdict={step.judgeVerdict} agentName={agent?.name ?? null} />
           ) : null}
-          {editingField === "body" ? (
+          {editable && editingField === "body" ? (
             <textarea
               autoFocus
               value={body}
@@ -1461,7 +1598,7 @@ function StepCard({
               placeholder="Body (markdown supported)…"
               className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-2 py-1 text-sm"
             />
-          ) : body.trim() ? (
+          ) : body.trim() && editable ? (
             <button
               type="button"
               onClick={() => setEditingField("body")}
@@ -1470,7 +1607,11 @@ function StepCard({
             >
               <ChatMarkdown body={body} />
             </button>
-          ) : (
+          ) : body.trim() ? (
+            <div className="mt-1 px-2 py-1 text-sm text-muted-foreground">
+              <ChatMarkdown body={body} />
+            </div>
+          ) : editable ? (
             <button
               type="button"
               onClick={() => setEditingField("body")}
@@ -1478,8 +1619,8 @@ function StepCard({
             >
               + Add body…
             </button>
-          )}
-          {editingField === "expected" ? (
+          ) : null}
+          {editable && editingField === "expected" ? (
             <textarea
               autoFocus
               value={expected}
@@ -1498,7 +1639,7 @@ function StepCard({
               placeholder="Expected output (markdown supported)…"
               className="text-meta mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-2 py-1"
             />
-          ) : expected.trim() ? (
+          ) : expected.trim() && editable ? (
             <button
               type="button"
               onClick={() => setEditingField("expected")}
@@ -1508,7 +1649,12 @@ function StepCard({
               <span className="uppercase tracking-wide opacity-70">Expected: </span>
               <ChatMarkdown body={expected} />
             </button>
-          ) : (
+          ) : expected.trim() ? (
+            <div className="text-meta mt-1 px-2 py-1 text-muted-foreground">
+              <span className="uppercase tracking-wide opacity-70">Expected: </span>
+              <ChatMarkdown body={expected} />
+            </div>
+          ) : editable ? (
             <button
               type="button"
               onClick={() => setEditingField("expected")}
@@ -1516,7 +1662,7 @@ function StepCard({
             >
               + Add expected output…
             </button>
-          )}
+          ) : null}
           <div className="mt-2">
             <StepComments stepId={step.id} />
           </div>
@@ -1532,12 +1678,14 @@ function StepCard({
           options={STEP_STATUSES.map((s) => ({ value: s, label: s.toLowerCase() }))}
         />
       </div>
-      <div className="flex items-center justify-end gap-2">
-        <FieldSaveTick pending={dirty.title || dirty.body || dirty.expected} />
-        <Button size="sm" variant="ghost" className="text-warning" onClick={onRemove}>
-          <Trash2 className="h-3 w-3" />
-        </Button>
-      </div>
+      {editable ? (
+        <div className="flex items-center justify-end gap-2">
+          <FieldSaveTick pending={dirty.title || dirty.body || dirty.expected} />
+          <Button size="sm" variant="ghost" className="text-warning" onClick={onRemove}>
+            <Trash2 className="h-3 w-3" />
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

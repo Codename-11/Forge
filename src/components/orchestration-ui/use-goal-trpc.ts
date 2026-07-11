@@ -130,8 +130,11 @@ type GoalStepRun = {
   externalRunId?: string | null;
   startedAt?: string | Date | null;
   lastEventAt?: string | Date | null;
-  finishedAt?: string | Date | null;
+  acknowledgedAt?: string | Date | null;
+  outputStartedAt?: string | Date | null;
   lastWakeAt?: string | Date | null;
+  wakeAttempts?: number | null;
+  finishedAt?: string | Date | null;
   awaitingApprovalAt?: string | Date | null;
   pendingApproval?: unknown;
   controlState?: string | null;
