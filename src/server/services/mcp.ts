@@ -57,13 +57,11 @@ import {
   RUN_BUDGET_WORKSPACE_SELECT,
 } from "@/server/services/run-budget";
 import { logger } from "@/server/logger";
+import { handoffCompletedRunToStep, maybeAutoJudge } from "@/server/services/orchestration-service";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
 import { agentIdSchema } from "@/server/validators";
-import {
-  TERMINAL_STATUS_CATEGORIES,
-  hasTerminalStatusCategory,
-} from "@/lib/saved-view-filters";
+import { TERMINAL_STATUS_CATEGORIES, hasTerminalStatusCategory } from "@/lib/saved-view-filters";
 import {
   assertKeyScope,
   buildKeyScopeWhere,
@@ -82,11 +80,7 @@ import {
   presignUploadUrl,
 } from "@/server/services/storage";
 import { forgeEntityTypeSchema, type ForgeEntityType } from "@/lib/entity-ref";
-import {
-  assertSafeExternalUrl,
-  isSafeExternalUrl,
-  safeExternalUrlMessage,
-} from "@/lib/url-safety";
+import { assertSafeExternalUrl, isSafeExternalUrl, safeExternalUrlMessage } from "@/lib/url-safety";
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
@@ -3054,7 +3048,8 @@ export const mcpTools = {
         },
       });
       if (!existing) throw new Error("Comment not found in this workspace.");
-      if (!existing.issueId) throw new Error("MCP comment updates currently require an issue comment.");
+      if (!existing.issueId)
+        throw new Error("MCP comment updates currently require an issue comment.");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: existing.issueId });
       await assertMcpCommentWriteAllowed(ctx, existing);
 
@@ -3189,7 +3184,8 @@ export const mcpTools = {
         },
       });
       if (!existing) throw new Error("Comment not found in this workspace.");
-      if (!existing.issueId) throw new Error("MCP comment deletion currently requires an issue comment.");
+      if (!existing.issueId)
+        throw new Error("MCP comment deletion currently requires an issue comment.");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: existing.issueId });
       await assertMcpCommentWriteAllowed(ctx, existing);
 
@@ -5879,17 +5875,16 @@ export const mcpTools = {
         .min(1)
         .max(40)
         .optional()
-        .describe("Optional Runtime.id. When omitted, Forge uses the calling linked agent's runtime."),
+        .describe(
+          "Optional Runtime.id. When omitted, Forge uses the calling linked agent's runtime.",
+        ),
       info: z
         .record(z.unknown())
         .describe(
           "Runtime metadata. Forge stores a sanitized whitelist: versions, bridge/container/build/host fields, workspaceRoot, and details.",
         ),
     }),
-    async run(
-      input: { runtimeId?: string; info: Record<string, unknown> },
-      ctx: McpContext,
-    ) {
+    async run(input: { runtimeId?: string; info: Record<string, unknown> }, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) {
         throw new Error("runtimes.reportInfo requires an agent-linked API key.");
@@ -5899,7 +5894,9 @@ export const mcpTools = {
         select: { id: true, runtimeId: true },
       });
       if (!agent?.runtimeId) {
-        throw new Error("The calling agent has no runtime attached; attach one before reporting info.");
+        throw new Error(
+          "The calling agent has no runtime attached; attach one before reporting info.",
+        );
       }
       if (input.runtimeId && input.runtimeId !== agent.runtimeId) {
         throw new Error("A linked-agent key can only report info for its own runtime.");
@@ -5909,7 +5906,8 @@ export const mcpTools = {
         select: { id: true, archivedAt: true },
       });
       if (!runtime) throw new Error("Runtime not found in this workspace.");
-      if (runtime.archivedAt) throw new Error("Runtime is archived; restore it before reporting info.");
+      if (runtime.archivedAt)
+        throw new Error("Runtime is archived; restore it before reporting info.");
 
       const sanitized = sanitizeRuntimeInfo(input.info);
       if (!sanitized) {
@@ -6078,9 +6076,7 @@ export const mcpTools = {
         where: { workspaceId: runtime.workspaceId, deletedAt: null, repoUrl: { not: null } },
         select: { repoUrl: true, repoBranch: true },
       });
-      const repos: Array<{ url: string; branch: string | null; path: string }> = [
-        ...runtime.repos,
-      ];
+      const repos: Array<{ url: string; branch: string | null; path: string }> = [...runtime.repos];
       const seenPaths = new Set(repos.map((r) => r.path));
       for (const p of projectRepos) {
         if (!p.repoUrl) continue;
@@ -6115,7 +6111,9 @@ export const mcpTools = {
             .catch(() => {});
         } catch (e) {
           const message = e instanceof Error ? e.message : "GitHub App token mint failed.";
-          db.githubApp.update({ where: { id: app.id }, data: { lastError: message } }).catch(() => {});
+          db.githubApp
+            .update({ where: { id: app.id }, data: { lastError: message } })
+            .catch(() => {});
         }
       }
 
@@ -6417,6 +6415,7 @@ export const mcpTools = {
           issueId: true,
           status: true,
           engagementMode: true,
+          executionStepId: true,
           issue: {
             select: {
               expectedOutput: true,
@@ -6483,7 +6482,7 @@ export const mcpTools = {
         data.followUps = input.followUps as Prisma.InputJsonValue;
       }
       data.completionMeta = completionMeta as Prisma.InputJsonValue;
-      return db.$transaction(async (tx) => {
+      const completed = await db.$transaction(async (tx) => {
         const updated = await tx.agentRun.updateMany({
           where: {
             id: run.id,
@@ -6513,12 +6512,16 @@ export const mcpTools = {
         // A genuinely successful EXECUTE completion (this path only, not
         // abandons/stops that also emit AGENT_RUN_COMPLETED elsewhere) is a
         // "ready for review" signal when the workspace opted in.
-        await maybeAutoTransitionOnComplete(
-          tx,
-          ctx.workspaceId,
-          run.issueId,
-          run.engagementMode,
-        );
+        await maybeAutoTransitionOnComplete(tx, ctx.workspaceId, run.issueId, run.engagementMode);
+        if (run.executionStepId) {
+          await handoffCompletedRunToStep(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.userId,
+            actorAgentId: linkedAgentId,
+            runId: run.id,
+            stepId: run.executionStepId,
+          });
+        }
         return tx.agentRun.findUniqueOrThrow({
           where: { id: run.id },
           select: {
@@ -6533,6 +6536,14 @@ export const mcpTools = {
           },
         });
       });
+      if (run.executionStepId) {
+        await maybeAutoJudge(db, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId,
+          stepId: run.executionStepId,
+        });
+      }
+      return completed;
     },
   },
 
@@ -7641,10 +7652,7 @@ export const mcpTools = {
       query: z.string().min(1).max(200),
       type: z.enum(["issue", "pr"]).optional(),
     }),
-    async run(
-      input: { mappingId: string; query: string; type?: "issue" | "pr" },
-      ctx: McpContext,
-    ) {
+    async run(input: { mappingId: string; query: string; type?: "issue" | "pr" }, ctx: McpContext) {
       const mapping = await resolveGitHubRepoMapping({
         db,
         workspaceId: ctx.workspaceId,
@@ -7754,84 +7762,85 @@ export const mcpTools = {
         });
         if (!issue) throw new Error("Issue not found in this workspace.");
 
-        const [rawComments, attachments, relations, currentRun, artifacts, externalResources] = await Promise.all([
-          db.comment.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              issueId,
-              deletedAt: null,
-            },
-            orderBy: { updatedAt: "desc" },
-            take: 50,
-            include: {
-              author: { select: { id: true, name: true, image: true } },
-              authoringAgent: {
-                select: { id: true, profileKey: true, name: true },
+        const [rawComments, attachments, relations, currentRun, artifacts, externalResources] =
+          await Promise.all([
+            db.comment.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                issueId,
+                deletedAt: null,
               },
-              run: { select: { id: true, status: true, finishedAt: true } },
-            },
-          }),
-          db.attachment.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              OR: [{ targetType: "issue", targetId: issueId }, { issueId }],
-              NOT: { url: { startsWith: "pending:" } },
-            },
-            orderBy: { createdAt: "asc" },
-          }),
-          db.issueRelation.findMany({
-            where: { workspaceId: ctx.workspaceId, fromIssueId: issueId },
-            include: {
-              toIssue: {
-                select: {
-                  id: true,
-                  number: true,
-                  title: true,
-                  statusId: true,
-                  status: { select: { category: true } },
+              orderBy: { updatedAt: "desc" },
+              take: 50,
+              include: {
+                author: { select: { id: true, name: true, image: true } },
+                authoringAgent: {
+                  select: { id: true, profileKey: true, name: true },
+                },
+                run: { select: { id: true, status: true, finishedAt: true } },
+              },
+            }),
+            db.attachment.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                OR: [{ targetType: "issue", targetId: issueId }, { issueId }],
+                NOT: { url: { startsWith: "pending:" } },
+              },
+              orderBy: { createdAt: "asc" },
+            }),
+            db.issueRelation.findMany({
+              where: { workspaceId: ctx.workspaceId, fromIssueId: issueId },
+              include: {
+                toIssue: {
+                  select: {
+                    id: true,
+                    number: true,
+                    title: true,
+                    statusId: true,
+                    status: { select: { category: true } },
+                  },
                 },
               },
-            },
-            orderBy: { createdAt: "asc" },
-          }),
-          db.agentRun.findFirst({
-            where: {
-              workspaceId: ctx.workspaceId,
-              issueId,
-              status: { notIn: ["COMPLETED", "ABANDONED"] },
-            },
-            orderBy: { startedAt: "desc" },
-          }),
-          // Wave 2: surface linked artifacts in the agent's context bundle.
-          // Includes both artifacts directly linked via `issueId` AND
-          // artifacts promoted from a source on this issue (via sourceType
-          // = "issue", sourceId = this id). Hidden when archived.
-          db.artifact.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              archivedAt: null,
-              OR: [{ issueId }, { sourceType: "issue", sourceId: issueId }],
-            },
-            orderBy: { updatedAt: "desc" },
-            take: 20,
-            select: {
-              id: true,
-              slug: true,
-              title: true,
-              type: true,
-              status: true,
-              summary: true,
-              sourceType: true,
-              sourceId: true,
-              updatedAt: true,
-            },
-          }),
-          db.externalResourceLink.findMany({
-            where: { workspaceId: ctx.workspaceId, issueId },
-            orderBy: { createdAt: "asc" },
-            include: { externalResource: true },
-          }),
-        ]);
+              orderBy: { createdAt: "asc" },
+            }),
+            db.agentRun.findFirst({
+              where: {
+                workspaceId: ctx.workspaceId,
+                issueId,
+                status: { notIn: ["COMPLETED", "ABANDONED"] },
+              },
+              orderBy: { startedAt: "desc" },
+            }),
+            // Wave 2: surface linked artifacts in the agent's context bundle.
+            // Includes both artifacts directly linked via `issueId` AND
+            // artifacts promoted from a source on this issue (via sourceType
+            // = "issue", sourceId = this id). Hidden when archived.
+            db.artifact.findMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                archivedAt: null,
+                OR: [{ issueId }, { sourceType: "issue", sourceId: issueId }],
+              },
+              orderBy: { updatedAt: "desc" },
+              take: 20,
+              select: {
+                id: true,
+                slug: true,
+                title: true,
+                type: true,
+                status: true,
+                summary: true,
+                sourceType: true,
+                sourceId: true,
+                updatedAt: true,
+              },
+            }),
+            db.externalResourceLink.findMany({
+              where: { workspaceId: ctx.workspaceId, issueId },
+              orderBy: { createdAt: "asc" },
+              include: { externalResource: true },
+            }),
+          ]);
 
         // Wave 5: completion contract — surfaced so agents know
         // exactly what "done" looks like before starting work.
@@ -13596,21 +13605,56 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
   runtime: ["issues", "comments", "chat", "runs", "actionRequests", "workspace"],
   // Everyday issue tracking — the smallest useful working set.
   core: [
-    "issues", "comments", "projects", "statuses", "labels", "relations",
-    "attachments", "agents", "workspace", "workspaces", "events", "pins",
+    "issues",
+    "comments",
+    "projects",
+    "statuses",
+    "labels",
+    "relations",
+    "attachments",
+    "agents",
+    "workspace",
+    "workspaces",
+    "events",
+    "pins",
     "notes",
   ],
   // core + iteration / roadmap planning + the goal→plan orchestration surface.
   planning: [
-    "issues", "comments", "projects", "statuses", "labels", "relations",
-    "cycles", "initiatives", "goals", "plans", "executionPlans", "reviewGates",
-    "contextSets", "attachments", "agents", "workspace", "workspaces", "events",
+    "issues",
+    "comments",
+    "projects",
+    "statuses",
+    "labels",
+    "relations",
+    "cycles",
+    "initiatives",
+    "goals",
+    "plans",
+    "executionPlans",
+    "reviewGates",
+    "contextSets",
+    "attachments",
+    "agents",
+    "workspace",
+    "workspaces",
+    "events",
   ],
   // core + agent orchestration / runtime ops.
   agents: [
-    "issues", "comments", "agents", "agentCrews", "runs", "runtimes",
-    "actionRequests", "chat", "reviewGates", "attachments", "workspace",
-    "workspaces", "events",
+    "issues",
+    "comments",
+    "agents",
+    "agentCrews",
+    "runs",
+    "runtimes",
+    "actionRequests",
+    "chat",
+    "reviewGates",
+    "attachments",
+    "workspace",
+    "workspaces",
+    "events",
   ],
   // Visual canvas tooling (the largest single namespace).
   canvas: ["canvases", "artifacts", "attachments", "notes", "workspace", "workspaces"],

@@ -176,6 +176,8 @@ enum EventKind {
   EXECUTION_STEP_READY
   EXECUTION_STEP_JUDGED
   PLAN_BUDGET_EXCEEDED
+  /// A RUNNING plan has no valid path to make progress without operator action.
+  PLAN_STALLED
 }
 
 /// Operator-requested control on an in-flight AgentRun. NONE is the

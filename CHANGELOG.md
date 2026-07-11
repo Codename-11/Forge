@@ -11,6 +11,8 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-11] — v0.8.1 · Operational layouts & reliable plan recovery
+
 ### Added
 
 - **File and dispatch work from your terminal in one command.** The `forge` CLI has a new `forge task "<what needs doing>"` — it creates the issue and, with `--agent <name>`, assigns it straight to that agent; without one, it queues the issue for auto-dispatch. (`--project`, `--priority`, and `--title` are supported too. Rebuild the CLI with `pnpm build:cli`.)
@@ -27,6 +29,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Fixed
 
+- **Completed goal work now advances instead of silently wedging.** Finishing a step-bound agent run now atomically moves its plan step into review and preserves the run as evidence. The watchdog safely repairs historical completed-run/READY-step drift, creates a human review gate when a crew has no reviewer, and sends one persistent, directly linked “Plan needs attention” notification. Plan detail also explains the exact recovery state instead of presenting stale work as actively queued.
 - **A stalled issue no longer floods Command Center or leave you guessing what to do.** Repeated watchdog signals group into one activity row and unchanged assignments stop re-emitting the same event; on the issue itself, Forge now explains when Research/Review finished without moving the issue and offers Execute, snooze, and activity actions while keeping runtime tool limits explicit.
 - **`forge issue assign` now works.** The CLI command was sending the wrong parameter name and always failed with a validation error; it now assigns correctly. (Rebuild the CLI with `pnpm build:cli` to pick it up.)
 - **Expired ephemeral (session) API keys are now cleaned up automatically.** Session keys are TTL-bounded and were meant to be auto-purged when they expire, but expired ones actually lingered in your Access / Agent Clients list; a background sweep now removes them shortly after expiry. Personal and agent keys are untouched.

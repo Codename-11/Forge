@@ -1,14 +1,9 @@
 "use client";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   Archive,
+  AlertTriangle,
   CheckCircle2,
   ChevronLeft,
   CornerDownRight,
@@ -37,10 +32,7 @@ import { StepComments } from "@/components/plans/step-comments";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { Avatar } from "@/components/ui/avatar";
 import { BudgetMeter } from "@/components/orchestration/budget-meter";
-import {
-  DagStepStrip,
-  toneForStepStatus,
-} from "@/components/orchestration/dag-step-strip";
+import { DagStepStrip, toneForStepStatus } from "@/components/orchestration/dag-step-strip";
 import { DagView } from "@/components/orchestration/dag-view";
 import type { DagAgent, DagStep } from "@/components/orchestration/types";
 import {
@@ -281,9 +273,7 @@ export default function PlanDetailPage() {
   const materializeStep = trpc.executionPlan.materializeStep.useMutation({
     onSuccess: (res) => {
       utils.executionPlan.get.invalidate({ id: params.planId });
-      toast.success(
-        res.created ? "Step materialized as issue" : "Step already has an issue",
-      );
+      toast.success(res.created ? "Step materialized as issue" : "Step already has an issue");
     },
     onError: (e) => toast.error(e.message),
   });
@@ -430,16 +420,18 @@ export default function PlanDetailPage() {
 
   // Orchestration contract reads (loose — these land on the schema via
   // the backend agent; optional-chained until types regenerate).
-  const planX = plan as unknown as {
-    totalCostUsd?: number | null;
-    maxTotalCostUsd?: number | null;
-    maxWallTimeMinutes?: number | null;
-    startedAt?: string | Date | null;
-    goalId?: string | null;
-    goal?: { id: string; title: string; status: string } | null;
-    autoJudge?: boolean;
-    maxStepRetries?: number | null;
-  } | undefined;
+  const planX = plan as unknown as
+    | {
+        totalCostUsd?: number | null;
+        maxTotalCostUsd?: number | null;
+        maxWallTimeMinutes?: number | null;
+        startedAt?: string | Date | null;
+        goalId?: string | null;
+        goal?: { id: string; title: string; status: string } | null;
+        autoJudge?: boolean;
+        maxStepRetries?: number | null;
+      }
+    | undefined;
   const totalCostUsd = planX?.totalCostUsd ?? 0;
   const maxTotalCostUsd = planX?.maxTotalCostUsd ?? null;
   const maxWallTimeMinutes = planX?.maxWallTimeMinutes ?? null;
@@ -451,13 +443,47 @@ export default function PlanDetailPage() {
     : null;
   const goalId = planX?.goalId ?? planX?.goal?.id ?? null;
   const goalTitle = planX?.goal?.title ?? null;
-  const hasBudget =
-    maxTotalCostUsd != null || totalCostUsd > 0 || maxWallTimeMinutes != null;
+  const hasBudget = maxTotalCostUsd != null || totalCostUsd > 0 || maxWallTimeMinutes != null;
 
   // Crew roster — embedded on `executionPlan.get`. Loosely read until
   // the Prisma client regenerates the `crew` relation onto the type.
-  const crew =
-    (plan as unknown as { crew?: CrewRosterData | null } | undefined)?.crew ?? null;
+  const crew = (plan as unknown as { crew?: CrewRosterData | null } | undefined)?.crew ?? null;
+
+  const latestRunForStep = (step: StepRow) => step.runs?.[0] ?? step.issue?.agentRuns?.[0] ?? null;
+  const completedRunMismatch = orderedSteps.find((step) => {
+    const run = latestRunForStep(step);
+    return (
+      (step.status === ExecutionStepStatus.READY || step.status === ExecutionStepStatus.RUNNING) &&
+      run?.status === "COMPLETED"
+    );
+  });
+  const reviewStep = orderedSteps.find((step) => step.status === ExecutionStepStatus.REVIEW);
+  const hasReviewer = crew?.members.some((member) => member.role === "REVIEWER") ?? false;
+  const reviewWithoutReviewer = reviewStep && !hasReviewer ? reviewStep : null;
+  const noProgressPath =
+    plan?.status === ExecutionPlanStatus.RUNNING &&
+    !orderedSteps.some((step) => ROSTER_ACTIVE_STEP_STATUSES.has(step.status)) &&
+    orderedSteps.some(
+      (step) =>
+        step.status === ExecutionStepStatus.TODO || step.status === ExecutionStepStatus.BLOCKED,
+    );
+  const planHealth = completedRunMismatch
+    ? {
+        title: "Completed run is waiting for reconciliation",
+        description: `“${completedRunMismatch.title}” finished, but its plan step has not advanced to review yet. Forge will reconcile it automatically; refresh if this remains visible.`,
+      }
+    : reviewWithoutReviewer
+      ? {
+          title: "Human review required",
+          description: `“${reviewWithoutReviewer.title}” completed, but this crew has no REVIEWER. Review the result and record a verdict, or add a reviewer to continue.`,
+        }
+      : noProgressPath
+        ? {
+            title: "Plan has no path to progress",
+            description:
+              "This plan is running, but no step is ready, running, or in review. Inspect blocked dependencies before continuing.",
+          }
+        : null;
 
   // Which crew member has active or queued work — drives the roster
   // highlight. READY means the worker dispatch was queued and is waiting
@@ -472,10 +498,7 @@ export default function PlanDetailPage() {
     return m;
   }, [orderedSteps]);
 
-  const attention = useMemo(
-    () => pickAttentionRun(orderedSteps),
-    [orderedSteps],
-  );
+  const attention = useMemo(() => pickAttentionRun(orderedSteps), [orderedSteps]);
 
   // DAG view inputs — the graph consumes the same step rows the page
   // already has, plus a presence-light agent map keyed by id.
@@ -512,8 +535,7 @@ export default function PlanDetailPage() {
         id: a.id,
         name: a.name,
         profileKey: a.profileKey,
-        status:
-          a.status === "ONLINE" || a.status === "BUSY" ? a.status : "OFFLINE",
+        status: a.status === "ONLINE" || a.status === "BUSY" ? a.status : "OFFLINE",
         avatar: a.image,
         availability: presenceAvailability(a),
       };
@@ -546,9 +568,7 @@ export default function PlanDetailPage() {
       }
     },
     onError: (e: { message: string }) => toast.error(e.message),
-  }) as
-    | { mutate: (input: { planId: string }) => void; isPending: boolean }
-    | undefined;
+  }) as { mutate: (input: { planId: string }) => void; isPending: boolean } | undefined;
 
   if (isLoading) {
     return (
@@ -603,11 +623,7 @@ export default function PlanDetailPage() {
         subtitle={`Plan · ${plan.status.toLowerCase()} · ${orderedSteps.length} steps`}
         actions={
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => router.push(`/w/${ws.slug}/plans`)}
-            >
+            <Button size="sm" variant="ghost" onClick={() => router.push(`/w/${ws.slug}/plans`)}>
               <ChevronLeft className="h-3.5 w-3.5" /> Back
             </Button>
             <SaveIndicator pending={savePending} />
@@ -615,9 +631,7 @@ export default function PlanDetailPage() {
               size="sm"
               variant="ghost"
               disabled={
-                !canvasIntegrationAvailable ||
-                !createCanvasMut ||
-                createCanvasMut.isPending
+                !canvasIntegrationAvailable || !createCanvasMut || createCanvasMut.isPending
               }
               title={
                 canvasIntegrationAvailable
@@ -637,6 +651,20 @@ export default function PlanDetailPage() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[1fr_280px]">
         <section className="flex min-w-0 flex-col gap-4">
+          {planHealth ? (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3"
+            >
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">{planHealth.title}</p>
+                <p className="text-meta mt-1 text-muted-foreground">{planHealth.description}</p>
+              </div>
+            </div>
+          ) : null}
+
           {plan.status === ExecutionPlanStatus.DRAFT ? (
             <PlanApproval
               planId={plan.id}
@@ -678,13 +706,11 @@ export default function PlanDetailPage() {
           {goalId ? (
             <a
               href={`/w/${ws.slug}/goals/${goalId}`}
-              className="group inline-flex items-center gap-1.5 self-start rounded-md border border-border bg-card/40 px-2.5 py-1 text-meta text-muted-foreground transition hover:border-ember/40 hover:text-foreground"
+              className="text-meta group inline-flex items-center gap-1.5 self-start rounded-md border border-border bg-card/40 px-2.5 py-1 text-muted-foreground transition hover:border-ember/40 hover:text-foreground"
             >
               <Target className="h-3 w-3 text-ember" />
               <span className="uppercase tracking-wide">Goal ·</span>
-              <span className="truncate group-hover:text-ember">
-                {goalTitle ?? "view goal"}
-              </span>
+              <span className="truncate group-hover:text-ember">{goalTitle ?? "view goal"}</span>
             </a>
           ) : null}
 
@@ -717,10 +743,7 @@ export default function PlanDetailPage() {
                     // blurs (existing autosave runs on the dirty body —
                     // matches the same "implicit save" semantics as
                     // clicking outside).
-                    if (
-                      ((e.metaKey || e.ctrlKey) && e.key === "Enter") ||
-                      e.key === "Escape"
-                    ) {
+                    if (((e.metaKey || e.ctrlKey) && e.key === "Enter") || e.key === "Escape") {
                       e.preventDefault();
                       (e.currentTarget as HTMLTextAreaElement).blur();
                     }
@@ -762,7 +785,7 @@ export default function PlanDetailPage() {
           </header>
 
           <div className="flex items-center justify-between">
-            <div className="inline-flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5 text-meta">
+            <div className="text-meta inline-flex items-center gap-1 rounded-md border border-border bg-card/40 p-0.5">
               <button
                 type="button"
                 onClick={() => setView("list")}
@@ -821,9 +844,7 @@ export default function PlanDetailPage() {
               onRemoveStep={(id) => setConfirmState({ kind: "remove-step", stepId: id })}
               onMaterializeStep={(id) => materializeStep.mutate({ stepId: id })}
               materializingStepId={
-                materializeStep.isPending
-                  ? (materializeStep.variables?.stepId ?? null)
-                  : null
+                materializeStep.isPending ? (materializeStep.variables?.stepId ?? null) : null
               }
             />
           ) : view === "timeline" ? (
@@ -855,7 +876,7 @@ export default function PlanDetailPage() {
 
         <aside className="flex flex-col gap-3">
           <div className="rounded-lg border border-border bg-card/40 p-3">
-            <div className="mb-2 text-meta uppercase tracking-wide text-muted-foreground">
+            <div className="text-meta mb-2 uppercase tracking-wide text-muted-foreground">
               Plan status
             </div>
             <Combobox
@@ -890,7 +911,7 @@ export default function PlanDetailPage() {
 
           <CrewRosterPanel crew={crew} activeByAgent={activeByAgent} />
 
-          <div className="rounded-lg border border-border bg-card/40 p-3 text-meta">
+          <div className="text-meta rounded-lg border border-border bg-card/40 p-3">
             <div className="mb-2 uppercase tracking-wide text-muted-foreground">Links</div>
             <ul className="flex flex-col gap-2 text-sm">
               {plan.issue ? (
@@ -963,10 +984,7 @@ export default function PlanDetailPage() {
         onConfirm={() => {
           if (confirmState?.kind !== "remove-step") return;
           const stepId = confirmState.stepId;
-          removeStep.mutate(
-            { id: stepId },
-            { onSettled: () => setConfirmState(null) },
-          );
+          removeStep.mutate({ id: stepId }, { onSettled: () => setConfirmState(null) });
         }}
       />
 
@@ -981,10 +999,7 @@ export default function PlanDetailPage() {
         variant="destructive"
         loading={archive.isPending}
         onConfirm={() =>
-          archive.mutate(
-            { id: plan.id },
-            { onSettled: () => setConfirmState(null) },
-          )
+          archive.mutate({ id: plan.id }, { onSettled: () => setConfirmState(null) })
         }
       />
 
@@ -996,8 +1011,7 @@ export default function PlanDetailPage() {
         title="Delete plan?"
         description={
           <>
-            This permanently removes the plan and its steps. Type the
-            plan&apos;s title to confirm.
+            This permanently removes the plan and its steps. Type the plan&apos;s title to confirm.
           </>
         }
         variant="destructive"
@@ -1058,12 +1072,7 @@ function PlanApproval({
 
   // Proper path: an open/bound ActionRequest drives activation.
   if (request) {
-    return (
-      <ActionRequestCard
-        planId={planId}
-        onResolved={onApproved}
-      />
-    );
+    return <ActionRequestCard planId={planId} onResolved={onApproved} />;
   }
 
   // Last-resort fallback: no ActionRequest — direct status flip.
@@ -1108,15 +1117,15 @@ function PlanApprovalBanner({
   return (
     <div
       role="alert"
-      className="flex flex-col gap-2 rounded-lg border-l-2 border-y border-r border-l-ember border-y-border border-r-border bg-ember/[0.05] p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2"
+      className="flex flex-col gap-2 rounded-lg border-y border-l-2 border-r border-y-border border-l-ember border-r-border bg-ember/[0.05] p-3 motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-top-2"
     >
       <div className="flex items-center gap-2">
         <CheckCircle2 className="h-4 w-4 shrink-0 text-ember" />
         <span className="text-sm font-medium">Pending your approval</span>
       </div>
       <p className="text-meta text-muted-foreground">
-        A planner finished decomposing this goal into steps. Approve to
-        let the crew start executing.
+        A planner finished decomposing this goal into steps. Approve to let the crew start
+        executing.
         {issueNumber != null
           ? " The full Accept / Decline recommendation lives on the source issue."
           : ""}
@@ -1133,7 +1142,7 @@ function PlanApprovalBanner({
         {issueNumber != null ? (
           <a
             href={`/w/${workspaceSlug}/i/${workspaceKey}-${issueNumber}`}
-            className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-meta text-muted-foreground transition hover:text-foreground"
+            className="text-meta inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-muted-foreground transition hover:text-foreground"
           >
             Review on issue
           </a>
@@ -1143,22 +1152,16 @@ function PlanApprovalBanner({
   );
 }
 
-function PlanStartBanner({
-  busy,
-  onStart,
-}: {
-  busy: boolean;
-  onStart: () => void;
-}) {
+function PlanStartBanner({ busy, onStart }: { busy: boolean; onStart: () => void }) {
   return (
-    <div className="flex flex-col gap-2 rounded-lg border-l-2 border-y border-r border-l-ember border-y-border border-r-border bg-ember/[0.05] p-3">
+    <div className="flex flex-col gap-2 rounded-lg border-y border-l-2 border-r border-y-border border-l-ember border-r-border bg-ember/[0.05] p-3">
       <div className="flex items-center gap-2">
         <CheckCircle2 className="h-4 w-4 shrink-0 text-ember" />
         <span className="text-sm font-medium">Approved, not running</span>
       </div>
       <p className="text-meta text-muted-foreground">
-        This plan was approved before the crew kickoff ran. Start it to flip
-        the goal active and dispatch the ready root steps.
+        This plan was approved before the crew kickoff ran. Start it to flip the goal active and
+        dispatch the ready root steps.
       </p>
       <div>
         <Button size="sm" variant="ember" disabled={busy} onClick={onStart}>
@@ -1174,7 +1177,7 @@ function SaveIndicator({ pending }: { pending: boolean }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 text-meta transition-opacity",
+        "text-meta inline-flex items-center gap-1 transition-opacity",
         pending ? "text-muted-foreground" : "text-muted-foreground/70",
       )}
       aria-live="polite"
@@ -1182,7 +1185,7 @@ function SaveIndicator({ pending }: { pending: boolean }) {
       <span
         className={cn(
           "inline-block h-1.5 w-1.5 rounded-full transition-colors",
-          pending ? "bg-ember animate-pulse" : "bg-success",
+          pending ? "animate-pulse bg-ember" : "bg-success",
         )}
         aria-hidden
       />
@@ -1264,7 +1267,7 @@ function StepsList({
 }) {
   if (steps.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border bg-card/20 p-4 text-meta text-muted-foreground">
+      <div className="text-meta rounded-lg border border-dashed border-border bg-card/20 p-4 text-muted-foreground">
         No steps yet. Add the first one below.
       </div>
     );
@@ -1280,7 +1283,7 @@ function StepsList({
           <StepCard
             step={step}
             index={idx}
-            agent={step.assignedAgentId ? agentsById.get(step.assignedAgentId) ?? null : null}
+            agent={step.assignedAgentId ? (agentsById.get(step.assignedAgentId) ?? null) : null}
             depsLabel={dependencyLabel(step, positionById)}
             workspaceSlug={workspaceSlug}
             running={step.id === runningStepId}
@@ -1331,12 +1334,12 @@ function StepCard({
   const [title, setTitle] = useState(step.title);
   const [body, setBody] = useState(step.body ?? "");
   const [expected, setExpected] = useState(step.expectedOutput ?? "");
-  const [editingField, setEditingField] = useState<null | "title" | "body" | "expected">(
-    null,
-  );
-  const [dirty, setDirty] = useState<{ title: boolean; body: boolean; expected: boolean }>(
-    { title: false, body: false, expected: false },
-  );
+  const [editingField, setEditingField] = useState<null | "title" | "body" | "expected">(null);
+  const [dirty, setDirty] = useState<{ title: boolean; body: boolean; expected: boolean }>({
+    title: false,
+    body: false,
+    expected: false,
+  });
 
   // Sync from server when not actively editing.
   useEffect(() => {
@@ -1403,7 +1406,7 @@ function StepCard({
       <div className="flex items-start gap-2">
         <span
           className={cn(
-            "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-mono transition-colors",
+            "mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-mono text-[10px] transition-colors",
             running
               ? "bg-ember/15 text-ember motion-safe:animate-pulse"
               : "bg-subtle text-muted-foreground",
@@ -1448,10 +1451,7 @@ function StepCard({
               }}
               onBlur={() => setEditingField(null)}
               onKeyDown={(e) => {
-                if (
-                  ((e.metaKey || e.ctrlKey) && e.key === "Enter") ||
-                  e.key === "Escape"
-                ) {
+                if (((e.metaKey || e.ctrlKey) && e.key === "Enter") || e.key === "Escape") {
                   e.preventDefault();
                   (e.currentTarget as HTMLTextAreaElement).blur();
                 }
@@ -1473,7 +1473,7 @@ function StepCard({
             <button
               type="button"
               onClick={() => setEditingField("body")}
-              className="mt-1 text-meta text-muted-foreground/70 hover:text-muted-foreground"
+              className="text-meta mt-1 text-muted-foreground/70 hover:text-muted-foreground"
             >
               + Add body…
             </button>
@@ -1488,23 +1488,20 @@ function StepCard({
               }}
               onBlur={() => setEditingField(null)}
               onKeyDown={(e) => {
-                if (
-                  ((e.metaKey || e.ctrlKey) && e.key === "Enter") ||
-                  e.key === "Escape"
-                ) {
+                if (((e.metaKey || e.ctrlKey) && e.key === "Enter") || e.key === "Escape") {
                   e.preventDefault();
                   (e.currentTarget as HTMLTextAreaElement).blur();
                 }
               }}
               rows={3}
               placeholder="Expected output (markdown supported)…"
-              className="mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-2 py-1 text-meta"
+              className="text-meta mt-1 w-full resize-y rounded-md border border-border bg-card/40 px-2 py-1"
             />
           ) : expected.trim() ? (
             <button
               type="button"
               onClick={() => setEditingField("expected")}
-              className="mt-1 block w-full rounded-md border border-transparent px-2 py-1 text-left text-meta text-muted-foreground transition-colors hover:border-border"
+              className="text-meta mt-1 block w-full rounded-md border border-transparent px-2 py-1 text-left text-muted-foreground transition-colors hover:border-border"
               aria-label={`Edit step ${index + 1} expected output`}
             >
               <span className="uppercase tracking-wide opacity-70">Expected: </span>
@@ -1514,7 +1511,7 @@ function StepCard({
             <button
               type="button"
               onClick={() => setEditingField("expected")}
-              className="mt-1 text-meta text-muted-foreground/70 hover:text-muted-foreground"
+              className="text-meta mt-1 text-muted-foreground/70 hover:text-muted-foreground"
             >
               + Add expected output…
             </button>
@@ -1548,7 +1545,7 @@ function FieldSaveTick({ pending }: { pending: boolean }) {
   return (
     <span
       className={cn(
-        "inline-flex items-center gap-1 text-meta",
+        "text-meta inline-flex items-center gap-1",
         pending ? "text-muted-foreground" : "text-muted-foreground/60",
       )}
       aria-live="polite"
@@ -1556,7 +1553,7 @@ function FieldSaveTick({ pending }: { pending: boolean }) {
       <span
         className={cn(
           "inline-block h-1.5 w-1.5 rounded-full transition-colors",
-          pending ? "bg-ember animate-pulse" : "bg-success/70",
+          pending ? "animate-pulse bg-ember" : "bg-success/70",
         )}
         aria-hidden
       />
@@ -1593,16 +1590,12 @@ function StepMetaStrip({
   materializing?: boolean;
 }) {
   const canMaterialize = !issue && !!onMaterialize;
-  const hasAny =
-    agent || depsLabel || retryCount > 0 || childPlanId || issue || canMaterialize;
+  const hasAny = agent || depsLabel || retryCount > 0 || childPlanId || issue || canMaterialize;
   if (!hasAny) return null;
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-meta text-muted-foreground">
+    <div className="text-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 px-2 text-muted-foreground">
       {agent ? (
-        <span
-          className="inline-flex items-center gap-1"
-          title={`Assigned to @${agent.profileKey}`}
-        >
+        <span className="inline-flex items-center gap-1" title={`Assigned to @${agent.profileKey}`}>
           <span className="relative inline-flex items-center">
             <Avatar name={agent.name} image={agent.image} size={16} />
             <AgentPresenceDot
@@ -1612,7 +1605,7 @@ function StepMetaStrip({
               className="absolute -bottom-0.5 -right-0.5 ring-1 ring-card"
             />
           </span>
-          <span className="font-mono text-id">@{agent.profileKey}</span>
+          <span className="text-id font-mono">@{agent.profileKey}</span>
         </span>
       ) : null}
       {depsLabel ? (
@@ -1648,7 +1641,7 @@ function StepMetaStrip({
           className="inline-flex items-center gap-1 rounded bg-subtle px-1.5 py-0.5 hover:bg-subtle/70"
           title={`Tracked as ${issue.workspace.key}-${issue.number}: ${issue.title}`}
         >
-          <span className="font-mono text-id">
+          <span className="text-id font-mono">
             {issue.workspace.key}-{issue.number}
           </span>
         </a>
@@ -1687,10 +1680,8 @@ function JudgeVerdictBlock({
   return (
     <div
       className={cn(
-        "mt-1.5 rounded-md border px-2 py-1.5 text-meta transition-colors motion-safe:animate-in motion-safe:fade-in",
-        fail
-          ? "border-danger/40 bg-danger/[0.05]"
-          : "border-success/30 bg-success/[0.05]",
+        "text-meta mt-1.5 rounded-md border px-2 py-1.5 transition-colors motion-safe:animate-in motion-safe:fade-in",
+        fail ? "border-danger/40 bg-danger/[0.05]" : "border-success/30 bg-success/[0.05]",
       )}
     >
       <button
@@ -1717,9 +1708,7 @@ function JudgeVerdictBlock({
             {Math.round(verdict.score * 100) / 100}
           </span>
         ) : null}
-        {agentName ? (
-          <span className="text-muted-foreground">· {agentName}</span>
-        ) : null}
+        {agentName ? <span className="text-muted-foreground">· {agentName}</span> : null}
         {feedback && !expanded ? (
           <span className="ml-auto text-muted-foreground/70">show feedback</span>
         ) : null}
@@ -1757,7 +1746,7 @@ function TimelineView({
 }) {
   if (steps.length === 0) {
     return (
-      <div className="rounded-lg border border-dashed border-border bg-card/20 p-4 text-meta text-muted-foreground">
+      <div className="text-meta rounded-lg border border-dashed border-border bg-card/20 p-4 text-muted-foreground">
         No steps yet. Add the first one below.
       </div>
     );
@@ -1771,7 +1760,7 @@ function TimelineView({
           <TimelineRow
             key={step.id}
             step={step}
-            agent={step.assignedAgentId ? agentsById.get(step.assignedAgentId) ?? null : null}
+            agent={step.assignedAgentId ? (agentsById.get(step.assignedAgentId) ?? null) : null}
             workspaceSlug={workspaceSlug}
             isRunning={isRunning}
             isLast={!next}
@@ -1823,7 +1812,7 @@ function TimelineRow({
       <div className="relative flex w-10 shrink-0 flex-col items-center">
         <span
           className={cn(
-            "z-10 mt-1 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-card text-[10px] font-mono text-muted-foreground transition-colors",
+            "z-10 mt-1 flex h-6 w-6 items-center justify-center rounded-full border border-border bg-card font-mono text-[10px] text-muted-foreground transition-colors",
             isRunning && "border-ember/40 text-ember shadow-sm",
           )}
         >
@@ -1842,9 +1831,7 @@ function TimelineRow({
         ref={attachRef}
         className={cn(
           "mb-2 ml-2 flex-1 rounded-lg border bg-card/40 px-3 py-2 transition-all duration-300",
-          isRunning
-            ? "border-ember/40 ring-1 ring-ember/30 shadow-sm"
-            : "border-border",
+          isRunning ? "border-ember/40 shadow-sm ring-1 ring-ember/30" : "border-border",
         )}
       >
         <div className="flex items-start gap-2">
@@ -1893,9 +1880,7 @@ function TimelineRow({
               </div>
             ) : null}
             {!step.body?.trim() && !step.expectedOutput?.trim() ? (
-              <p className="text-meta text-muted-foreground/70">
-                No body or expected output.
-              </p>
+              <p className="text-meta text-muted-foreground/70">No body or expected output.</p>
             ) : null}
           </div>
         ) : null}
@@ -1917,12 +1902,7 @@ function AddStepForm({
 
   if (!open) {
     return (
-      <Button
-        variant="ghost"
-        size="sm"
-        className="self-start"
-        onClick={() => setOpen(true)}
-      >
+      <Button variant="ghost" size="sm" className="self-start" onClick={() => setOpen(true)}>
         <Plus className="h-3.5 w-3.5" /> Add step
       </Button>
     );
@@ -1975,18 +1955,13 @@ function AddStepForm({
         }}
         rows={3}
         placeholder="Expected output (optional, markdown supported)"
-        className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
+        className="text-meta w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2"
       />
       <div className="flex justify-end gap-2">
         <Button variant="ghost" size="sm" onClick={cancel}>
           Cancel
         </Button>
-        <Button
-          variant="ember"
-          size="sm"
-          disabled={disabled || !title.trim()}
-          onClick={commit}
-        >
+        <Button variant="ember" size="sm" disabled={disabled || !title.trim()} onClick={commit}>
           <Plus className="h-3.5 w-3.5" /> Add
         </Button>
       </div>

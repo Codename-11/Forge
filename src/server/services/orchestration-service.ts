@@ -203,7 +203,10 @@ export async function createGoal(
       select: { id: true },
     });
     if (!found) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Agent crew not found in this workspace.",
+      });
     }
   }
   if (input.initiativeId) {
@@ -212,7 +215,10 @@ export async function createGoal(
       select: { id: true },
     });
     if (!found) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Initiative not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Initiative not found in this workspace.",
+      });
     }
   }
   const { id } = await db.$transaction(async (tx) => {
@@ -297,7 +303,10 @@ export async function updateGoal(
       select: { id: true },
     });
     if (!found) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Agent crew not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Agent crew not found in this workspace.",
+      });
     }
   }
   if (input.initiativeId) {
@@ -306,7 +315,10 @@ export async function updateGoal(
       select: { id: true },
     });
     if (!found) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Initiative not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Initiative not found in this workspace.",
+      });
     }
   }
 
@@ -325,15 +337,12 @@ export async function updateGoal(
         : input.crewId
           ? { connect: { id: input.crewId } }
           : { disconnect: true },
-    maxTotalCostUsd:
-      input.maxTotalCostUsd === undefined ? undefined : input.maxTotalCostUsd,
+    maxTotalCostUsd: input.maxTotalCostUsd === undefined ? undefined : input.maxTotalCostUsd,
     maxWallTimeMinutes:
       input.maxWallTimeMinutes === undefined ? undefined : input.maxWallTimeMinutes,
   };
   const planBudgetData: Prisma.ExecutionPlanUpdateManyMutationInput = {
-    ...(input.maxTotalCostUsd === undefined
-      ? {}
-      : { maxTotalCostUsd: input.maxTotalCostUsd }),
+    ...(input.maxTotalCostUsd === undefined ? {} : { maxTotalCostUsd: input.maxTotalCostUsd }),
     ...(input.maxWallTimeMinutes === undefined
       ? {}
       : { maxWallTimeMinutes: input.maxWallTimeMinutes }),
@@ -378,15 +387,11 @@ export async function updateGoal(
       },
       after: {
         title: input.title?.trim() ?? goal.title,
-        description:
-          input.description === undefined ? goal.description : input.description,
-        initiativeId:
-          input.initiativeId === undefined ? goal.initiativeId : input.initiativeId,
+        description: input.description === undefined ? goal.description : input.description,
+        initiativeId: input.initiativeId === undefined ? goal.initiativeId : input.initiativeId,
         crewId: input.crewId === undefined ? goal.crewId : input.crewId,
         maxTotalCostUsd:
-          input.maxTotalCostUsd === undefined
-            ? goal.maxTotalCostUsd
-            : input.maxTotalCostUsd,
+          input.maxTotalCostUsd === undefined ? goal.maxTotalCostUsd : input.maxTotalCostUsd,
         maxWallTimeMinutes:
           input.maxWallTimeMinutes === undefined
             ? goal.maxWallTimeMinutes
@@ -405,10 +410,7 @@ export async function updateGoal(
   return { id: goal.id };
 }
 
-export async function getGoal(
-  db: PrismaClient,
-  params: { workspaceId: string; id: string },
-) {
+export async function getGoal(db: PrismaClient, params: { workspaceId: string; id: string }) {
   const goal = await db.goal.findFirst({
     where: { id: params.id, workspaceId: params.workspaceId },
     include: {
@@ -857,7 +859,10 @@ export async function decomposeGoal(
       select: { id: true },
     });
     if (!cs) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Context set not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Context set not found in this workspace.",
+      });
     }
   }
 
@@ -869,7 +874,10 @@ export async function decomposeGoal(
       select: { id: true },
     });
     if (!ok) {
-      throw new TRPCError({ code: "BAD_REQUEST", message: "plannerAgentId not in this workspace." });
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "plannerAgentId not in this workspace.",
+      });
     }
   }
   if (!plannerAgentId && goal.crewId) {
@@ -914,8 +922,7 @@ export async function decomposeGoal(
       };
       // RUNS agents are reached via a Runtime (their dispatch webhook is
       // suppressed); everyone else needs a webhookUrl.
-      dispatchable =
-        agent.runEngine === RunEngine.RUNS ? !!agent.runtimeId : hasWebhook;
+      dispatchable = agent.runEngine === RunEngine.RUNS ? !!agent.runtimeId : hasWebhook;
     }
   }
 
@@ -1055,7 +1062,10 @@ export async function generatePlanForGoal(
       select: { id: true },
     });
     if (!cs) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Context set not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Context set not found in this workspace.",
+      });
     }
   }
 
@@ -1123,8 +1133,7 @@ export async function generatePlanForGoal(
   if (!generated || generated.length === 0) {
     throw new TRPCError({
       code: "BAD_GATEWAY",
-      message:
-        "The model did not return any plan steps. Try again, or dispatch to a crew planner.",
+      message: "The model did not return any plan steps. Try again, or dispatch to a crew planner.",
     });
   }
 
@@ -1207,9 +1216,7 @@ export async function generatePlanForGoal(
         title: s.title,
         body: s.body,
         expectedOutput: s.expectedOutput,
-        verification: s.verification.length
-          ? (s.verification as Prisma.InputJsonValue)
-          : null,
+        verification: s.verification.length ? (s.verification as Prisma.InputJsonValue) : null,
         dependsOnStepIndexes: s.dependsOnStepIndexes,
       })),
     });
@@ -1698,10 +1705,7 @@ export async function retryExecutionStep(
     if (!step) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
     }
-    if (
-      step.status === ExecutionStepStatus.DONE ||
-      step.status === ExecutionStepStatus.CANCELED
-    ) {
+    if (step.status === ExecutionStepStatus.DONE || step.status === ExecutionStepStatus.CANCELED) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: `Cannot retry a ${step.status.toLowerCase()} step.`,
@@ -2119,7 +2123,7 @@ async function recordStepJudged(
 export async function maybeAutoJudge(
   db: PrismaClient,
   params: { workspaceId: string; actorId: string | null; stepId: string },
-): Promise<{ dispatched: boolean }> {
+): Promise<{ dispatched: boolean; humanReviewRequired?: boolean }> {
   const step = await db.executionStep.findFirst({
     where: { id: params.stepId, workspaceId: params.workspaceId },
     select: {
@@ -2130,10 +2134,47 @@ export async function maybeAutoJudge(
   });
   if (!step) return { dispatched: false };
   if (step.status !== ExecutionStepStatus.REVIEW) return { dispatched: false };
-  if (!step.plan.autoJudge) return { dispatched: false };
-  if (!step.plan.crewId) return { dispatched: false };
+  const ensureHumanReviewGate = async (reason: string) => {
+    const existing = await db.reviewGate.findFirst({
+      where: {
+        workspaceId: params.workspaceId,
+        targetType: "execution-step",
+        targetId: step.id,
+        status: "PENDING",
+      },
+      select: { id: true },
+    });
+    if (!existing) {
+      await db.$transaction((tx) =>
+        openReviewGateTx(tx, {
+          workspaceId: params.workspaceId,
+          actorId: params.actorId,
+          targetType: "execution-step",
+          targetId: step.id,
+          prompt: reason,
+          requiredRole: null,
+          crewId: step.plan.crewId,
+        }),
+      );
+    }
+    return { dispatched: false, humanReviewRequired: true } as const;
+  };
+  if (!step.plan.autoJudge) {
+    return ensureHumanReviewGate(
+      "This completed plan step is ready for manual review. Record a PASS or FAIL verdict to continue the plan.",
+    );
+  }
+  if (!step.plan.crewId) {
+    return ensureHumanReviewGate(
+      "This completed plan step has no crew or REVIEWER. Review it manually or assign a reviewer to continue the plan.",
+    );
+  }
   const reviewer = await pickCrewMember(db, step.plan.crewId, "REVIEWER");
-  if (!reviewer) return { dispatched: false };
+  if (!reviewer) {
+    return ensureHumanReviewGate(
+      "This completed plan step has no REVIEWER in its crew. Review it manually or add a reviewer to continue the plan.",
+    );
+  }
   await dispatchJudge(db, {
     workspaceId: params.workspaceId,
     actorId: params.actorId,
@@ -2144,10 +2185,73 @@ export async function maybeAutoJudge(
 }
 
 /**
+ * Atomically connect a clean runs.complete result back to its owning plan
+ * step. The run remains the immutable evidence row; REVIEW is the only safe
+ * automatic destination because a successful worker completion still needs a
+ * reviewer verdict before dependencies may advance.
+ */
+export async function handoffCompletedRunToStep(
+  tx: Tx,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    runId: string;
+    stepId: string;
+  },
+): Promise<{ transitioned: boolean; status: ExecutionStepStatus }> {
+  const step = await tx.executionStep.findFirst({
+    where: { id: params.stepId, workspaceId: params.workspaceId },
+    select: { id: true, planId: true, status: true, sourceRunId: true },
+  });
+  if (!step) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+  }
+  if (
+    step.status === ExecutionStepStatus.DONE ||
+    step.status === ExecutionStepStatus.CANCELED ||
+    step.status === ExecutionStepStatus.BLOCKED
+  ) {
+    return { transitioned: false, status: step.status };
+  }
+  const transitioned = step.status !== ExecutionStepStatus.REVIEW;
+  await tx.executionStep.update({
+    where: { id: step.id },
+    data: { status: ExecutionStepStatus.REVIEW, sourceRunId: params.runId },
+  });
+  await tx.executionPlan.update({
+    where: { id: step.planId },
+    data: { updatedAt: new Date() },
+  });
+  if (transitioned || step.sourceRunId !== params.runId) {
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
+      entity: "execution-step",
+      entityId: step.id,
+      action: "run-completed",
+      before: { status: step.status, sourceRunId: step.sourceRunId },
+      after: { status: ExecutionStepStatus.REVIEW, sourceRunId: params.runId },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "execution-step",
+      subjectId: step.id,
+      payload: {
+        planId: step.planId,
+        runId: params.runId,
+        from: step.status,
+        to: ExecutionStepStatus.REVIEW,
+      } as Prisma.InputJsonValue,
+    });
+  }
+  return { transitioned, status: ExecutionStepStatus.REVIEW };
+}
+
+/**
  * When every step in the active plan is DONE, flip the goal → ACHIEVED and
  * the plan → COMPLETED. No-op if any step is non-DONE.
  */
-async function maybeCompleteGoal(
+export async function maybeCompleteGoal(
   tx: Tx,
   params: { workspaceId: string; planId: string; actorId: string | null },
 ): Promise<void> {
@@ -2278,10 +2382,7 @@ export async function activatePlan(
   if (!plan) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
   }
-  if (
-    plan.status !== ExecutionPlanStatus.DRAFT &&
-    plan.status !== ExecutionPlanStatus.APPROVED
-  ) {
+  if (plan.status !== ExecutionPlanStatus.DRAFT && plan.status !== ExecutionPlanStatus.APPROVED) {
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Plan must be DRAFT or APPROVED to activate (is ${plan.status}).`,
@@ -2437,8 +2538,7 @@ export async function checkAndBlockBudget(
 ): Promise<boolean> {
   const { plan } = params;
   if (plan.status !== ExecutionPlanStatus.RUNNING) return false;
-  const overCost =
-    plan.maxTotalCostUsd != null && plan.totalCostUsd > plan.maxTotalCostUsd;
+  const overCost = plan.maxTotalCostUsd != null && plan.totalCostUsd > plan.maxTotalCostUsd;
   const wallClockStart = plan.startedAt ?? plan.createdAt;
   const overTime =
     plan.maxWallTimeMinutes != null &&
@@ -2489,21 +2589,25 @@ export async function checkAndBlockBudget(
 }
 
 /**
- * Periodic budget/liveness watchdog for RUNNING plans (worker sweep).
+ * Periodic budget/liveness watchdog and state reconciler for RUNNING plans.
  *
  * `checkAndBlockBudget` was previously only ever called from the cost-record
  * path (applyRunCostToPlan), so a plan whose agents never report cost had its
  * WALL-TIME cap silently un-enforced, and a wedged plan sat RUNNING forever
  * with no signal. This sweep re-runs the same guard on every RUNNING plan with
  * a wall-time cap (enforcing time independent of cost events), and logs plans
- * that appear stuck (RUNNING, a wall-time cap, but no in-flight work) for
- * operator visibility.
+ * It also repairs the safe, deterministic drift case where a step-bound run
+ * completed but its step never reached REVIEW, then emits a durable
+ * PLAN_STALLED signal for states that still need an operator.
  */
-export async function sweepOrchestrationBudget(): Promise<{ blocked: number }> {
+export async function sweepOrchestrationBudget(): Promise<{
+  blocked: number;
+  reconciled: number;
+  stalled: number;
+}> {
   const plans = await db.executionPlan.findMany({
     where: {
       status: ExecutionPlanStatus.RUNNING,
-      maxWallTimeMinutes: { not: null },
       archivedAt: null,
     },
     select: {
@@ -2517,10 +2621,13 @@ export async function sweepOrchestrationBudget(): Promise<{ blocked: number }> {
       goalId: true,
       createdAt: true,
       startedAt: true,
+      updatedAt: true,
     },
     take: 200,
   });
   let blocked = 0;
+  let reconciled = 0;
+  let stalled = 0;
   for (const plan of plans) {
     try {
       const didBlock = await db.$transaction((tx) =>
@@ -2530,37 +2637,131 @@ export async function sweepOrchestrationBudget(): Promise<{ blocked: number }> {
         blocked++;
         continue;
       }
-      // Not over budget but possibly wedged: no ACTIVE run + no READY/RUNNING/
-      // REVIEW step means nothing is (or will be) progressing on its own.
-      const inflightSteps = await db.executionStep.count({
-        where: {
-          planId: plan.id,
-          status: {
-            in: [
-              ExecutionStepStatus.READY,
-              ExecutionStepStatus.RUNNING,
-              ExecutionStepStatus.REVIEW,
-            ],
+      const steps = await db.executionStep.findMany({
+        where: { planId: plan.id },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          runs: {
+            orderBy: [{ completedAt: "desc" }, { lastEventAt: "desc" }],
+            take: 1,
+            select: { id: true, status: true },
           },
         },
       });
-      if (inflightSteps === 0) {
-        const remaining = await db.executionStep.count({
-          where: {
-            planId: plan.id,
-            status: { in: [ExecutionStepStatus.TODO, ExecutionStepStatus.BLOCKED] },
-          },
-        });
-        if (remaining > 0) {
-          logger.warn(
-            { planId: plan.id, workspaceId: plan.workspaceId, remaining },
-            "orchestration-watchdog: plan RUNNING with no in-flight work but steps remain (possible wedge)",
+
+      for (const step of steps) {
+        const latestRun = step.runs[0];
+        if (
+          latestRun?.status === AgentRunStatus.COMPLETED &&
+          (step.status === ExecutionStepStatus.READY || step.status === ExecutionStepStatus.RUNNING)
+        ) {
+          const result = await db.$transaction((tx) =>
+            handoffCompletedRunToStep(tx, {
+              workspaceId: plan.workspaceId,
+              actorId: null,
+              runId: latestRun.id,
+              stepId: step.id,
+            }),
           );
+          if (result.transitioned) reconciled++;
+          await maybeAutoJudge(db, {
+            workspaceId: plan.workspaceId,
+            actorId: null,
+            stepId: step.id,
+          });
         }
+      }
+
+      const current = await db.executionStep.findMany({
+        where: { planId: plan.id },
+        select: {
+          id: true,
+          title: true,
+          status: true,
+          runs: {
+            where: { status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] } },
+            take: 1,
+            select: { id: true },
+          },
+        },
+      });
+      const reviewStep = current.find((step) => step.status === ExecutionStepStatus.REVIEW);
+      const hasLiveRun = current.some((step) => step.runs.length > 0);
+      const progressStatuses = new Set<ExecutionStepStatus>([
+        ExecutionStepStatus.READY,
+        ExecutionStepStatus.RUNNING,
+        ExecutionStepStatus.REVIEW,
+      ]);
+      const remainingStatuses = new Set<ExecutionStepStatus>([
+        ExecutionStepStatus.TODO,
+        ExecutionStepStatus.BLOCKED,
+      ]);
+      const hasProgressState = current.some((step) => progressStatuses.has(step.status));
+      const remaining = current.filter((step) => remainingStatuses.has(step.status)).length;
+
+      let reasonCode: "review_without_reviewer" | "no_progress_path" | null = null;
+      let reason: string | null = null;
+      if (reviewStep) {
+        const reviewer = plan.crewId ? await pickCrewMember(db, plan.crewId, "REVIEWER") : null;
+        if (!reviewer) {
+          await maybeAutoJudge(db, {
+            workspaceId: plan.workspaceId,
+            actorId: null,
+            stepId: reviewStep.id,
+          });
+          reasonCode = "review_without_reviewer";
+          reason = `“${reviewStep.title}” completed, but this plan has no REVIEWER. A human decision is required.`;
+        }
+      } else if (!hasLiveRun && !hasProgressState && remaining > 0) {
+        reasonCode = "no_progress_path";
+        reason = `This running plan has ${remaining} unfinished step${remaining === 1 ? "" : "s"} and no live or ready work.`;
+      }
+
+      if (reasonCode && reason) {
+        const currentPlan = await db.executionPlan.findUniqueOrThrow({
+          where: { id: plan.id },
+          select: { updatedAt: true },
+        });
+        const recentSignal = await db.activityEvent.findFirst({
+          where: {
+            workspaceId: plan.workspaceId,
+            kind: EventKind.PLAN_STALLED,
+            subjectType: "execution-plan",
+            subjectId: plan.id,
+            // One durable signal per unchanged plan state. Any meaningful
+            // repair/status edit bumps updatedAt and permits a fresh signal
+            // if the plan becomes stalled again later.
+            createdAt: { gte: currentPlan.updatedAt },
+          },
+          select: { id: true },
+        });
+        if (!recentSignal) {
+          await db.$transaction((tx) =>
+            recordChange(tx, {
+              workspaceId: plan.workspaceId,
+              actorId: null,
+              entity: "execution-plan",
+              entityId: plan.id,
+              action: "stalled",
+              after: { status: ExecutionPlanStatus.RUNNING, reasonCode },
+              eventKind: EventKind.PLAN_STALLED,
+              subjectType: "execution-plan",
+              subjectId: plan.id,
+              payload: { reasonCode, reason } as Prisma.InputJsonValue,
+            }),
+          );
+          stalled++;
+        }
+        logger.warn(
+          { planId: plan.id, workspaceId: plan.workspaceId, reasonCode },
+          "orchestration-watchdog: plan needs operator attention",
+        );
       }
     } catch (err) {
       logger.warn({ err, planId: plan.id }, "orchestration-watchdog: plan check failed");
     }
   }
-  return { blocked };
+  return { blocked, reconciled, stalled };
 }

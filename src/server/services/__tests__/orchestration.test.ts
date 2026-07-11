@@ -20,9 +20,13 @@ import {
   getGoal,
   recordVerdict,
   requestPlanApproval,
+  sweepOrchestrationBudget,
   updateGoal,
 } from "@/server/services/orchestration-service";
-import { createExecutionPlan, materializeStepAsIssue } from "@/server/services/execution-plan-service";
+import {
+  createExecutionPlan,
+  materializeStepAsIssue,
+} from "@/server/services/execution-plan-service";
 import {
   createAgentCrew,
   addCrewMember,
@@ -34,6 +38,7 @@ import {
 import { acceptActionRequest } from "@/server/services/action-request-service";
 import {
   createWorkspaceFixture,
+  createIssue,
   disconnectPrisma,
   getPrisma,
   type TestFixture,
@@ -76,6 +81,69 @@ async function makeAgent(wsId: string, name: string) {
 }
 
 describe("orchestration: goals", () => {
+  it("reconciles completed step runs and raises one durable stalled-plan signal", async () => {
+    const { fixture, prisma } = await setup();
+    const agent = await makeAgent(fixture.workspace.id, "reconcile-worker");
+    const issue = await createIssue(fixture);
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Recover completed work",
+        status: ExecutionPlanStatus.RUNNING,
+        startedAt: new Date(),
+      },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        title: "Completed implementation",
+        position: 0,
+        status: ExecutionStepStatus.READY,
+        assignedAgentId: agent.id,
+        issueId: issue.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        executionStepId: step.id,
+        status: AgentRunStatus.COMPLETED,
+        completedAt: new Date(),
+        finishedAt: new Date(),
+      },
+    });
+
+    const first = await sweepOrchestrationBudget();
+    expect(first.reconciled).toBeGreaterThanOrEqual(1);
+    expect(first.stalled).toBeGreaterThanOrEqual(1);
+    const after = await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } });
+    expect(after.status).toBe(ExecutionStepStatus.REVIEW);
+    expect(after.sourceRunId).toBe(run.id);
+    expect(
+      await prisma.activityEvent.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          kind: "PLAN_STALLED",
+          subjectId: plan.id,
+        },
+      }),
+    ).toBe(1);
+
+    await sweepOrchestrationBudget();
+    expect(
+      await prisma.activityEvent.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          kind: "PLAN_STALLED",
+          subjectId: plan.id,
+        },
+      }),
+    ).toBe(1);
+  });
+
   it("creates, gets, and abandons a goal", async () => {
     const { fixture, prisma } = await setup();
     const { id } = await createGoal(prisma, {
@@ -247,10 +315,7 @@ describe("orchestration: readiness cascade", () => {
       workspaceId: fixture.workspace.id,
       actorId: fixture.user.id,
       planId,
-      steps: [
-        { title: "root" },
-        { title: "child", dependsOnStepIndexes: [0] },
-      ],
+      steps: [{ title: "root" }, { title: "child", dependsOnStepIndexes: [0] }],
     });
     // Activate → root becomes READY, child stays TODO.
     await prisma.$transaction((tx) =>
@@ -428,9 +493,11 @@ describe("orchestration: budget breach", () => {
         workspaceId: fixture.workspace.id,
         number: 1,
         title: "x",
-        statusId: (await prisma.status.findFirstOrThrow({
-          where: { workspaceId: fixture.workspace.id },
-        })).id,
+        statusId: (
+          await prisma.status.findFirstOrThrow({
+            where: { workspaceId: fixture.workspace.id },
+          })
+        ).id,
         authorId: fixture.user.id,
       },
     });

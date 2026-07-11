@@ -8,6 +8,7 @@ export const ALERTABLE_ACTIVITY_EVENT_KINDS = [
   // Decisions badge rather than materialized here.
   "GOAL_STATUS_CHANGED",
   "PLAN_BUDGET_EXCEEDED",
+  "PLAN_STALLED",
   "EXECUTION_STEP_JUDGED",
 ] as const;
 
@@ -119,7 +120,7 @@ export function mapAlertableActivityEventToNotification(
         ? `${agentLabel} did not ack${
             requiredAckSeconds != null ? ` within ${formatSeconds(requiredAckSeconds)}` : ""
           }`
-          : requiredAckSeconds != null
+        : requiredAckSeconds != null
           ? `No ack within ${formatSeconds(requiredAckSeconds)}`
           : undefined;
       const primaryHref = issueHref ?? agentHref ?? buildWorkspaceHref(input.workspace);
@@ -257,6 +258,34 @@ export function mapAlertableActivityEventToNotification(
         },
       };
     }
+    case "PLAN_STALLED": {
+      const reasonCode = readPayloadString(payload, "reasonCode");
+      const reasonText = readPayloadString(payload, "reason");
+      const planHref = buildPlanHref(input.workspace, input.event.subjectId);
+      const recommendedAction =
+        reasonCode === "review_without_reviewer"
+          ? "Open the plan and review the completed step, or add a REVIEWER to its crew."
+          : "Open the plan to inspect the completed run and resume from the safe recovery action.";
+      return {
+        kind: input.event.kind,
+        severity: "ERROR",
+        importance: 88,
+        persistent: true,
+        summary: "Plan needs attention",
+        reason:
+          reasonText ??
+          "A running plan has no live work and cannot advance without operator action.",
+        recommendedAction,
+        primaryHref: planHref,
+        primaryActionLabel: "Open plan",
+        replacementKey: `plan:${input.event.subjectId}:stalled:${reasonCode ?? "unknown"}`,
+        toast: {
+          title: "Plan needs attention",
+          description: reasonText ?? undefined,
+          actionLabel: "Open plan",
+        },
+      };
+    }
     case "EXECUTION_STEP_JUDGED": {
       // Only a BLOCKED outcome (retries exhausted) needs a nudge; PASS
       // and retryable FAIL are routine loop progress.
@@ -337,10 +366,7 @@ export function getEventNotificationActionLinks(
     },
   ];
 
-  if (
-    notification.detailHref &&
-    notification.detailHref !== notification.primaryHref
-  ) {
+  if (notification.detailHref && notification.detailHref !== notification.primaryHref) {
     links.push({
       href: notification.detailHref,
       label: notification.detailActionLabel ?? "Open details",
@@ -366,17 +392,11 @@ export function buildAgentHref(
   return `${buildWorkspaceHref(workspace)}/agents/${encodeURIComponent(profileKey)}`;
 }
 
-export function buildGoalHref(
-  workspace: NotificationWorkspaceContext,
-  goalId: string,
-): string {
+export function buildGoalHref(workspace: NotificationWorkspaceContext, goalId: string): string {
   return `${buildWorkspaceHref(workspace)}/goals/${encodeURIComponent(goalId)}`;
 }
 
-export function buildPlanHref(
-  workspace: NotificationWorkspaceContext,
-  planId: string,
-): string {
+export function buildPlanHref(workspace: NotificationWorkspaceContext, planId: string): string {
   return `${buildWorkspaceHref(workspace)}/plans/${encodeURIComponent(planId)}`;
 }
 

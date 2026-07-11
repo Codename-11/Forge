@@ -39,11 +39,11 @@ themselves AND by us** via the CLI). Four slices, deploy-held on main.
 - **1a — auto-archive idle EPHEMERAL agents.** New `Workspace.ephemeralAgentIdleMinutes`
   (migration `0093`, default `0` = disabled, per the "0 disables the sweep"
   convention). `sweepIdleEphemeralAgents` (`src/server/services/ephemeral-idle.ts`)
-  + worker job `ephemeral-idle-sweep` (5-min). Archives EPHEMERAL agents idle
-  past the window (reversible); skips BUSY; a never-heartbeated agent is only
-  reaped once `createdAt < cutoff` (grace to connect). PERSISTENT agents never
-  touched. Wired into `workspace.get` + `workspace.update` (0..10080). Test:
-  `ephemeral-idle.test.ts`.
+  - worker job `ephemeral-idle-sweep` (5-min). Archives EPHEMERAL agents idle
+    past the window (reversible); skips BUSY; a never-heartbeated agent is only
+    reaped once `createdAt < cutoff` (grace to connect). PERSISTENT agents never
+    touched. Wired into `workspace.get` + `workspace.update` (0..10080). Test:
+    `ephemeral-idle.test.ts`.
 - **1b — `runtimes.archive` (deregister).** New MCP tool (ADMIN), the teardown
   counterpart of `runtimes.register`; sets `archivedAt`. Exposed as
   `forge runtimes archive <id>`. **Deferred:** did NOT auto-wire the daemon to
@@ -51,7 +51,7 @@ themselves AND by us** via the CLI). Four slices, deploy-held on main.
   cached id), so a clean archive→restart cycle needs unarchive-on-register
   first. Manual deregister works now.
 - **2 — `forge task`.** `forge task "<desc>" [--agent X] [--project P] [--priority]
-  [--title]` → `issues.create` then `issues.assign` (`--agent`) or
+[--title]` → `issues.create` then `issues.assign` (`--agent`) or
   `issues.setQueued` (else → auto-dispatch). NB: `issues.assign` takes `issueId`,
   `issues.setQueued` takes `id` — the tools disagree; the command handles both.
 - **3 — `runs.open` (agent opens a run on itself).** New MCP tool (WRITE_ISSUES,
@@ -99,7 +99,7 @@ landing.
 ## 2026-07-08 — Agent removal: smart delete for agents + profiles (both surfaces)
 
 Gap report from Bailey: the workspace Agents settings + Instance Admin could
-disable/unbind agents but never *remove* them (esp. ephemeral CLI / temp
+disable/unbind agents but never _remove_ them (esp. ephemeral CLI / temp
 agents, a mistakenly-created "claude"). Root cause: the `agent.*` router had
 `archive`/`unarchive`/`delete`, but the only wired client call was
 `agent.update` (chat engine) — no UI surfaced removal. Instance Admin only
@@ -109,6 +109,7 @@ wired `agents.profiles.setDisabled`. And `agent.delete` was a raw
 history.
 
 Design (per Bailey: "smart remove", both surfaces):
+
 - **`agent.remove`** (adminProcedure) — counts references (runs, comments,
   apiKeys, assigned/claimed issues, artifacts, plans, goals, steps, review
   gates, action requests, crew). Zero → hard delete; any → archive
@@ -121,6 +122,7 @@ Design (per Bailey: "smart remove", both surfaces):
   (profile→agent FK is SetNull).
 
 UI:
+
 - Workspace Agents (`/settings/agents`): a "Delete" button on each
   BoundAgentRow beside Unbind — Unbind stays the reversible archive, Delete is
   the smart remove. Destructive `Confirm`; toast reports deleted vs archived.
@@ -209,7 +211,7 @@ instruction) unless confirmed.
 
 **Big unblock, unrelated to the feature itself:** finally root-caused why
 every worktree this session could typecheck/lint/build but never actually
-*run* its test suite (`Cannot find module 'server-only'`, seen 3x already
+_run_ its test suite (`Cannot find module 'server-only'`, seen 3x already
 today). `pnpm-workspace.yaml` is gitignored and a fresh worktree checkout
 never has it — without it, `pnpm install` silently skips linking a chunk of
 real dependencies (not just `server-only`; eslint/vitest/prisma/typescript/
@@ -250,9 +252,9 @@ Two pieces, following up the same-day Cockpit ship.
   correct RESEARCH/REVIEW/DISCUSS behavior — these modes are documented to
   never move the issue) never touches that column — only a status/field
   write does. So the watchdog is completely mode-blind: `docs/agents/
-  engagement-modes.md` explicitly claims *"the SLA/watchdog applies the
+engagement-modes.md` explicitly claims _"the SLA/watchdog applies the
   'must move the issue' expectation only to Execute… a Research run is
-  never falsely marked stalled"* — but the code implementing that promise
+  never falsely marked stalled"_ — but the code implementing that promise
   was never written. Confirmed live on AXI-91: `ISSUE_STALLED` fired at
   22:29:00 and again at 23:30:00 UTC, both with `lastUpdate` frozen at the
   21:58:17 assignment timestamp despite a real reply at 21:58:50 and a
@@ -263,7 +265,7 @@ Two pieces, following up the same-day Cockpit ship.
   (one wasted research run per SLA window, matching Victor's own
   "avoid repeated research-only stalled loops" comment on that issue).
   Fixed: one extra batched query (`AgentRun.findMany({distinct:
-  ["issueId"], orderBy: {startedAt: "desc"}})`, one index-backed round
+["issueId"], orderBy: {startedAt: "desc"}})`, one index-backed round
   trip for the whole candidate batch) resolves each candidate's most
   recent run mode; skip entirely when it's anything but EXECUTE. An
   issue with **no** run yet is NOT skipped — that's the watchdog's
@@ -271,7 +273,7 @@ Two pieces, following up the same-day Cockpit ship.
   keep firing. Added 2 integration tests (RESEARCH-mode skipped past
   cutoff; EXECUTE-mode still flags with a run attached) to the existing
   `stale-work.test.ts` — typecheck/lint/build clean, but this worktree
-  (like the two before it today) can't actually *run* the integration
+  (like the two before it today) can't actually _run_ the integration
   suite: `Cannot find module 'server-only'`, confirmed pre-existing and
   unrelated (every test in the file, including ones I didn't touch,
   fails to even collect; copying the package in by hand didn't fix it —
@@ -325,7 +327,7 @@ Three independent pieces from one session, all typecheck + lint clean.
   (`settings/runtimes/page.tsx`) reads this function directly, so operators
   now see the corrected default there too. New `tests/unit/runtime-tools.test.ts`
   (7 cases). `modeToolPolicyEnforced` still defaults off — this only fixes
-  what's *advertised*/prompted; hard host enforcement stays opt-in per Runtime.
+  what's _advertised_/prompted; hard host enforcement stays opt-in per Runtime.
 - **Quick Create: engagement mode picker on `/assign`.** The new-issue global
   overlay already assigned agents via `/assign @handle`, but had no way to set
   the run's engagement mode — the server hardcoded `explicit: null`, so it
@@ -527,7 +529,7 @@ instance audit log and webhook-delivery rows. New
 agent (name + `@handle`), project/initiative/cycle/agent-crew/context-set/
 workspace-canvas (name), goal/execution-plan/execution-step/action-request/
 artifact/note (title, humanized-type fallback for null). Unhandled/transient
-types (comment, review-gate, chat-thread*, canvas-style/component, stream/ack/
+types (comment, review-gate, chat-thread\*, canvas-style/component, stream/ack/
 presence) are absent → caller falls back to humanized type + short id. Scoped by
 `workspaceId` when given; global (cuid-unique) for instance-admin.
 
@@ -557,6 +559,7 @@ scroll/resize, flips above when <`minSpaceBelow` room), owns outside-click
 `dismissOnOutsideClick={false}` + passthrough `onMouseEnter/Leave`. Migrated six
 hand-rolled `absolute top-full` dropdowns that were (or could be) clipped by an
 `overflow-hidden`/`overflow-y-auto` ancestor:
+
 - **HIGH (confirmed):** `RunControlMenu` (inside agent-pipeline's
   `max-h-72 overflow-y-auto` lane), `CommentHistoryPopover` (scrollable comment
   thread).
@@ -607,7 +610,7 @@ issue-relations-panel, time-tracker-widget, agent-crew (router), review/page.
 Reworked `src/components/quick-create.tsx` (the `⇧C` create overlay) from a
 five-row "input + static legends + detached pickers" layout into a tokenized
 capture bar. Triggered by two reports: (1) the **Project** picker dropdown was
-invisible — it lived in the *last* row of the card and opened downward, but the
+invisible — it lived in the _last_ row of the card and opened downward, but the
 card is `overflow-hidden`, so the menu rendered past the bottom edge and was
 clipped to nothing (z-index was a red herring); (2) the raw priority/project
 pickers sat in a detached row, not where you type, and there was no value
@@ -615,9 +618,10 @@ autocomplete — the existing `useSlashAutocomplete` completes only the command
 **keyword** (`/pro` → `/project `), never the **argument**.
 
 What changed (issue / sub-issue modes only; other modes keep their rows):
+
 - **Tokenized box.** The title field is now a flex box holding `[ModeChip]
-  [badges…] [borderless input]`. Priority (≠NONE), a resolved project, and every
-  committed slash command render as removable coloured badges *inside* the box.
+[badges…] [borderless input]`. Priority (≠NONE), a resolved project, and every
+  committed slash command render as removable coloured badges _inside_ the box.
   Backspace at caret-start (`selectionStart===selectionEnd===0`) pops the last
   badge (committed → project → priority).
 - **Value autocomplete.** New `matchTrailingToken()` (looser than
@@ -637,11 +641,11 @@ What changed (issue / sub-issue modes only; other modes keep their rows):
   anchor sits in. The overlay's outside-mousedown handler now also checks
   `acPopoverRef` so clicking a suggestion doesn't close the sheet.
 - **+ field pills (mouse path).** A row under the box (`+ Priority/Project/
-  Assignee/Label/Due` + Description toggle) primes the matching slash stub +
+Assignee/Label/Due` + Description toggle) primes the matching slash stub +
   focuses, so mouse users hit the same value picker — one code path.
 - **Progressive legends.** The MODES pill row shows only while the title is
   empty (teach, then get out of the way); the permanent SLASH cheatsheet row is
-  gone (the autocomplete *is* discoverability now). Tab cycles modes only when
+  gone (the autocomplete _is_ discoverability now). Tab cycles modes only when
   the title is empty so it never fights tokenization; `⌘1..7` still jumps
   anytime.
 
@@ -666,6 +670,7 @@ creates no mapping — so a workspace with a working app but zero mappings saw
 path that bootstrapped the first mapping (via `connectApp`).
 
 Browse rework — list installation repos, auto-map on first search:
+
 - `linkability.ts::listBrowsableGitHubRepos({db,workspaceId,userId,isAdmin})` —
   active mappings ∪ (admins only) every repo the workspace's installed
   `GithubApp`(s)/connections can reach. Mints via `resolveInstallationToken`, so
@@ -690,6 +695,7 @@ Browse rework — list installation repos, auto-map on first search:
   path runs unchanged. So mapped-vs-unmapped is invisible to the operator.
 
 Claim-holder badge + sidebar tidy (`issues/[id]/page.tsx`):
+
 - `issue.byId` now selects `claimedBy {id,name,email,image}`. The sidebar's
   "Claimed" block (which rendered `claimedById.slice(0,8)` — a raw cuid) is now
   a `ClaimHolderCard`: `Avatar` + name (name → email → short id), short id as
@@ -703,7 +709,7 @@ Tests: +4 in `github-app-connect.test.ts` (browsable admin/non-admin gating;
 `ensureGitHubRepoLinkable` create + idempotent). Full suite 999 pass / 1 skip,
 lint + typecheck clean.
 
-Follow-up (done, same day): true *agent* attribution on a claim — see below.
+Follow-up (done, same day): true _agent_ attribution on a claim — see below.
 
 ### True agent attribution on claims (`claimedByAgentId`)
 
@@ -714,6 +720,7 @@ api-key owner User) stays; the new column records the agent that actually
 claimed.
 
 Wired through **every** claim write:
+
 - Set on agent claim: `issue.ts::claim` (both targeted + queue-scan paths) and
   `mcp.ts::issues.claim` (both paths), from `ctx.apiKey?.linkedAgentId`.
 - Cleared on release / unqueue-while-unclaimed / run abandon+redispatch:
@@ -739,6 +746,7 @@ global env app via `app-auth.ts` — had no app + no Connection → "install the
 dead-end. The two GitHub-App credential sources were disjoint.
 
 Fix — unify so one `GithubApp` powers both runtime auth and linking:
+
 - `installation-token.ts::resolveInstallationToken(installationId)` — prefer a
   `GithubApp` that owns the installation (mint with its key via
   `getInstallationTokenForApp`), else fall back to the global env app. Wired into
@@ -764,16 +772,16 @@ resolveInstallationToken prefer-app + env-fallback, connectApp create + idempote
 ## 2026-06-24 — GitHub Connect-flow public-origin fix + branch cleanup + AXI-79 landed
 
 - **GitHub Connect flow fixed for proxied deploys.** `/api/connections/github/install`
-  + `/setup` derived redirect URLs from `new URL(req.url).origin`, which behind
-  Traefik is `https://0.0.0.0:3000` — so "Install GitHub App" bounced the operator
-  to an unreachable internal URL, and the install cookie's `secure` flag was derived
-  from the internal (http) protocol. Both now use `publicOrigin(req)` (the helper
-  from `1a1379f`, honoring `X-Forwarded-Host`/`-Proto`), and the cookie's `secure`
-  flag follows the public origin. Also: when `GITHUB_APP_SLUG` is unset, the install
-  route now falls back to a configured `GithubApp.slug` the caller can access
-  (preferring the workspace parsed from `returnTo`) instead of dead-ending with
-  "GITHUB_APP_SLUG is not configured" — so a single-tenant deploy that set up an app
-  via Settings → GitHub Apps works without also hand-setting the env var.
+  - `/setup` derived redirect URLs from `new URL(req.url).origin`, which behind
+    Traefik is `https://0.0.0.0:3000` — so "Install GitHub App" bounced the operator
+    to an unreachable internal URL, and the install cookie's `secure` flag was derived
+    from the internal (http) protocol. Both now use `publicOrigin(req)` (the helper
+    from `1a1379f`, honoring `X-Forwarded-Host`/`-Proto`), and the cookie's `secure`
+    flag follows the public origin. Also: when `GITHUB_APP_SLUG` is unset, the install
+    route now falls back to a configured `GithubApp.slug` the caller can access
+    (preferring the workspace parsed from `returnTo`) instead of dead-ending with
+    "GITHUB_APP_SLUG is not configured" — so a single-tenant deploy that set up an app
+    via Settings → GitHub Apps works without also hand-setting the env var.
 - **Branch triage + cleanup.** Assessed the unmerged branches (parallel read-only
   workflow `wf_af9b1d73`): `mobile-ui-ux-enhancement` and `axi-40-workspace-mcp` were
   SUPERSEDED (content already on main byte-for-byte) → force-deleted; the merged
@@ -799,11 +807,12 @@ linking resolves through `Connection` + an **active repo `ConnectionMapping`**
 (`resolveGitHubRepoMapping`). Installing the App only creates the `Connection`
 (via `/api/connections/github/install`→`setup`); the per-repo `ConnectionMapping`
 is a separate admin-gated step surfaced **only** on `/settings/connections` —
-and the runtime-auth "GitHub Apps" page (the `GithubApp` model) is a *different*
+and the runtime-auth "GitHub Apps" page (the `GithubApp` model) is a _different_
 system that creates neither. So from the issue page the error was unavoidable
 with no remediation path.
 
 **Built (no schema change):**
+
 - `src/server/services/github/linkability.ts` — `classifyLinkability` (pure),
   `resolveRepoLinkability` (mapping fast-path → admin-only installation probe),
   `mapGitHubRepo` (idempotent, repo-in-installation verified), `listGitHubRepoMappings`.
@@ -820,6 +829,7 @@ with no remediation path.
 
 **Adversarial review (4 lenses → per-finding verify, 15 confirmed; workflow
 `wf_a0bbe85f`):** fixed the real ones —
+
 - **MEDIUM (security):** `github.linkability` was a plain `workspaceProcedure`,
   so any member/guest could probe arbitrary `owner/repo` against the workspace's
   installations → private-repo **access oracle** + connection enumeration. Now the
@@ -844,6 +854,7 @@ Validated on the local isolated stack: typecheck ✓, lint ✓, **985 tests** �
 (+16), production build ✓.
 
 **Deferrals pass (same day):**
+
 - **DONE — orchestration runs stamp engine/source.** The two
   `openOrTouchRun` sites in `orchestration-service.ts` (markStepReady +
   retry) now resolve the worker's engine via `resolveRunEngineWithSource`
@@ -853,7 +864,7 @@ Validated on the local isolated stack: typecheck ✓, lint ✓, **985 tests** �
   runs stamp null engine/source" gap so the engine chip renders on
   orchestrated runs. Additive; 985 tests + build green.
 - **Verified non-issue — reconcile `completedAt`.** `RECONCILE`
-  (agent-run-recovery) accepts a protocol-failed *completed* run and clears
+  (agent-run-recovery) accepts a protocol-failed _completed_ run and clears
   the recovery flag; it does not re-open, so `completedAt` correctly
   persists. No change.
 - **Deferred (with rationale) — operator Resume + don't-auto-resume-on-comment.**
@@ -861,7 +872,7 @@ Validated on the local isolated stack: typecheck ✓, lint ✓, **985 tests** �
   `run-attention-panel` offers nudge ("please resume…") + abandon, and the
   comment-driven `openOrTouchRun` resume branch re-arms the budget via
   `clearBudgetMarkers` — so a paused run isn't left dangling. The genuinely
-  open piece is the *semantic* question of whether an ordinary discussion
+  open piece is the _semantic_ question of whether an ordinary discussion
   comment should silently un-pause + re-grant budget; that's a hot-path
   invariant change (the same resume invariant fixed in Phase 1) plus a
   product decision, so it gets its own focused, live-runtime-validated pass
@@ -888,7 +899,7 @@ Follow-ups on the Phase 2 commit (no schema change this round — all code):
   `engagementSource: "explicit"` on the opened run (engine chip now renders).
 - **`dispatchPreview` tRPC** (`agent.dispatchPreview`): resolves mode + source +
   engine + connector label + ready for a (agent, surface) — reuses the dispatcher's
-  resolvers. Consumers: agent-detail Engine row shows the *resolved* engine
+  resolvers. Consumers: agent-detail Engine row shows the _resolved_ engine
   (`byProfileKey.resolvedEngine`); assign popover shows a current-assignee preview.
   `ready` excludes the disabled-runtime sentinel.
 - **Per-issue grouping** of action requests (inbox.actionRequestsForMe +
@@ -923,7 +934,7 @@ engagement-mode and run-engine axes the audit found scattered.
 - **Persisted.** New `AgentRun.engagementSource` (enum `EngagementSource`),
   `runEngine` (`RunEngine`), `runEngineSource` (String) — migration `0089`,
   all nullable. Stamped at the single chokepoint `openOrTouchRun`: CREATE always;
-  UPDATE re-stamps mode+source only on a *fresh* assignment (gate:
+  UPDATE re-stamps mode+source only on a _fresh_ assignment (gate:
   `assignmentEventId && !existing.assignmentEventId`), backfills engine when null.
   An incidental wake (comment/MCP write, `assignmentEventId=null`) never clobbers
   the sticky mode. (The deliberate contract change: assignment now wins over an
@@ -975,8 +986,8 @@ Shipped **Phase 1 ("stop the bleeding")** — correctness invariants only:
   `supersededByRunId: null`, so command-center/recovery render one chain head
   instead of N cards.
 - **P0-2 per-run budgets (`run-budget.ts`).** Opt-in `Workspace.runTokenBudget /
-  runCostBudgetUsd / runMaxMinutes / runBudgetWarnPct(=80) / runBudgetAction(PAUSE|
-  STOP)`. `evaluateRunBudget` (pure) + `enforceRunBudget` (effects). One-time warn;
+runCostBudgetUsd / runMaxMinutes / runBudgetWarnPct(=80) / runBudgetAction(PAUSE|
+STOP)`. `evaluateRunBudget` (pure) + `enforceRunBudget` (effects). One-time warn;
   on breach → `connector.stop()` (best-effort, tracked) → **PAUSE** (atomic
   ACTIVE→WAITING + `PAUSE_REQUESTED` + honest "raise & resume / abandon"
   notification) or **STOP** (atomic ACTIVE→ABANDONED). Wired into `pollActiveRuns`
@@ -991,8 +1002,9 @@ Shipped **Phase 1 ("stop the bleeding")** — correctness invariants only:
 - **P0-4b `completedAt`** distinct from `finishedAt` (set only on clean COMPLETED).
 
 Migration `0088_agent_run_supersede_and_run_budget` (hand-written): columns/enums
-+ backfills (collapse existing STALLED backlog under latest run per (issue,agent),
-dedup pre-existing OPEN grant dupes before creating the partial unique index).
+
+- backfills (collapse existing STALLED backlog under latest run per (issue,agent),
+  dedup pre-existing OPEN grant dupes before creating the partial unique index).
 
 **Adversarial review (3-lens workflow) caught a BLOCKER**, now fixed: a
 budget-PAUSEd run (WAITING, `breachedAt` set) was auto-resumed by
@@ -1026,6 +1038,7 @@ with `Maximum tools limit reached` when Forge's direct tool list was stacked
 with Hermes native tools and other MCP servers.
 
 Fixes:
+
 - Changed `tools/list` default selection from the full Forge registry to a
   compact `runtime` profile covering issues, comments, chat, runs, action
   requests, and workspace lookup.
@@ -1054,6 +1067,7 @@ marked that task failed and completed the implementation directly in the same
 worktree.
 
 Fixes:
+
 - Added account Settings -> Agent Clients as a first-class MCP/session client
   surface backed by existing access key rows, with create shortcuts, status,
   scope/narrowing context, revoke/delete actions, and a clear raw-secret
@@ -1086,6 +1100,7 @@ passed 10/10 after restoring stable labels.
 Fixed AXI-85 by centralizing renderable/external URL validation and applying it to rich markdown links, link attachments, and existing link-attachment open/preview surfaces.
 
 Fixes:
+
 - Added `src/lib/url-safety.ts` to allow only `http:`/`https:` external URLs and intentional internal app paths beginning with `/` for rendered markdown navigation.
 - Updated `MarkdownWithAttachments` so unsafe markdown link schemes such as `javascript:` and `data:` render as inert text, while `https://…`, internal `/w/...` links, and existing http(s)-only forge-link chips continue to work.
 - Enforced http(s)-only link attachment URLs in the tRPC attachment router, MCP `attachments.attachLink`, and storage helper; also guarded existing link attachment chip/lightbox/canvas open and iframe-preview paths against legacy unsafe values.
@@ -1101,6 +1116,7 @@ showed the dock acting like a source of truth and the page layout stretching
 awkwardly when activity/attention lists got long.
 
 Fixes:
+
 - Reframed Mission Control as a quick-access dock: removed the floating
   History/Admin/Plans tabs, sanitized legacy saved tab state back to Live, and
   limited default-tab preferences to Live/Queue/Agents/Chat.
@@ -1129,6 +1145,7 @@ Expanded the daily-driving operator surfaces after Dashboard and Command Center
 still made blocked agents and recent workspace change context too hard to read.
 
 Fixes:
+
 - Added `event.timeline`, a workspace-wide display-ready activity feed that
   hydrates issues, agents, runs, goals, plans, and execution steps, then returns
   actor labels, tone, category, detail copy, and canonical jump links for
@@ -1167,6 +1184,7 @@ from an operational queue; clearing the run did not answer how the plan step
 should continue.
 
 Fixes:
+
 - Added `executionPlan.retryStep`, a step-aware recovery mutation that opens a
   fresh AgentRun with `executionStepId`, materializes an issue if needed, and
   reuses the runtime-only dispatch path so Codex retries stay visible on the
@@ -1224,6 +1242,7 @@ support Rich Rendering": active plan `cmqjkctwa0003mo07aonmhg1j` was
 `APPROVED`, all 6 steps were `TODO`, and no bound `ActionRequest` existed.
 
 Fixes:
+
 - Added `executionPlan.activate` tRPC mutation, backed by the existing
   `activatePlan()` service path, so UI start/approval actions run the canonical
   transition: plan → `RUNNING`, goal → `ACTIVE`, root steps → `READY` and
@@ -1311,6 +1330,7 @@ advertised list at 200; stacked with other MCP servers + runtime core tools,
 Hermes sessions hit ~290 and got rejected.
 
 Fix (Forge-side, no schema change):
+
 - **`selectMcpToolNames({ profile?, namespaces?, scopes? })`** + `MCP_TOOL_PROFILES`
   (`core` / `planning` / `agents` / `canvas`) + `mcpToolNamespace` / `mcpToolNames`
   / `mcpNamespaces` in `src/server/services/mcp.ts`. Namespace = segment before
@@ -1334,7 +1354,7 @@ namespaces win, scope filter mirrors auth (READ_ISSUES key can't see
 
 Ops: point a capped runtime's Forge MCP URL at `…/api/mcp/rpc?profile=core`.
 Still open in AXI-82 scope (not done here): Hermes-side config to actually set
-that URL per session, and whether to make a slim profile the *default*.
+that URL per session, and whether to make a slim profile the _default_.
 
 ## 2026-06-17 — Built-in plan generation + planning UI refresh
 
@@ -1342,15 +1362,17 @@ Fixed the "empty plan" dead end and modernized the planning surfaces against
 the `Forge Screens Board` design bundle (claude.ai/design export).
 
 ### Root cause
+
 `decomposeGoal` (`orchestration-service.ts`) only ever created an empty DRAFT
 plan and fired a fire-and-forget webhook at the resolved planner. With no
 reachable planner (crew has no PLANNER, agent OFFLINE / no `webhookUrl` /
 RUNS-engine whose dispatch webhook is suppressed, or delivery fails) the plan
-stayed empty forever with **zero UI feedback**. Goal *creation* also
+stayed empty forever with **zero UI feedback**. Goal _creation_ also
 auto-dispatched decompose, reproducing the dead end at create time. Forge had
 no built-in/synchronous decomposition.
 
 ### Backend ("pick at click time")
+
 - **`runPlanGeneration(client, input)`** in `ai.ts` — single-shot forced
   `submit_plan` tool-call mirroring `runTriage`; returns `GeneratedStep[]` or
   null. Caller passes a client from **`resolveWorkspaceProviderClient`**
@@ -1370,6 +1392,7 @@ no built-in/synchronous decomposition.
   columns, no migration.**
 
 ### UI
+
 - **Goal detail:** single "Start planner" → two actions (**Generate with
   Forge** / **Dispatch to crew planner**) via a new `PlannerPanel`; a
   `DispatchFeedback` block surfaces "dispatched to X · waiting" vs. an
@@ -1394,6 +1417,7 @@ no built-in/synchronous decomposition.
   added `generatePlan` + `GoalGenerateResult`/`GoalPlannerInfo`.
 
 ### Verify
+
 `pnpm lint` + `pnpm typecheck` clean; `pnpm test` 901 passed / 1 skipped
 (orchestration integration incl. addSteps/decompose green — refactor is
 backward-compatible). Manual end-to-end of generate/dispatch + the
@@ -1424,9 +1448,11 @@ placeholder docs grid had advertised `docs.forge.dev` — a domain we don't own
 — now removed (see below).
 
 ### Docs at forge-pm.dev/docs
+
 Docs are already a full VitePress site (`docs/`, base `/docs/`) that the app
 builds via `scripts/build-docs.sh` → `public/docs/`. Rather than build a second
 renderer in the landing site, mirrored that into the landing static export:
+
 - New `landing/scripts/build-docs.sh` — builds the SAME `../docs` site and
   stages dist → `landing/public/docs/`. POSIX sh; `SKIP_DOCS`/`STAGE_ONLY`
   knobs; skips gracefully if `docs/` absent.
@@ -1438,10 +1464,11 @@ renderer in the landing site, mirrored that into the landing static export:
 - Gitignored `landing/public/docs/` (build artifact).
 - No Next rewrite needed (unlike the app server): static hosts auto-serve
   `index.html` for `/docs/`, and base `/docs/` makes assets resolve.
-Verified `pnpm build` → `out/docs/` carries all 60 pages + assets + sitemap
-alongside the landing pages; lint + typecheck green.
+  Verified `pnpm build` → `out/docs/` carries all 60 pages + assets + sitemap
+  alongside the landing pages; lint + typecheck green.
 
 ### VitePress config (shared by app + landing builds)
+
 - `srcExclude: ["audits/**","plans/**"]` — keep internal execution plans /
   audit notes out of the published site (they were unlinked but reachable).
   Fixed the one inbound link (`agents/providers-and-transports.md` → the
@@ -1455,7 +1482,9 @@ alongside the landing pages; lint + typecheck green.
   `you@example.com`).
 
 ### Public-readiness audit (repo is already PUBLIC)
+
 Swept tracked files for secrets / internal data:
+
 - CRITICAL: an earlier DEVLOG entry (~L8265, 2026-04-19 section) carried a
   plaintext owner-login credential (the `ADMIN_PASSWORD` from
   `~/docker/forge/.env`). Redacted at HEAD. Because it sits in already-pushed
@@ -1560,9 +1589,11 @@ Verification: `pnpm typecheck`; `pnpm test src/server/services/__tests__/orchest
 `pnpm lint`; `env -u OPENAI_API_KEY pnpm test` (109 files passed, 898 tests
 passed, 1 skipped). Full test run still logs pre-existing async notification
 fan-out/storage CORS warnings, but exits green.
+
 ## 2026-06-15 — AXI-79 global issue filters + Quick Create cleanup
 
 Improved the global `/issues` operations surface:
+
 - Added a first-class Project chip beside Sprint/Initiative, including a `No project` branch backed by a new `withoutProject` filter.
 - Added a Done quick filter and made status filtering terminal-aware: explicit DONE/CANCELED status ids/categories now bypass the default terminal-status exclusion instead of producing impossible queries.
 - Mirrored the terminal/no-project behavior in the MCP `issues.list` path so agents and UI see the same semantics.
@@ -1570,15 +1601,15 @@ Improved the global `/issues` operations surface:
 
 Tests: targeted Vitest for saved-view filters, Quick Create modes, issue router, and MCP issues; `pnpm typecheck`; `pnpm lint`; full `pnpm test`; `pnpm test:e2e` (first attempted with an invalid extra `-- --workers=1` arg which Playwright treated as a test pattern; reran plain and passed 34/34).
 
-
 ## 2026-06-15 — Provisioning distribution (one script, any runtime)
 
 Made runtime provisioning **provider-agnostic in practice**, not just on the
 platform. Confirmed first: `runtimes.provisioning` gates on `linked-agent`, not
 provider — so Hermes/Claude/Codex/custom all qualify. The gap was the
-*runtime-side consumer* (only the Codex bridge's `provision.cjs` existed).
+_runtime-side consumer_ (only the Codex bridge's `provision.cjs` existed).
 
 Shipped a single **canonical provisioning script** as the source of truth:
+
 - `src/server/integrations/provision-script.ts` — the portable Node (≥18,
   dep-free, idempotent) script as a string, authored with concatenation-only
   (no internal backticks/`${}`) + a `__FORGE_BASE_DEFAULT__` placeholder so it
@@ -1674,7 +1705,7 @@ the PEM is write-only, never returned.
 
 - **Service** `src/server/services/github-app.ts` — RS256 app-JWT (node
   `crypto`, 9-min expiry, 60s skew backdate) → `POST /app/installations/{id}/
-  access_tokens`. `mintInstallationToken` (+ per-runtime 50-min token cache,
+access_tokens`. `mintInstallationToken` (+ per-runtime 50-min token cache,
   `getInstallationTokenForRuntime`), `verifyGithubApp` (signs, mints, reads
   `/app` slug + `/installation/repositories` count for the Test button).
 - **tRPC** `runtime.{get,set,delete,test}GithubApp` — admin-gated (get is
@@ -1726,7 +1757,7 @@ runtime-scoped, cascade via the runtime.
   (admin, encrypt via `crypto.ts`), `listRepos`/`setRepo`/`deleteRepo`. Env-var
   key + safe-relative-path validation.
 - **MCP** `runtimes.provisioning` (`scopes: []`, **linked-agent-required** via
-  `mcp-policy`): returns the *decrypted* secrets + repos for the calling
+  `mcp-policy`): returns the _decrypted_ secrets + repos for the calling
   agent's runtime — strictly scoped (agent A's key never reads B's secrets).
 - **Bridge provisioning** (`~/docker/codex-bridge/provision.cjs`, run by the
   entrypoint before the bridge starts): fetches `runtimes.provisioning`, writes
@@ -1770,7 +1801,7 @@ three-valued-logic bug: `NOT: { authoringAgentId }` drops human comments
 Fix (#3): issue agent panel shows the block reason (`currentStep`) inline when
 a run is waiting, instead of only "Waiting on your reply".
 
-Loop guard (exposed by the above): once Codex actually *completed* assigned
+Loop guard (exposed by the above): once Codex actually _completed_ assigned
 work (instead of always stalling), a self-perpetuating dispatch loop surfaced
 — `runs.complete` → agent posts a comment → `comments.create` calls
 `openOrTouchRun`, finds no live run, opens a fresh ACTIVE/unbacked/trigger-less
@@ -1856,6 +1887,7 @@ running↔waiting forever (the "approve 10×" symptom). `instrumentation.ts:32`
 literally predicts this. Chat worked because its run lives in one process.
 
 Fixes:
+
 - **Cross-process approval relay (codex-app-server.ts).** Added a Redis
   control channel `forge:codex:control`. The socket-owning process subscribes
   on `startRun`; `approve`/`stop` apply locally when the run is in-process,
@@ -1873,7 +1905,7 @@ Fixes:
   approval is actionable where the operator is looking, not only in the Live
   overlay.
 - **Settings copy fix + YOLO enabled.** Corrected the Codex YOLO toggle help
-  text (it gates *every* turn, not just chat/discuss). Enabled YOLO on the
+  text (it gates _every_ turn, not just chat/discuss). Enabled YOLO on the
   prod `rt_codex_appserver` runtime (yoloMode + danger-full-access + approval
   `never`) so our deployment's Codex dispatch runs without approval prompts.
 
@@ -3032,7 +3064,7 @@ NOT in this commit.
 
 - **Slash → commit-to-chips** in QuickCreate. New `matchTrailingCommand()` in
   `slash-commands.ts` detects a trailing `/cmd arg` at the end of the single-line
-  title (so commands finally work *with* a title — the old single-line input could
+  title (so commands finally work _with_ a title — the old single-line input could
   only hold a command OR a title, never both). Plain ⏎ commits the trailing command:
   `/priority`→native priority chip, resolvable `/project KEY`→native project picker,
   the rest (`/assign`,`/due`,`/label`,`/watch`,`/unwatch`, unresolved `/project`) land
@@ -3055,11 +3087,12 @@ NOT in this commit.
   shared `IssueSort`/`IssueGroupBy` in `saved-view-filters.ts`.
 
 Verified: typecheck, lint, slash-commands unit tests green. (Full unit suite passes in
-the main checkout; 10 server-module files fail to load *in the worktree only* because
+the main checkout; 10 server-module files fail to load _in the worktree only_ because
 `vitest.config.ts` aliases `server-only` to a worktree-relative path with no
 `node_modules/server-only` — environmental, not a code regression.)
 
 Follow-up wave (same session, mid-session asks):
+
 - **#6 runtime label** — `audit.ts` assignment SYSTEM comment rendered the raw
   `RuntimeKind` enum inside `_…_`; the embedded underscore broke the markdown emphasis.
   New shared `src/lib/runtime-kind.ts` (`RUNTIME_KIND_LABEL`/`runtimeKindLabel`); audit
@@ -3080,7 +3113,7 @@ Follow-up wave (same session, mid-session asks):
 - **#4 responsive** — issue-detail Attachments "attach link" inputs used
   `min-w-[18rem]`/`min-w-[14rem]` and overflowed the ~22rem rail on smaller laptops →
   switched to `w-full min-w-0 basis-full` (stack). Relations search input → `flex-1
-  min-w-0`. Issues-list search → `w-32 sm:w-48`. Shell layout (capped 1600, `min-w-0`
+min-w-0`. Issues-list search → `w-32 sm:w-48`. Shell layout (capped 1600, `min-w-0`
   main, `shrink-0` aside) was already sound; the overflow was inner content.
 
 Verified (follow-ups): typecheck + lint green. The inline-highlight backdrop is the one
@@ -3110,24 +3143,25 @@ Verified: typecheck, lint, next+docs build green. Released v0.2.0 via GitHub Flo
 
 Executed `docs/plans/multiws-followup-goal.md` (agent-team spec) — the deferred/larger
 items after the core restructure shipped. Migration 0071 (`AgentProfile.requestedById`
-+ `approvedAt`; `Agent.requireApprovalBeforeStart`, additive). Six lanes, parallel
-subagents, integrated centrally:
 
-- **Connections live OAuth/OIDC** — `/api/connections/[id]/authorize` + `/callback`
+- `approvedAt`; `Agent.requireApprovalBeforeStart`, additive). Six lanes, parallel
+  subagents, integrated centrally:
+
+* **Connections live OAuth/OIDC** — `/api/connections/[id]/authorize` + `/callback`
   (PKCE + signed state), generic OIDC discovery + GitHub/Google/Slack, encrypted token
   bundle + clientSecret (`config.clientSecretEnc`), `connection.refreshIfNeeded`. Global
   connections page wired with Authorize/Re-authorize + add-connection flow. Per-connection
   callback URL `<origin>/api/connections/<id>/callback`. Reuses AUTH_SECRET via crypto.ts.
-- **Activity dock 7-tab fidelity** — Live/Queue/Agents/History/Chat/Admin/Plans brought to
+* **Activity dock 7-tab fidelity** — Live/Queue/Agents/History/Chat/Admin/Plans brought to
   `screens-activity.jsx` (stat-card headers, section labels, dispatch hints, outcome words)
   without changing data sources / keybindings / namespaces.
-- **Profile request→approve** — `agents.profiles.request` (member) / `approve` / `reject` /
+* **Profile request→approve** — `agents.profiles.request` (member) / `approve` / `reject` /
   `listPending`; `/admin/agents` pending queue; workspace catalog "Request a profile" dialog.
   Bind catalog hides pending (unapproved) profiles; bind rejects pending.
-- **Wired admin + binding affordances** — `instanceAdmin.createTenant` / `inviteUser` /
+* **Wired admin + binding affordances** — `instanceAdmin.createTenant` / `inviteUser` /
   `backup` (best-effort ack) behind the Overview/Users buttons; per-binding require-approval
   toggle; connection-mapping default labels.
-- **MCP/CLI profile-awareness** — `agents.profiles.list`/`get` MCP tools, `agents.me` now
+* **MCP/CLI profile-awareness** — `agents.profiles.list`/`get` MCP tools, `agents.me` now
   returns `profileId` + `instanceRole`; `forge agents --global`, `forge whoami` instanceRole.
 
 Verified: typecheck, lint, next+docs build, unit **736 passed/1 skipped** (sequential),
@@ -3160,6 +3194,7 @@ auto-runs `migrate deploy`):
    Custom — Authelia-style), not hardcoded vendors.
 
 **Phase 1 shipped (additive only — existing code compiles untouched):**
+
 - `enum InstanceRole`, `User.instanceRole` (default MEMBER).
 - `AgentProfile` (global, `ownerId`, base capabilities, `instanceShared`,
   `disabledAt`); `Agent.profileId` + binding policy columns
@@ -3185,6 +3220,7 @@ Next (Phase 2): globalize `Runtime` (nullable `workspaceId`, `instanceShared`),
 split routers into `agents.profiles.*`/`agents.bindings.*`,
 `runtimes.*`/`connections.*` global+workspace, add `global.*` aggregation
 router + `globalProcedure`.
+
 ## 2026-05-26 — Forge MCP Orca integration contract
 
 Closed the Orca-facing MCP gaps in `src/server/services/mcp.ts`:
@@ -3207,6 +3243,7 @@ Closed the Orca-facing MCP gaps in `src/server/services/mcp.ts`:
   of double-wrapping them.
 
 Coverage:
+
 - `DATABASE_URL=postgresql://forge:forge@localhost:55432/forge?schema=public REDIS_URL=redis://localhost:56379 pnpm test src/server/services/__tests__/mcp.test.ts` → 102 passed
 - `pnpm typecheck` → pass
 - `pnpm lint` → pass
@@ -3284,6 +3321,7 @@ second pass inside the same transaction. Explicit `dependsOnStepIds` remain
 supported and are de-duped with resolved index deps.
 
 Surface updates:
+
 - Service input accepts `dependsOnStepIndexes` on seeded steps.
 - tRPC `executionPlans.create` schema forwards `dependsOnStepIndexes` and router
   coverage verifies the seeded child receives the resolved parent id.
@@ -3292,6 +3330,7 @@ Surface updates:
 - Changelog updated under Unreleased.
 
 Verification:
+
 - RED confirmed first: new service test failed with `dependsOnStepIds` still
   empty for child steps.
 - `pnpm test src/server/services/__tests__/orchestration.test.ts -t "createExecutionPlan resolves seeded step dependencies by input index"` → pass
@@ -3312,12 +3351,13 @@ associated to its goal via a shared `issueId`, never the `goalId` FK, so the
 Goal DAG view didn't claim it.
 
 Changes (no migration — `goalId` column already existed):
+
 - `createExecutionPlan` (+ tRPC `executionPlans.create` + MCP) now accepts
   `goalId`. When set, the plan is created as the goal's active attempt and any
   prior active attempt is demoted (mirrors `decomposeGoal`). Cross-tenant +
   not-ACHIEVED/ABANDONED guards.
 - New `attachPlanToGoal` service + tRPC `goals.attachPlan` + MCP
-  `goals.attachPlan({ goalId, planId, makeActive? })` to link an *existing*
+  `goals.attachPlan({ goalId, planId, makeActive? })` to link an _existing_
   plan. Refuses to steal a plan already owned by a different goal; keeps the
   single-active-attempt invariant.
 - Tests: 3 new orchestration cases (attach links + activates; create-with-goalId
@@ -3344,6 +3384,7 @@ STATUS comment updates do not create/touch canonical agent work; BODY comments,
 stalls, SLA breaches, nudges, and priority changes still page watchers.
 
 Verification:
+
 - `pnpm vitest run src/server/services/__tests__/audit.test.ts -t "watcher fan-out"` → 3 passed / 4 skipped
 - `pnpm vitest run src/server/services/__tests__/mcp.test.ts -t "runs.complete"` → 2 passed / 97 skipped
 - `pnpm vitest run src/server/services/__tests__/agent-run-stale.test.ts src/server/services/__tests__/stale-work.test.ts` → 9 passed
@@ -3364,12 +3405,12 @@ is byte-identical to the design's reference copy), so the deltas were small:
 - **`.forge-glow-grid*` family** added to `globals.css` (BG3 — the Atlas
   dashboard background ported to Forge tokens): static dot grid + two soft
   radial "lights" drifting on non-syncing 28s/36s paths, `mix-blend-mode:
-  plus-lighter` so they add luminance to the dots beneath. Blob B uses ember
+plus-lighter` so they add luminance to the dots beneath. Blob B uses ember
   for the single warm-accent bias. Transform-only, gated on `[data-motion="on"]`
-  + reduced-motion. Registered `forge-glow-drift-a/-b` keyframes + animations in
-  `tailwind.config.ts`. Did NOT regress `.forge-grid-bg` — live's `::before`
-  translate3d version is the intentionally-smoother one vs the design's
-  background-position form.
+  - reduced-motion. Registered `forge-glow-drift-a/-b` keyframes + animations in
+    `tailwind.config.ts`. Did NOT regress `.forge-grid-bg` — live's `::before`
+    translate3d version is the intentionally-smoother one vs the design's
+    background-position form.
 - `topbar.tsx` gained `bg-background` for strict parity with the board's
   `PageTopbar`.
 - Sidebar `NavRow` badge colour split: decisions → ember accent, inbox → quiet
@@ -3381,7 +3422,7 @@ overlapping agentic-config surfaces (Agents / Runtimes / Integrations) into two:
 - `settings-nav.ts`: renamed the `integrations` group → `connections`
   (`/integrations` item → `/connections`, new copy), removed the standalone
   `/runtimes` nav item, refreshed the Agents description. The settings index
-  + compact navbar render from this list, so both auto-reflect the change.
+  - compact navbar render from this list, so both auto-reflect the change.
 - **New `/settings/connections`** page — strict inbound/outbound external I/O.
   Banner explains where Hermes/Claude/Codex went. The one real backend
   (Email-to-issue, `/api/ingest/email` + HMAC) is fully preserved as the wired
@@ -3412,9 +3453,9 @@ set). Done in worktree `worktree-design-parity`.
 
 **Per-screen parity sweep (all 13 Screens-Board artboards).** Diffed every
 board artboard against its live page. Finding: live is consistently a
-*superset* of the mock (the board was built *from* live, then live grew
+_superset_ of the mock (the board was built _from_ live, then live grew
 further — customizable dashboard widgets, the chat diagnostics rail, inbox
-extras). So "parity" = porting the design's *additive* signal elements live was
+extras). So "parity" = porting the design's _additive_ signal elements live was
 missing, NOT regressing live to the simpler mock. Implemented (add-only,
 verified data exists first — skipped anything that would need a new tRPC field
 or a router change):
@@ -3467,11 +3508,11 @@ Final: `pnpm typecheck` + `pnpm lint` clean; `pnpm test` 688 pass / 1 skip
 **Settings-page redesign sweep (the "specifically designed" settings screens).**
 The second design bundle (`iCVaz0otBlYcWUMr4POAdA`) is byte-identical to the
 first; the operator re-pointed at it to flag that the prior passes did the
-settings *IA* but not the per-subpage *internal* redesigns. Brought the live
+settings _IA_ but not the per-subpage _internal_ redesigns. Brought the live
 settings pages up to the design's vocabulary (SettingsLayout / FormSection +
 hints / DangerZone / SaveBar / TeachEmpty / FormSegmented) — add-only, every
 input + tRPC mutation + handler preserved (the design's FormInput/Select are
-display stubs; we reorganized live's *functional* controls, never replaced
+display stubs; we reorganized live's _functional_ controls, never replaced
 them):
 
 - **Agents** — replaced the flat list rows with the design's **AgentMergedCard**:
@@ -3482,7 +3523,7 @@ them):
   "Open runtime editor →" deep link). All real data from `agent.list` ⨝
   `runtime`; all actions (QuickActions / View / Edit-wizard / Archive / Delete)
   preserved. (Gallery + provider matrix from the earlier pass kept.)
-- **Plugins** — added the **Permission reference** grid built from the *real*
+- **Plugins** — added the **Permission reference** grid built from the _real_
   `PluginScope` enum (not the mock's invented scopes), a "scopes" label, and
   aligned subtitle.
 - **Workspace · General** — split one long form into Identity / Sprint cadence /
@@ -3492,7 +3533,7 @@ them):
   accurate pending count + ⌘S.
 - **Members** — Roster section + a Roles teach card (OWNER/ADMIN/MEMBER/GUEST).
   **Dispatch rules** — Routing-matrix section + "How rules resolve" walkthrough
-  + teach-empty (drag-reorder + first-match-wins preserved).
+  - teach-empty (drag-reorder + first-match-wins preserved).
 - **Statuses** — Pipeline section + read-only Categories reference + hex chips.
   **Labels** — Labels section + Palette reference + hex chips.
 - **Saved views** — Yours / Shared split + teach-empty. **Recurring** — Schedules
@@ -3508,7 +3549,7 @@ them):
   route rather than wire a phantom). Appearance + Developer access already
   matched the design — left as-is.
 - **Onboarding** — live's 5-step add-agent wizard already implements the design's
-  flow; now entered via the provider gallery. Connection/plugin *detail* flows
+  flow; now entered via the provider gallery. Connection/plugin _detail_ flows
   from the mock (GitHub etc.) are aspirational with no backend — not built.
 
 Validation: `pnpm typecheck` clean · `pnpm lint` clean · `pnpm test` 688 pass /
@@ -3531,10 +3572,11 @@ via `issue.update({ assignedAgentId })`).
 
 **Data-backed deltas (added the data paths, then the UI — all query-side, no
 schema change).**
+
 - Projects list: `project.list` now includes `initiative` + a groupBy-computed
   `_count.doneIssues`; cards show a done/total progress bar + initiative chip.
 - Initiatives: `initiative.list` now carries per-project `{key,name,color,done,
-  total}`; card renders the nested project list (cap 4 + "+N more").
+total}`; card renders the nested project list (cap 4 + "+N more").
 - Plans: `executionPlan.list` now includes `steps{position,status}` +
   `createdBy`/`createdByAgent` + `doneSteps`; card renders a DAG step strip
   (color-by-status pips + connectors, cap 12) + owner footer.
@@ -3575,7 +3617,7 @@ Validation: applied `0063` to the local `:55432` dev stack; `pnpm typecheck` +
 
 ## 2026-05-25 — Settings left rail + granular detail parity (status glyphs, dispatch matrix, dashed +Add)
 
-Post-deploy review pass — the operator flagged that the settings *shell* kept
+Post-deploy review pass — the operator flagged that the settings _shell_ kept
 the horizontal navbar (design wanted a left rail) and that lots of small details
 didn't match. Ran a granular detail audit and closed the HIGH items.
 
@@ -3657,7 +3699,7 @@ cross-agent), chat-readiness unit tests 6 pass.
 
 **1. Dispatch runs consume `/events` live (migration 0057: `AgentRun.pendingApproval`).**
 The worker now keeps a live SSE subscription per active connector-driven run
-(tracked in-process, re-established by the 5s sweep → restart-safe) *alongside*
+(tracked in-process, re-established by the 5s sweep → restart-safe) _alongside_
 the status poll. The poll still owns lifecycle (terminal/usage/awaiting flag);
 the subscription enriches the timeline with per-tool + thinking steps and
 **captures the exact `approval.request` command** (poll status can't see it).
@@ -3707,6 +3749,7 @@ typecheck + eslint clean; chat/dispatcher/run-stale tests (27) green; docs build
 
 **Dispatch approvals (the deferred Phase-2 follow-up).** A connector-driven
 run that pauses for operator permission is now actionable from Mission Control.
+
 - Migration 0056: `AgentRun.awaitingApprovalAt`.
 - `run-dispatcher` poll: on `waiting_for_approval` sets the flag + a one-shot
   BLOCKED event (keeps the run ACTIVE so it stays in the Live tab); on resume
@@ -3720,6 +3763,7 @@ run that pauses for operator permission is now actionable from Mission Control.
 
 **Slash commands.** Added an `args` usage-hint field (rendered in the `/`
 autocomplete + `/help`), and new commands:
+
 - `/engine [completions|runs]` — show or switch this agent's chat engine
   (ties into the engine work; admin-only switch, errors surfaced inline).
 - `/assign <KEY>` — ask the agent to take an issue.
@@ -3732,31 +3776,31 @@ typecheck + eslint clean; chat/dispatcher/run-stale/orchestration tests green.
 ## 2026-05-22 — Hermes default→runs, approval semantics, FREE_FORM answers
 
 Follow-on to the engine work, after researching the Hermes gateway approval
-model (approvals gate dangerous *shell commands*: payload `{command,
+model (approvals gate dangerous _shell commands_: payload `{command,
 description, choices: once|session|always|deny}`, per-session FIFO; a bare
 **deny leaves the run blocked → must `/stop`**; `reasoning.available` carries
 real thinking; tool args/results aren't streamed).
 
 - **Hermes integration now defaults to RUNS** (`adapters.ts`). Chatting with
-  Victor/Mizu talks to *that agent* (own memory + tools), and dispatch uses
+  Victor/Mizu talks to _that agent_ (own memory + tools), and dispatch uses
   runs too. Per-agent override unchanged; flip to Completions for a stateless
   Forge-owned loop. engines.md updated to reflect the new default.
 - **Chat permission blocks fixed** (`/api/chat/stream` RUNS path): the
   approval card is titled with the actual command (+ risk description in the
   args); **Approve → allow once; Decline → `/stop`** (a bare deny would hang
   the run per gateway semantics).
-- **FREE_FORM asks deliver the answer.** A FREE_FORM ActionRequest is the
-  agent asking *us* for info — bare "Accept" resolved it but delivered
+- **FREE_FORM asks deliver the answer.** A FREE*FORM ActionRequest is the
+  agent asking \_us* for info — bare "Accept" resolved it but delivered
   nothing. Command Center now shows **Respond** (textarea) for FREE_FORM asks;
   on accept-with-answer, `acceptActionRequest` posts a comment `@agent
-  <answer>` on the issue, routing through the normal mention dispatch (+ inbox
+<answer>` on the issue, routing through the normal mention dispatch (+ inbox
   row for runs agents). Bound kinds (TRANSITION/ASSIGN/…) keep "Accept".
 
 Streaming/thinking/tool rendering confirmed intact on the runs chat path
 (message.delta → content, reasoning.available → thinking, tool.started/
 completed → tool cards).
 
-Deferred: a Mission Control approve/reject UI for *autonomous dispatch* runs
+Deferred: a Mission Control approve/reject UI for _autonomous dispatch_ runs
 that hit an approval (currently shown as a "waiting for approval" step). Not
 urgent — the operator's agents run `approvals.mode: off`, and the interactive
 chat path already handles human-in-the-loop approvals.
@@ -3882,14 +3926,14 @@ Built on the M1–M10 motion work below.
   primitive and no Radix, with **705 `title=` occurrences across 154 files**
   — too many to hand-edit. Built a global `NativeTooltips` delegate (mounted
   in the root layout) that intercepts every `title` on hover/focus: stashes
-  + removes the attribute (suppressing the native popup), renders a
-  token-styled tooltip, and restores `title` at rest for a11y. Net effect:
-  every existing `title` is themed with zero call-site changes, and no
-  native tooltips remain. Added a thin `<Tooltip content>` wrapper
-  (`ui/tooltip.tsx`) for explicit use (sets `title`, routed through the same
-  delegate). Fade-in is `motion-safe`; the tooltip itself always works.
+  - removes the attribute (suppressing the native popup), renders a
+    token-styled tooltip, and restores `title` at rest for a11y. Net effect:
+    every existing `title` is themed with zero call-site changes, and no
+    native tooltips remain. Added a thin `<Tooltip content>` wrapper
+    (`ui/tooltip.tsx`) for explicit use (sets `title`, routed through the same
+    delegate). Fade-in is `motion-safe`; the tooltip itself always works.
 
-Integration audit: each forge-* class/hook verified at its intended surface
+Integration audit: each forge-\* class/hook verified at its intended surface
 (M1 dashboard, M4 issue-list, M5 chat, M6 dashboard counts, M7 step-node,
 M8 sidebar, M9 section divider, M10 presence dot); M2/M3 remain classes-only
 (deferred — don't stack ambient backgrounds). `pnpm typecheck` + `pnpm lint`
@@ -3947,7 +3991,7 @@ unrelated to this diff.) Optional follow-ups left out of scope: a
 
 ## 2026-05-21 — Mission Control chat: multiple conversations per agent
 
-The chat tab only ever opened each agent's *default* thread and had no
+The chat tab only ever opened each agent's _default_ thread and had no
 way to start another — even though the backend already supports many
 threads per agent (`chat.createConversation`) and `ChatThreadView`
 already accepted a `threadId`. Added a thread strip above the
@@ -3972,18 +4016,18 @@ in `~/SYSTEM.md`.
   comes through an agent-linked API key, the Agent is the recorded
   actor (avatar + name + indigo "agent" chip); the human key-owner stays
   as secondary metadata (`actorId`) surfaced in a `via API key owned by
-  {name}` tooltip. No "on behalf of" primary text.
+{name}` tooltip. No "on behalf of" primary text.
 - **Migration `0053_actor_agent`.** Added nullable `actorAgentId`
   (Agent FK, `onDelete: SetNull`) to `AuditLog` AND `ActivityEvent`,
   with back-relations on `Agent` (`actorAuditLogs`,
   `actorActivityEvents`). Indexes: `AuditLog @@index([workspaceId,
-  actorAgentId])`, `ActivityEvent @@index([workspaceId, actorAgentId,
-  createdAt])`. Applied cleanly via `migrate deploy`; client regenerated.
+actorAgentId])`, `ActivityEvent @@index([workspaceId, actorAgentId,
+createdAt])`. Applied cleanly via `migrate deploy`; client regenerated.
 - **`recordChange`** (`src/server/audit.ts`) gained optional
   `actorAgentId?: string | null` (default null), written to both
   `auditLog.create` and `activityEvent.create`. No other behavior change.
 - **Call sites (grep-driven sweep).** Threaded `actorAgentId:
-  ctx.apiKey?.linkedAgentId ?? null` (or the already-computed agent var)
+ctx.apiKey?.linkedAgentId ?? null` (or the already-computed agent var)
   through every reachable `recordChange`: `issue.ts` (20), `comment.ts`
   (create/update/upsertStatus), `mcp.ts` (49 remaining — primary agent
   path), plus full sweep of agent-reachable routers (canvas 31,
@@ -4056,7 +4100,7 @@ surface and gave both pages distinct identities.
   to reconcile (and the realtime sub catches the server-side event too).
   Other cards (goals, runs, due, artifacts, timer) keep deep-linking.
 - **De-overlap decision.** Investigated the overlap and it was already
-  minimal: the Inbox surfaces *your work* (assigned/unblocked, mentions,
+  minimal: the Inbox surfaces _your work_ (assigned/unblocked, mentions,
   waiting-on-me, human/agent-stalled, watching, sprint burn, agent
   queue) and **never surfaced action requests or review gates** as a
   decision affordance. The old CC "ask" card even deep-linked to
@@ -4106,7 +4150,7 @@ Operator bug: "after I @ an agent in a comment, I can't use a / command,"
 plus "when editing, allow agent triggering properly."
 
 **Root cause.** The slash picker (`slash-autocomplete.tsx`) only opened
-when the caret line lived in a *top-of-body command block* — every
+when the caret line lived in a _top-of-body command block_ — every
 preceding non-blank line had to start with `/`. Typing an @mention as
 prose on line 0 made any later `/` line "not top-of-body", so the picker
 never opened. The same gate lived in `parseSlashCommands`
@@ -4144,7 +4188,7 @@ event, so editing in an @agent triggered nothing. It now diffs old→new
 mention tokens (`extractMentions`), resolves only the ADDED agents/users,
 auto-watches them, and emits `COMMENT_UPDATED` with `edited: true` and a
 `mentions.agentIds` carrying ONLY the diff. `audit.ts` branch (c) now
-also fires on `COMMENT_UPDATED` *when `edited === true`*, so newly-added
+also fires on `COMMENT_UPDATED` _when `edited === true`_, so newly-added
 mentions dispatch exactly like a fresh comment while pre-existing
 mentions stay quiet (idempotent typo-fix). Rolling STATUS upserts also
 emit COMMENT_UPDATED but without `edited`, so they never re-page. Branch
@@ -4154,14 +4198,15 @@ a plain update with no fan-out.
 
 **Files.** `src/components/slash-autocomplete.tsx` (any-line trigger +
 `suppressed` + fenced-block guard); `src/lib/slash-commands.ts` (parser
-+ hint copy); `src/components/inputs/mention-input.tsx`
-(`onMentionOpenChange`); `src/components/issue-detail/issue-main.tsx`
-(comment composer suppression, `CommentEditor`, description slash
-support, parser-driven hint); `src/server/routers/comment.ts`
-(update mention diff + event); `src/server/audit.ts` (branch c on edited
-COMMENT_UPDATED, branch e skip for edits); tests in
-`tests/unit/slash-commands.test.ts` and
-`src/server/routers/__tests__/comment.test.ts`.
+
+- hint copy); `src/components/inputs/mention-input.tsx`
+  (`onMentionOpenChange`); `src/components/issue-detail/issue-main.tsx`
+  (comment composer suppression, `CommentEditor`, description slash
+  support, parser-driven hint); `src/server/routers/comment.ts`
+  (update mention diff + event); `src/server/audit.ts` (branch c on edited
+  COMMENT_UPDATED, branch e skip for edits); tests in
+  `tests/unit/slash-commands.test.ts` and
+  `src/server/routers/__tests__/comment.test.ts`.
 
 **Validation.** `pnpm typecheck` clean; `pnpm lint` clean;
 `vitest run` unit suite 178/178 + slash/templates 35; comment router
@@ -4254,8 +4299,8 @@ Tying together the recent UI/UX work. No schema changes; all client/render.
 - **Comment composer advertises @ and /.** The features already
   existed (`MentionInput` + `useSlashAutocomplete`) but nothing told
   users. New placeholder (`@ to mention · / for commands · paste or
-  drop to attach`) plus a persistent `@ mention · / commands · ⌘↵ send`
-  hint under the box — previously the hint only appeared *after* you'd
+drop to attach`) plus a persistent `@ mention · / commands · ⌘↵ send`
+  hint under the box — previously the hint only appeared _after_ you'd
   typed a `/`.
 - **Chat composer parity.** Did NOT swap `MentionInput` into the
   Mission Control chat composer: its dropdown anchors below the caret
@@ -4264,7 +4309,7 @@ Tying together the recent UI/UX work. No schema changes; all client/render.
   auto-resize, Enter-to-send, file-context toggles, and a chat-specific
   slash set. Instead added the same adaptive `@ / ↵` hint (gated to
   what's actually wired up, shown only while the composer is empty) so
-  the *experience* matches. True component-level dedup would need
+  the _experience_ matches. True component-level dedup would need
   placement-aware dropdown support in `MentionInput` — noted as
   follow-up.
 - **Issue list: hover previews** — wired the existing
@@ -4365,7 +4410,7 @@ cleanly via psql).
   (`slash-templates` — a parallel UI agent's uncommitted `/goal`
   template not yet reflected in its own test).
 - **Docs**: new `docs/concepts/orchestration.md`; `docs/reference/mcp.md`
-  + `events.md` updated.
+  - `events.md` updated.
 
 ## 2026-05-20 — Canvas Polish Wave 1
 
@@ -4503,8 +4548,8 @@ ran in parallel after the schema migration landed.
 - Style tokens: `canvas.styleCreate / List / Update / Delete` (soft
   delete via `archivedAt`).
 - Components: `canvas.componentCreate / List / Get / Update / Archive`
-  + instances: `instanceCreate / Patch / Detach` (detach materializes
-  the definition into raw rows under the host frame).
+  - instances: `instanceCreate / Patch / Detach` (detach materializes
+    the definition into raw rows under the host frame).
 - Layers: `layerSetLocked / SetHidden / Rename / Reorder` (shared
   helper across nodes/shapes/frames/groups/instances).
 - All exposed as `canvases.*` MCP tools.
@@ -4523,7 +4568,7 @@ ran in parallel after the schema migration landed.
 - Per-tool cursor management (`cursorForTool`) — crosshair for
   draw/connect tools, text I-beam for text, grab/grabbing for pan,
   default for select.
-- Connector preview switched from orthogonal A* to a cheap quadratic
+- Connector preview switched from orthogonal A\* to a cheap quadratic
   curve during drag — the root cause of "drawing node flows is
   delayed". Orthogonal routing still runs once on drop.
 - Escape clears in-progress connector + active selection + reverts to
@@ -4553,6 +4598,7 @@ canvas frontend rendering while I did the server-side Today zone +
 the two remaining storyboard MCPs in this session.
 
 **Today zone server (`src/server/services/today-zone.ts`)**
+
 - Idempotent `refreshTodayZone(db, workspaceId, userId, canvasId)`.
   Finds (or creates) a Today frame on the Personal canvas, identified
   by `backgroundFill.kind = "today-zone"` so renames don't break
@@ -4565,6 +4611,7 @@ the two remaining storyboard MCPs in this session.
   Cheap enough (small N) to run inline; no background job needed.
 
 **storyboardResearch + storyboardCustom MCP**
+
 - `canvases.storyboardResearch({ canvasId, topic })` — frame with
   scratchpad + sources column + next-steps lane.
 - `canvases.storyboardCustom({ canvasId, name, panels })` — escape
@@ -4574,9 +4621,10 @@ the two remaining storyboard MCPs in this session.
   four gestures listed with their input shapes).
 - Chat tools allowlist now exposes all storyboard MCP entries +
   `canvases.frameAdd` + `canvases.alignSelection` + `notes.promote`
-  + `notes.setStatus`.
+  - `notes.setStatus`.
 
 **Frontend canvas renderers** (delegated to parallel agents)
+
 - Visible frames (`src/components/canvas/canvas-frames.tsx`),
   components panel, layers panel, draw-frame F-key tool, multi-page
   tab bar for DESIGN canvases, drag-children-with-frame semantics.
@@ -4588,11 +4636,11 @@ the two remaining storyboard MCPs in this session.
   429 tests pass (8 new — 3 today-zone, 5 canvas-router Workstream B).
 - All DoD criteria addressed at the code level:
   - Visible frames + drag-children-with-frame (`canvas-frames.tsx`
-    + `framePatch` server cascade).
+    - `framePatch` server cascade).
   - Multi-page tab bar for DESIGN canvases (`canvas-page-tabs.tsx`).
   - Components panel + drag-onto-canvas (`canvas-components-panel.tsx`
-    + `CanvasComponentInstances` renderer; drop emits
-    `application/x-forge-canvas-component`).
+    - `CanvasComponentInstances` renderer; drop emits
+      `application/x-forge-canvas-component`).
   - Layers panel — right-edge tree, hide/lock/rename/reorder
     (`canvas-layers-panel.tsx` + `canvas-right-panel.tsx`).
   - Today zone — `refreshTodayZone` runs inside `canvas.hydrate`
@@ -4656,8 +4704,9 @@ via the modal's `loading` prop.
 
 **Canvas perf + canvas confirms (Agent J)** — substantial work on
 `canvas/[canvasId]/page.tsx`:
+
 - Drag state moved from `setData` cache writes to a `dragOverridesRef:
-  Map<id, override>` + rAF-bumped `dragRev` counter. Only the moving
+Map<id, override>` + rAF-bumped `dragRev` counter. Only the moving
   card re-renders, not the whole tree.
 - `CanvasCard` wrapped in `React.memo` with a custom equality
   comparing id/x/y/width/height/viewMode/meta-by-reference. Parent
@@ -4674,6 +4723,7 @@ via the modal's `loading` prop.
   convert-to-plan (default variant with dry-run preview).
 
 **CRUD lifecycle (Agent K)** — both routers gained the full set:
+
 - `executionPlan.restore({ id }) → { ok }`.
 - `executionPlan.duplicate({ id, newTitle? }) → { id }` — clones
   description, steps, and remaps `dependsOnStepIds` from old→new
@@ -4693,12 +4743,13 @@ via the modal's `loading` prop.
 
 **Chat streaming (Agent L)** — `/api/chat/stream` is the new
 primary chat path for text-only sends:
+
 - POST endpoint accepts `{ threadId, body }`, persists the USER
   ChatMessage immediately, streams the agent's reply back as
   Server-Sent Events.
 - Provider routing via `Agent.provider`: HERMES → gateway,
   CLAUDE → Anthropic (with `thinking: { type: "enabled",
-  budget_tokens: 4000 }`), CODEX → OpenAI, CUSTOM → custom base
+budget_tokens: 4000 }`), CODEX → OpenAI, CUSTOM → custom base
   URL. Each falls back to Hermes if its provider env is unset.
 - SSE event types: `meta` (placeholder messageId), `thinking`
   (extended-thinking delta), `content` (token delta), `tool_use`
@@ -4718,9 +4769,10 @@ primary chat path for text-only sends:
 **Canvas attachment previews (Agent M)** — new
 `canvas-preview.tsx` shared component renders attachments + non-NOTE
 artifacts inline on the canvas:
+
 - Kind matrix: image (`<img>` cover, click → lightbox), PDF
   (`<iframe>`), HTML (`<iframe sandbox="allow-popups
-  allow-forms">`), LINK (sandboxed iframe → new tab), markdown
+allow-forms">`), LINK (sandboxed iframe → new tab), markdown
   (`<ChatMarkdown>`), text/code (fetched `<pre>` capped at 40 lines
   with "Open full" → lightbox), video/audio (native controls),
   unsupported (warning chip).
@@ -4729,7 +4781,7 @@ artifacts inline on the canvas:
 - 25 MB size cap on inline preview.
 - Entity-hydration enriched: attachment meta gains `size`,
   `filename`, `externalUrl`; non-NOTE artifact meta gains `body`
-  + `bodyKind` (`markdown` / `code` / `text`).
+  - `bodyKind` (`markdown` / `code` / `text`).
 - Card-level preview/card toggle button; new attachment / non-NOTE
   artifact drops default to `preview` viewMode.
 - `onTogglePreview` is `useCallback`-stable + threaded into the
@@ -4832,6 +4884,7 @@ typecheck + 386/386 tests + build.
 ### What changed
 
 **Chat overlay (Agent F)**
+
 1. **Default-tab pref** — `User.missionControlDefaultTab` (migration
    0042), applied on mount only when state is still "live", surfaced
    as a dropdown in the new `settings-popover.tsx`. Per-user, global
@@ -4862,9 +4915,10 @@ typecheck + 386/386 tests + build.
 **Canvas frontend (Agent G)** — `canvas/[canvasId]/page.tsx`
 expanded ~626 → ~1468 lines, plus a new
 `canvas/canvas-templates.tsx` and a left `CanvasEntityRail`:
+
 1. **Chat-thread renderer** — card view shows agent + last-message
    preview + relative time; live view shows last 3 message bubbles
-   + composer-on-expand affordance routing to Mission Control chat.
+   - composer-on-expand affordance routing to Mission Control chat.
 2. **Note renderer** (sticky-style) — `ArtifactType.NOTE` rendered
    inline with `ChatMarkdown`, click-to-edit via `artifact.update`,
    amber sticky tone (warm tokens — no pure yellow).
@@ -4895,10 +4949,11 @@ expanded ~626 → ~1468 lines, plus a new
    (matches Plans timeline).
 
 **Canvas backend (Agent H)**
+
 1. **`ArtifactType.NOTE`** — migration 0041 added the enum value;
    schema kept in sync.
 2. **`canvas.addNote / addChatThread / convertToPlan /
-   broadcastPresence`** tRPC procedures + matching MCP tools
+broadcastPresence`** tRPC procedures + matching MCP tools
    (`canvases.addNote`, `canvases.addChatThread`,
    `canvases.convertToPlan`).
 3. **`convertToPlan`** walks the canvas nodes, takes existing
@@ -4909,14 +4964,14 @@ expanded ~626 → ~1468 lines, plus a new
    chat-thread are ignored with a reason).
 4. **`broadcastPresence`** publishes Redis events
    (`subjectType="canvas-presence"`, payload `{ userId, name,
-   x, y, ts }`) — fire-and-forget, mirrors `agent-run.ts`
+x, y, ts }`) — fire-and-forget, mirrors `agent-run.ts`
    patterns.
 5. **Entity-hydration extensions** — chat-thread returns
    `meta.agent { name, profileKey, avatar }`, `meta.lastMessageAt`,
    `meta.preview[3]` (user-filtered); artifact returns `meta.kind`,
    `meta.updatedAt`, and (NOTE-only) `meta.body`.
 6. **6 new integration tests** covering note + chat-thread + convert
-   + presence + cross-workspace rejection.
+   - presence + cross-workspace rejection.
 
 ### Tests + verification
 
@@ -4962,7 +5017,7 @@ execution-plan and execution-step targets (card + live viewModes).
    subtle Tailwind transitions.
 3. **Live progress bar** in the plan header — stacked counts of
    TODO/READY/RUNNING/BLOCKED/REVIEW/DONE with `{done}/{total} done ·
-   {running} running · {blocked} blocked` caption.
+{running} running · {blocked} blocked` caption.
 4. **Currently-working highlight + auto-scroll.** RUNNING step gets an
    ember ring + smooth scrollIntoView, suppressed if the operator
    scrolled manually in the last 5 s.
@@ -4976,8 +5031,8 @@ execution-plan and execution-step targets (card + live viewModes).
    dynamic-imported and only ship when a body actually uses them —
    zero bundle cost for the chat hot path. Mermaid uses
    `securityLevel: "strict"`; KaTeX uses `trust: false` + `strict:
-   "ignore"` so user-authored math can't smuggle HTML. Inline `$5 and
-   $10` (prices) is correctly ignored by the regex.
+"ignore"` so user-authored math can't smuggle HTML. Inline `$5 and
+$10` (prices) is correctly ignored by the regex.
 7. **Canvas plan/step renderers.** Schema already allowed
    `targetType="execution-plan" | "execution-step"` but the renderer
    and entity-hydration only had stubs. Plans now render with status
@@ -5020,7 +5075,7 @@ execution-plan and execution-step targets (card + live viewModes).
 - I considered storing HTML alongside Markdown as an optional plan
   content type, then declined: XSS sanitization, diff churn, and
   migration cost are too high relative to Markdown-with-GFM + Mermaid
-  + LaTeX, which now covers ~all the "rich plan body" use cases.
+  - LaTeX, which now covers ~all the "rich plan body" use cases.
 - Mermaid is the heaviest dep (~700 KB). Strict dynamic-import is the
   reason the chat hot path stays cheap. If a future page wants
   diagrams to render server-side (e.g. PDF export), we'll need to
@@ -5051,7 +5106,7 @@ chat panel showing infinite "thinking".
 
 1. **Schema (migration 0039_agent_dispatch_inbox).** `AgentRun` gained
    `triggerEventId / triggerKind / acknowledgedAt / outputStartedAt /
-   lastWakeAt / wakeAttempts / lastWakeDeliveryId` plus two indexes
+lastWakeAt / wakeAttempts / lastWakeDeliveryId` plus two indexes
    (`(workspaceId, agentId, acknowledgedAt, lastEventAt)` and
    `(workspaceId, triggerEventId)`). `ChatMessage` gained the
    parallel set without `triggerEventId` (the row id IS the
@@ -5078,19 +5133,19 @@ chat panel showing infinite "thinking".
    - `agent.inbox.list({ status, limit, staleAfterSeconds? })`
    - `agent.inbox.ack({ runId | chatMessageId })`
    - `agent.inbox.outputStarted({ runId | chatMessageId })`
-   All three require a key with `linkedAgentId`; the ack/output
-   tools reject cross-agent ownership. `chat.startDraft`,
-   `chat.appendMessage`, and `chat.finalizeDraft` now also flip
-   the latest pending USER ChatMessage to `acknowledged +
-   outputStarted` so the UI clears its diagnostic rail in
-   lock-step with the visible reply.
+     All three require a key with `linkedAgentId`; the ack/output
+     tools reject cross-agent ownership. `chat.startDraft`,
+     `chat.appendMessage`, and `chat.finalizeDraft` now also flip
+     the latest pending USER ChatMessage to `acknowledged +
+outputStarted` so the UI clears its diagnostic rail in
+     lock-step with the visible reply.
 6. **Hermes dispatch prompts** (`~/.hermes/webhook_subscriptions.json`
-   + `~/.hermes/profiles/mizu/webhook_subscriptions.json`) rewritten
-   to spell out the new contract: wake → `agent.inbox.list` →
-   `agent.inbox.ack` → `agent.context.bundle` → act. The payload is
-   a hint, not a task spec. `docs/agents/hermes.md` and
-   `docs/automation/webhooks.md` got the equivalent operator-facing
-   callouts.
+   - `~/.hermes/profiles/mizu/webhook_subscriptions.json`) rewritten
+     to spell out the new contract: wake → `agent.inbox.list` →
+     `agent.inbox.ack` → `agent.context.bundle` → act. The payload is
+     a hint, not a task spec. `docs/agents/hermes.md` and
+     `docs/automation/webhooks.md` got the equivalent operator-facing
+     callouts.
 7. **Chat UI ack-aware diagnostics.** `buildThreadDiagnostics`
    exposes a derived `dispatchState` plus the user message's
    lifecycle snapshot. `chat-thread.tsx` drives its typing /
@@ -5329,15 +5384,15 @@ None — all existing tables.
 
 ### Files of note
 
-| Area | Path |
-|------|------|
-| CaptureSheet | `src/components/quick-create.tsx` |
-| Plans UI | `src/app/(app)/w/[slug]/plans/` |
-| Crews settings | `src/app/(app)/w/[slug]/settings/crews/page.tsx` |
-| Review gate inbox | `src/app/(app)/w/[slug]/review/page.tsx` |
-| Canvas viewer | `src/app/(app)/w/[slug]/canvas/` |
-| Canvas MCP | `src/server/services/mcp.ts` (canvases.create/addNode/…) |
-| Sidebar | `src/components/sidebar-nav.ts` (added Plans, Canvas, Review) |
+| Area              | Path                                                          |
+| ----------------- | ------------------------------------------------------------- |
+| CaptureSheet      | `src/components/quick-create.tsx`                             |
+| Plans UI          | `src/app/(app)/w/[slug]/plans/`                               |
+| Crews settings    | `src/app/(app)/w/[slug]/settings/crews/page.tsx`              |
+| Review gate inbox | `src/app/(app)/w/[slug]/review/page.tsx`                      |
+| Canvas viewer     | `src/app/(app)/w/[slug]/canvas/`                              |
+| Canvas MCP        | `src/server/services/mcp.ts` (canvases.create/addNode/…)      |
+| Sidebar           | `src/components/sidebar-nav.ts` (added Plans, Canvas, Review) |
 
 ## 2026-05-19 — Agentic Work OS plan status/handoff update
 
@@ -5387,7 +5442,7 @@ replace.
 4. **ContextSet + ContextSetItem** (migration 0033). Reusable
    bundles of canonical refs with INCLUDE / EXCLUDE /
    SUMMARY_ONLY modes. MCP `contextSets.list/hydrate/create/
-   addItem/removeItem`.
+addItem/removeItem`.
 
 5. **Agent completion contract** (migration 0034). Issue gains
    `expectedOutput` / `verificationChecklist` / `artifactRequired`.
@@ -5423,11 +5478,11 @@ replace.
    `g j`.
 
 10. **WorkspaceCanvas + Node + Edge** (migration 0038). Schema
-    + tRPC + read-only MCP for the infinite spatial canvas
-    primitive. Nodes carry layout + entity refs; canonical
-    content always comes from the source row via the
-    entity-hydration service. Viewer UI deferred per the plan's
-    risk guidance.
+    - tRPC + read-only MCP for the infinite spatial canvas
+      primitive. Nodes carry layout + entity refs; canonical
+      content always comes from the source row via the
+      entity-hydration service. Viewer UI deferred per the plan's
+      risk guidance.
 
 11. **MCP + Hermes context integration pass**. Audited the MCP
     surface. Extended `agent.context.bundle` for chat threads
@@ -5443,7 +5498,7 @@ replace.
 - `0034_completion_contract` — Issue + AgentRun columns.
 - `0035_execution_plan` — ExecutionPlan + ExecutionStep + 2 enums.
 - `0036_agent_crew_review_gate` — AgentCrew + Member + ReviewGate
-  + the deferred ExecutionPlan.crewId FK.
+  - the deferred ExecutionPlan.crewId FK.
 - `0037_action_request` — ActionRequest + enum.
 - `0038_workspace_canvas` — WorkspaceCanvas + Node + Edge.
 
@@ -5481,21 +5536,21 @@ columns with safe defaults.
 
 ### Files of note
 
-| Area | Path |
-|------|------|
-| Entity refs | `src/lib/entity-ref.ts` |
-| Hydration | `src/server/services/entity-hydration.ts` |
-| Artifact service | `src/server/services/artifact-service.ts` |
-| Artifact router | `src/server/routers/artifact.ts` |
-| Artifact pages | `src/app/(app)/w/[slug]/artifacts/` |
-| ContextSet | `src/server/{routers,services}/context-set*` |
-| ExecutionPlan | `src/server/{routers,services}/execution-plan*` |
-| AgentCrew | `src/server/{routers,services}/agent-crew*` |
-| ActionRequest | `src/server/{routers,services}/action-request*` |
-| Command Center | `src/server/routers/command-center.ts` + page |
-| Canvas | `src/server/routers/canvas.ts` |
-| MCP surface | `src/server/services/mcp.ts` (much-expanded) |
-| Docs | `docs/concepts/primitives.md` (new section) |
+| Area             | Path                                            |
+| ---------------- | ----------------------------------------------- |
+| Entity refs      | `src/lib/entity-ref.ts`                         |
+| Hydration        | `src/server/services/entity-hydration.ts`       |
+| Artifact service | `src/server/services/artifact-service.ts`       |
+| Artifact router  | `src/server/routers/artifact.ts`                |
+| Artifact pages   | `src/app/(app)/w/[slug]/artifacts/`             |
+| ContextSet       | `src/server/{routers,services}/context-set*`    |
+| ExecutionPlan    | `src/server/{routers,services}/execution-plan*` |
+| AgentCrew        | `src/server/{routers,services}/agent-crew*`     |
+| ActionRequest    | `src/server/{routers,services}/action-request*` |
+| Command Center   | `src/server/routers/command-center.ts` + page   |
+| Canvas           | `src/server/routers/canvas.ts`                  |
+| MCP surface      | `src/server/services/mcp.ts` (much-expanded)    |
+| Docs             | `docs/concepts/primitives.md` (new section)     |
 
 ## 2026-05-18 — Forge Conversations v2 follow-up
 
@@ -10150,6 +10205,7 @@ bytes. Single-shot deploy.
 Post-merge cleanup of the design-system landing.
 
 ### Motion-merge regressions found + fixed
+
 - **M1 grid invisible** — the animated paper grid used `-z-10` inside a
   `.relative` parent with no stacking context, so it painted behind
   `<main>`'s opaque `bg-background`. Added `isolate` to the parent on the
@@ -10161,6 +10217,7 @@ Post-merge cleanup of the design-system landing.
   for invisibility; rest are sound.
 
 ### Themed tooltips (`native-tooltips.tsx`)
+
 - Two-pass measure-and-clamp: tooltips now stay fully inside the viewport
   (was: only the horizontal center was clamped, no vertical clamp at all,
   so edge tooltips clipped). Vertical placement flips by available room.
@@ -10171,6 +10228,7 @@ Post-merge cleanup of the design-system landing.
   for the Search, Quick-create, and Collapse controls.
 
 ### Settings information architecture
+
 - **Single source of truth** — new `components/settings/settings-nav.ts`.
   Both the `SettingsNavbar` and the settings Overview index render from it;
   they previously kept separate, drifting inventories (crews in one,
@@ -10202,7 +10260,7 @@ Post-merge cleanup of the design-system landing.
 - **M5 stream shimmer wired to the live bubble.** `AgentStreamBubble` was
   rendering markdown + an ad-hoc `▍` cursor while streaming and never used
   the M5 classes. It now renders raw text with `forge-streaming
-  forge-streaming-cursor` (ember sweep + blinking caret) while live, then
+forge-streaming-cursor` (ember sweep + blinking caret) while live, then
   switches to selectable markdown on commit. CSS already existed.
 - **Chat conversations pane: collapse + resize.** `chat-workspace.tsx` grid
   → flex; the Conversations pane collapses to a slim rail and is
@@ -10242,8 +10300,8 @@ first-party types.
   reset). Instance-global (auth is per-user, not per-workspace). `type`
   (OIDC|GITHUB|GOOGLE), `issuer`, `clientId`, encrypted `clientSecret`,
   `scopes`, `allowLinking`, `enabled`, `sortOrder`.
-- **Runtime — the linchpin.** `auth.ts` switched to NextAuth v5's *lazy
-  async config* (`NextAuth(async () => …)`), so `providers` are built from
+- **Runtime — the linchpin.** `auth.ts` switched to NextAuth v5's _lazy
+  async config_ (`NextAuth(async () => …)`), so `providers` are built from
   the DB at request time. `ssoProvidersFromDb()` maps rows → providers
   (OIDC via `type:"oidc"` discovery from `<issuer>/.well-known/…`;
   GitHub/Google via their factories so callback URLs stay
@@ -10293,7 +10351,7 @@ a real "import existing db" path. Four pieces:
   boots `docker/docker-compose.yml` (postgres 55432 / redis 56379 / minio
   59000), runs `prisma migrate deploy`, seeds an empty DB, then runs
   `next dev --turbo` against the LOCAL stack. Contrast with `dev:live`
-  which points at the *deployed* data. Flags: `--fresh` (drop+recreate
+  which points at the _deployed_ data. Flags: `--fresh` (drop+recreate
   schema), `--no-seed`. Stable dev auth (fixed AUTH_SECRET; sign in with
   `owner@forge.local` / `forge-dev`, ADMIN_HANDLE=forge so the credentials
   bootstrap workspace lines up with the seed's slug).
@@ -10322,10 +10380,10 @@ a real "import existing db" path. Four pieces:
   the browser downloads. Import is ADDITIVE: config rows upsert by natural
   key (status/label/cycle name, project key, initiative slug, agent
   profileKey), issues always create fresh with appended numbers, relations
-  + comments remap onto the new ids, users matched by email (unknown →
-  importing admin). Never deletes. Round-trip verified end-to-end via a
-  throwaway createCaller test (24 issues / 40 issue-labels / 2 relations /
-  3 comments reproduced exactly into a fresh workspace).
+  - comments remap onto the new ids, users matched by email (unknown →
+    importing admin). Never deletes. Round-trip verified end-to-end via a
+    throwaway createCaller test (24 issues / 40 issue-labels / 2 relations /
+    3 comments reproduced exactly into a fresh workspace).
 
 Verified: fresh migrate + seed against local stack (counts correct),
 seed idempotency (re-run creates 0), export→import round-trip, typecheck,
@@ -10349,7 +10407,7 @@ clone is the isolated-sandbox alternative via `pnpm dev:local --no-seed`.
 chat backend (e.g. a Codex CLI agent) surfaced the amber "no chat model
 configured" banner, then it disappeared ~800ms later on both Mission Control
 and the standalone Chat view. Root cause: that error is emitted as an SSE
-`error` event *after* the route accepts the send (200 + `meta`), so
+`error` event _after_ the route accepts the send (200 + `meta`), so
 `serverAccepted` is true and `failSend` sets `error` **and** `finishedAt`.
 The cleanup timer at the end of `runStreamingSend` (`chat-thread.tsx`) cleared
 any bubble whose `finishedAt` was set — including errored ones. Fix: retain
@@ -10361,7 +10419,8 @@ one fix covers both.
 
 **Architecture: provider/transport taxonomy (decision + scaffolding).**
 Encoded the two-kinds-of-provider model in `src/server/runtimes/adapters.ts`:
-- **Agent/runtime providers** (the agent *is* the provider; no Forge-held API
+
+- **Agent/runtime providers** (the agent _is_ the provider; no Forge-held API
   key) vs **chat-only providers** (raw OpenAI-compat model via key/base URL —
   the Completions backend). Chat-only is **deferred** as its own first-class
   surface (no registry adapter ships with it).
@@ -10397,7 +10456,7 @@ worked the deferred list.
 **Chat-readiness steering (ADR item 4).** New
 `src/server/services/chat-readiness.ts` `resolveChatReadiness()` mirrors what
 `/api/chat/stream` does at send time — resolves effective provider+engine and
-checks the *same* backend (runs connector for RUNS, `isProviderAvailable` for
+checks the _same_ backend (runs connector for RUNS, `isProviderAvailable` for
 COMPLETIONS) — returning `{ ready, mode, reason, hint }`. Exposed via
 `chat.chatReadiness({ agentId, threadId? })` (honours per-thread provider
 override). `ChatThreadView` renders an on-theme amber steering banner above
@@ -10421,9 +10480,9 @@ declared-but-not-yet-connectable adapters. `runtime.adapters` now returns
 `chatMode`; added `runtime.plannedAdapters` (from `PLANNED_ADAPTERS`).
 
 **Deferred items 1–3 status.** Item 1 (chat-only/completions provider as a
-UI-registered surface): the *selection/availability* surface already exists in
+UI-registered surface): the _selection/availability_ surface already exists in
 Settings → Workspace → AI (env-keyed via `listProviders`); UI-based key
-*registration* (DB-backed, encrypted) remains. Items 2 (ACP) & 3 (Codex app
+_registration_ (DB-backed, encrypted) remains. Items 2 (ACP) & 3 (Codex app
 server): adapters are first-class in the taxonomy + visible in UI as Planned;
 their dispatch connectors are intentionally NOT fabricated — ACP is likely
 daemon-mediated (stdio JSON-RPC) rather than an HTTP runs connector, and the
@@ -10542,7 +10601,7 @@ Findings + fixes:
   `item/completed` agentMessage fallback (delta-less turns still finalize
   non-empty) and folded chat history into the turn (fresh thread per run).
 - **Validation:** (1) gated live vitest `codex-app-server-live.test.ts`
-  (CODEX_LIVE=1) bridges stdio→ws and runs the *shipped* connector through real
+  (CODEX*LIVE=1) bridges stdio→ws and runs the \_shipped* connector through real
   codex — streams `FORGE_CODEX_OK`. (2) The **deployed Forge container** drove
   the bridge→codex round-trip over the network (&lt;internal-host&gt;:4505) and got
   `FORGE_PROD_OK` via both streamed deltas and the fallback.
@@ -10568,13 +10627,13 @@ round-trip from the deployed container → bridge → codex returns `FORGE_WS_OK
 
 Audit found the chat UI was only accurate for server-side runtimes. Fixes:
 
-- **Transport-aware readiness.** `resolveChatReadiness` now resolves *how* chat
+- **Transport-aware readiness.** `resolveChatReadiness` now resolves _how_ chat
   is served with a 4-way mode + `transportLabel`: `runs` (Hermes / Codex app
   server), `completions` (configured model), **`dispatch`** (no server model
-  but reachable via the agent's runtime/daemon — per-agent webhook, LOCAL_DAEMON
+  but reachable via the agent's runtime/daemon — per-agent webhook, LOCAL*DAEMON
   runtime, ACP/local-daemon/webhook adapter, or an AGENT-kind ApiKey linked to
   it), and `none`. The daemon's `handleChatDispatch` doesn't filter
-  `streamed:true`, so local CLI / **ACP** agents *do* answer — they now read as
+  `streamed:true`, so local CLI / **ACP** agents \_do* answer — they now read as
   ready (dispatch) instead of a false "no chat model" warning.
 - **Route agrees with the banner.** `/api/chat/stream` computes the same
   transport; for `dispatch` mode it runs **no server loop** — persists the USER
@@ -10610,6 +10669,7 @@ on two layers, keeping today's full-access behavior as the default.
 (verified via `codex app-server generate-ts`). The connector
 (`dispatch/codex-app-server.ts`) now sends them every turn from
 `Runtime.config = { sandboxMode, approvalPolicy, workspaceRoot }`:
+
 - `sandboxMode` → `SandboxPolicy`: `danger-full-access` → `dangerFullAccess`;
   `workspace-write` → `workspaceWrite{ writableRoots:[cwd], networkAccess:false }`;
   `read-only` → `readOnly{ networkAccess:false }`.
@@ -10621,8 +10681,8 @@ on two layers, keeping today's full-access behavior as the default.
   `Json` defensively (drops unknown enums → safe default; never throws).
 
 **2. Enable/disable kill-switch.** New `Runtime.disabledAt` (migration 0062,
-additive). Distinct from `archivedAt` (reversible *delete*): disabling is a
-reversible *pause* that keeps the row configured + visible. `registry.ts`
+additive). Distinct from `archivedAt` (reversible _delete_): disabling is a
+reversible _pause_ that keeps the row configured + visible. `registry.ts`
 short-circuits a disabled runtime to a **sentinel connector** (`kind:
 "disabled"`) whose `startRun` throws `[runtime disabled]` — so chat shows a
 clear message instead of a silent transport fallback. The dispatch sweep
@@ -10653,18 +10713,20 @@ present). The spawn-time `sandbox_mode` is just a default — Forge's per-turn
 override is authoritative.
 
 **Cutover (operator, not done yet — replaces a live service):**
+
 1. `pkill -f codex-appserver-bridge.cjs` (free :4505)
 2. `cd ~/docker/codex-bridge && docker compose up -d --build`
 3. In Forge → Settings → Runtimes, edit `rt_codex_appserver`: set
    `workspaceRoot=/work` and pick a sandbox/approval tier (leave
    full-access/never for parity with today). Endpoint stays
    `ws://&lt;internal-host&gt;:4505`.
-Live end-to-end of a sandboxed Codex *turn* still needs the operator to send a
-chat (auth-walled) — every layer beneath that is proven.
+   Live end-to-end of a sandboxed Codex _turn_ still needs the operator to send a
+   chat (auth-walled) — every layer beneath that is proven.
 
 Verified: typecheck + lint clean, unit suite 676 passing (+4:
 `parseCodexRuntimeConfig` mapping), CLI build clean, codex-bridge image builds
-+ smoke-tested (handshake + jail).
+
+- smoke-tested (handshake + jail).
 
 ## 2026-05-24 — Agent/runtime UX pass (settings · onboarding · MC · chat)
 
@@ -10846,7 +10908,7 @@ cache can't silently drop changes. Not a deploy gap.
 
 Root cause: the Codex **agent row** is `runtimeMode: EPHEMERAL`, which
 short-circuits both `agentAvailabilityModel` and `presenceAvailability`
-(transport-display.ts) to "session" *before* the on-demand branch — and
+(transport-display.ts) to "session" _before_ the on-demand branch — and
 chat-workspace.tsx maps non-"on-demand" → "offline". Why EPHEMERAL: the
 Settings → Agents wizard hard-blocked PERSISTENT for CLAUDE/CODEX
 (`validate()` gate + disabled RuntimeOption at :840 + stale "roadmap"
@@ -10887,6 +10949,7 @@ rendering raw `AgentPresenceDot status=…`. Used `agent.list` (which spreads
 the full agent row — provider/runtimeMode/runtimeId/webhookUrl) as the single
 authoritative source, mapped by agent id — purely client-side, no router/
 Prisma changes:
+
 - **Plans cockpit**: widened `AgentLite` with the presence inputs; pass
   `availability={presenceAvailability(agent)}` on the assignee dot; added
   `availability` to `DagAgent` (orchestration/types.ts), computed in the
@@ -10943,7 +11006,7 @@ persistent Claude entirely — so a Claude/Codex agent on the Forge local daemon
 couldn't be persistent.
 
 Generalized: the gate is now provider-agnostic for CLAUDE/CODEX — persistent
-allowed iff a managed-persistent runtime is attached (MANAGED_PERSISTENT_-
+allowed iff a managed-persistent runtime is attached (MANAGED*PERSISTENT*-
 ADAPTER_KEYS broadened to {codex-app-server, local-daemon, hermes}). Enabled
 the Persistent toggle for both, refreshed hints + footer copy. All 8 adapters
 are coherent (defaultRuntimeMode vs presence). Verified: typecheck + lint
@@ -10972,7 +11035,7 @@ together). Because the agents now carry a real `lastHeartbeatAt` + status,
 every existing surface resolves them to "heartbeat" presence and shows
 online/offline — zero surface changes.
 
-Scope/limitation (by design): runtimes reached *outbound* from Forge that
+Scope/limitation (by design): runtimes reached _outbound_ from Forge that
 don't heartbeat inbound — Codex app server (REMOTE_HTTP), webhooks — never hit
 this path, so their agents keep null `lastHeartbeatAt` → on-demand. Giving
 codex-app-server true presence would need an active health probe (Forge pings
@@ -11063,7 +11126,7 @@ Bailey asked to verify the navbar notifications + inbox commands (mark read,
 snooze, etc.) actually work. Audited end-to-end: every control is wired
 (client handler → tRPC → DB → invalidation), realtime fan-out present, and the
 notification/inbox test suites are green (21 tests). No broken wiring. But three
-behaviors *felt* broken; Bailey okayed fixing all three.
+behaviors _felt_ broken; Bailey okayed fixing all three.
 
 1. **Auto-mark-read on open → on close.** `activity-drawer.tsx` previously fired
    `markNotificationRead({all:true})` on a 1s timer after the drawer opened, so a
@@ -11075,15 +11138,15 @@ behaviors *felt* broken; Bailey okayed fixing all three.
    settle.
 
 2 + 3. **Badge is now an unread/since-visit count, not a backlog total.**
-   `inbox.badge` previously returned raw assigned+stalled+mention totals, so
-   "mark read"/`M` never moved it. Reworked to count only rows new since
-   `User.lastInboxVisitAt` (mirrors the `unreadSinceVisit` notion `inbox.get`
-   already computes): assigned/stalled by `updatedAt > lastVisit`, mentions by
-   `createdAt > lastVisit`; null lastVisit → count all (new user). Now visiting
-   the Inbox (auto-visit on mount already existed), pressing `M`, or opening+
-   closing the bell drops it to zero; fresh activity re-raises it. Bell tooltip
-   updated from "items need your attention" → "N unread items". Sidebar inbox
-   badge shares `inbox.badge`, so it gets the same unread semantics.
+`inbox.badge` previously returned raw assigned+stalled+mention totals, so
+"mark read"/`M` never moved it. Reworked to count only rows new since
+`User.lastInboxVisitAt` (mirrors the `unreadSinceVisit` notion `inbox.get`
+already computes): assigned/stalled by `updatedAt > lastVisit`, mentions by
+`createdAt > lastVisit`; null lastVisit → count all (new user). Now visiting
+the Inbox (auto-visit on mount already existed), pressing `M`, or opening+
+closing the bell drops it to zero; fresh activity re-raises it. Bell tooltip
+updated from "items need your attention" → "N unread items". Sidebar inbox
+badge shares `inbox.badge`, so it gets the same unread semantics.
 
 New test: `inbox-badge.test.ts` (3 cases — counts when never-visited, zeroes
 after visit, re-raises on post-visit update). typecheck + lint + notification/
@@ -11272,7 +11335,6 @@ src/server/services/__tests__/run-dispatcher.test.ts` pass (22);
 `git diff --check` clean. LAN preview restarted at
 `http://&lt;internal-host&gt;:3020/w/axiom-labs/chat`.
 
-
 ## 2026-06-11 — AXI-78 Codex RUNS split-worker fix
 
 Follow-up after the AXI-78 verification: Bailey reported a new Codex run
@@ -11338,6 +11400,7 @@ the Done-filter bug, then fixed four batches. All server changes share one
 where-builder so list/count/board can't drift.
 
 **Server (issue.ts).**
+
 - `orderBy` now ends every branch in a unique `id` tiebreaker (asc/desc to
   match the primary key) — cursor pagination was lossy on ties (same title /
   same-second createdAt/updatedAt / priority+createdAt).
@@ -11349,8 +11412,9 @@ where-builder so list/count/board can't drift.
   `issue.count` reusing it — the header count can't drift from the list.
 
 **Pagination.**
+
 - issue-list.tsx: `useQuery` → `useInfiniteQuery` (`getNextPageParam:
-  last.nextCursor`), pages flat-mapped; IntersectionObserver sentinel
+last.nextCursor`), pages flat-mapped; IntersectionObserver sentinel
   (rootMargin 400px) + "Load more" fallback. Was silently capped at 50.
 - issue-board.tsx: rewrote from one global `limit:100` bucketed client-side
   (which starved low-priority columns) to per-column `BoardColumn` components,
@@ -11433,8 +11497,9 @@ interaction is not covered by tests — browser smoke-test recommended.
 
 Follow-up to the framer-motion grid: it "felt finnicky" and unused widgets
 showed as blank tiles. dashboard-stack.tsx:
+
 - Restored `:empty` collapse (lost in the grid rewrite) — `!editing &&
-  "empty:hidden"` on the tile, so a widget that renders null takes no space.
+"empty:hidden"` on the tile, so a widget that renders null takes no space.
   In edit mode tiles stay visible with a `peer-empty:block` "Not in use"
   placeholder so users know to hide them.
 - Drag target is now the full tile body (an absolute overlay below the
@@ -11455,7 +11520,7 @@ changing dispatch policy.
 
 - Added `ActionRequestKind.RUNTIME_TOOL_GRANT` plus migration
   `0085_runtime_tool_grants`. Payload carries `{ agentId, mode, tools,
-  accessLevel, scopePath, reason? }`.
+accessLevel, scopePath, reason? }`.
 - Accepting the typed request now validates the target Hermes runtime,
   supersedes any active/waiting run for that issue+agent, opens a fresh run in
   the requested mode, stores a one-time runtime policy snapshot with the grant,
@@ -11600,7 +11665,7 @@ clean (`E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1`, 34 passed);
 ## 2026-06-27 — AI triage: prose fallback + actionable ERROR card
 
 Diagnosed why the AI-triage card (`AiTriageCard`, above the issue description)
-was stuck in ERROR for every issue on the AXI workspace. Root cause was *not*
+was stuck in ERROR for every issue on the AXI workspace. Root cause was _not_
 config: `Workspace.aiProvider=hermes` routes through the Hermes gateway, which
 wraps the call in a full agent loop with its own toolset and **ignores OpenAI
 `tool_choice`**. The model answered in prose ("…the backend tool
@@ -11612,8 +11677,9 @@ returns `finish_reason: stop`, prose content, ~55k prompt tokens (gateway
 context injection).
 
 Three fixes (no provider change — the goal was to make `hermes` work):
+
 - `src/server/services/ai.ts`: new exported `parseTriageMessage(message,
-  validLabelIds, validAgentIds)` degrades tool_calls → `function_call` →
+validLabelIds, validAgentIds)` degrades tool_calls → `function_call` →
   fenced/inline JSON → labelled prose. Prose only counts if it names a
   recognizable priority (else null → caller ERRORs); label/agent ids matched by
   scanning the text for the workspace's actual cuids (format-agnostic). Mirrors
@@ -11769,7 +11835,7 @@ thresholds live elsewhere, unlinked.
   non-answers (<40 chars / <8 words), so garbage is never posted. Unit-tested
   with the verbatim prod strings (`tests/unit/coach-comment-quality.test.ts`).
 - **`ai-coach.ts` `coachOnEvent`** — dedup: skip if a Coach comment already
-  exists on the issue within 24h (checked *before* the LLM call, so it also
+  exists on the issue within 24h (checked _before_ the LLM call, so it also
   saves tokens). Kills the per-issue spam.
 - **`ai.coachStatus` + `CoachStatusPanel`** (Settings → Workspace → AI, under
   the Coach toggle) — armed/needs-attention/off, provider reachability, Coach
@@ -11782,7 +11848,7 @@ clean; `pnpm lint` 0 errors.
 ## 2026-06-28 — Wire per-issue SLA target → Coach SLA-breach trigger
 
 Follow-up to the Coach health panel: the SLA-breach trigger was the only chip
-showing ✗, and "wire it" = make that path actually fire. The *backend* was
+showing ✗, and "wire it" = make that path actually fire. The _backend_ was
 already complete — `sweepSlaBreaches` is a registered maintenance job
 (`worker.ts`), emits `ISSUE_SLA_BREACH`, calls `coachOnEvent`, gated by
 `Workspace.slaEnforcementEnabled` (toggle exists in Settings → Workspace →
@@ -11928,3 +11994,103 @@ Verification: `pnpm lint` (0 errors; pre-existing warnings), `pnpm typecheck`,
 final focused responsive dashboard E2E pass (1 passed). Production builds
 completed through the E2E build path. Visual QA passed and is recorded in
 `design-qa.md`.
+
+## 2026-07-10 — Local dashboard iteration: operational density + bounded flow lead
+
+Iterated locally after reviewing the deployed dashboard at real production
+density. This pass is intentionally **not deployed** pending operator review.
+
+- **Live Operations placement:** Pulse and Today/Schedule move out of Workspace
+  flow and into the priority cockpit beside Agents and Standup. The operation
+  grid responds to personal-work density: 9+ Focus/Pick-up cards use a taller
+  single-column rail; sparse states use two columns so the cockpit does not
+  manufacture a large empty band.
+- **Bounded Workspace Flow lead:** Pipeline keeps a two-track data canvas and
+  What's New owns the compact third track. Suggestions, Notes, and Workspace
+  activity then reclaim all three desktop tracks, preventing the right slot
+  from becoming another permanent empty rail after What's New ends.
+- **Hard content bounds:** Schedule renders at most three due rows and links to
+  the remainder; What's New caps current items at four and history at three,
+  with two-line/one-line truncation; Pulse bounds large metric labels to `999+`
+  while keeping the exact value in the title. Existing Workspace activity and
+  Ideas server caps remain five.
+- **Overflow fixes exposed by QA:** Quick Notes now wraps its compact header,
+  and Standup uses a two-column internal metric grid so both fit half-width and
+  mobile placements without clipping.
+- **Preference migration:** dashboard JSON preferences carry layout version 2;
+  stale order/width overrides reset once while hidden-widget choices survive.
+
+Verification: `pnpm lint` (0 errors; pre-existing warnings), `pnpm typecheck`,
+focused unit coverage, a production E2E build, and the responsive dashboard
+E2E at 1600/1024/390 px. Visual QA passed in `design-qa.md`. No commit, push,
+or deployment performed for this iteration.
+
+## 2026-07-10 — Local Command Center hierarchy + bounded context
+
+Applied the dashboard's priority-first organization to Command Center after
+auditing the wide desktop rail, repeated stall entries, and empty attention
+groups. This pass remains local alongside the dashboard iteration.
+
+- **Three explicit bands:** Needs Action contains the attention queue, Live
+  Operations contains agent state and compact goal/run/due modules, and
+  Workspace Context contains the bounded activity and artifact surfaces.
+- **Signal-only attention:** empty asks and review-gate groups no longer reserve
+  cards. The remaining groups reflow between one and three columns and keep an
+  internal scroll bound when volume grows.
+- **Single recovery surface:** stalled runs remain actionable in Needs Action;
+  Agent Attention excludes those run-detail rows while retaining per-agent
+  blocked/active counts. This removes repeated recovery copy without hiding
+  operational state.
+- **No permanent activity rail:** Workspace activity now shares a bounded 8+4
+  desktop context row with Recent Artifacts, then stacks at tablet/mobile
+  widths. Activity defaults to agent work, shows at most eight rows, and both
+  panels link to their complete surfaces.
+- **Explicit module caps:** Live Goals, Active Runs, and Due Soon render at most
+  four rows; Recent Artifacts renders at most six. Every capped module exposes
+  an `Open all` path.
+- **Responsive coverage:** added production-build Playwright coverage at
+  1600/1024/390 px for band visibility, group suppression, module caps,
+  duplicate-stall removal, column behavior, and horizontal overflow.
+
+Verification: `pnpm lint`, `pnpm typecheck`, and focused production E2E (1
+passed). Visual QA evidence is recorded in `design-qa.md` and
+`command-center-audit.md`. No commit, push, or deployment performed.
+
+## 2026-07-11 — Read-only Teams / Goals / Plans production audit
+
+Audited the live active goal and its execution lifecycle without mutating
+production. The active Rich Rendering goal is not waiting on an agent: AXI-84's
+step-bound run completed successfully, while the source ExecutionStep remained
+READY. The plan consequently remains RUNNING with no live run and five blocked
+dependents.
+
+The trace identified a split lifecycle between `runs.complete`, materialized
+Issues, ExecutionSteps, judging, and parent Goal/Plan completion; missing crew
+role validation; a wall-time-cap-only watchdog; and no persistent notification
+for contradictory plan/run state. Full evidence and repair order are recorded
+in `teams-goals-plans-audit.md`. After operator approval, the signed-in Crew →
+Goal → Plan → AXI-84 → Inbox flow was captured in Firefox against an isolated
+production-data snapshot; every accepted screenshot was inspected, and the
+temporary database/server were removed afterward. No product code, production
+data, deployment, commit, or push was performed.
+
+## 2026-07-11 — Goal/plan completion handoff and stalled-plan recovery
+
+Implemented the production repair from the Teams / Goals / Plans audit.
+
+- `runs.complete` now closes the run, updates the materialized issue, and moves
+  its linked ExecutionStep to REVIEW with `sourceRunId` in one transaction.
+- REVIEW steps without an automatic reviewer now receive one deduplicated human
+  ReviewGate instead of silently waiting forever.
+- The orchestration watchdog now examines every RUNNING plan, not only plans
+  with wall-time caps. It safely reconciles historical completed-run/READY-step
+  drift and emits a state-deduplicated `PLAN_STALLED` event for review gaps or
+  plans with no progress path.
+- `PLAN_STALLED` materializes as a persistent, high-priority notification that
+  links directly to the plan. The plan page also renders an accessible warning
+  for completed-run drift, missing reviewers, and no-progress states.
+- Manual final-step completion now invokes the same plan/goal completion
+  reconciliation as a PASS verdict.
+
+Regression coverage exercises the atomic `runs.complete` handoff, historical
+watchdog reconciliation, event deduplication, and notification metadata.

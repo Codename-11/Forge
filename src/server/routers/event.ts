@@ -57,6 +57,7 @@ const TIMELINE_KINDS: EventKind[] = [
   EventKind.EXECUTION_STEP_READY,
   EventKind.EXECUTION_STEP_JUDGED,
   EventKind.PLAN_BUDGET_EXCEEDED,
+  EventKind.PLAN_STALLED,
   EventKind.ISSUE_SNOOZED,
   EventKind.ISSUE_UNSNOOZED,
   EventKind.ISSUE_NUDGED,
@@ -76,6 +77,7 @@ const AGENT_TIMELINE_KINDS = new Set<EventKind>([
   EventKind.EXECUTION_STEP_READY,
   EventKind.EXECUTION_STEP_JUDGED,
   EventKind.PLAN_BUDGET_EXCEEDED,
+  EventKind.PLAN_STALLED,
 ]);
 
 const DECISION_TIMELINE_KINDS = new Set<EventKind>([
@@ -87,6 +89,7 @@ const DECISION_TIMELINE_KINDS = new Set<EventKind>([
   EventKind.ISSUE_SLA_BREACH,
   EventKind.EXECUTION_STEP_JUDGED,
   EventKind.PLAN_BUDGET_EXCEEDED,
+  EventKind.PLAN_STALLED,
 ]);
 
 /**
@@ -99,6 +102,7 @@ const COLLAPSIBLE_TIMELINE_KINDS = new Set<EventKind>([
   EventKind.ISSUE_SLA_BREACH,
   EventKind.AGENT_NOACK,
   EventKind.AGENT_RUN_STALLED,
+  EventKind.PLAN_STALLED,
 ]);
 
 const timelineFilterSchema = z.enum(["all", "mine", "agents", "decisions"]);
@@ -253,27 +257,17 @@ export const eventRouter = router({
       return {
         events: page.map((e) => {
           const payload = (e.payload ?? {}) as Record<string, unknown>;
-          const pAgentId =
-            typeof payload.agentId === "string"
-              ? (payload.agentId as string)
-              : null;
-          const pIssueId =
-            typeof payload.issueId === "string"
-              ? (payload.issueId as string)
-              : null;
+          const pAgentId = typeof payload.agentId === "string" ? (payload.agentId as string) : null;
+          const pIssueId = typeof payload.issueId === "string" ? (payload.issueId as string) : null;
           const subjectIssue =
             e.subjectType === "issue"
               ? (issueById.get(e.subjectId) ?? null)
               : pIssueId
                 ? (issueById.get(pIssueId) ?? null)
-              : null;
+                : null;
           const subjectAgent =
-            e.subjectType === "agent"
-              ? (agentById.get(e.subjectId) ?? null)
-              : null;
-          const payloadAgent = pAgentId
-            ? (agentById.get(pAgentId) ?? null)
-            : null;
+            e.subjectType === "agent" ? (agentById.get(e.subjectId) ?? null) : null;
+          const payloadAgent = pAgentId ? (agentById.get(pAgentId) ?? null) : null;
           return {
             id: e.id,
             kind: e.kind,
@@ -337,10 +331,7 @@ export const eventRouter = router({
           { subjectType: { in: ["action-request", "review-gate"] } },
         ];
       } else {
-        where.OR = [
-          { kind: { in: TIMELINE_KINDS } },
-          ...(ownedChatWhere ? [ownedChatWhere] : []),
-        ];
+        where.OR = [{ kind: { in: TIMELINE_KINDS } }, ...(ownedChatWhere ? [ownedChatWhere] : [])];
       }
 
       const rows = await ctx.db.activityEvent.findMany({
@@ -480,11 +471,14 @@ export const eventRouter = router({
             items.push({
               id: `ask:${request.id}`,
               kind: "question",
-              tone: request.severity === "ERROR" || request.severity === "CRITICAL" ? "danger" : "warning",
+              tone:
+                request.severity === "ERROR" || request.severity === "CRITICAL"
+                  ? "danger"
+                  : "warning",
               title: request.title,
               detail: request.issue
                 ? `${issueLabel(request.issue)} · ${request.issue.title}`
-                : request.body ?? "Open question from agent",
+                : (request.body ?? "Open question from agent"),
               href: `/w/${workspace.slug}/command-center`,
               createdAt: request.createdAt,
             });
@@ -569,7 +563,11 @@ export const eventRouter = router({
               blocked: blockers.length,
               activeRuns: agentRuns.length,
               total:
-                questions.length + gates.length + approvals.length + blockers.length + agentRuns.length,
+                questions.length +
+                gates.length +
+                approvals.length +
+                blockers.length +
+                agentRuns.length,
             },
             items: items.slice(0, input.itemLimit),
           };
@@ -602,8 +600,7 @@ export const eventRouter = router({
     .query(async ({ ctx, input }) => {
       // Default window: 24h ago — nothing older counts as "unread" even
       // if the user has never opened the drawer. Keeps the badge bounded.
-      const since =
-        input.since ?? new Date(Date.now() - 24 * 60 * 60_000);
+      const since = input.since ?? new Date(Date.now() - 24 * 60 * 60_000);
       const myChatThreadIds = (
         await ctx.db.chatThread.findMany({
           where: {
@@ -836,39 +833,39 @@ function mapTimelineRow(
   const payload = payloadRecord(row.payload);
   const issue =
     row.subjectType === "issue"
-      ? refs.issues.get(row.subjectId) ?? null
+      ? (refs.issues.get(row.subjectId) ?? null)
       : payloadString(payload, "issueId")
-        ? refs.issues.get(payloadString(payload, "issueId")!) ?? null
+        ? (refs.issues.get(payloadString(payload, "issueId")!) ?? null)
         : null;
   const run =
     row.subjectType === "agent-run"
-      ? refs.runs.get(row.subjectId) ?? null
+      ? (refs.runs.get(row.subjectId) ?? null)
       : payloadString(payload, "runId")
-        ? refs.runs.get(payloadString(payload, "runId")!) ?? null
+        ? (refs.runs.get(payloadString(payload, "runId")!) ?? null)
         : null;
   const agent =
     row.subjectType === "agent"
-      ? refs.agents.get(row.subjectId) ?? null
+      ? (refs.agents.get(row.subjectId) ?? null)
       : payloadString(payload, "agentId")
-        ? refs.agents.get(payloadString(payload, "agentId")!) ?? null
-        : run?.agent ?? null;
+        ? (refs.agents.get(payloadString(payload, "agentId")!) ?? null)
+        : (run?.agent ?? null);
   const goal =
     row.subjectType === "goal"
-      ? refs.goals.get(row.subjectId) ?? null
+      ? (refs.goals.get(row.subjectId) ?? null)
       : payloadString(payload, "goalId")
-        ? refs.goals.get(payloadString(payload, "goalId")!) ?? null
+        ? (refs.goals.get(payloadString(payload, "goalId")!) ?? null)
         : null;
   const plan =
     row.subjectType === "execution-plan"
-      ? refs.plans.get(row.subjectId) ?? null
+      ? (refs.plans.get(row.subjectId) ?? null)
       : payloadString(payload, "planId")
-        ? refs.plans.get(payloadString(payload, "planId")!) ?? null
+        ? (refs.plans.get(payloadString(payload, "planId")!) ?? null)
         : null;
   const step =
     row.subjectType === "execution-step"
-      ? refs.steps.get(row.subjectId) ?? null
+      ? (refs.steps.get(row.subjectId) ?? null)
       : payloadString(payload, "stepId")
-        ? refs.steps.get(payloadString(payload, "stepId")!) ?? null
+        ? (refs.steps.get(payloadString(payload, "stepId")!) ?? null)
         : null;
 
   const actor = actorLabel(row);
@@ -1025,7 +1022,7 @@ function mapTimelineRow(
       break;
     case EventKind.AGENT_RUN_KICKED:
       title = `${actor} kicked ${agentLabel}`;
-      detail = targetIssue ? `${targetLabel} · ${targetIssue.title}` : run?.currentStep ?? detail;
+      detail = targetIssue ? `${targetLabel} · ${targetIssue.title}` : (run?.currentStep ?? detail);
       tone = "warning";
       category = "run";
       break;
@@ -1042,7 +1039,9 @@ function mapTimelineRow(
       break;
     case EventKind.EXECUTION_STEP_READY:
       title = `${step?.title ?? payloadString(payload, "title") ?? "Step"} is ready`;
-      detail = targetAgent?.profileKey ? `Assigned to @${targetAgent.profileKey}` : plan?.title ?? detail;
+      detail = targetAgent?.profileKey
+        ? `Assigned to @${targetAgent.profileKey}`
+        : (plan?.title ?? detail);
       category = "plan";
       break;
     case EventKind.EXECUTION_STEP_JUDGED: {
@@ -1092,7 +1091,13 @@ function mapTimelineRow(
     subject: {
       type: row.subjectType,
       id: row.subjectId,
-      label: targetLabel ?? goal?.title ?? plan?.title ?? step?.title ?? targetAgent?.profileKey ?? row.subjectType,
+      label:
+        targetLabel ??
+        goal?.title ??
+        plan?.title ??
+        step?.title ??
+        targetAgent?.profileKey ??
+        row.subjectType,
     },
     occurrences: 1,
   };

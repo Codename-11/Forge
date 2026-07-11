@@ -128,7 +128,10 @@ export async function createExecutionPlan(
       select: { id: true },
     });
     if (!found) {
-      throw new TRPCError({ code: "NOT_FOUND", message: "Context set not found in this workspace." });
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Context set not found in this workspace.",
+      });
     }
   }
   if (input.goalId) {
@@ -187,11 +190,14 @@ export async function createExecutionPlan(
             assignedAgentId: step.assignedAgentId ?? null,
             assignedUserId: step.assignedUserId ?? null,
             expectedOutput: step.expectedOutput ?? null,
-            verification: step.verification === undefined || step.verification === null
-              ? Prisma.JsonNull
-              : step.verification,
+            verification:
+              step.verification === undefined || step.verification === null
+                ? Prisma.JsonNull
+                : step.verification,
             // Index-based deps resolved in pass 2; fall back to explicit ids.
-            dependsOnStepIds: step.dependsOnStepIndexes?.length ? [] : (step.dependsOnStepIds ?? []),
+            dependsOnStepIds: step.dependsOnStepIndexes?.length
+              ? []
+              : (step.dependsOnStepIds ?? []),
           },
           select: { id: true },
         });
@@ -377,12 +383,9 @@ export async function updateExecutionStep(
         title: params.title?.trim() ?? undefined,
         body: params.body === undefined ? undefined : params.body,
         status: params.status ?? undefined,
-        assignedAgentId:
-          params.assignedAgentId === undefined ? undefined : params.assignedAgentId,
-        assignedUserId:
-          params.assignedUserId === undefined ? undefined : params.assignedUserId,
-        expectedOutput:
-          params.expectedOutput === undefined ? undefined : params.expectedOutput,
+        assignedAgentId: params.assignedAgentId === undefined ? undefined : params.assignedAgentId,
+        assignedUserId: params.assignedUserId === undefined ? undefined : params.assignedUserId,
+        expectedOutput: params.expectedOutput === undefined ? undefined : params.expectedOutput,
         sourceRunId: params.sourceRunId === undefined ? undefined : params.sourceRunId,
         dependsOnStepIds: params.dependsOnStepIds ?? undefined,
         ...verificationData,
@@ -411,10 +414,14 @@ export async function updateExecutionStep(
       // now unblocked flip TODO → READY and dispatch. Done inside the
       // same transaction so the cascade is atomic with the status flip.
       if (params.status === "DONE") {
-        const { cascadeReadiness } = await import(
-          "@/server/services/orchestration-service"
-        );
+        const { cascadeReadiness } = await import("@/server/services/orchestration-service");
         await cascadeReadiness(tx, {
+          workspaceId: params.workspaceId,
+          planId: step.planId,
+          actorId: params.actorId,
+        });
+        const { maybeCompleteGoal } = await import("@/server/services/orchestration-service");
+        await maybeCompleteGoal(tx, {
           workspaceId: params.workspaceId,
           planId: step.planId,
           actorId: params.actorId,
@@ -430,9 +437,7 @@ export async function updateExecutionStep(
   // slow. Best-effort; failures here don't roll back the REVIEW transition.
   if (params.status === "REVIEW" && params.status !== step.status) {
     try {
-      const { maybeAutoJudge } = await import(
-        "@/server/services/orchestration-service"
-      );
+      const { maybeAutoJudge } = await import("@/server/services/orchestration-service");
       await maybeAutoJudge(db as PrismaClient, {
         workspaceId: params.workspaceId,
         actorId: params.actorId,

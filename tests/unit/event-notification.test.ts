@@ -253,6 +253,25 @@ describe("event notification mapping", () => {
     expect(out.reason).toContain("cost cap");
   });
 
+  it("raises a persistent recovery notification for a stalled plan", () => {
+    const out = mustMap({
+      workspace,
+      event: {
+        kind: "PLAN_STALLED",
+        subjectType: "execution-plan",
+        subjectId: "plan_9",
+        payload: {
+          reasonCode: "review_without_reviewer",
+          reason: "The completed step has no reviewer.",
+        },
+      },
+    });
+    expect(out.severity).toBe("ERROR");
+    expect(out.persistent).toBe(true);
+    expect(out.primaryHref).toBe("/w/axiom/plans/plan_9");
+    expect(out.recommendedAction).toContain("REVIEWER");
+  });
+
   it("alerts only on a BLOCKED step verdict, linking to its plan", () => {
     const blocked = mustMap({
       workspace,

@@ -1686,7 +1686,9 @@ describe("mcp — awareness tools (Stream BA)", () => {
       /author|admin/i,
     );
 
-    const { ctx: adminCtx } = buildMcpCtx(f, { scopes: ["READ_ISSUES", "WRITE_COMMENTS", "ADMIN"] });
+    const { ctx: adminCtx } = buildMcpCtx(f, {
+      scopes: ["READ_ISSUES", "WRITE_COMMENTS", "ADMIN"],
+    });
     const updatedByAdmin = (await call(
       "comments.update",
       { id: ownedByMember.id, body: "admin edit" },
@@ -3392,9 +3394,9 @@ describe("mcp runs.complete + completion contract", () => {
     await expect(
       call("issues.update", { id: issue.id, title: "should not mutate" }, scopedCtx),
     ).rejects.toThrow(/RESEARCH.*does not allow issues\.update/);
-    await expect(
-      call("issues.create", { title: "should not create" }, scopedCtx),
-    ).rejects.toThrow(/RESEARCH.*does not allow issues\.create/);
+    await expect(call("issues.create", { title: "should not create" }, scopedCtx)).rejects.toThrow(
+      /RESEARCH.*does not allow issues\.create/,
+    );
     await expect(
       call("issues.claim", { issueId: issue.id, claimTtlMinutes: 30 }, scopedCtx),
     ).rejects.toThrow(/RESEARCH.*does not allow issues\.claim/);
@@ -3602,6 +3604,65 @@ describe("mcp runs.complete + completion contract", () => {
     expect(audit.actorAgentId).toBe(agent.id);
   });
 
+  it("runs.complete atomically advances its execution step to review", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `ccs-${Date.now()}`,
+        name: "Plan worker",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Completion handoff",
+        status: "RUNNING",
+      },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        title: "Finish implementation",
+        position: 0,
+        status: "READY",
+        assignedAgentId: agent.id,
+        issueId: issue.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        executionStepId: step.id,
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.EXECUTE,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    await call("runs.complete", { runId: run.id, summary: "Implemented and verified." }, scopedCtx);
+
+    const after = await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } });
+    expect(after.status).toBe("REVIEW");
+    expect(after.sourceRunId).toBe(run.id);
+    const gate = await prisma.reviewGate.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        targetType: "execution-step",
+        targetId: step.id,
+        status: "PENDING",
+      },
+    });
+    expect(gate?.prompt).toContain("no crew or REVIEWER");
+  });
+
   it("runs.complete auto-transitions the issue to reviewStatusId when EXECUTE completes", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CC4" });
     fixtures.push(fixture);
@@ -3667,7 +3728,11 @@ describe("mcp runs.complete + completion contract", () => {
     });
 
     const agent = await prisma.agent.create({
-      data: { workspaceId: fixture.workspace.id, profileKey: `cc5-${Date.now()}`, name: "Researcher" },
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `cc5-${Date.now()}`,
+        name: "Researcher",
+      },
     });
     const issue = await createIssue(fixture);
     const before = await prisma.issue.findUniqueOrThrow({
