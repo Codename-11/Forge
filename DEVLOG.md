@@ -12094,3 +12094,10 @@ Implemented the production repair from the Teams / Goals / Plans audit.
 
 Regression coverage exercises the atomic `runs.complete` handoff, historical
 watchdog reconciliation, event deduplication, and notification metadata.
+
+Production verification of v0.8.1 exposed a null-ordering edge before any
+reconciliation mutation occurred: PostgreSQL's descending sort places null
+`completedAt` values first, so an older STALLED attempt was selected ahead of
+the newer COMPLETED run. v0.8.2 orders attempts by `lastEventAt` instead (set on
+every run state) and adds the exact stalled-then-completed history to the
+watchdog regression fixture.

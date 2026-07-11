@@ -2600,7 +2600,7 @@ export async function checkAndBlockBudget(
  * completed but its step never reached REVIEW, then emits a durable
  * PLAN_STALLED signal for states that still need an operator.
  */
-export async function sweepOrchestrationBudget(): Promise<{
+export async function sweepOrchestrationBudget(params?: { workspaceId?: string }): Promise<{
   blocked: number;
   reconciled: number;
   stalled: number;
@@ -2609,6 +2609,7 @@ export async function sweepOrchestrationBudget(): Promise<{
     where: {
       status: ExecutionPlanStatus.RUNNING,
       archivedAt: null,
+      ...(params?.workspaceId ? { workspaceId: params.workspaceId } : {}),
     },
     select: {
       id: true,
@@ -2644,7 +2645,11 @@ export async function sweepOrchestrationBudget(): Promise<{
           title: true,
           status: true,
           runs: {
-            orderBy: [{ completedAt: "desc" }, { lastEventAt: "desc" }],
+            // PostgreSQL sorts NULL first for DESC. Ordering by completedAt
+            // would therefore prefer an older STALLED attempt (null) over a
+            // newer clean completion. lastEventAt is populated for every run
+            // state and reflects the actual latest attempt.
+            orderBy: { lastEventAt: "desc" },
             take: 1,
             select: { id: true, status: true },
           },

@@ -115,8 +115,19 @@ describe("orchestration: goals", () => {
         finishedAt: new Date(),
       },
     });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        executionStepId: step.id,
+        status: AgentRunStatus.STALLED,
+        finishedAt: new Date(Date.now() - 60_000),
+        lastEventAt: new Date(Date.now() - 60_000),
+      },
+    });
 
-    const first = await sweepOrchestrationBudget();
+    const first = await sweepOrchestrationBudget({ workspaceId: fixture.workspace.id });
     expect(first.reconciled).toBeGreaterThanOrEqual(1);
     expect(first.stalled).toBeGreaterThanOrEqual(1);
     const after = await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } });
@@ -132,7 +143,7 @@ describe("orchestration: goals", () => {
       }),
     ).toBe(1);
 
-    await sweepOrchestrationBudget();
+    await sweepOrchestrationBudget({ workspaceId: fixture.workspace.id });
     expect(
       await prisma.activityEvent.count({
         where: {

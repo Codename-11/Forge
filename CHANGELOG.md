@@ -11,6 +11,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-11] — v0.8.2 · Plan recovery ordering
+
+### Fixed
+
+- **Historical plan recovery now selects the genuinely latest run attempt.** PostgreSQL places null values first for descending timestamps; the initial reconciler could therefore prefer an older stalled attempt over a newer successful completion. It now orders by the run's universal last-event timestamp, with the production history shape covered by regression tests.
+
 ## [2026-07-11] — v0.8.1 · Operational layouts & reliable plan recovery
 
 ### Added
