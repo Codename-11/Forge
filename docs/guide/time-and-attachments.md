@@ -226,6 +226,11 @@ favicon (origin + `/favicon.ico`, with a Lucide `ExternalLink` fallback
 on image-load error) and the hostname inline. Clicking opens the URL
 in a new tab.
 
+Preview behavior for images, videos, link chips, provider embeds,
+collapsed states, per-preview actions, and safe fallbacks is defined in
+[Chat rich previews](/agents/chat.html#rich-previews-contract). The same
+contract applies anywhere Forge renders attachment or link previews.
+
 ### `forge-link` markdown token
 
 Inside any rendered markdown body (issue descriptions, comments,

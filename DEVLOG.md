@@ -2,6 +2,18 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-11 — AXI-95 rich preview rendering contract
+
+Defined the shared rich preview contract for chat/message markdown surfaces.
+`docs/agents/chat.md` now specifies inline image, video, file, LINK attachment,
+`forge-link`, normal URL, and allowlisted provider embed behavior; max preview
+sizing; collapsed/expanded/hidden states; per-preview actions; and safe
+fallback/error behavior. `docs/guide/time-and-attachments.md` now links
+attachment readers back to that shared contract.
+
+Verification: documentation diff reviewed. `corepack pnpm lint` and
+`corepack pnpm typecheck` were run in the bridge container.
+
 ## 2026-07-13 — Plan context integrity + reversible issue archive
 
 Closed the execution-context gaps that let materialized plan issues look like

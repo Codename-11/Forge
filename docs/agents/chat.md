@@ -101,6 +101,74 @@ bold/italic, inline code, fenced code blocks (with copy buttons), blockquotes,
 unordered lists, attachments, tool-call cards, and local SYSTEM bubbles from
 slash commands.
 
+### Rich previews contract
+
+Chat, comments, descriptions, notes, and artifact bodies use one rendering
+contract for inline media and links. The renderer is intentionally allowlist-
+driven: Forge embeds only known-safe media surfaces and never executes remote
+HTML or scripts from a message body.
+
+| Input | Default rendering | Expanded rendering | Plain-link fallback |
+| --- | --- | --- | --- |
+| Uploaded image attachment (`image/png`, `image/jpeg`, `image/gif`, `image/webp`, `image/svg+xml`) | Inline thumbnail when rendered from an image token or attachment list. | Attachment lightbox with fit-to-viewport preview. | File chip if the presigned URL, image decode, or storage lookup fails. |
+| Uploaded video attachment (`video/mp4`, `video/webm`, `video/quicktime`) | Compact file chip in dense message bodies; canvas/attachment preview surfaces may show an inline player. | Attachment lightbox or preview card with native controls and no autoplay. | File chip with open/download actions if playback or presign fails. |
+| Uploaded non-media file | File chip with MIME-aware icon, filename, and size. | Attachment lightbox preview when Forge has a safe renderer; otherwise open/download. | File chip remains the canonical view. |
+| LINK attachment | Link chip with favicon or external-link icon, title/hostname, and external indicator. | Opens the canonical URL in a new tab. | Hostname chip if title or favicon lookup fails. |
+| `forge-link:https://...` markdown token | Inline link chip matching LINK attachment styling. | Opens in a new tab. | Plain text if the scheme is not `http` or `https`. |
+| Normal markdown link or bare `http(s)` URL | Standard text link. | Opens in a new tab. | Standard text link; no rich card is fetched automatically. |
+| Allowlisted product embed URL | Provider embed card for known safe providers only, currently Forge artifacts plus YouTube, GitHub, Loom, and Figma. | Embedded card/player in the body, constrained to the preview size rules below. | Standard text link when provider detection fails or the provider cannot render safely. |
+
+Preview sizing is capped by surface:
+
+- Inline image thumbnails are square, approximately 80 px, object-fit cover.
+- Message/body embed cards use the available body width and should cap at
+  640 px wide and 360 px tall, preserving media aspect ratio.
+- Attachment lightbox previews fit within the modal viewport and never force
+  page scroll outside the modal.
+- Canvas preview cards use the node bounds; new preview cards default to a
+  larger card height so the preview is useful, then resize with the canvas
+  node.
+- No preview should expand a chat bubble, comment, or note beyond the readable
+  column width. Long filenames, titles, and URLs truncate in the middle or end
+  instead of reflowing controls.
+
+Collapsed and hidden states:
+
+- Dense message bodies default to compact chips for non-image files and links.
+- Each preview-capable attachment or embed has a collapsed state: chip/card
+  summary with filename or title, host/MIME/size metadata, and an expand action.
+- Expanded previews show the media/embed in place when the surface supports
+  inline expansion; otherwise they open the attachment lightbox.
+- Users can collapse an expanded inline preview back to the chip/card summary.
+- A dismissed preview hides only that preview instance for the current surface;
+  it does not delete the attachment, mutate message markdown, or hide the same
+  attachment everywhere else.
+
+Per-preview actions:
+
+- File previews: open in new tab, download, copy short-lived presigned URL,
+  and delete when the current user has permission for that target.
+- LINK and `forge-link` previews: open in new tab and copy canonical URL.
+  They do not expose download because Forge has no bytes for them.
+- Embed previews: open source in new tab, copy URL, collapse, and hide preview.
+- Destructive actions use the existing confirmation flow and update the
+  surrounding attachment list after success.
+
+Fallback and error behavior:
+
+- Presign, fetch, decode, provider-detection, favicon, and playback failures
+  must degrade to a chip or standard link; they must not leave broken image,
+  iframe, or video chrome in the message.
+- Unsupported MIME types should already be rejected at upload. If older data or
+  bad metadata reaches the renderer, render a generic file chip.
+- External HTML is never injected into the DOM. Provider embeds are implemented
+  with first-party components or sandboxed, allowlisted iframe URLs; unknown
+  URLs remain normal links.
+- Remote media does not autoplay. Video controls are user-initiated, and audio
+  stays muted/off until the user starts playback.
+- Copying a presigned file URL should label the result as short-lived because
+  Forge download URLs expire.
+
 ## Status and diagnostics
 
 The right-hand Chat status rail is the operator-facing source of truth for a
