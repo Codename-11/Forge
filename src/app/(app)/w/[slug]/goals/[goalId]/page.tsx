@@ -65,10 +65,7 @@ export default function GoalDetailPage() {
   const goalRouter = useGoalRouter();
 
   const available = Boolean(goalRouter?.get);
-  const query = goalRouter?.get?.useQuery(
-    { id: params.goalId },
-    { staleTime: 10_000 },
-  );
+  const query = goalRouter?.get?.useQuery({ id: params.goalId }, { staleTime: 10_000 });
   const { data: crewList } = trpc.agentCrew.list.useQuery({});
   const goal = query?.data;
   const isLoading = available ? (query?.isLoading ?? true) : false;
@@ -234,17 +231,12 @@ export default function GoalDetailPage() {
   const status = goal.status as GoalStatus;
   const live = isGoalLive(goal.status);
   const plans = (goal.plans ?? []).slice();
-  const activePlan =
-    goal.activePlan ??
-    plans.find((p) => p.isActiveAttempt) ??
-    plans[0] ??
-    null;
+  const activePlan = goal.activePlan ?? plans.find((p) => p.isActiveAttempt) ?? plans[0] ?? null;
   const priorAttempts = plans.filter((p) => p.id !== activePlan?.id);
 
   const canAbandon = goal.status !== "ACHIEVED" && goal.status !== "ABANDONED";
   const canPlan = goal.status !== "ACHIEVED" && goal.status !== "ABANDONED";
-  const activeStepCount =
-    activePlan?.steps?.length ?? activePlan?._count?.steps ?? 0;
+  const activeStepCount = activePlan?.steps?.length ?? activePlan?._count?.steps ?? 0;
   const attention = activePlan
     ? pickAttentionRun(
         (activePlan.steps ?? []).map((step) => ({
@@ -253,8 +245,7 @@ export default function GoalDetailPage() {
         })),
       )
     : null;
-  const activePlanEmpty =
-    !!activePlan && activePlan.status === "DRAFT" && activeStepCount === 0;
+  const activePlanEmpty = !!activePlan && activePlan.status === "DRAFT" && activeStepCount === 0;
   // Offer the planner actions whenever there's nothing to run yet: no active
   // plan, or an active plan still sitting as an empty DRAFT (the bug the user
   // hit). A plan with steps hides the panel.
@@ -264,10 +255,7 @@ export default function GoalDetailPage() {
     : null;
   const activeByAgent: ActiveStepByAgent = new Map();
   for (const step of activePlan?.steps ?? []) {
-    if (
-      step.assignedAgentId &&
-      ["READY", "RUNNING", "REVIEW"].includes(step.status)
-    ) {
+    if (step.assignedAgentId && ["READY", "RUNNING", "REVIEW"].includes(step.status)) {
       activeByAgent.set(step.assignedAgentId, {
         id: step.id,
         title: step.title ?? "Step",
@@ -283,11 +271,7 @@ export default function GoalDetailPage() {
         subtitle={`Goal · ${goal.status.toLowerCase()}`}
         actions={
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => router.push(`/w/${ws.slug}/goals`)}
-            >
+            <Button size="sm" variant="ghost" onClick={() => router.push(`/w/${ws.slug}/goals`)}>
               <ChevronLeft className="h-3.5 w-3.5" /> Back
             </Button>
             {canPlan ? (
@@ -306,6 +290,33 @@ export default function GoalDetailPage() {
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto p-4 lg:grid-cols-[1fr_300px]">
         <section className="flex min-w-0 flex-col gap-4">
+          {goal.operating &&
+          ["NEEDS_REVIEW", "BLOCKED", "WAITING_REVIEW"].includes(goal.operating.health) ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/30 bg-warning/5 p-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-sm font-medium text-warning">
+                  <AlertTriangle className="h-4 w-4" />
+                  {goal.operating.health.replaceAll("_", " ").toLowerCase()}
+                </div>
+                <p className="text-meta mt-1 text-muted-foreground">{goal.operating.nextAction}</p>
+              </div>
+              {goal.operating.pendingGates?.length ? (
+                <Link
+                  href={`/w/${ws.slug}/review`}
+                  className="inline-flex h-8 items-center rounded-md border border-border bg-card/40 px-3 text-xs font-medium transition hover:border-ember/40 hover:text-ember"
+                >
+                  Review now
+                </Link>
+              ) : goal.operating.focusStep && activePlan ? (
+                <Link
+                  href={`/w/${ws.slug}/plans/${activePlan.id}#step-${goal.operating.focusStep.id}`}
+                  className="inline-flex h-8 items-center rounded-md border border-border bg-card/40 px-3 text-xs font-medium transition hover:border-ember/40 hover:text-ember"
+                >
+                  Open step
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
           <header className="rounded-lg border border-border bg-card/40 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -329,7 +340,7 @@ export default function GoalDetailPage() {
             {goal.issue ? (
               <Link
                 href={`/w/${ws.slug}/issues/${goal.issue.id}`}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 text-meta text-muted-foreground transition hover:border-ember/40 hover:text-ember"
+                className="text-meta mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-card/40 px-2 py-1 text-muted-foreground transition hover:border-ember/40 hover:text-ember"
               >
                 <ListChecks className="h-3 w-3" />
                 From issue {ws.key}-{goal.issue.number}
@@ -340,6 +351,22 @@ export default function GoalDetailPage() {
               <p className="mt-2 whitespace-pre-wrap text-sm text-muted-foreground">
                 {goal.description}
               </p>
+            ) : null}
+            {goal.successCriteria ? (
+              <div className="mt-3 rounded-md border border-border bg-background/30 p-3">
+                <div className="text-meta mb-1 font-medium uppercase tracking-wide text-muted-foreground">
+                  Success criteria
+                </div>
+                <p className="whitespace-pre-wrap text-sm">{goal.successCriteria}</p>
+              </div>
+            ) : null}
+            {goal.outcomeSummary ? (
+              <div className="mt-3 rounded-md border border-success/30 bg-success/5 p-3">
+                <div className="text-meta mb-1 font-medium uppercase tracking-wide text-success">
+                  Outcome
+                </div>
+                <p className="whitespace-pre-wrap text-sm">{goal.outcomeSummary}</p>
+              </div>
             ) : null}
             <GoalLoopExplainerCollapsible className="mt-3" />
           </header>
@@ -433,23 +460,60 @@ export default function GoalDetailPage() {
             activeByAgent={activeByAgent}
           />
 
-          <div className="rounded-lg border border-border bg-card/40 p-3 text-meta">
-            <div className="mb-2 uppercase tracking-wide text-muted-foreground">
-              Details
+          {goal.operating?.outputs?.length ? (
+            <div className="rounded-lg border border-border bg-card/40 p-3">
+              <div className="text-meta mb-2 uppercase tracking-wide text-muted-foreground">
+                Outputs ({goal.operating.outputs.length})
+              </div>
+              <div className="flex flex-col gap-1">
+                {goal.operating.outputs.slice(0, 6).map((output) => (
+                  <Link
+                    key={output.id}
+                    href={`/w/${ws.slug}/artifacts/${output.slug}`}
+                    className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-subtle hover:text-ember"
+                  >
+                    <span className="truncate">{output.title}</span>
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </Link>
+                ))}
+              </div>
             </div>
+          ) : null}
+
+          {goal.operating?.recentDecisions?.length ? (
+            <div className="rounded-lg border border-border bg-card/40 p-3">
+              <div className="text-meta mb-2 uppercase tracking-wide text-muted-foreground">
+                Recent decisions
+              </div>
+              <div className="flex flex-col gap-2">
+                {goal.operating.recentDecisions.slice(0, 5).map((decision) => (
+                  <div key={decision.id} className="text-meta border-l border-border pl-2">
+                    <div className="font-medium text-foreground">
+                      {decision.status.toLowerCase()} · {decision.prompt}
+                    </div>
+                    {decision.resolution ? (
+                      <div className="mt-0.5 line-clamp-2 text-muted-foreground">
+                        {decision.resolution}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          <div className="text-meta rounded-lg border border-border bg-card/40 p-3">
+            <div className="mb-2 uppercase tracking-wide text-muted-foreground">Details</div>
             <dl className="flex flex-col gap-1.5 text-sm">
               <Row label="Plans" value={`${plans.length}`} />
               {goal.startedAt ? (
-                <Row
-                  label="Started"
-                  value={new Date(goal.startedAt).toLocaleString()}
-                />
+                <Row label="Started" value={new Date(goal.startedAt).toLocaleString()} />
               ) : null}
               {goal.achievedAt ? (
-                <Row
-                  label="Achieved"
-                  value={new Date(goal.achievedAt).toLocaleString()}
-                />
+                <Row label="Achieved" value={new Date(goal.achievedAt).toLocaleString()} />
+              ) : null}
+              {goal.targetDate ? (
+                <Row label="Target" value={new Date(goal.targetDate).toLocaleDateString()} />
               ) : null}
             </dl>
           </div>
@@ -528,6 +592,9 @@ function GoalEditModal({
   goal: {
     title: string;
     description?: string | null;
+    successCriteria?: string | null;
+    outcomeSummary?: string | null;
+    targetDate?: string | Date | null;
     crewId?: string | null;
     maxTotalCostUsd?: number | null;
     maxWallTimeMinutes?: number | null;
@@ -538,6 +605,9 @@ function GoalEditModal({
   onSave: (payload: {
     title: string;
     description: string | null;
+    successCriteria: string | null;
+    outcomeSummary: string | null;
+    targetDate: Date | null;
     crewId: string | null;
     maxTotalCostUsd: number | null;
     maxWallTimeMinutes: number | null;
@@ -545,6 +615,11 @@ function GoalEditModal({
 }) {
   const [title, setTitle] = useState(goal.title);
   const [description, setDescription] = useState(goal.description ?? "");
+  const [successCriteria, setSuccessCriteria] = useState(goal.successCriteria ?? "");
+  const [outcomeSummary, setOutcomeSummary] = useState(goal.outcomeSummary ?? "");
+  const [targetDate, setTargetDate] = useState(
+    goal.targetDate ? new Date(goal.targetDate).toISOString().slice(0, 10) : "",
+  );
   const [crewId, setCrewId] = useState(goal.crewId ?? "");
   const [costCap, setCostCap] = useState(
     goal.maxTotalCostUsd == null ? "" : String(goal.maxTotalCostUsd),
@@ -556,8 +631,7 @@ function GoalEditModal({
   const parsedCost = costCap.trim() ? Number(costCap) : null;
   const parsedTime = timeCap.trim() ? Number(timeCap) : null;
   const invalidCost = parsedCost != null && (!Number.isFinite(parsedCost) || parsedCost < 0);
-  const invalidTime =
-    parsedTime != null && (!Number.isInteger(parsedTime) || parsedTime <= 0);
+  const invalidTime = parsedTime != null && (!Number.isInteger(parsedTime) || parsedTime <= 0);
 
   return (
     <QuickForm
@@ -574,12 +648,14 @@ function GoalEditModal({
         if (!title.trim()) return { error: "Title is required." };
         if (invalidCost || invalidTime)
           return {
-            error:
-              "Cost must be zero or higher. Wall time must be a whole positive minute.",
+            error: "Cost must be zero or higher. Wall time must be a whole positive minute.",
           };
         await onSave({
           title: title.trim(),
           description: description.trim() || null,
+          successCriteria: successCriteria.trim() || null,
+          outcomeSummary: outcomeSummary.trim() || null,
+          targetDate: targetDate ? new Date(`${targetDate}T12:00:00`) : null,
           crewId: crewId || null,
           maxTotalCostUsd: parsedCost,
           maxWallTimeMinutes: parsedTime,
@@ -592,6 +668,35 @@ function GoalEditModal({
           name="title"
           value={title}
           onChange={(e) => setTitle(e.target.value)}
+          className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Success criteria">
+        <textarea
+          name="successCriteria"
+          value={successCriteria}
+          onChange={(e) => setSuccessCriteria(e.target.value)}
+          rows={3}
+          placeholder="Observable conditions that prove completion"
+          className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Outcome summary">
+        <textarea
+          name="outcomeSummary"
+          value={outcomeSummary}
+          onChange={(e) => setOutcomeSummary(e.target.value)}
+          rows={3}
+          placeholder="What changed or was delivered?"
+          className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Target date">
+        <input
+          type="date"
+          name="targetDate"
+          value={targetDate}
+          onChange={(e) => setTargetDate(e.target.value)}
           className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
         />
       </QuickForm.Field>
@@ -690,7 +795,8 @@ function GoalLiveStatus({
   })();
 
   const phase = (() => {
-    if (!plan) return { title: "No plan yet", body: "Generate a plan or dispatch the crew planner." };
+    if (!plan)
+      return { title: "No plan yet", body: "Generate a plan or dispatch the crew planner." };
     if (plan.status === "DRAFT" && total === 0) {
       return { title: "Draft is empty", body: "The planner has not added steps yet." };
     }
@@ -698,7 +804,10 @@ function GoalLiveStatus({
       return { title: "Waiting for approval", body: "Approve the draft plan to start the crew." };
     }
     if (plan.status === "APPROVED") {
-      return { title: "Approved, not running", body: "Start the crew to dispatch ready root steps." };
+      return {
+        title: "Approved, not running",
+        body: "Start the crew to dispatch ready root steps.",
+      };
     }
     if (plan.status === "RUNNING") {
       if (attentionRun?.status === "STALLED") {
@@ -713,12 +822,36 @@ function GoalLiveStatus({
           body: attentionRun.summary ?? "The latest worker run is waiting before continuing.",
         };
       }
-      if (blocked > 0) return { title: "Blocked", body: `${blocked} step${blocked === 1 ? "" : "s"} need attention.` };
-      if (activeRunCount > 0) return { title: "Crew working", body: `${activeRunCount} run${activeRunCount === 1 ? "" : "s"} active now.` };
-      if (running > 0) return { title: "Crew working", body: `${running} step${running === 1 ? "" : "s"} running now.` };
-      if (review > 0) return { title: "In review", body: `${review} step${review === 1 ? "" : "s"} waiting on judging.` };
-      if (queued > 0) return { title: "Queued for pickup", body: `${queued} step${queued === 1 ? "" : "s"} dispatched and waiting for acknowledgement.` };
-      if (done === total && total > 0) return { title: "Wrapping up", body: "Every step is done; completion should land shortly." };
+      if (blocked > 0)
+        return {
+          title: "Blocked",
+          body: `${blocked} step${blocked === 1 ? "" : "s"} need attention.`,
+        };
+      if (activeRunCount > 0)
+        return {
+          title: "Crew working",
+          body: `${activeRunCount} run${activeRunCount === 1 ? "" : "s"} active now.`,
+        };
+      if (running > 0)
+        return {
+          title: "Crew working",
+          body: `${running} step${running === 1 ? "" : "s"} running now.`,
+        };
+      if (review > 0)
+        return {
+          title: "In review",
+          body: `${review} step${review === 1 ? "" : "s"} waiting on judging.`,
+        };
+      if (queued > 0)
+        return {
+          title: "Queued for pickup",
+          body: `${queued} step${queued === 1 ? "" : "s"} dispatched and waiting for acknowledgement.`,
+        };
+      if (done === total && total > 0)
+        return {
+          title: "Wrapping up",
+          body: "Every step is done; completion should land shortly.",
+        };
       return { title: "Waiting on dependencies", body: "No root step is ready yet." };
     }
     if (plan.status === "BLOCKED") {
@@ -733,7 +866,7 @@ function GoalLiveStatus({
   return (
     <div className="rounded-lg border border-border bg-card/40 p-3">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-meta uppercase tracking-wide text-muted-foreground">
+        <div className="text-meta flex items-center gap-1.5 uppercase tracking-wide text-muted-foreground">
           <Clock3 className="h-3 w-3" />
           <span>Live status</span>
         </div>
@@ -744,9 +877,9 @@ function GoalLiveStatus({
         ) : null}
       </div>
       <div className="text-sm font-medium">{phase.title}</div>
-      <p className="mt-1 text-meta text-muted-foreground">{phase.body}</p>
+      <p className="text-meta mt-1 text-muted-foreground">{phase.body}</p>
       {plan ? (
-        <dl className="mt-3 grid grid-cols-2 gap-2 text-meta">
+        <dl className="text-meta mt-3 grid grid-cols-2 gap-2">
           <Metric label="Steps" value={String(total)} />
           <Metric label="Done" value={`${done}/${total}`} />
           <Metric label="Queued" value={String(queued)} />
@@ -775,12 +908,12 @@ function GoalLiveStatus({
                 Run {attentionRun.status.toLowerCase()}
               </div>
               {attentionRun.summary ? (
-                <p className="mt-1 line-clamp-3 text-meta text-muted-foreground">
+                <p className="text-meta mt-1 line-clamp-3 text-muted-foreground">
                   {attentionRun.summary}
                 </p>
               ) : null}
               {attentionRun.lastEventAt ? (
-                <div className="mt-1 text-[10px] font-mono text-muted-foreground">
+                <div className="mt-1 font-mono text-[10px] text-muted-foreground">
                   {new Date(attentionRun.lastEventAt).toLocaleTimeString([], {
                     hour: "numeric",
                     minute: "2-digit",
@@ -848,37 +981,22 @@ function PlannerPanel({
           {hasEmptyDraft ? "This plan has no steps yet" : "No plan yet"}
         </span>
       </div>
-      <p className="mt-1 text-meta text-muted-foreground">
-        Generate the steps with Forge, or dispatch the crew&apos;s planner agent
-        to draft them.
+      <p className="text-meta mt-1 text-muted-foreground">
+        Generate the steps with Forge, or dispatch the crew&apos;s planner agent to draft them.
       </p>
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant="ember"
-          disabled={!canGenerate || busy}
-          onClick={onGenerate}
-        >
+        <Button size="sm" variant="ember" disabled={!canGenerate || busy} onClick={onGenerate}>
           <Sparkles className="h-3.5 w-3.5" />
           {generating ? "Generating…" : "Generate with Forge"}
         </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!canDispatch || busy}
-          onClick={onDispatch}
-        >
+        <Button size="sm" variant="outline" disabled={!canDispatch || busy} onClick={onDispatch}>
           <Send className="h-3.5 w-3.5" />
           {dispatching ? "Dispatching…" : "Dispatch to crew planner"}
         </Button>
       </div>
 
       {dispatchResult ? (
-        <DispatchFeedback
-          result={dispatchResult}
-          activePlanId={activePlanId}
-          slug={slug}
-        />
+        <DispatchFeedback result={dispatchResult} activePlanId={activePlanId} slug={slug} />
       ) : null}
     </div>
   );
@@ -898,17 +1016,16 @@ function DispatchFeedback({
   if (dispatchable && planner) {
     const offline = planner.status === "OFFLINE";
     return (
-      <div className="mt-3 rounded-md border border-border bg-card/40 p-2.5 text-meta">
+      <div className="text-meta mt-3 rounded-md border border-border bg-card/40 p-2.5">
         <div className="flex flex-wrap items-center gap-1.5 text-foreground">
           <span className="forge-breath" aria-hidden />
           Dispatched to <span className="font-medium">{planner.name}</span>
-          <span className="text-id text-muted-foreground">{planner.profileKey}</span>
-          · waiting for steps.
+          <span className="text-id text-muted-foreground">{planner.profileKey}</span>· waiting for
+          steps.
         </div>
         {offline ? (
           <div className="mt-1 text-warning">
-            Agent is currently offline — it&apos;ll pick this up when it
-            reconnects.
+            Agent is currently offline — it&apos;ll pick this up when it reconnects.
           </div>
         ) : null}
       </div>
@@ -919,19 +1036,16 @@ function DispatchFeedback({
   const reason = !planner
     ? "No planner agent is assigned to this goal's crew."
     : `${planner.name} can't be reached — it ${
-        planner.runEngine === "RUNS"
-          ? "has no runtime attached"
-          : "has no webhook configured"
+        planner.runEngine === "RUNS" ? "has no runtime attached" : "has no webhook configured"
       }.`;
   return (
-    <div className="mt-3 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-meta text-foreground">
+    <div className="text-meta mt-3 rounded-md border border-warning/30 bg-warning/10 p-2.5 text-foreground">
       <div className="flex items-start gap-1.5">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
         <div>
           <div>{reason}</div>
           <div className="mt-1 text-muted-foreground">
-            Generate with Forge instead, or assign a reachable planner to the
-            crew.
+            Generate with Forge instead, or assign a reachable planner to the crew.
             {activePlanId ? (
               <>
                 {" "}
@@ -991,9 +1105,7 @@ function PlanAttemptCard({
           className="group flex min-w-0 flex-1 items-center gap-2"
         >
           <ListChecks className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <span className="truncate text-sm font-medium group-hover:text-ember">
-            {plan.title}
-          </span>
+          <span className="truncate text-sm font-medium group-hover:text-ember">{plan.title}</span>
         </a>
         <span
           className={cn(
@@ -1022,7 +1134,7 @@ function PlanAttemptCard({
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <a
           href={`/w/${slug}/plans/${plan.id}`}
-          className="inline-flex items-center gap-1 text-meta text-ember hover:underline"
+          className="text-meta inline-flex items-center gap-1 text-ember hover:underline"
         >
           Open plan cockpit <ExternalLink className="h-3 w-3" />
         </a>

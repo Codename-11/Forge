@@ -13165,6 +13165,9 @@ export const mcpTools = {
     input: z.object({
       title: z.string().min(1).max(300),
       description: z.string().max(50_000).nullable().optional(),
+      successCriteria: z.string().max(50_000).nullable().optional(),
+      outcomeSummary: z.string().max(50_000).nullable().optional(),
+      targetDate: z.coerce.date().nullable().optional(),
       issueId: z.string().cuid().nullable().optional(),
       initiativeId: z.string().cuid().nullable().optional(),
       crewId: z.string().cuid().nullable().optional(),
@@ -13175,6 +13178,9 @@ export const mcpTools = {
       input: {
         title: string;
         description?: string | null;
+        successCriteria?: string | null;
+        outcomeSummary?: string | null;
+        targetDate?: Date | null;
         issueId?: string | null;
         initiativeId?: string | null;
         crewId?: string | null;
@@ -13190,11 +13196,51 @@ export const mcpTools = {
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         title: input.title,
         description: input.description ?? null,
+        successCriteria: input.successCriteria ?? null,
+        outcomeSummary: input.outcomeSummary ?? null,
+        targetDate: input.targetDate ?? null,
         issueId: input.issueId ?? null,
         initiativeId: input.initiativeId ?? null,
         crewId: input.crewId ?? null,
         maxTotalCostUsd: input.maxTotalCostUsd ?? null,
         maxWallTimeMinutes: input.maxWallTimeMinutes ?? null,
+      });
+    },
+  },
+
+  "goals.update": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      title: z.string().min(1).max(300).optional(),
+      description: z.string().max(50_000).nullable().optional(),
+      successCriteria: z.string().max(50_000).nullable().optional(),
+      outcomeSummary: z.string().max(50_000).nullable().optional(),
+      targetDate: z.coerce.date().nullable().optional(),
+      crewId: z.string().cuid().nullable().optional(),
+      maxTotalCostUsd: z.number().nonnegative().nullable().optional(),
+      maxWallTimeMinutes: z.number().int().positive().nullable().optional(),
+    }),
+    async run(
+      input: {
+        id: string;
+        title?: string;
+        description?: string | null;
+        successCriteria?: string | null;
+        outcomeSummary?: string | null;
+        targetDate?: Date | null;
+        crewId?: string | null;
+        maxTotalCostUsd?: number | null;
+        maxWallTimeMinutes?: number | null;
+      },
+      ctx: McpContext,
+    ) {
+      const { updateGoal } = await import("@/server/services/orchestration-service");
+      return updateGoal(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        ...input,
       });
     },
   },
@@ -13404,6 +13450,38 @@ export const mcpTools = {
         verdict: input.verdict,
         feedback: input.feedback,
         score: input.score ?? null,
+      });
+    },
+  },
+
+  "plans.comments.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ stepId: z.string().cuid() }),
+    async run(input: { stepId: string }, ctx: McpContext) {
+      const { listExecutionStepComments } =
+        await import("@/server/services/execution-step-comments");
+      return listExecutionStepComments(db, {
+        workspaceId: ctx.workspaceId,
+        stepId: input.stepId,
+      });
+    },
+  },
+
+  "plans.comments.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      stepId: z.string().cuid(),
+      body: z.string().min(1).max(50_000),
+    }),
+    async run(input: { stepId: string; body: string }, ctx: McpContext) {
+      const { createExecutionStepComment } =
+        await import("@/server/services/execution-step-comments");
+      return createExecutionStepComment(db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        stepId: input.stepId,
+        body: input.body,
       });
     },
   },

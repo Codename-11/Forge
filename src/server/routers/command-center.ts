@@ -1,12 +1,8 @@
 import { z } from "zod";
-import {
-  ActionRequestStatus,
-  AgentRunStatus,
-  GoalStatus,
-  ReviewGateStatus,
-} from "@prisma/client";
+import { ActionRequestStatus, AgentRunStatus, GoalStatus, ReviewGateStatus } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { listRunRecoveryItems } from "@/server/services/agent-run-recovery";
+import { listReviewGatesWithContext } from "@/server/services/review-gate-context";
 
 /** Goal statuses that mean a goal is live and worth surfacing. */
 const LIVE_GOAL_STATUSES = [GoalStatus.PLANNING, GoalStatus.ACTIVE];
@@ -98,7 +94,9 @@ export const commandCenterRouter = router({
               // input.limit after collapsing.
               take: 200,
               include: {
-                requestedByAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+                requestedByAgent: {
+                  select: { id: true, name: true, profileKey: true, avatar: true },
+                },
                 requestedByUser: { select: { id: true, name: true, image: true } },
                 issue: {
                   select: {
@@ -111,13 +109,10 @@ export const commandCenterRouter = router({
               },
             })
           : Promise.resolve([]),
-        ctx.db.reviewGate.findMany({
-          where: {
-            workspaceId: ctx.workspaceId,
-            status: ReviewGateStatus.PENDING,
-          },
-          orderBy: { createdAt: "desc" },
-          take: input.limit,
+        listReviewGatesWithContext(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          status: ReviewGateStatus.PENDING,
+          limit: input.limit,
         }),
         ctx.db.agentRun.findMany({
           where: {

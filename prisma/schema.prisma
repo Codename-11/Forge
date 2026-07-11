@@ -3064,6 +3064,12 @@ model Goal {
   workspaceId        String
   title              String
   description        String?    @db.Text
+  /// Observable definition of success, kept separate from planner context.
+  successCriteria    String?    @db.Text
+  /// Operator-facing closeout summary populated during or after delivery.
+  outcomeSummary     String?    @db.Text
+  /// Optional outcome horizon; plans retain their own execution budgets.
+  targetDate         DateTime?
   status             GoalStatus @default(OPEN)
   issueId            String?
   /// Optional parent Initiative (AXI-58) — places a goal in the strategy
@@ -3091,6 +3097,7 @@ model Goal {
   plans          ExecutionPlan[]
 
   @@index([workspaceId, status])
+  @@index([workspaceId, targetDate])
   @@index([initiativeId])
 }
 

@@ -53,6 +53,9 @@ export const goalRouter = router({
       z.object({
         title: z.string().min(1).max(300),
         description: z.string().max(50_000).nullable().optional(),
+        successCriteria: z.string().max(50_000).nullable().optional(),
+        outcomeSummary: z.string().max(50_000).nullable().optional(),
+        targetDate: z.coerce.date().nullable().optional(),
         issueId: z.string().cuid().nullable().optional(),
         initiativeId: z.string().cuid().nullable().optional(),
         crewId: z.string().cuid().nullable().optional(),
@@ -67,6 +70,9 @@ export const goalRouter = router({
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         title: input.title,
         description: input.description ?? null,
+        successCriteria: input.successCriteria ?? null,
+        outcomeSummary: input.outcomeSummary ?? null,
+        targetDate: input.targetDate ?? null,
         issueId: input.issueId ?? null,
         initiativeId: input.initiativeId ?? null,
         crewId: input.crewId ?? null,
@@ -81,6 +87,9 @@ export const goalRouter = router({
         id: z.string().cuid(),
         title: z.string().min(1).max(300).optional(),
         description: z.string().max(50_000).nullable().optional(),
+        successCriteria: z.string().max(50_000).nullable().optional(),
+        outcomeSummary: z.string().max(50_000).nullable().optional(),
+        targetDate: z.coerce.date().nullable().optional(),
         initiativeId: z.string().cuid().nullable().optional(),
         crewId: z.string().cuid().nullable().optional(),
         maxTotalCostUsd: z.number().nonnegative().nullable().optional(),
@@ -94,19 +103,15 @@ export const goalRouter = router({
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         id: input.id,
         title: input.title,
-        description:
-          input.description === undefined ? undefined : input.description,
-        initiativeId:
-          input.initiativeId === undefined ? undefined : input.initiativeId,
+        description: input.description === undefined ? undefined : input.description,
+        successCriteria: input.successCriteria === undefined ? undefined : input.successCriteria,
+        outcomeSummary: input.outcomeSummary === undefined ? undefined : input.outcomeSummary,
+        targetDate: input.targetDate === undefined ? undefined : input.targetDate,
+        initiativeId: input.initiativeId === undefined ? undefined : input.initiativeId,
         crewId: input.crewId === undefined ? undefined : input.crewId,
-        maxTotalCostUsd:
-          input.maxTotalCostUsd === undefined
-            ? undefined
-            : input.maxTotalCostUsd,
+        maxTotalCostUsd: input.maxTotalCostUsd === undefined ? undefined : input.maxTotalCostUsd,
         maxWallTimeMinutes:
-          input.maxWallTimeMinutes === undefined
-            ? undefined
-            : input.maxWallTimeMinutes,
+          input.maxWallTimeMinutes === undefined ? undefined : input.maxWallTimeMinutes,
       });
     }),
 

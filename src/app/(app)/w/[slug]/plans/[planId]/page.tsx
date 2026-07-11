@@ -1390,6 +1390,7 @@ function StepCard({
 
   return (
     <div
+      id={`step-${step.id}`}
       ref={attachRef}
       data-status={step.status}
       className={cn(

@@ -47,10 +47,9 @@ export default function GoalsPage() {
   const [filter, setFilter] = useState<Filter>("all");
   const goalRouter = useGoalRouter();
 
-  const listQuery = goalRouter?.list?.useQuery(
-    filter === "all" ? undefined : { status: filter },
-    { staleTime: 15_000 },
-  );
+  const listQuery = goalRouter?.list?.useQuery(filter === "all" ? undefined : { status: filter }, {
+    staleTime: 15_000,
+  });
   const available = Boolean(goalRouter?.list);
   const data = listQuery?.data;
   const isLoading = available ? (listQuery?.isLoading ?? true) : false;
@@ -93,12 +92,16 @@ export default function GoalsPage() {
 
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [successCriteria, setSuccessCriteria] = useState("");
+  const [targetDate, setTargetDate] = useState("");
   const [crewId, setCrewId] = useState<string | null>(null);
   const createGoal = goalRouter?.create?.useMutation({
     onSuccess: (result) => {
       setCreating(false);
       setTitle("");
       setDescription("");
+      setSuccessCriteria("");
+      setTargetDate("");
       setCrewId(null);
       invalidateGoalList();
       toast.success("Goal created.");
@@ -130,11 +133,7 @@ export default function GoalsPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <div className="mb-3 flex flex-wrap items-center gap-1">
-          <FilterPill
-            label="All"
-            active={filter === "all"}
-            onClick={() => setFilter("all")}
-          />
+          <FilterPill label="All" active={filter === "all"} onClick={() => setFilter("all")} />
           {GOAL_STATUSES.map((s) => (
             <FilterPill
               key={s}
@@ -152,10 +151,9 @@ export default function GoalsPage() {
             title="Goals are coming online"
             description={
               <span>
-                The orchestration backend isn&apos;t wired into this
-                workspace yet. Once it is, goals you spin up with{" "}
-                <span className="font-mono">/goal</span> from an issue
-                will appear here with live plan progress and budget burn.
+                The orchestration backend isn&apos;t wired into this workspace yet. Once it is,
+                goals you spin up with <span className="font-mono">/goal</span> from an issue will
+                appear here with live plan progress and budget burn.
               </span>
             }
           />
@@ -181,12 +179,10 @@ export default function GoalsPage() {
               title={filter === "all" ? "No goals yet" : `No ${filter.toLowerCase()} goals`}
               description={
                 <span>
-                  A goal is a high-level objective an agent crew drives to
-                  completion on its own. Hit{" "}
-                  <span className="font-medium text-foreground">New goal</span>{" "}
-                  above, or type{" "}
-                  <span className="font-mono">/goal &lt;objective&gt;</span> in
-                  any issue&apos;s comment composer.
+                  A goal is a high-level objective an agent crew drives to completion on its own.
+                  Hit <span className="font-medium text-foreground">New goal</span> above, or type{" "}
+                  <span className="font-mono">/goal &lt;objective&gt;</span> in any issue&apos;s
+                  comment composer.
                 </span>
               }
               action={
@@ -205,11 +201,7 @@ export default function GoalsPage() {
                 "Goal loop · Decompose → Plan → …" expands to the full
                 phase callout. Keeps the loop legible without re-teaching
                 the empty state. */}
-            <GoalLoopExplainerCollapsible
-              className="mb-3"
-              label="Goal loop"
-              slug
-            />
+            <GoalLoopExplainerCollapsible className="mb-3" label="Goal loop" slug />
             <ul className="grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-3">
               {items.map((goal, idx) => (
                 <li
@@ -238,6 +230,8 @@ export default function GoalsPage() {
           await createGoal.mutateAsync({
             title: title.trim(),
             description: description.trim() || null,
+            successCriteria: successCriteria.trim() || null,
+            targetDate: targetDate ? new Date(`${targetDate}T12:00:00`) : null,
             crewId: crewId ?? undefined,
           });
         }}
@@ -253,6 +247,25 @@ export default function GoalsPage() {
             className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
           />
         </QuickForm.Field>
+        <QuickForm.Field label="Success criteria">
+          <textarea
+            name="successCriteria"
+            value={successCriteria}
+            onChange={(e) => setSuccessCriteria(e.target.value)}
+            rows={3}
+            placeholder="What observable outcome proves this goal is achieved?"
+            className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+          />
+        </QuickForm.Field>
+        <QuickForm.Field label="Target date (optional)">
+          <input
+            name="targetDate"
+            type="date"
+            value={targetDate}
+            onChange={(e) => setTargetDate(e.target.value)}
+            className="w-full rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+          />
+        </QuickForm.Field>
         <QuickForm.Field label="Context for the planner (optional)">
           <textarea
             name="description"
@@ -260,15 +273,11 @@ export default function GoalsPage() {
             onChange={(e) => setDescription(e.target.value)}
             rows={3}
             placeholder="Constraints, links, acceptance criteria…"
-            className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-meta"
+            className="text-meta w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2"
           />
         </QuickForm.Field>
         <QuickForm.Field label="Crew that runs it">
-          <CrewSelector
-            value={crewId}
-            onChange={setCrewId}
-            noneLabel="No crew (assign later)"
-          />
+          <CrewSelector value={crewId} onChange={setCrewId} noneLabel="No crew (assign later)" />
         </QuickForm.Field>
       </QuickForm>
     </>
@@ -324,8 +333,10 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
 
   const spent = goal.totalCostUsd ?? 0;
   const cap = goal.maxTotalCostUsd ?? null;
-  const pct =
-    typeof cap === "number" && cap > 0 ? Math.min((spent / cap) * 100, 100) : 0;
+  const pct = typeof cap === "number" && cap > 0 ? Math.min((spent / cap) * 100, 100) : 0;
+  const needsAttention = ["NEEDS_REVIEW", "BLOCKED", "WAITING_REVIEW"].includes(
+    goal.operating?.health ?? "",
+  );
 
   return (
     <Link
@@ -336,7 +347,7 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-center gap-1.5 text-meta uppercase tracking-wide text-muted-foreground">
+        <div className="text-meta flex items-center gap-1.5 uppercase tracking-wide text-muted-foreground">
           <span className="relative inline-flex">
             <Target className="h-3 w-3" />
             {live ? (
@@ -359,13 +370,26 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
         {goal.title}
       </div>
       {goal.description ? (
-        <p className="line-clamp-2 text-meta text-muted-foreground">
-          {goal.description}
-        </p>
+        <p className="text-meta line-clamp-2 text-muted-foreground">{goal.description}</p>
+      ) : null}
+      {goal.operating ? (
+        <div
+          className={cn(
+            "text-meta rounded-md border px-2 py-1.5",
+            needsAttention
+              ? "border-warning/30 bg-warning/5 text-warning"
+              : "border-border bg-background/30 text-muted-foreground",
+          )}
+        >
+          <div className="mb-0.5 text-[10px] font-medium uppercase tracking-wide">
+            {goal.operating.health.replaceAll("_", " ").toLowerCase()}
+          </div>
+          <div className="line-clamp-2">{goal.operating.nextAction}</div>
+        </div>
       ) : null}
 
       {/* Crew + plan-count meta row */}
-      <div className="flex items-center gap-1.5 text-meta text-muted-foreground">
+      <div className="text-meta flex items-center gap-1.5 text-muted-foreground">
         <UsersRound className="h-3 w-3" />
         {goal.crew?.name ? (
           <>
@@ -390,13 +414,11 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
         {/* Segmented step ladder — one segment per step. */}
         {stepsTotal > 0 ? (
           <div>
-            <div className="flex items-center justify-between text-meta text-muted-foreground">
+            <div className="text-meta flex items-center justify-between text-muted-foreground">
               <span>
                 {stepsDone}/{stepsTotal} steps
               </span>
-              <span className="tabular-nums">
-                {Math.round((stepsDone / stepsTotal) * 100)}%
-              </span>
+              <span className="tabular-nums">{Math.round((stepsDone / stepsTotal) * 100)}%</span>
             </div>
             <div className="mt-1 flex h-1.5 gap-px overflow-hidden rounded-full bg-subtle">
               {Array.from({ length: stepsTotal }).map((_, idx) => (
@@ -419,16 +441,12 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
         {/* Dedicated budget meter. */}
         {typeof cap === "number" && cap > 0 ? (
           <div>
-            <div className="flex items-center justify-between text-meta text-muted-foreground">
+            <div className="text-meta flex items-center justify-between text-muted-foreground">
               <span>Budget</span>
               <span
                 className={cn(
                   "font-mono tabular-nums",
-                  pct >= 100
-                    ? "text-danger"
-                    : pct >= 80
-                      ? "text-warning"
-                      : "text-muted-foreground",
+                  pct >= 100 ? "text-danger" : pct >= 80 ? "text-warning" : "text-muted-foreground",
                 )}
               >
                 {fmtUsd(spent)} / {fmtUsd(cap)}
@@ -445,11 +463,9 @@ function GoalCard({ goal, slug }: { goal: GoalRow; slug: string }) {
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between text-meta text-muted-foreground">
+          <div className="text-meta flex items-center justify-between text-muted-foreground">
             <span>Budget</span>
-            <span className="font-mono tabular-nums text-muted-foreground">
-              {fmtUsd(spent)}
-            </span>
+            <span className="font-mono tabular-nums text-muted-foreground">{fmtUsd(spent)}</span>
           </div>
         )}
       </div>

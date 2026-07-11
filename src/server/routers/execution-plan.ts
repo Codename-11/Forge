@@ -1,15 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import {
-  EventKind,
-  ExecutionPlanStatus,
-  ExecutionStepStatus,
-  Prisma,
-} from "@prisma/client";
+import { EventKind, ExecutionPlanStatus, ExecutionStepStatus, Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
-import { extractMentions } from "@/server/services/mentions";
+import {
+  createExecutionStepComment,
+  listExecutionStepComments,
+} from "@/server/services/execution-step-comments";
 import { activatePlan, retryExecutionStep } from "@/server/services/orchestration-service";
 import {
   addExecutionStep,
@@ -86,9 +84,7 @@ export const executionPlanRouter = router({
       });
       const items = rows.map((row) => ({
         ...row,
-        doneSteps: row.steps.filter(
-          (s) => s.status === ExecutionStepStatus.DONE,
-        ).length,
+        doneSteps: row.steps.filter((s) => s.status === ExecutionStepStatus.DONE).length,
       }));
       return { items };
     }),
@@ -492,10 +488,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      if (
-        ctx.membership.role !== "OWNER" &&
-        ctx.membership.role !== "ADMIN"
-      ) {
+      if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "Admin role required to hard-delete an execution plan.",
@@ -585,12 +578,9 @@ export const executionPlanRouter = router({
         title: input.title,
         body: input.body === undefined ? undefined : input.body,
         status: input.status,
-        assignedAgentId:
-          input.assignedAgentId === undefined ? undefined : input.assignedAgentId,
-        assignedUserId:
-          input.assignedUserId === undefined ? undefined : input.assignedUserId,
-        expectedOutput:
-          input.expectedOutput === undefined ? undefined : input.expectedOutput,
+        assignedAgentId: input.assignedAgentId === undefined ? undefined : input.assignedAgentId,
+        assignedUserId: input.assignedUserId === undefined ? undefined : input.assignedUserId,
+        expectedOutput: input.expectedOutput === undefined ? undefined : input.expectedOutput,
         verification: input.verification ?? undefined,
         sourceRunId: input.sourceRunId === undefined ? undefined : input.sourceRunId,
         dependsOnStepIds: input.dependsOnStepIds,
@@ -627,28 +617,9 @@ export const executionPlanRouter = router({
   stepCommentList: workspaceProcedure
     .input(z.object({ stepId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
-      // Workspace gate: confirm the step belongs to this workspace
-      // before returning anything attached to it.
-      const step = await ctx.db.executionStep.findFirst({
-        where: { id: input.stepId, workspaceId: ctx.workspaceId },
-        select: { id: true },
-      });
-      if (!step) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
-      }
-      const rows = await ctx.db.comment.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          executionStepId: input.stepId,
-          deletedAt: null,
-        },
-        orderBy: { createdAt: "asc" },
-        include: {
-          author: { select: { id: true, name: true, image: true } },
-          authoringAgent: {
-            select: { id: true, name: true, profileKey: true, avatar: true },
-          },
-        },
+      const rows = await listExecutionStepComments(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        stepId: input.stepId,
       });
       return { items: rows };
     }),
@@ -661,78 +632,14 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // Step must exist + be in this workspace. Done outside the
-      // transaction to keep the audit-emit txn short.
-      const step = await ctx.db.executionStep.findFirst({
-        where: { id: input.stepId, workspaceId: ctx.workspaceId },
-        select: { id: true, planId: true },
-      });
-      if (!step) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
-      }
-
-      return ctx.db.$transaction(async (tx) => {
-        const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
-
-        const comment = await tx.comment.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            executionStepId: input.stepId,
-            authorId: ctx.session.user.id,
-            body: input.body,
-            authoringAgentId,
-          },
-          include: {
-            author: { select: { id: true, name: true, image: true } },
-            authoringAgent: {
-              select: { id: true, name: true, profileKey: true, avatar: true },
-            },
-          },
-        });
-
-        // Resolve @profileKey tokens to Agents in this workspace — same
-        // shape as comment.create so downstream tooling that looks at
-        // COMMENT_CREATED payloads sees a uniform `mentions` array
-        // regardless of the comment's subject surface.
-        const tokens = extractMentions(input.body);
-        const mentions: Array<{ agentId: string; profileKey: string }> = [];
-        if (tokens.length) {
-          const matches = await tx.agent.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              profileKey: { in: tokens },
-              archivedAt: null,
-            },
-            select: { id: true, profileKey: true },
-          });
-          for (const a of matches) {
-            mentions.push({ agentId: a.id, profileKey: a.profileKey });
-          }
-        }
-
-        await recordChange(tx, {
-          workspaceId: ctx.workspaceId,
-          actorId: ctx.session.user.id,
-          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
-          entity: "Comment",
-          entityId: comment.id,
-          action: "create",
-          after: comment,
-          eventKind: EventKind.COMMENT_CREATED,
-          subjectType: "execution-step",
-          subjectId: input.stepId,
-          payload: {
-            commentId: comment.id,
-            executionStepId: input.stepId,
-            planId: step.planId,
-            preview: input.body.slice(0, 120),
-            mentions,
-          },
-          ip: ctx.ip,
-          userAgent: ctx.userAgent,
-        });
-
-        return comment;
+      return createExecutionStepComment(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        stepId: input.stepId,
+        body: input.body,
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
       });
     }),
 
@@ -753,8 +660,7 @@ export const executionPlanRouter = router({
       // Author-or-admin gate. `ctx.membership.role` is injected by
       // workspaceProcedure middleware (OWNER / ADMIN / MEMBER).
       const isAuthor = comment.authorId === ctx.session.user.id;
-      const isAdmin =
-        ctx.membership.role === "OWNER" || ctx.membership.role === "ADMIN";
+      const isAdmin = ctx.membership.role === "OWNER" || ctx.membership.role === "ADMIN";
       if (!isAuthor && !isAdmin) {
         throw new TRPCError({
           code: "FORBIDDEN",

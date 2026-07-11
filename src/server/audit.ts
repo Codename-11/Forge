@@ -866,7 +866,7 @@ export async function recordChange(
     (params.eventKind === EventKind.COMMENT_CREATED ||
       (params.eventKind === EventKind.COMMENT_UPDATED &&
         (params.payload as { edited?: boolean } | undefined)?.edited === true)) &&
-    params.subjectType === "issue";
+    (params.subjectType === "issue" || params.subjectType === "execution-step");
   if (isCommentMentionEvent) {
     // Normalize to a flat list of agent ids regardless of incoming shape.
     const mentionedAgentIds = mentionedAgentIdsFromPayload(params.payload);

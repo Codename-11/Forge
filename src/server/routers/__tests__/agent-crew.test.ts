@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ReviewGateStatus } from "@prisma/client";
+import {
+  ExecutionPlanStatus,
+  ExecutionStepStatus,
+  GoalStatus,
+  ReviewGateStatus,
+} from "@prisma/client";
 import { agentCrewRouter, reviewGateRouter } from "@/server/routers/agent-crew";
 import {
   buildContext,
@@ -128,9 +133,66 @@ describe("agentCrewRouter + reviewGateRouter", () => {
     expect(row.resolution).toBe("LGTM");
 
     // Re-resolving rejects.
-    await expect(
-      gateCaller.resolve({ id: open.id, decision: "APPROVED" }),
-    ).rejects.toThrow(/already/);
+    await expect(gateCaller.resolve({ id: open.id, decision: "APPROVED" })).rejects.toThrow(
+      /already/,
+    );
+  });
+
+  it("passes an execution-step gate through the verdict lifecycle", async () => {
+    const { fixture, prisma, gateCaller } = await setup();
+    const goal = await prisma.goal.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Ship reviewed work",
+        status: GoalStatus.ACTIVE,
+      },
+    });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        goalId: goal.id,
+        title: "Reviewed plan",
+        status: ExecutionPlanStatus.RUNNING,
+        isActiveAttempt: true,
+      },
+    });
+    const reviewStep = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        title: "Review me",
+        position: 0,
+        status: ExecutionStepStatus.REVIEW,
+      },
+    });
+    const nextStep = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        title: "Continue after review",
+        position: 1,
+        status: ExecutionStepStatus.TODO,
+        dependsOnStepIds: [reviewStep.id],
+      },
+    });
+    const gate = await gateCaller.open({
+      targetType: "execution-step",
+      targetId: reviewStep.id,
+      prompt: "Does the completed work satisfy the step?",
+    });
+
+    await gateCaller.resolve({
+      id: gate.id,
+      decision: "APPROVED",
+      resolution: "Verification passed.",
+    });
+
+    const [reviewed, downstream] = await Promise.all([
+      prisma.executionStep.findUniqueOrThrow({ where: { id: reviewStep.id } }),
+      prisma.executionStep.findUniqueOrThrow({ where: { id: nextStep.id } }),
+    ]);
+    expect(reviewed.status).toBe(ExecutionStepStatus.DONE);
+    expect(downstream.status).toBe(ExecutionStepStatus.READY);
   });
 
   it("resolves a human label + number for issue targets in list", async () => {

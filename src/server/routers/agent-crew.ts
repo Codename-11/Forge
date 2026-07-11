@@ -1,11 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import {
-  EventKind,
-  ExecutionStepStatus,
-  GoalStatus,
-  ReviewGateStatus,
-} from "@prisma/client";
+import { EventKind, ExecutionStepStatus, GoalStatus, ReviewGateStatus } from "@prisma/client";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
@@ -19,6 +14,7 @@ import {
   updateAgentCrew,
   type AgentCrewRole,
 } from "@/server/services/agent-crew-service";
+import { listReviewGatesWithContext } from "@/server/services/review-gate-context";
 
 /** Step statuses that mean a crew member has queued or active work. */
 const ACTIVE_STEP_STATUSES: ExecutionStepStatus[] = [
@@ -111,9 +107,7 @@ export const agentCrewRouter = router({
       // one query — avoids an N+1 across members. We only pull plans that
       // belong to this crew (the loop dispatches a crew's steps from its
       // own plans), so "current activity" is scoped to this crew's work.
-      const agentIds = Array.from(
-        new Set(crew.members.map((m) => m.agentId)),
-      );
+      const agentIds = Array.from(new Set(crew.members.map((m) => m.agentId)));
       const activeSteps = agentIds.length
         ? await ctx.db.executionStep.findMany({
             where: {
@@ -396,58 +390,11 @@ export const reviewGateRouter = router({
         .default({}),
     )
     .query(async ({ ctx, input }) => {
-      const rows = await ctx.db.reviewGate.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          status: input.status,
-          targetType: input.targetType,
-        },
-        orderBy: { createdAt: "desc" },
-        take: input.limit,
-      });
-      // Resolve a human-readable label per target so the Review page shows
-      // *what* is being gated (issue key + title / plan / goal) rather than a
-      // raw cuid. Batched per type to avoid N+1.
-      const idsByType = (type: string) =>
-        rows.filter((r) => r.targetType === type).map((r) => r.targetId);
-      const [issues, plans, goals] = await Promise.all([
-        idsByType("issue").length
-          ? ctx.db.issue.findMany({
-              where: { id: { in: idsByType("issue") }, workspaceId: ctx.workspaceId },
-              select: { id: true, number: true, title: true },
-            })
-          : Promise.resolve([]),
-        idsByType("execution-plan").length
-          ? ctx.db.executionPlan.findMany({
-              where: { id: { in: idsByType("execution-plan") }, workspaceId: ctx.workspaceId },
-              select: { id: true, title: true },
-            })
-          : Promise.resolve([]),
-        idsByType("goal").length
-          ? ctx.db.goal.findMany({
-              where: { id: { in: idsByType("goal") }, workspaceId: ctx.workspaceId },
-              select: { id: true, title: true },
-            })
-          : Promise.resolve([]),
-      ]);
-      const issueMap = new Map(issues.map((i) => [i.id, i]));
-      const planMap = new Map(plans.map((p) => [p.id, p.title]));
-      const goalMap = new Map(goals.map((g) => [g.id, g.title]));
-      const items = rows.map((r) => {
-        const issue = r.targetType === "issue" ? issueMap.get(r.targetId) : undefined;
-        const targetLabel =
-          issue?.title ??
-          (r.targetType === "execution-plan"
-            ? planMap.get(r.targetId)
-            : r.targetType === "goal"
-              ? goalMap.get(r.targetId)
-              : undefined) ??
-          null;
-        return {
-          ...r,
-          targetLabel,
-          targetNumber: issue?.number ?? null,
-        };
+      const items = await listReviewGatesWithContext(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        status: input.status,
+        targetType: input.targetType,
+        limit: input.limit,
       });
       return { items };
     }),

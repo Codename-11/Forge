@@ -13,14 +13,28 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
 
 /** Deep-link a gate target where it can be acted on; null if not routable. */
-function gateTargetHref(slug: string, targetType: string, targetId: string): string | null {
-  switch (targetType) {
+function gateTargetHref(
+  slug: string,
+  gate: {
+    targetType: string;
+    targetId: string;
+    targetContext?: {
+      kind: string;
+      step?: { plan?: { id: string } };
+    } | null;
+  },
+): string | null {
+  switch (gate.targetType) {
     case "execution-plan":
-      return `/w/${slug}/plans/${targetId}`;
+      return `/w/${slug}/plans/${gate.targetId}`;
+    case "execution-step": {
+      const planId = gate.targetContext?.step?.plan?.id;
+      return planId ? `/w/${slug}/plans/${planId}#step-${gate.targetId}` : null;
+    }
     case "goal":
-      return `/w/${slug}/goals/${targetId}`;
+      return `/w/${slug}/goals/${gate.targetId}`;
     case "issue":
-      return `/w/${slug}/issues/${targetId}`;
+      return `/w/${slug}/issues/${gate.targetId}`;
     default:
       return null;
   }
@@ -52,10 +66,7 @@ export default function ReviewPage() {
   const utils = trpc.useUtils();
   const [filter, setFilter] = useState<string>("open");
 
-  const status = useMemo(
-    () => FILTER_OPTIONS.find((f) => f.key === filter)?.status,
-    [filter],
-  );
+  const status = useMemo(() => FILTER_OPTIONS.find((f) => f.key === filter)?.status, [filter]);
 
   const { data, isLoading } = trpc.reviewGate.list.useQuery({
     status,
@@ -124,17 +135,17 @@ export default function ReviewPage() {
               >
                 <div className="flex flex-wrap items-start justify-between gap-2 sm:flex-nowrap">
                   <div className="min-w-0 flex-1">
-                    <div className="flex min-w-0 flex-wrap items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
+                    <div className="text-meta flex min-w-0 flex-wrap items-center gap-2 uppercase tracking-wide text-muted-foreground">
                       <Shield className="h-3 w-3" />
                       <span>{gate.targetType.replace("-", " ")}</span>
                       <span aria-hidden>·</span>
-                      {gateTargetHref(ws.slug, gate.targetType, gate.targetId) ? (
+                      {gateTargetHref(ws.slug, gate) ? (
                         <Link
-                          href={gateTargetHref(ws.slug, gate.targetType, gate.targetId)!}
+                          href={gateTargetHref(ws.slug, gate)!}
                           className="inline-flex min-w-0 items-center gap-1 normal-case hover:underline"
                         >
-                          {gate.targetType === "issue" && gate.targetNumber != null && (
-                            <span className="shrink-0 font-mono text-id text-ember">
+                          {gate.targetNumber != null && (
+                            <span className="text-id shrink-0 font-mono text-ember">
                               {formatIssueId(ws.key, gate.targetNumber)}
                             </span>
                           )}
@@ -150,8 +161,15 @@ export default function ReviewPage() {
                       )}
                     </div>
                     <p className="mt-1 whitespace-pre-wrap text-sm">{gate.prompt}</p>
+                    {gate.targetContext?.kind === "execution-step" ? (
+                      <StepReviewEvidence
+                        slug={ws.slug}
+                        workspaceKey={ws.key}
+                        step={gate.targetContext.step}
+                      />
+                    ) : null}
                     {gate.resolution ? (
-                      <p className="mt-1 whitespace-pre-wrap text-meta text-muted-foreground">
+                      <p className="text-meta mt-1 whitespace-pre-wrap text-muted-foreground">
                         <span className="uppercase tracking-wide opacity-70">Resolution: </span>
                         {gate.resolution}
                       </p>
@@ -166,6 +184,10 @@ export default function ReviewPage() {
                 {gate.status === "PENDING" ? (
                   <GateDecisionRow
                     busy={resolve.isPending}
+                    stepReview={
+                      gate.targetContext?.kind === "execution-step" &&
+                      gate.targetContext.step.status === "REVIEW"
+                    }
                     onResolve={(decision, resolution) =>
                       resolve.mutate({ id: gate.id, decision, resolution: resolution || null })
                     }
@@ -186,9 +208,11 @@ export default function ReviewPage() {
 
 function GateDecisionRow({
   busy,
+  stepReview,
   onResolve,
 }: {
   busy: boolean;
+  stepReview: boolean;
   onResolve: (decision: "APPROVED" | "REJECTED" | "CANCELED", resolution: string) => void;
 }) {
   const [resolution, setResolution] = useState("");
@@ -197,8 +221,12 @@ function GateDecisionRow({
       <input
         value={resolution}
         onChange={(e) => setResolution(e.target.value)}
-        placeholder="Resolution note (optional)"
-        className="w-full rounded-md border border-border bg-card/40 px-3 py-1.5 text-meta"
+        placeholder={
+          stepReview
+            ? "Review note (required when requesting changes)"
+            : "Resolution note (optional)"
+        }
+        className="text-meta w-full rounded-md border border-border bg-card/40 px-3 py-1.5"
       />
       <div className="flex flex-wrap gap-2">
         <Button
@@ -207,16 +235,16 @@ function GateDecisionRow({
           disabled={busy}
           onClick={() => onResolve("APPROVED", resolution)}
         >
-          <Check className="h-3.5 w-3.5" /> Approve
+          <Check className="h-3.5 w-3.5" /> {stepReview ? "Pass & continue" : "Approve"}
         </Button>
         <Button
           size="sm"
           variant="ghost"
           className="text-destructive"
-          disabled={busy}
+          disabled={busy || (stepReview && !resolution.trim())}
           onClick={() => onResolve("REJECTED", resolution)}
         >
-          <X className="h-3.5 w-3.5" /> Reject
+          <X className="h-3.5 w-3.5" /> {stepReview ? "Request changes" : "Reject"}
         </Button>
         <Button
           size="sm"
@@ -228,6 +256,94 @@ function GateDecisionRow({
           Cancel
         </Button>
       </div>
+    </div>
+  );
+}
+
+type StepReviewEvidenceProps = {
+  slug: string;
+  workspaceKey: string;
+  step: {
+    id: string;
+    title: string;
+    position: number;
+    status: string;
+    expectedOutput: string | null;
+    plan: {
+      id: string;
+      title: string;
+      _count: { steps: number };
+      goal: { id: string; title: string } | null;
+    };
+    issue: { id: string; number: number; title: string } | null;
+    assignedAgent: { name: string; profileKey: string } | null;
+    runs: Array<{
+      id: string;
+      summary: string | null;
+      verificationResult: unknown;
+      producedArtifactIds: string[];
+      completedAt: string | Date | null;
+      agent: { name: string; profileKey: string };
+    }>;
+  };
+};
+
+function StepReviewEvidence({ slug, workspaceKey, step }: StepReviewEvidenceProps) {
+  const run = step.runs[0] ?? null;
+  const checks = Array.isArray(run?.verificationResult) ? run.verificationResult : [];
+  const completedChecks = checks.filter(
+    (item) => item && typeof item === "object" && "done" in item && item.done === true,
+  ).length;
+  return (
+    <div className="mt-3 rounded-md border border-border bg-background/40 p-2.5">
+      <div className="text-meta flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+        {step.plan.goal ? <span>{step.plan.goal.title}</span> : null}
+        {step.plan.goal ? <span aria-hidden>›</span> : null}
+        <Link
+          href={`/w/${slug}/plans/${step.plan.id}#step-${step.id}`}
+          className="text-ember hover:underline"
+        >
+          {step.plan.title} · step {step.position + 1} of {step.plan._count.steps}
+        </Link>
+        {step.issue ? (
+          <>
+            <span aria-hidden>·</span>
+            <Link
+              href={`/w/${slug}/issues/${step.issue.id}`}
+              className="font-mono text-ember hover:underline"
+            >
+              {formatIssueId(workspaceKey, step.issue.number)}
+            </Link>
+          </>
+        ) : null}
+      </div>
+      <div className="text-meta mt-2 flex flex-wrap gap-2 text-muted-foreground">
+        <span>
+          Worker · @{step.assignedAgent?.profileKey ?? run?.agent.profileKey ?? "unassigned"}
+        </span>
+        {run?.completedAt ? (
+          <span>Completed · {new Date(run.completedAt).toLocaleString()}</span>
+        ) : null}
+        {checks.length > 0 ? (
+          <span>
+            Checks · {completedChecks}/{checks.length}
+          </span>
+        ) : null}
+        {run?.producedArtifactIds.length ? (
+          <span>Artifacts · {run.producedArtifactIds.length}</span>
+        ) : null}
+      </div>
+      {run?.summary ? (
+        <p className="mt-2 line-clamp-4 whitespace-pre-wrap text-sm text-foreground/85">
+          {run.summary}
+        </p>
+      ) : null}
+      {step.expectedOutput ? (
+        <p className="text-meta mt-2 text-muted-foreground">
+          <span className="uppercase tracking-wide opacity-70">Expected · </span>
+          {step.expectedOutput}
+        </p>
+      ) : null}
     </div>
   );
 }

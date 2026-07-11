@@ -11,10 +11,7 @@ import {
 } from "@/server/services/agent-run";
 import { FORGE_RUN_CONTRACT_VERSION, forgeRunInstruction } from "@/server/services/engagement-mode";
 import { deriveRepoPath } from "@/server/services/repo-path";
-import {
-  buildRuntimePolicySnapshot,
-  type RuntimePolicySnapshot,
-} from "@/lib/runtime-enforcement";
+import { buildRuntimePolicySnapshot, type RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { getRunsConnectorForAgent, resolveRunEngine, type AgentRuntimeRef } from "./registry";
 import {
   clearBudgetMarkers,
@@ -127,8 +124,7 @@ function runtimePolicyGrantContext(policy: RuntimePolicySnapshot): string {
   const tools = policy.allowedHostTools.length
     ? policy.allowedHostTools.join(", ")
     : "no host tools";
-  const access =
-    grant.accessLevel === "READ_ONLY" ? "read-only" : "full";
+  const access = grant.accessLevel === "READ_ONLY" ? "read-only" : "full";
   const scope = grant.scopePath ? ` within ${grant.scopePath}` : "";
   return (
     `\n\nOne-time runtime tool grant approved for this run: ` +
@@ -272,19 +268,20 @@ async function startNewRuns(): Promise<number> {
 
     try {
       const { externalRunId } = await connector.startRun({
-        message: issueMessage(
-          {
-            id: issue.id,
-            key: issueKey(issue.workspace.key, issue.number),
-            title: issue.title,
-            description: issue.description,
-            repo: issue.project?.repoUrl
-              ? { url: issue.project.repoUrl, branch: issue.project.repoBranch }
-              : null,
-          },
-          instruction,
-          already?.id ?? null,
-        ) + runtimePolicyGrantContext(runtimePolicy),
+        message:
+          issueMessage(
+            {
+              id: issue.id,
+              key: issueKey(issue.workspace.key, issue.number),
+              title: issue.title,
+              description: issue.description,
+              repo: issue.project?.repoUrl
+                ? { url: issue.project.repoUrl, branch: issue.project.repoBranch }
+                : null,
+            },
+            instruction,
+            already?.id ?? null,
+          ) + runtimePolicyGrantContext(runtimePolicy),
         instructions: instruction,
         engagementMode,
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -378,7 +375,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
   let started = 0;
   for (const run of runs) {
     if (started >= limit) break;
-    const [issue, agent] = await Promise.all([
+    const [issue, agent, triggerEvent] = await Promise.all([
       db.issue.findUnique({
         where: { id: run.issueId },
         select: {
@@ -407,6 +404,12 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
           },
         },
       }),
+      run.triggerEventId
+        ? db.activityEvent.findUnique({
+            where: { id: run.triggerEventId },
+            select: { kind: true, payload: true },
+          })
+        : null,
     ]);
     if (!issue || !agent) continue;
     if (agent.runtime?.disabledAt) continue;
@@ -430,24 +433,31 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       buildRuntimePolicySnapshot({
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
         engagementMode,
-        adapterKey:
-          agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
+        adapterKey: agent.runtime?.adapterKey ?? (agent.provider === "HERMES" ? "hermes" : null),
         runtimeName: agent.runtime?.name ?? null,
         config: agent.runtime?.config,
       });
 
     try {
+      const triggerPayload = triggerEvent?.payload as Record<string, unknown> | null;
+      const operatorContext =
+        triggerEvent?.kind === "COMMENT_CREATED" && typeof triggerPayload?.body === "string"
+          ? `\n\nOperator comment${typeof triggerPayload.executionStepId === "string" ? " on this plan step" : ""}:\n${triggerPayload.body}`
+          : "";
       const { externalRunId } = await connector.startRun({
-        message: issueMessage(
-          {
-            id: issue.id,
-            key: issueKey(issue.workspace.key, issue.number),
-            title: issue.title,
-            description: issue.description,
-          },
-          instruction,
-          run.id,
-        ) + runtimePolicyGrantContext(runtimePolicy),
+        message:
+          issueMessage(
+            {
+              id: issue.id,
+              key: issueKey(issue.workspace.key, issue.number),
+              title: issue.title,
+              description: issue.description,
+            },
+            instruction,
+            run.id,
+          ) +
+          operatorContext +
+          runtimePolicyGrantContext(runtimePolicy),
         instructions: instruction,
         engagementMode,
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -490,9 +500,9 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       });
       started++;
     } catch (err) {
-        logger.warn(
-          { err, runId: run.id, issueId: run.issueId },
-          "runs-dispatch: start unbacked run failed",
+      logger.warn(
+        { err, runId: run.id, issueId: run.issueId },
+        "runs-dispatch: start unbacked run failed",
       );
     }
   }
@@ -621,10 +631,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
 
     const waitingReason = (run.currentStep || run.summary || "").trim();
     const replyBlock = replies
-      .map(
-        (r) =>
-          `${r.authoringAgent?.name ?? r.author?.name ?? "Operator"}: ${r.body}`,
-      )
+      .map((r) => `${r.authoringAgent?.name ?? r.author?.name ?? "Operator"}: ${r.body}`)
       .join("\n\n");
     const message =
       issueMessage(
@@ -805,7 +812,9 @@ async function pollActiveRuns(): Promise<number> {
       if (Math.abs(delta) > 1e-9) {
         await db.agentRun
           .update({ where: { id: run.id }, data: { costUsd: polledCost } })
-          .catch((err) => logger.warn({ err, runId: run.id }, "runs-dispatch: cost persist failed"));
+          .catch((err) =>
+            logger.warn({ err, runId: run.id }, "runs-dispatch: cost persist failed"),
+          );
         await applyPolledCostDelta(run, delta);
       }
     }
@@ -958,9 +967,7 @@ async function pollActiveRuns(): Promise<number> {
             workspaceId: run.workspaceId,
             issueId: run.issueId,
             agentId: run.agentId,
-            body:
-              `[dispatch · run ${terminal.toLowerCase()}]\n\n` +
-              summary,
+            body: `[dispatch · run ${terminal.toLowerCase()}]\n\n` + summary,
           });
         }
         const usage = status.usage;

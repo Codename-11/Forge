@@ -130,10 +130,7 @@ describe("executionPlanRouter", () => {
       where: { executionStepId: step.id },
       orderBy: { startedAt: "asc" },
     });
-    expect(runs.map((r) => r.status)).toEqual([
-      AgentRunStatus.STALLED,
-      AgentRunStatus.ACTIVE,
-    ]);
+    expect(runs.map((r) => r.status)).toEqual([AgentRunStatus.STALLED, AgentRunStatus.ACTIVE]);
     expect(runs[1].issueId).toBe(issue.id);
 
     const event = await prisma.activityEvent.findFirst({
@@ -226,12 +223,12 @@ describe("executionPlanRouter — step comments", () => {
     const { caller: callerA } = await setupWithStep();
     const { step: stepB } = await setupWithStep();
     // callerA is scoped to workspace A; stepB lives in workspace B.
-    await expect(
-      callerA.stepCommentCreate({ stepId: stepB.id, body: "hi" }),
-    ).rejects.toThrow(/Execution step not found/);
-    await expect(
-      callerA.stepCommentList({ stepId: stepB.id }),
-    ).rejects.toThrow(/Execution step not found/);
+    await expect(callerA.stepCommentCreate({ stepId: stepB.id, body: "hi" })).rejects.toThrow(
+      /Execution step not found/,
+    );
+    await expect(callerA.stepCommentList({ stepId: stepB.id })).rejects.toThrow(
+      /Execution step not found/,
+    );
   });
 
   it("emits COMMENT_CREATED observable via ActivityEvent query", async () => {
@@ -252,6 +249,44 @@ describe("executionPlanRouter — step comments", () => {
     const payload = event!.payload as { commentId?: string; planId?: string };
     expect(payload.commentId).toBe(created.id);
     expect(payload.planId).toBeTruthy();
+  });
+
+  it("materializes a step and opens a canonical run when an agent is mentioned", async () => {
+    const { fixture, caller, step } = await setupWithStep();
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `comment-agent-${Date.now()}`,
+        name: "Comment Agent",
+      },
+    });
+
+    await caller.stepCommentCreate({
+      stepId: step.id,
+      body: `@${agent.profileKey} please inspect the failed verification and respond here.`,
+    });
+
+    const updatedStep = await prisma.executionStep.findUniqueOrThrow({
+      where: { id: step.id },
+      select: { issueId: true },
+    });
+    expect(updatedStep.issueId).toBeTruthy();
+    const run = await prisma.agentRun.findFirst({
+      where: { executionStepId: step.id, agentId: agent.id },
+      orderBy: { startedAt: "desc" },
+    });
+    expect(run).toMatchObject({
+      issueId: updatedStep.issueId,
+      triggerKind: "COMMENT_CREATED",
+    });
+    const event = await prisma.activityEvent.findUniqueOrThrow({
+      where: { id: run!.triggerEventId! },
+    });
+    expect(event.payload).toMatchObject({
+      executionStepId: step.id,
+      body: expect.stringContaining("failed verification"),
+    });
   });
 
   it("author can delete their own step comment (soft-delete)", async () => {
@@ -298,9 +333,9 @@ describe("executionPlanRouter — step comments", () => {
     });
     const otherCaller = executionPlanRouter.createCaller(otherCtx);
 
-    await expect(
-      otherCaller.stepCommentDelete({ commentId: created.id }),
-    ).rejects.toThrow(/author or a workspace admin/);
+    await expect(otherCaller.stepCommentDelete({ commentId: created.id })).rejects.toThrow(
+      /author or a workspace admin/,
+    );
   });
 
   it("workspace admin can delete another user's step comment", async () => {

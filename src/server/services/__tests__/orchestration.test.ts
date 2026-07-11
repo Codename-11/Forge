@@ -162,13 +162,21 @@ describe("orchestration: goals", () => {
       actorId: fixture.user.id,
       title: "Ship the thing",
       description: "do it well",
+      successCriteria: "The release is live and verification passes.",
+      targetDate: new Date("2026-08-01T12:00:00.000Z"),
       maxTotalCostUsd: 5,
     });
     const got = await getGoal(prisma, { workspaceId: fixture.workspace.id, id });
     expect(got.title).toBe("Ship the thing");
     expect(got.status).toBe(GoalStatus.OPEN);
     expect(got.maxTotalCostUsd).toBe(5);
+    expect(got.successCriteria).toContain("verification passes");
+    expect(got.targetDate?.toISOString()).toBe("2026-08-01T12:00:00.000Z");
     expect(got.aggregate.totalSteps).toBe(0);
+    expect(got.operating).toMatchObject({
+      health: "NEEDS_PLAN",
+      nextAction: "Create an execution plan",
+    });
 
     await abandonGoal(prisma, {
       workspaceId: fixture.workspace.id,
@@ -200,6 +208,8 @@ describe("orchestration: goals", () => {
       id,
       title: "Updated goal",
       description: "new detail",
+      successCriteria: "All acceptance checks are green.",
+      outcomeSummary: "The migration completed without downtime.",
       maxTotalCostUsd: 12,
       maxWallTimeMinutes: 45,
     });
@@ -207,6 +217,8 @@ describe("orchestration: goals", () => {
     const goal = await getGoal(prisma, { workspaceId: fixture.workspace.id, id });
     expect(goal.title).toBe("Updated goal");
     expect(goal.description).toBe("new detail");
+    expect(goal.successCriteria).toBe("All acceptance checks are green.");
+    expect(goal.outcomeSummary).toContain("without downtime");
     expect(goal.maxTotalCostUsd).toBe(12);
     expect(goal.maxWallTimeMinutes).toBe(45);
 

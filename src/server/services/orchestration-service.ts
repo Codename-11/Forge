@@ -177,6 +177,9 @@ export interface CreateGoalInput {
   actorAgentId?: string | null;
   title: string;
   description?: string | null;
+  successCriteria?: string | null;
+  outcomeSummary?: string | null;
+  targetDate?: Date | null;
   issueId?: string | null;
   initiativeId?: string | null;
   crewId?: string | null;
@@ -227,6 +230,9 @@ export async function createGoal(
         workspaceId: input.workspaceId,
         title: input.title.trim(),
         description: input.description ?? null,
+        successCriteria: input.successCriteria ?? null,
+        outcomeSummary: input.outcomeSummary ?? null,
+        targetDate: input.targetDate ?? null,
         issueId: input.issueId ?? null,
         initiativeId: input.initiativeId ?? null,
         crewId: input.crewId ?? null,
@@ -242,7 +248,12 @@ export async function createGoal(
       entity: "goal",
       entityId: goal.id,
       action: "created",
-      after: { title: goal.title, status: goal.status },
+      after: {
+        title: goal.title,
+        status: goal.status,
+        successCriteria: goal.successCriteria,
+        targetDate: goal.targetDate,
+      },
       eventKind: EventKind.GOAL_CREATED,
       subjectType: "goal",
       subjectId: goal.id,
@@ -264,6 +275,9 @@ export interface UpdateGoalInput {
   id: string;
   title?: string;
   description?: string | null;
+  successCriteria?: string | null;
+  outcomeSummary?: string | null;
+  targetDate?: Date | null;
   initiativeId?: string | null;
   crewId?: string | null;
   maxTotalCostUsd?: number | null;
@@ -280,6 +294,9 @@ export async function updateGoal(
       id: true,
       title: true,
       description: true,
+      successCriteria: true,
+      outcomeSummary: true,
+      targetDate: true,
       status: true,
       initiativeId: true,
       crewId: true,
@@ -325,6 +342,9 @@ export async function updateGoal(
   const goalData: Prisma.GoalUpdateInput = {
     title: input.title?.trim() ?? undefined,
     description: input.description === undefined ? undefined : input.description,
+    successCriteria: input.successCriteria === undefined ? undefined : input.successCriteria,
+    outcomeSummary: input.outcomeSummary === undefined ? undefined : input.outcomeSummary,
+    targetDate: input.targetDate === undefined ? undefined : input.targetDate,
     initiative:
       input.initiativeId === undefined
         ? undefined
@@ -380,6 +400,9 @@ export async function updateGoal(
       before: {
         title: goal.title,
         description: goal.description,
+        successCriteria: goal.successCriteria,
+        outcomeSummary: goal.outcomeSummary,
+        targetDate: goal.targetDate,
         initiativeId: goal.initiativeId,
         crewId: goal.crewId,
         maxTotalCostUsd: goal.maxTotalCostUsd,
@@ -388,6 +411,11 @@ export async function updateGoal(
       after: {
         title: input.title?.trim() ?? goal.title,
         description: input.description === undefined ? goal.description : input.description,
+        successCriteria:
+          input.successCriteria === undefined ? goal.successCriteria : input.successCriteria,
+        outcomeSummary:
+          input.outcomeSummary === undefined ? goal.outcomeSummary : input.outcomeSummary,
+        targetDate: input.targetDate === undefined ? goal.targetDate : input.targetDate,
         initiativeId: input.initiativeId === undefined ? goal.initiativeId : input.initiativeId,
         crewId: input.crewId === undefined ? goal.crewId : input.crewId,
         maxTotalCostUsd:
@@ -440,6 +468,8 @@ export async function getGoal(db: PrismaClient, params: { workspaceId: string; i
                       id: true,
                       status: true,
                       summary: true,
+                      producedArtifactIds: true,
+                      verificationResult: true,
                       currentStep: true,
                       startedAt: true,
                       lastEventAt: true,
@@ -482,6 +512,8 @@ export async function getGoal(db: PrismaClient, params: { workspaceId: string; i
                   id: true,
                   status: true,
                   summary: true,
+                  producedArtifactIds: true,
+                  verificationResult: true,
                   currentStep: true,
                   triggerKind: true,
                   externalRunId: true,
@@ -575,7 +607,97 @@ export async function getGoal(db: PrismaClient, params: { workspaceId: string; i
       blockedSteps: counts.get(ExecutionStepStatus.BLOCKED) ?? 0,
     };
   }
-  return { ...goal, aggregate };
+  const activeSteps = activePlan?.steps ?? [];
+  const activeStepIds = activeSteps.map((step) => step.id);
+  const gates = activeStepIds.length
+    ? await db.reviewGate.findMany({
+        where: {
+          workspaceId: params.workspaceId,
+          targetType: "execution-step",
+          targetId: { in: activeStepIds },
+        },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: {
+          id: true,
+          targetId: true,
+          status: true,
+          prompt: true,
+          resolution: true,
+          createdAt: true,
+          resolvedAt: true,
+          resolvedBy: { select: { id: true, name: true } },
+          resolvedByAgent: { select: { id: true, name: true, profileKey: true } },
+        },
+      })
+    : [];
+  const artifactIds = Array.from(
+    new Set(
+      activeSteps.flatMap((step) => {
+        const direct = step.runs?.[0]?.producedArtifactIds ?? [];
+        const issueRun = step.issue?.agentRuns?.[0]?.producedArtifactIds ?? [];
+        return [...direct, ...issueRun];
+      }),
+    ),
+  );
+  const outputs = artifactIds.length
+    ? await db.artifact.findMany({
+        where: { workspaceId: params.workspaceId, id: { in: artifactIds }, archivedAt: null },
+        orderBy: { updatedAt: "desc" },
+        select: { id: true, title: true, slug: true, type: true, status: true, summary: true },
+      })
+    : [];
+  const pendingGates = gates.filter((gate) => gate.status === "PENDING");
+  const blockedStep = activeSteps.find((step) => step.status === ExecutionStepStatus.BLOCKED);
+  const reviewStep = activeSteps.find((step) => step.status === ExecutionStepStatus.REVIEW);
+  const runningStep = activeSteps.find((step) => step.status === ExecutionStepStatus.RUNNING);
+  const readyStep = activeSteps.find((step) => step.status === ExecutionStepStatus.READY);
+  const health =
+    goal.status === GoalStatus.ACHIEVED
+      ? "ACHIEVED"
+      : goal.status === GoalStatus.ABANDONED
+        ? "ABANDONED"
+        : pendingGates.length > 0
+          ? "NEEDS_REVIEW"
+          : blockedStep
+            ? "BLOCKED"
+            : runningStep
+              ? "RUNNING"
+              : reviewStep
+                ? "WAITING_REVIEW"
+                : readyStep
+                  ? "READY"
+                  : activePlan
+                    ? "PLANNING"
+                    : "NEEDS_PLAN";
+  const focusStep = blockedStep ?? reviewStep ?? runningStep ?? readyStep ?? null;
+  const nextAction = pendingGates.length
+    ? "Review completed work"
+    : blockedStep
+      ? `Resolve blocked step: ${blockedStep.title}`
+      : reviewStep
+        ? `Review step: ${reviewStep.title}`
+        : runningStep
+          ? `In progress: ${runningStep.title}`
+          : readyStep
+            ? `Ready to run: ${readyStep.title}`
+            : activePlan
+              ? "Finish or approve the active plan"
+              : "Create an execution plan";
+  return {
+    ...goal,
+    aggregate,
+    operating: {
+      health,
+      nextAction,
+      focusStep: focusStep
+        ? { id: focusStep.id, title: focusStep.title, status: focusStep.status }
+        : null,
+      pendingGates,
+      recentDecisions: gates.filter((gate) => gate.status !== "PENDING").slice(0, 8),
+      outputs,
+    },
+  };
 }
 
 export async function listGoals(
@@ -588,7 +710,7 @@ export async function listGoals(
     limit?: number;
   },
 ) {
-  return db.goal.findMany({
+  const goals = await db.goal.findMany({
     where: {
       workspaceId: params.workspaceId,
       status: params.status,
@@ -597,7 +719,73 @@ export async function listGoals(
     },
     orderBy: { updatedAt: "desc" },
     take: params.limit ?? 50,
-    include: { _count: { select: { plans: true } } },
+    include: {
+      _count: { select: { plans: true } },
+      crew: { select: { id: true, name: true } },
+      plans: {
+        where: { isActiveAttempt: true },
+        take: 1,
+        select: {
+          id: true,
+          status: true,
+          steps: {
+            orderBy: { position: "asc" },
+            select: { id: true, title: true, status: true },
+          },
+        },
+      },
+    },
+  });
+  const stepIds = goals.flatMap((goal) =>
+    goal.plans.flatMap((plan) => plan.steps.map((s) => s.id)),
+  );
+  const pendingGates = stepIds.length
+    ? await db.reviewGate.findMany({
+        where: {
+          workspaceId: params.workspaceId,
+          targetType: "execution-step",
+          targetId: { in: stepIds },
+          status: "PENDING",
+        },
+        select: { id: true, targetId: true },
+      })
+    : [];
+  const gatedStepIds = new Set(pendingGates.map((gate) => gate.targetId));
+  return goals.map((goal) => {
+    const plan = goal.plans[0] ?? null;
+    const steps = plan?.steps ?? [];
+    const gated = steps.find((step) => gatedStepIds.has(step.id));
+    const blocked = steps.find((step) => step.status === ExecutionStepStatus.BLOCKED);
+    const running = steps.find((step) => step.status === ExecutionStepStatus.RUNNING);
+    const review = steps.find((step) => step.status === ExecutionStepStatus.REVIEW);
+    const ready = steps.find((step) => step.status === ExecutionStepStatus.READY);
+    const focus = gated ?? blocked ?? review ?? running ?? ready ?? null;
+    const health = gated
+      ? "NEEDS_REVIEW"
+      : blocked
+        ? "BLOCKED"
+        : running
+          ? "RUNNING"
+          : review
+            ? "WAITING_REVIEW"
+            : ready
+              ? "READY"
+              : plan
+                ? "PLANNING"
+                : goal.status;
+    return {
+      ...goal,
+      activePlan: plan,
+      operating: {
+        health,
+        nextAction: focus
+          ? `${focus.status === "REVIEW" ? "Review" : focus.status === "BLOCKED" ? "Unblock" : focus.status === "RUNNING" ? "Running" : "Next"}: ${focus.title}`
+          : plan
+            ? "Finish or approve the active plan"
+            : "Create an execution plan",
+        pendingGateCount: steps.filter((step) => gatedStepIds.has(step.id)).length,
+      },
+    };
   });
 }
 
@@ -1967,7 +2155,23 @@ export async function recordVerdict(
     score?: number | null;
   },
 ): Promise<{ outcome: "DONE" | "RETRY" | "BLOCKED"; retryCount: number }> {
-  const step = await db.executionStep.findFirst({
+  return db.$transaction((tx) => recordVerdictTx(tx, params));
+}
+
+/** Transactional verdict primitive shared by judges and human ReviewGates. */
+export async function recordVerdictTx(
+  tx: Tx,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    stepId: string;
+    verdict: "PASS" | "FAIL";
+    feedback: string;
+    score?: number | null;
+  },
+): Promise<{ outcome: "DONE" | "RETRY" | "BLOCKED"; retryCount: number }> {
+  const step = await tx.executionStep.findFirst({
     where: { id: params.stepId, workspaceId: params.workspaceId },
     select: {
       id: true,
@@ -2006,85 +2210,76 @@ export async function recordVerdict(
     judgedAt: new Date().toISOString(),
   };
 
-  let outcome: "DONE" | "RETRY" | "BLOCKED";
   let nextRetryCount = step.retryCount;
 
-  await db.$transaction(async (tx) => {
-    if (params.verdict === "PASS") {
-      outcome = "DONE";
-      await tx.executionStep.update({
-        where: { id: step.id },
-        data: {
-          status: ExecutionStepStatus.DONE,
-          judgeVerdict: verdictJson as unknown as Prisma.InputJsonValue,
-          lastFeedback: null,
-        },
-      });
-      await recordStepJudged(tx, params, step, verdictJson, "DONE");
-      // Cascade: dependents may now be READY.
-      await cascadeReadiness(tx, {
-        workspaceId: params.workspaceId,
-        planId: step.planId,
-        actorId: params.actorId,
-      });
-      await maybeCompleteGoal(tx, {
-        workspaceId: params.workspaceId,
-        planId: step.planId,
-        actorId: params.actorId,
-      });
-      return;
-    }
-
-    // FAIL.
-    if (step.retryCount < step.plan.maxStepRetries) {
-      outcome = "RETRY";
-      nextRetryCount = step.retryCount + 1;
-      await tx.executionStep.update({
-        where: { id: step.id },
-        data: {
-          status: ExecutionStepStatus.TODO,
-          retryCount: nextRetryCount,
-          lastFeedback: params.feedback,
-          judgeVerdict: verdictJson as unknown as Prisma.InputJsonValue,
-        },
-      });
-      await recordStepJudged(tx, params, step, verdictJson, "RETRY");
-      // Re-dispatch by re-readying (deps already satisfied since it ran).
-      await transitionStepToReady(tx, {
-        workspaceId: params.workspaceId,
-        stepId: step.id,
-        actorId: params.actorId,
-      });
-      return;
-    }
-
-    // Retries exhausted → BLOCKED + ReviewGate.
-    outcome = "BLOCKED";
+  if (params.verdict === "PASS") {
     await tx.executionStep.update({
       where: { id: step.id },
       data: {
-        status: ExecutionStepStatus.BLOCKED,
+        status: ExecutionStepStatus.DONE,
         judgeVerdict: verdictJson as unknown as Prisma.InputJsonValue,
-        lastFeedback: params.feedback,
+        lastFeedback: null,
       },
     });
-    await recordStepJudged(tx, params, step, verdictJson, "BLOCKED");
-    await openReviewGateTx(tx, {
+    await recordStepJudged(tx, params, step, verdictJson, "DONE");
+    await cascadeReadiness(tx, {
       workspaceId: params.workspaceId,
+      planId: step.planId,
       actorId: params.actorId,
-      actorAgentId: params.actorAgentId ?? null,
-      targetType: "execution-step",
-      targetId: step.id,
-      prompt:
-        `Step "${step.title}" failed judging ${nextRetryCount + 1} time(s) ` +
-        `(retry budget exhausted). Latest feedback: ${params.feedback}. ` +
-        `Intervene: revise the step, reassign, or abandon the plan.`,
-      requiredRole: null,
-      crewId: step.plan.crewId,
     });
-  });
+    await maybeCompleteGoal(tx, {
+      workspaceId: params.workspaceId,
+      planId: step.planId,
+      actorId: params.actorId,
+    });
+    return { outcome: "DONE", retryCount: nextRetryCount };
+  }
 
-  return { outcome: outcome!, retryCount: nextRetryCount };
+  // FAIL.
+  if (step.retryCount < step.plan.maxStepRetries) {
+    nextRetryCount = step.retryCount + 1;
+    await tx.executionStep.update({
+      where: { id: step.id },
+      data: {
+        status: ExecutionStepStatus.TODO,
+        retryCount: nextRetryCount,
+        lastFeedback: params.feedback,
+        judgeVerdict: verdictJson as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await recordStepJudged(tx, params, step, verdictJson, "RETRY");
+    await transitionStepToReady(tx, {
+      workspaceId: params.workspaceId,
+      stepId: step.id,
+      actorId: params.actorId,
+    });
+    return { outcome: "RETRY", retryCount: nextRetryCount };
+  }
+
+  // Retries exhausted → BLOCKED + ReviewGate.
+  await tx.executionStep.update({
+    where: { id: step.id },
+    data: {
+      status: ExecutionStepStatus.BLOCKED,
+      judgeVerdict: verdictJson as unknown as Prisma.InputJsonValue,
+      lastFeedback: params.feedback,
+    },
+  });
+  await recordStepJudged(tx, params, step, verdictJson, "BLOCKED");
+  await openReviewGateTx(tx, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    actorAgentId: params.actorAgentId ?? null,
+    targetType: "execution-step",
+    targetId: step.id,
+    prompt:
+      `Step "${step.title}" failed judging ${nextRetryCount + 1} time(s) ` +
+      `(retry budget exhausted). Latest feedback: ${params.feedback}. ` +
+      `Intervene: revise the step, reassign, or abandon the plan.`,
+    requiredRole: null,
+    crewId: step.plan.crewId,
+  });
+  return { outcome: "BLOCKED", retryCount: nextRetryCount };
 }
 
 async function recordStepJudged(

@@ -792,6 +792,21 @@ type CCReviewGate = {
   prompt: string;
   targetType: string;
   targetId: string;
+  targetLabel?: string | null;
+  targetNumber?: number | null;
+  targetContext?: {
+    kind: string;
+    step?: {
+      id: string;
+      title: string;
+      position: number;
+      status: string;
+      plan: { id: string; title: string; _count: { steps: number } };
+      issue: { id: string; number: number; title: string } | null;
+      assignedAgent: { profileKey: string } | null;
+      runs: Array<{ summary: string | null; completedAt: string | Date | null }>;
+    };
+  } | null;
 };
 
 function ReviewGateDecisionCard({
@@ -808,7 +823,9 @@ function ReviewGateDecisionCard({
   // reviewGate.resolve is an adminProcedure — only OWNER/ADMIN can act
   // inline. Everyone else still gets the deep link to inspect the target.
   const canResolve = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
-  const href = gateTargetHref(slug, gate.targetType, gate.targetId);
+  const href = gateTargetHref(slug, gate);
+  const step = gate.targetContext?.kind === "execution-step" ? gate.targetContext.step : null;
+  const stepReview = step?.status === "REVIEW";
   const [showResolution, setShowResolution] = useState(false);
   const [resolution, setResolution] = useState("");
 
@@ -831,15 +848,22 @@ function ReviewGateDecisionCard({
       <div className="flex flex-col gap-0.5">
         {href ? (
           <Link href={href} className="text-sm font-medium hover:underline">
-            {gate.prompt.slice(0, 80)}
+            {step
+              ? `${step.title} · step ${step.position + 1} of ${step.plan._count.steps}`
+              : gate.prompt.slice(0, 80)}
           </Link>
         ) : (
           <span className="text-sm font-medium">{gate.prompt.slice(0, 80)}</span>
         )}
         <span className="text-meta text-muted-foreground">
-          {gate.targetType.replace(/-/g, " ")}
+          {step
+            ? `${step.plan.title}${step.issue ? ` · ${step.issue.title}` : ""}`
+            : gate.targetType.replace(/-/g, " ")}
           {href ? "" : ` · ${gate.targetId.slice(0, 12)}…`}
         </span>
+        {step?.runs[0]?.summary ? (
+          <p className="text-meta line-clamp-2 text-muted-foreground">{step.runs[0].summary}</p>
+        ) : null}
       </div>
       {!canResolve ? (
         <span className="text-meta italic text-muted-foreground">
@@ -874,13 +898,13 @@ function ReviewGateDecisionCard({
               ) : (
                 <Check className="h-3 w-3" />
               )}
-              Approve
+              {stepReview ? "Pass & continue" : "Approve"}
             </Button>
             <Button
               size="sm"
               variant="ghost"
               className="text-destructive"
-              disabled={resolve.isPending}
+              disabled={resolve.isPending || (stepReview && !resolution.trim())}
               onClick={() =>
                 resolve.mutate({
                   id: gate.id,
@@ -890,7 +914,7 @@ function ReviewGateDecisionCard({
               }
             >
               <X className="h-3 w-3" />
-              Reject
+              {stepReview ? "Request changes" : "Reject"}
             </Button>
             <Button
               size="sm"
@@ -913,7 +937,7 @@ function ReviewGateDecisionCard({
             disabled={resolve.isPending}
             onClick={() => resolve.mutate({ id: gate.id, decision: "APPROVED", resolution: null })}
           >
-            <Check className="h-3 w-3" /> Approve
+            <Check className="h-3 w-3" /> {stepReview ? "Pass & continue" : "Approve"}
           </Button>
           <Button
             size="sm"
@@ -1180,14 +1204,18 @@ function RunFailureCard({
  * bare execution-step, which has no standalone page) — those render as
  * plain text.
  */
-function gateTargetHref(slug: string, targetType: string, targetId: string): string | null {
-  switch (targetType) {
+function gateTargetHref(slug: string, gate: CCReviewGate): string | null {
+  switch (gate.targetType) {
     case "execution-plan":
-      return `/w/${slug}/plans/${targetId}`;
+      return `/w/${slug}/plans/${gate.targetId}`;
+    case "execution-step": {
+      const planId = gate.targetContext?.step?.plan.id;
+      return planId ? `/w/${slug}/plans/${planId}#step-${gate.targetId}` : null;
+    }
     case "goal":
-      return `/w/${slug}/goals/${targetId}`;
+      return `/w/${slug}/goals/${gate.targetId}`;
     case "issue":
-      return `/w/${slug}/issues/${targetId}`;
+      return `/w/${slug}/issues/${gate.targetId}`;
     default:
       return null;
   }

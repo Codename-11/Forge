@@ -2,6 +2,37 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-11 — Review gates, actionable Plan comments, and outcome-driven Goals
+
+Closed the orchestration visibility gaps that made active work look stuck and
+made completed work difficult to review from Forge itself.
+
+- **Review gates now drive the step lifecycle.** Execution-step gates hydrate
+  the plan, goal, issue, worker, latest run summary, checks, artifacts, and
+  expected output. Review and Command Center deep-link to the exact Plan step.
+  Passing a gate records a PASS verdict, marks the step done, and releases its
+  dependents; requesting changes requires feedback and records a FAIL verdict
+  through the existing retry/block state machine.
+- **Plan comments are agent-capable.** `plans.comments.list/create` are
+  available over MCP. An explicit `@profileKey` on a freestanding Plan step
+  materializes its issue-backed work record, creates a canonical step-bound
+  AgentRun, and includes the full operator comment in the run instruction so
+  the agent can respond to the request with the right context.
+- **Goals are now an operating surface.** Added success criteria, target date,
+  and outcome summary (migration `0095`). Goal list/detail derive health and
+  next action from the active Plan, steps, and pending gates; attention states
+  link directly to Review or the blocked step. Goal detail rolls up recent gate
+  decisions and artifacts produced by completed step runs. Goal create/update
+  support the new fields in UI, tRPC, and MCP (`goals.update` added).
+- **Regression coverage.** Added integration tests proving gate approval
+  advances the DAG, Plan mentions materialize and wake canonical agent work,
+  and Goal outcome/health fields round-trip correctly.
+
+Verification: `pnpm lint` (passes with existing native-select warnings),
+`pnpm typecheck`, full Vitest suite (**1,096 passed; 1 skipped**), and Playwright
+(**36 passed**). Migration `0095` was applied to the local development/test
+database only. This iteration was committed but intentionally not deployed.
+
 ## 2026-07-08 — CLI: standalone binaries + one-line installers (curl|bash / irm|iex)
 
 Made the `forge` CLI installable without cloning the repo or publishing to npm.

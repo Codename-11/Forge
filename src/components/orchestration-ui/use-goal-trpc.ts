@@ -22,6 +22,9 @@ type GoalRow = {
   id: string;
   title: string;
   description?: string | null;
+  successCriteria?: string | null;
+  outcomeSummary?: string | null;
+  targetDate?: string | Date | null;
   status: string;
   issueId?: string | null;
   // Source issue embedded on `goal.get` — for the "From issue" backlink.
@@ -39,6 +42,36 @@ type GoalRow = {
   // Crew roster embedded on `goal.get` (read-only display).
   crew?: GoalCrewRow | null;
   _count?: { plans?: number } | null;
+  operating?: {
+    health: string;
+    nextAction: string;
+    pendingGateCount?: number;
+    focusStep?: { id: string; title: string; status: string } | null;
+    pendingGates?: Array<{
+      id: string;
+      targetId: string;
+      prompt: string;
+      createdAt: string | Date;
+    }>;
+    recentDecisions?: Array<{
+      id: string;
+      targetId: string;
+      status: string;
+      prompt: string;
+      resolution?: string | null;
+      resolvedAt?: string | Date | null;
+      resolvedBy?: { id: string; name: string | null } | null;
+      resolvedByAgent?: { id: string; name: string; profileKey: string } | null;
+    }>;
+    outputs?: Array<{
+      id: string;
+      title: string;
+      slug: string;
+      type: string;
+      status: string;
+      summary?: string | null;
+    }>;
+  };
 };
 
 type GoalCrewRow = {
@@ -181,6 +214,9 @@ interface GoalRouter {
     {
       title: string;
       description?: string | null;
+      successCriteria?: string | null;
+      outcomeSummary?: string | null;
+      targetDate?: string | Date | null;
       issueId?: string;
       crewId?: string;
       maxTotalCostUsd?: number;
@@ -193,6 +229,9 @@ interface GoalRouter {
       id: string;
       title?: string;
       description?: string | null;
+      successCriteria?: string | null;
+      outcomeSummary?: string | null;
+      targetDate?: string | Date | null;
       initiativeId?: string | null;
       crewId?: string | null;
       maxTotalCostUsd?: number | null;
@@ -204,17 +243,12 @@ interface GoalRouter {
     { goalId: string; plannerAgentId?: string | null; contextSetId?: string | null },
     GoalDecomposeResult
   >;
-  generatePlan?: MutationHook<
-    { goalId: string; contextSetId?: string | null },
-    GoalGenerateResult
-  >;
+  generatePlan?: MutationHook<{ goalId: string; contextSetId?: string | null }, GoalGenerateResult>;
   abandon?: MutationHook<{ id: string }, { ok: boolean }>;
 }
 
 export function useGoalRouter(): GoalRouter | undefined {
-  return (trpc as unknown as Record<string, unknown>).goal as
-    | GoalRouter
-    | undefined;
+  return (trpc as unknown as Record<string, unknown>).goal as GoalRouter | undefined;
 }
 
 export type {

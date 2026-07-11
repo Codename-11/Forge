@@ -1,11 +1,6 @@
 import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import {
-  AgentRunStatus,
-  EngagementMode,
-  EventKind,
-  MentionEngagementPolicy,
-} from "@prisma/client";
+import { AgentRunStatus, EngagementMode, EventKind, MentionEngagementPolicy } from "@prisma/client";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
 import {
   FORGE_RUN_CONTRACT_VERSION,
@@ -202,6 +197,22 @@ export async function ensureCanonicalFromEvent(
   if (params.subjectType === "issue") {
     return ensureIssueRuns(tx, params, agentIds);
   }
+  if (params.subjectType === "execution-step" && COMMENT_WAKE_KINDS.has(params.eventKind)) {
+    const step = await tx.executionStep.findFirst({
+      where: { id: params.subjectId, workspaceId: params.workspaceId },
+      select: { id: true, issueId: true },
+    });
+    if (!step?.issueId) return EMPTY_ENSURE;
+    const payload = {
+      ...(asRecord(params.payload) ?? {}),
+      executionStepId: step.id,
+    };
+    return ensureIssueRuns(
+      tx,
+      { ...params, subjectType: "issue", subjectId: step.issueId, payload },
+      agentIds,
+    );
+  }
   if (params.subjectType === "chat-thread" && params.eventKind === EventKind.CHAT_MESSAGE_POSTED) {
     return ensureChatMessage(tx, params, agentIds);
   }
@@ -322,7 +333,7 @@ async function ensureIssueRuns(
           : wsConfig.assignmentEngagementMode,
         assignmentAgentEngagementMode: forceExecuteDefault
           ? null
-          : (assigned ? issueAssignmentMode : null) ?? agent?.engagementMode ?? null,
+          : ((assigned ? issueAssignmentMode : null) ?? agent?.engagementMode ?? null),
         mentionEngagementPolicy: wsConfig.mentionEngagementPolicy,
         mentionDefaultMode: wsConfig.mentionDefaultMode,
       },
@@ -361,6 +372,10 @@ async function ensureIssueRuns(
       runEngine: engine?.engine ?? null,
       runEngineSource: engine?.source ?? null,
       runtimePolicy: runtimePolicy as Prisma.InputJsonValue | null,
+      executionStepId:
+        typeof asRecord(params.payload)?.executionStepId === "string"
+          ? (asRecord(params.payload)?.executionStepId as string)
+          : null,
     });
     // Stamp the latest trigger on the run so the inbox can distinguish
     // "Victor was just re-mentioned in AXI-31" from "Victor is the

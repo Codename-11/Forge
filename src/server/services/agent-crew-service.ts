@@ -405,7 +405,49 @@ export async function resolveReviewGate(
       message: `Review gate already ${gate.status.toLowerCase()}.`,
     });
   }
+  if (
+    gate.targetType === "execution-step" &&
+    params.decision === "REJECTED" &&
+    !params.resolution?.trim()
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Requesting changes on a plan step requires feedback.",
+    });
+  }
   await db.$transaction(async (tx) => {
+    let verdictOutcome: "DONE" | "RETRY" | "BLOCKED" | null = null;
+    if (
+      gate.targetType === "execution-step" &&
+      (params.decision === "APPROVED" || params.decision === "REJECTED")
+    ) {
+      const step = await tx.executionStep.findFirst({
+        where: { id: gate.targetId, workspaceId: params.workspaceId },
+        select: { status: true },
+      });
+      if (!step) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+      }
+      // REVIEW gates are verdict gates: resolving them must advance the same
+      // state machine as an agent judge. Gates on already-BLOCKED steps remain
+      // intervention records and are resolved without rewriting settled work.
+      if (step.status === "REVIEW") {
+        const { recordVerdictTx } = await import("@/server/services/orchestration-service");
+        const verdict = await recordVerdictTx(tx, {
+          workspaceId: params.workspaceId,
+          actorId: params.actorId,
+          actorAgentId: params.actorAgentId ?? null,
+          stepId: gate.targetId,
+          verdict: params.decision === "APPROVED" ? "PASS" : "FAIL",
+          feedback:
+            params.resolution?.trim() ||
+            (params.decision === "APPROVED"
+              ? "Approved by human reviewer."
+              : "Changes requested by human reviewer."),
+        });
+        verdictOutcome = verdict.outcome;
+      }
+    }
     await tx.reviewGate.update({
       where: { id: gate.id },
       data: {
@@ -432,6 +474,7 @@ export async function resolveReviewGate(
         gateTargetType: gate.targetType,
         gateTargetId: gate.targetId,
         decision: params.decision,
+        verdictOutcome,
       } as Prisma.InputJsonValue,
     });
   });
