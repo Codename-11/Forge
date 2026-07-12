@@ -1,5 +1,5 @@
 "use client";
-import { Fragment, useId, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useId, useMemo, useReducer, useState, type ReactNode } from "react";
 import Link from "next/link";
 import {
   EyeOff,
@@ -342,6 +342,43 @@ type Block =
 
 type Align = "left" | "center" | "right" | null;
 type DirectMediaKind = "image" | "video";
+
+export type PreviewControlState = {
+  hidden: boolean;
+  collapsed: boolean;
+  menuOpen: boolean;
+};
+
+type PreviewControlAction =
+  | { type: "toggleMenu" }
+  | { type: "closeMenu" }
+  | { type: "toggleCollapsed" }
+  | { type: "hide" }
+  | { type: "show" };
+
+const INITIAL_PREVIEW_CONTROL_STATE: PreviewControlState = {
+  hidden: false,
+  collapsed: false,
+  menuOpen: false,
+};
+
+export function reducePreviewControlState(
+  state: PreviewControlState,
+  action: PreviewControlAction,
+): PreviewControlState {
+  switch (action.type) {
+    case "toggleMenu":
+      return { ...state, menuOpen: !state.menuOpen };
+    case "closeMenu":
+      return { ...state, menuOpen: false };
+    case "toggleCollapsed":
+      return { ...state, collapsed: !state.collapsed, menuOpen: false };
+    case "hide":
+      return { ...state, hidden: true, menuOpen: false };
+    case "show":
+      return { hidden: false, collapsed: false, menuOpen: false };
+  }
+}
 
 const IMAGE_EXTENSIONS = new Set(["avif", "gif", "jpg", "jpeg", "png", "webp"]);
 const VIDEO_EXTENSIONS = new Set(["mp4", "ogg", "ogv", "webm"]);
@@ -1124,9 +1161,11 @@ function PreviewControls({
   label: string;
   children: ReactNode;
 }) {
-  const [hidden, setHidden] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [state, dispatch] = useReducer(
+    reducePreviewControlState,
+    INITIAL_PREVIEW_CONTROL_STATE,
+  );
+  const { hidden, collapsed, menuOpen } = state;
   const host = hostLabel(url);
 
   if (hidden) {
@@ -1143,8 +1182,7 @@ function PreviewControls({
         <button
           type="button"
           onClick={() => {
-            setHidden(false);
-            setCollapsed(false);
+            dispatch({ type: "show" });
           }}
           className="focus-ring shrink-0 rounded border border-border bg-background/80 px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-background hover:text-foreground"
         >
@@ -1171,8 +1209,8 @@ function PreviewControls({
             type="button"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            onClick={() => setMenuOpen((v) => !v)}
-            onBlur={() => window.setTimeout(() => setMenuOpen(false), 120)}
+            onClick={() => dispatch({ type: "toggleMenu" })}
+            onBlur={() => window.setTimeout(() => dispatch({ type: "closeMenu" }), 120)}
             className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
             title="Preview actions"
           >
@@ -1188,8 +1226,7 @@ function PreviewControls({
                 role="menuitem"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
-                  setCollapsed((v) => !v);
-                  setMenuOpen(false);
+                  dispatch({ type: "toggleCollapsed" });
                 }}
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-meta hover:bg-subtle"
               >
@@ -1215,8 +1252,7 @@ function PreviewControls({
                 role="menuitem"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
-                  setHidden(true);
-                  setMenuOpen(false);
+                  dispatch({ type: "hide" });
                 }}
                 className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-meta hover:bg-subtle"
               >

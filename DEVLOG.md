@@ -12328,3 +12328,22 @@ density-aware text utilities.
 Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass.
 DB-backed tests were not run because this codex-bridge container has no
 Postgres/Redis service stack.
+
+---
+
+## 2026-07-12 — AXI-98 rich rendering behavior tests
+
+Added focused rich-rendering regression coverage for plain text, multiple
+inline links, direct image/video previews, YouTube embed promotion, unsupported
+links, malformed URLs, preview hide/collapse state transitions, and issue-detail
+usage of `RichContentRenderer`.
+
+Extracted the preview action state into a tiny reducer used by the existing
+preview controls so hide/collapse/show behavior can be tested without adding a
+browser-only test dependency.
+
+Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass;
+`node_modules/.bin/vitest run tests/unit/rich-rendering.test.ts` pass (7).
+`corepack pnpm test` was attempted and reached the normal command, but this
+codex-bridge container has no `DATABASE_URL`/Postgres service, so Prisma-backed
+router/service tests failed during fixture setup.
