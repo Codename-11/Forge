@@ -22,10 +22,7 @@ import {
 import { LinkFavicon } from "@/components/attachments/attachment-chip";
 import { IssueHoverPreview } from "@/components/issue-hover-preview";
 import { AgentHoverPreview } from "@/components/agent-hover-preview";
-import {
-  tryParseDataBlock,
-  type DataBlock,
-} from "@/components/data-blocks/data-block-parser";
+import { tryParseDataBlock, type DataBlock } from "@/components/data-blocks/data-block-parser";
 import { DataBlockTable } from "@/components/data-blocks/data-block-table";
 import { DataBlockList } from "@/components/data-blocks/data-block-list";
 import { DataBlockKV } from "@/components/data-blocks/data-block-kv";
@@ -74,13 +71,11 @@ import { isSafeExternalUrl, toRenderableHref } from "@/lib/url-safety";
 // Forge primitive tokenization
 // ---------------------------------------------------------------------------
 
-const FORGE_ATTACHMENT_RE =
-  /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
+const FORGE_ATTACHMENT_RE = /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
 const FORGE_LINK_RE = /\[([^\]]*)\]\(forge-link:(https?:\/\/[^\s)]+)\)/gi;
 // Issue refs (KEY-NN) and agent mentions (@profileKey). The lookbehind on
 // `@` keeps `email@host` from accidentally matching as a mention.
-const REF_RE =
-  /(\b[A-Z][A-Z0-9]{1,9}-\d+\b)|(?<=^|[\s(,.;:!?])@([a-z0-9][a-z0-9_-]*)/gi;
+const REF_RE = /(\b[A-Z][A-Z0-9]{1,9}-\d+\b)|(?<=^|[\s(,.;:!?])@([a-z0-9][a-z0-9_-]*)/gi;
 // Standard markdown link (used after forge-attachment / forge-link).
 // Excludes the `forge-` schemes so they always win their own pass.
 const MD_LINK_RE = /\[([^\]]+)\]\((?!forge-)([^)\s]+(?:\s+"[^"]*")?)\)/g;
@@ -196,8 +191,7 @@ function tokenizeInline(text: string): InlineSegment[] {
       const idx = m.index ?? 0;
       if (idx > lo) passD.push({ type: "text", value: t.slice(lo, idx) });
       if (m[1]) passD.push({ type: "issueRef", key: m[1].toUpperCase() });
-      else if (m[2])
-        passD.push({ type: "mention", profileKey: m[2].toLowerCase() });
+      else if (m[2]) passD.push({ type: "mention", profileKey: m[2].toLowerCase() });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passD.push({ type: "text", value: t.slice(lo) });
@@ -251,12 +245,9 @@ function parseEmphasis(text: string): InlineSegment[] {
   const codeRe = /`([^`\n]+)`/;
   const codeMatch = text.match(codeRe);
   if (codeMatch && codeMatch.index !== undefined) {
-    if (codeMatch.index > 0)
-      out.push(...parseEmphasis(text.slice(0, codeMatch.index)));
+    if (codeMatch.index > 0) out.push(...parseEmphasis(text.slice(0, codeMatch.index)));
     out.push({ type: "code", value: codeMatch[1] });
-    out.push(
-      ...parseEmphasis(text.slice(codeMatch.index + codeMatch[0].length)),
-    );
+    out.push(...parseEmphasis(text.slice(codeMatch.index + codeMatch[0].length)));
     return out;
   }
 
@@ -264,13 +255,10 @@ function parseEmphasis(text: string): InlineSegment[] {
   const boldRe = /\*\*([^*\n]+?)\*\*|__([^_\n]+?)__/;
   const boldMatch = text.match(boldRe);
   if (boldMatch && boldMatch.index !== undefined) {
-    if (boldMatch.index > 0)
-      out.push(...parseEmphasis(text.slice(0, boldMatch.index)));
+    if (boldMatch.index > 0) out.push(...parseEmphasis(text.slice(0, boldMatch.index)));
     const inner = boldMatch[1] ?? boldMatch[2] ?? "";
     out.push({ type: "bold", children: parseEmphasis(inner) });
-    out.push(
-      ...parseEmphasis(text.slice(boldMatch.index + boldMatch[0].length)),
-    );
+    out.push(...parseEmphasis(text.slice(boldMatch.index + boldMatch[0].length)));
     return out;
   }
 
@@ -278,15 +266,12 @@ function parseEmphasis(text: string): InlineSegment[] {
   const strikeRe = /~~([^~\n]+?)~~/;
   const strikeMatch = text.match(strikeRe);
   if (strikeMatch && strikeMatch.index !== undefined) {
-    if (strikeMatch.index > 0)
-      out.push(...parseEmphasis(text.slice(0, strikeMatch.index)));
+    if (strikeMatch.index > 0) out.push(...parseEmphasis(text.slice(0, strikeMatch.index)));
     out.push({
       type: "strike",
       children: parseEmphasis(strikeMatch[1] ?? ""),
     });
-    out.push(
-      ...parseEmphasis(text.slice(strikeMatch.index + strikeMatch[0].length)),
-    );
+    out.push(...parseEmphasis(text.slice(strikeMatch.index + strikeMatch[0].length)));
     return out;
   }
 
@@ -296,13 +281,10 @@ function parseEmphasis(text: string): InlineSegment[] {
   const italicRe = /(?<!\w)\*([^*\n]+?)\*(?!\w)|(?<!\w)_([^_\n]+?)_(?!\w)/;
   const italicMatch = text.match(italicRe);
   if (italicMatch && italicMatch.index !== undefined) {
-    if (italicMatch.index > 0)
-      out.push(...parseEmphasis(text.slice(0, italicMatch.index)));
+    if (italicMatch.index > 0) out.push(...parseEmphasis(text.slice(0, italicMatch.index)));
     const inner = italicMatch[1] ?? italicMatch[2] ?? "";
     out.push({ type: "italic", children: parseEmphasis(inner) });
-    out.push(
-      ...parseEmphasis(text.slice(italicMatch.index + italicMatch[0].length)),
-    );
+    out.push(...parseEmphasis(text.slice(italicMatch.index + italicMatch[0].length)));
     return out;
   }
 
@@ -594,11 +576,7 @@ function parseBlocks(body: string): Block[] {
           while (align.length < header.length) align.push(null);
           const rows: string[][] = [];
           let j = i + 2;
-          while (
-            j < lines.length &&
-            lines[j].includes("|") &&
-            lines[j].trim() !== ""
-          ) {
+          while (j < lines.length && lines[j].includes("|") && lines[j].trim() !== "") {
             const row = splitTableRow(lines[j]);
             // Pad / truncate to header width so cell layout stays stable
             while (row.length < header.length) row.push("");
@@ -694,11 +672,7 @@ function collectInlineAttachments(
       out.push({ id: seg.attachmentId, label: seg.alt || "image", isImage: true });
     else if (seg.type === "attachmentLink")
       out.push({ id: seg.attachmentId, label: seg.label, isImage: false });
-    else if (
-      seg.type === "bold" ||
-      seg.type === "italic" ||
-      seg.type === "strike"
-    )
+    else if (seg.type === "bold" || seg.type === "italic" || seg.type === "strike")
       for (const c of seg.children) walkSeg(c);
   }
   for (const b of blocks) {
@@ -815,7 +789,7 @@ function renderInlineSegs(
       );
     if (s.type === "strike")
       return (
-        <span key={key} className="line-through text-muted-foreground">
+        <span key={key} className="text-muted-foreground line-through">
           {renderInlineSegs(s.children, inlineList, key)}
         </span>
       );
@@ -832,11 +806,7 @@ function renderInlineSegs(
   });
 }
 
-function renderInline(
-  text: string,
-  inlineList: InlineList,
-  keyBase: string,
-): ReactNode[] {
+function renderInline(text: string, inlineList: InlineList, keyBase: string): ReactNode[] {
   return renderInlineSegs(tokenizeInline(text), inlineList, keyBase);
 }
 
@@ -846,13 +816,7 @@ function renderInline(
  * block children with consistent vertical rhythm; no `whitespace-pre-wrap`
  * because the block parser handles spacing structurally now.
  */
-export function MarkdownWithAttachments({
-  body,
-  className,
-}: {
-  body: string;
-  className?: string;
-}) {
+export function MarkdownWithAttachments({ body, className }: { body: string; className?: string }) {
   const blocks = useMemo(() => parseBlocks(body ?? ""), [body]);
   const inlineList = useMemo(() => collectInlineAttachments(blocks), [blocks]);
 
@@ -869,11 +833,7 @@ export function MarkdownWithAttachments({
 
 export const RichContentRenderer = MarkdownWithAttachments;
 
-function renderBlock(
-  block: Block,
-  idx: number,
-  inlineList: InlineList,
-): ReactNode {
+function renderBlock(block: Block, idx: number, inlineList: InlineList): ReactNode {
   const k = `b-${idx}`;
   if (block.type === "heading") {
     const sizeClass =
@@ -890,17 +850,41 @@ function renderBlock(
     // dynamic-string-to-IntrinsicElements widening in strict mode.
     switch (block.level) {
       case 1:
-        return <h1 key={k} className={sizeClass}>{inner}</h1>;
+        return (
+          <h1 key={k} className={sizeClass}>
+            {inner}
+          </h1>
+        );
       case 2:
-        return <h2 key={k} className={sizeClass}>{inner}</h2>;
+        return (
+          <h2 key={k} className={sizeClass}>
+            {inner}
+          </h2>
+        );
       case 3:
-        return <h3 key={k} className={sizeClass}>{inner}</h3>;
+        return (
+          <h3 key={k} className={sizeClass}>
+            {inner}
+          </h3>
+        );
       case 4:
-        return <h4 key={k} className={sizeClass}>{inner}</h4>;
+        return (
+          <h4 key={k} className={sizeClass}>
+            {inner}
+          </h4>
+        );
       case 5:
-        return <h5 key={k} className={sizeClass}>{inner}</h5>;
+        return (
+          <h5 key={k} className={sizeClass}>
+            {inner}
+          </h5>
+        );
       default:
-        return <h6 key={k} className={sizeClass}>{inner}</h6>;
+        return (
+          <h6 key={k} className={sizeClass}>
+            {inner}
+          </h6>
+        );
     }
   }
   if (block.type === "hr") {
@@ -924,7 +908,10 @@ function renderBlock(
   if (block.type === "list") {
     if (block.ordered) {
       return (
-        <ol key={k} className="my-1.5 ml-5 list-decimal space-y-0.5 marker:text-muted-foreground marker:font-mono marker:text-[0.85em]">
+        <ol
+          key={k}
+          className="my-1.5 ml-5 list-decimal space-y-0.5 marker:font-mono marker:text-[0.85em] marker:text-muted-foreground"
+        >
           {block.items.map((it, j) => (
             <li key={`${k}-${j}`} className="pl-0.5">
               {renderInline(it.text, inlineList, `${k}-${j}`)}
@@ -945,9 +932,7 @@ function renderBlock(
               <span
                 aria-hidden
                 className={`mt-0.5 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border ${
-                  it.checked
-                    ? "border-ember bg-ember/20 text-ember"
-                    : "border-border bg-background"
+                  it.checked ? "border-ember bg-ember/20 text-ember" : "border-border bg-background"
                 }`}
               >
                 {it.checked ? "✓" : ""}
@@ -963,10 +948,8 @@ function renderBlock(
   }
   if (block.type === "dataBlock") {
     const db = block.block;
-    if (db.kind === "table")
-      return <DataBlockTable key={k} payload={db.payload} />;
-    if (db.kind === "list")
-      return <DataBlockList key={k} payload={db.payload} />;
+    if (db.kind === "table") return <DataBlockTable key={k} payload={db.payload} />;
+    if (db.kind === "list") return <DataBlockList key={k} payload={db.payload} />;
     return <DataBlockKV key={k} payload={db.payload} />;
   }
   if (block.type === "dataBlockInvalid") {
@@ -991,13 +974,7 @@ function renderBlock(
     return <ArtifactEmbed key={k} artifactId={block.artifactId} />;
   }
   if (block.type === "mediaPreview") {
-    return (
-      <DirectMediaPreview
-        key={k}
-        url={block.url}
-        media={block.media}
-      />
-    );
+    return <DirectMediaPreview key={k} url={block.url} media={block.media} />;
   }
   if (block.type === "urlEmbed") {
     const m = block.match;
@@ -1035,10 +1012,7 @@ function renderBlock(
   }
   if (block.type === "table") {
     return (
-      <div
-        key={k}
-        className="my-2 overflow-x-auto rounded-md border border-border bg-card/30"
-      >
+      <div key={k} className="my-2 overflow-x-auto rounded-md border border-border bg-card/30">
         <table className="w-full border-collapse text-[0.8125rem]">
           <thead>
             <tr className="border-b border-border bg-card/60">
@@ -1054,10 +1028,7 @@ function renderBlock(
           </thead>
           <tbody>
             {block.rows.map((row, j) => (
-              <tr
-                key={`${k}-r-${j}`}
-                className="border-b border-border/40 last:border-b-0"
-              >
+              <tr key={`${k}-r-${j}`} className="border-b border-border/40 last:border-b-0">
                 {row.map((c, l) => (
                   <td
                     key={`${k}-r-${j}-${l}`}
@@ -1089,11 +1060,7 @@ function renderBlock(
         {renderInline(block.text, inlineList, k)}
       </p>
       {mediaUrls.map((it, mediaIdx) => (
-        <DirectMediaPreview
-          key={`${k}-media-${mediaIdx}`}
-          url={it.url}
-          media={it.media}
-        />
+        <DirectMediaPreview key={`${k}-media-${mediaIdx}`} url={it.url} media={it.media} />
       ))}
     </Fragment>
   );
@@ -1161,10 +1128,7 @@ function PreviewControls({
   label: string;
   children: ReactNode;
 }) {
-  const [state, dispatch] = useReducer(
-    reducePreviewControlState,
-    INITIAL_PREVIEW_CONTROL_STATE,
-  );
+  const [state, dispatch] = useReducer(reducePreviewControlState, INITIAL_PREVIEW_CONTROL_STATE);
   const { hidden, collapsed, menuOpen } = state;
   const host = hostLabel(url);
 
@@ -1175,7 +1139,7 @@ function PreviewControls({
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="min-w-0 truncate text-meta text-ember underline-offset-2 hover:underline"
+          className="text-meta min-w-0 truncate text-ember underline-offset-2 hover:underline"
         >
           {url}
         </a>
@@ -1184,7 +1148,7 @@ function PreviewControls({
           onClick={() => {
             dispatch({ type: "show" });
           }}
-          className="focus-ring shrink-0 rounded border border-border bg-background/80 px-1.5 py-0.5 text-meta text-muted-foreground hover:bg-background hover:text-foreground"
+          className="focus-ring text-meta shrink-0 rounded border border-border bg-background/80 px-1.5 py-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
         >
           Show preview
         </button>
@@ -1199,7 +1163,7 @@ function PreviewControls({
           href={url}
           target="_blank"
           rel="noopener noreferrer"
-          className="min-w-0 truncate text-meta text-muted-foreground underline-offset-2 hover:text-ember hover:underline"
+          className="text-meta min-w-0 truncate text-muted-foreground underline-offset-2 hover:text-ember hover:underline"
           title={url}
         >
           {label} · {host}
@@ -1209,7 +1173,14 @@ function PreviewControls({
             type="button"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
+            aria-label={`${label} actions`}
             onClick={() => dispatch({ type: "toggleMenu" })}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                dispatch({ type: "closeMenu" });
+              }
+            }}
             onBlur={() => window.setTimeout(() => dispatch({ type: "closeMenu" }), 120)}
             className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground"
             title="Preview actions"
@@ -1219,16 +1190,24 @@ function PreviewControls({
           {menuOpen && (
             <div
               role="menu"
+              aria-label={`${label} actions`}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  dispatch({ type: "closeMenu" });
+                }
+              }}
               className="absolute right-0 top-7 z-20 w-36 overflow-hidden rounded-md border border-border bg-popover p-1 shadow-lg"
             >
               <button
                 type="button"
                 role="menuitem"
+                aria-label={collapsed ? "Expand preview" : "Collapse preview"}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   dispatch({ type: "toggleCollapsed" });
                 }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-meta hover:bg-subtle"
+                className="text-meta flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-subtle"
               >
                 {collapsed ? (
                   <Maximize2 className="h-3.5 w-3.5" />
@@ -1239,10 +1218,11 @@ function PreviewControls({
               </button>
               <a
                 role="menuitem"
+                aria-label={`Open ${host} in a new tab`}
                 href={url}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center gap-2 rounded px-2 py-1.5 text-meta hover:bg-subtle"
+                className="text-meta flex items-center gap-2 rounded px-2 py-1.5 hover:bg-subtle"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
                 Open link
@@ -1250,11 +1230,12 @@ function PreviewControls({
               <button
                 type="button"
                 role="menuitem"
+                aria-label="Hide preview"
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={() => {
                   dispatch({ type: "hide" });
                 }}
-                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-meta hover:bg-subtle"
+                className="text-meta flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-subtle"
               >
                 <EyeOff className="h-3.5 w-3.5" />
                 Hide
@@ -1269,7 +1250,7 @@ function PreviewControls({
             href={url}
             target="_blank"
             rel="noopener noreferrer"
-            className="block truncate text-meta text-ember underline-offset-2 hover:underline"
+            className="text-meta block truncate text-ember underline-offset-2 hover:underline"
           >
             {url}
           </a>
@@ -1283,33 +1264,14 @@ function PreviewControls({
   );
 }
 
-function DirectMediaPreview({
-  url,
-  media,
-}: {
-  url: string;
-  media: DirectMediaKind;
-}) {
+function DirectMediaPreview({ url, media }: { url: string; media: DirectMediaKind }) {
   return (
-    <PreviewControls
-      url={url}
-      label={media === "image" ? "Image preview" : "Video preview"}
-    >
+    <PreviewControls url={url} label={media === "image" ? "Image preview" : "Video preview"}>
       {media === "image" ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={url}
-          alt=""
-          loading="lazy"
-          className="max-h-96 w-full object-contain"
-        />
+        <img src={url} alt="" loading="lazy" className="max-h-96 w-full object-contain" />
       ) : (
-        <video
-          src={url}
-          controls
-          preload="metadata"
-          className="max-h-96 w-full bg-subtle"
-        >
+        <video src={url} controls preload="metadata" className="max-h-96 w-full bg-subtle">
           <a href={url} target="_blank" rel="noopener noreferrer">
             Open video
           </a>
@@ -1337,13 +1299,7 @@ function inlineListToAttachments(inlineList: InlineList): AttachmentLite[] {
   }));
 }
 
-function UnavailablePill({
-  label,
-  errorMessage,
-}: {
-  label?: string;
-  errorMessage?: string;
-}) {
+function UnavailablePill({ label, errorMessage }: { label?: string; errorMessage?: string }) {
   const tooltip = errorMessage
     ? `${label ? `${label} — ` : ""}${errorMessage}`
     : label || "Storage error";

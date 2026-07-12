@@ -30,14 +30,11 @@ vi.mock("@/components/attachments/attachment-lightbox", () => ({
 
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 
-const { RichContentRenderer, reducePreviewControlState } = await import(
-  "@/components/markdown/attachment-renderer"
-);
+const { RichContentRenderer, reducePreviewControlState } =
+  await import("@/components/markdown/attachment-renderer");
 
 function render(body: string): string {
-  return renderToStaticMarkup(
-    React.createElement(RichContentRenderer, { body }),
-  );
+  return renderToStaticMarkup(React.createElement(RichContentRenderer, { body }));
 }
 
 describe("RichContentRenderer rich link and media behavior", () => {
@@ -56,9 +53,7 @@ describe("RichContentRenderer rich link and media behavior", () => {
 
     expect(imageHtml).toContain("Image preview");
     expect(imageHtml).toContain("<img");
-    expect(imageHtml).toContain(
-      'src="https://cdn.example.com/screenshot.png?token=abc"',
-    );
+    expect(imageHtml).toContain('src="https://cdn.example.com/screenshot.png?token=abc"');
     expect(videoHtml).toContain("Video preview");
     expect(videoHtml).toContain("<video");
     expect(videoHtml).toContain('src="https://cdn.example.com/demo.webm"');
@@ -96,6 +91,30 @@ describe("RichContentRenderer rich link and media behavior", () => {
     expect(malformed).not.toContain("<iframe");
     expect(malformed).not.toContain("<img");
     expect(malformed).not.toContain("<video");
+  });
+
+  it("does not render scriptable markdown link hrefs", () => {
+    const html = render(
+      "[safe](https://example.com) [mail](mailto:team@example.com) [bad](javascript:alert(1))",
+    );
+
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('href="mailto:team@example.com"');
+    expect(html).toContain("bad)");
+    expect(html).not.toContain("javascript:");
+  });
+
+  it("labels preview action controls for assistive technology", () => {
+    const html = render("https://cdn.example.com/screenshot.png");
+    const source = readFileSync(
+      resolve(process.cwd(), "src/components/markdown/attachment-renderer.tsx"),
+      "utf8",
+    );
+
+    expect(html).toContain('aria-label="Image preview actions"');
+    expect(source).toContain('aria-label={collapsed ? "Expand preview" : "Collapse preview"}');
+    expect(source).toContain("aria-label={`Open ${host} in a new tab`}");
+    expect(source).toContain('aria-label="Hide preview"');
   });
 });
 

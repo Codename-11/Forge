@@ -12347,3 +12347,20 @@ Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass;
 `corepack pnpm test` was attempted and reached the normal command, but this
 codex-bridge container has no `DATABASE_URL`/Postgres service, so Prisma-backed
 router/service tests failed during fixture setup.
+
+---
+
+## 2026-07-12 — AXI-99 rich rendering accessibility/security review
+
+Reviewed the rich issue content renderer for XSS safety, keyboard/screen-reader
+accessibility, mobile preview behavior, visual token usage, and many-preview
+performance. Fixed two review blockers before approval: markdown links with
+scriptable/non-approved schemes now render as plain text instead of anchors, and
+preview action dropdown controls now expose explicit screen-reader labels plus
+Escape handling.
+
+Added regression coverage for scriptable markdown link handling and preview
+action labels alongside the existing rich-rendering behavior tests.
+
+Verification: `pnpm test tests/unit/rich-rendering.test.ts` pass (9);
+`pnpm lint` clean; `pnpm typecheck` pass; `git diff --check` clean.

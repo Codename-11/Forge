@@ -122,11 +122,11 @@ function chooseLabel(type: "pull" | "issue", state: string | null): string {
 function chooseTone(state: string | null): string {
   switch (state) {
     case "open":
-      return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400";
+      return "bg-success/15 text-success";
     case "merged":
-      return "bg-purple-500/15 text-purple-600 dark:text-purple-400";
+      return "bg-ember/15 text-ember";
     case "closed":
-      return "bg-rose-500/15 text-rose-600 dark:text-rose-400";
+      return "bg-danger/15 text-danger";
     case "draft":
       return "bg-subtle text-muted-foreground";
     default:
@@ -137,15 +137,14 @@ function chooseTone(state: string | null): string {
 function chooseBadge(state: string | null): string {
   switch (state) {
     case "open":
-      return "border-emerald-500/30 text-emerald-700 dark:text-emerald-400";
+      return "border-success/30 text-success";
     case "merged":
-      return "border-purple-500/30 text-purple-700 dark:text-purple-400";
+      return "border-ember/30 text-ember";
     case "closed":
-      return "border-rose-500/30 text-rose-700 dark:text-rose-400";
+      return "border-danger/30 text-danger";
     case "draft":
       return "border-border text-muted-foreground";
     default:
       return "border-border text-muted-foreground";
   }
 }
-
