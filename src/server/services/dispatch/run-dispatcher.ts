@@ -443,7 +443,11 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       const operatorContext =
         triggerEvent?.kind === "COMMENT_CREATED" && typeof triggerPayload?.body === "string"
           ? `\n\nOperator comment${typeof triggerPayload.executionStepId === "string" ? " on this plan step" : ""}:\n${triggerPayload.body}`
-          : "";
+          : triggerEvent?.kind === "EXECUTION_STEP_READY" &&
+              triggerPayload?.phase === "judge" &&
+              typeof triggerPayload.prompt === "string"
+            ? `\n\nReview assignment:\n${triggerPayload.prompt}`
+            : "";
       const { externalRunId } = await connector.startRun({
         message:
           issueMessage(

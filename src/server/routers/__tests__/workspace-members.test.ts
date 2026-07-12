@@ -59,6 +59,19 @@ describe("workspaceRouter — admin member management", () => {
     expect(workspace.agentRunStaleMinutes).toBe(45);
   });
 
+  it("updates the reviewer-start fallback window", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+
+    await caller.update({ reviewStartTimeoutMinutes: 8 });
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: fixture.workspace.id },
+      select: { reviewStartTimeoutMinutes: true },
+    });
+    expect(workspace.reviewStartTimeoutMinutes).toBe(8);
+  });
+
   it("updates and validates the workspace default issue assignee", async () => {
     const { caller, fixture } = await adminSetup();
     const prisma = getPrisma();

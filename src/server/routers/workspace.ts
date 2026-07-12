@@ -124,6 +124,7 @@ export const workspaceRouter = router({
         aiProvider: true,
         aiModel: true,
         agentRunStaleMinutes: true,
+        reviewStartTimeoutMinutes: true,
         ephemeralAgentIdleMinutes: true,
         runTokenBudget: true,
         runCostBudgetUsd: true,
@@ -267,6 +268,7 @@ export const workspaceRouter = router({
         agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),
         assignmentSlaMinutes: z.number().int().min(0).max(10080).optional(),
         agentRunStaleMinutes: z.number().int().min(0).max(10080).optional(),
+        reviewStartTimeoutMinutes: z.number().int().min(0).max(10080).optional(),
         ephemeralAgentIdleMinutes: z.number().int().min(0).max(10080).optional(),
         // Per-run safety budgets (null = unlimited; opt-in). See run-budget.ts.
         runTokenBudget: z.number().int().min(0).max(1_000_000_000).nullable().optional(),

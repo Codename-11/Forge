@@ -36,6 +36,7 @@ export default function WorkspaceSettingsPage() {
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
   const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
   const [agentRunStaleMinutes, setAgentRunStaleMinutes] = useState(0);
+  const [reviewStartTimeoutMinutes, setReviewStartTimeoutMinutes] = useState(5);
   // Per-run safety budgets. 0 = unlimited (opt-in). See run-budget.ts.
   const [runTokenBudget, setRunTokenBudget] = useState(0);
   const [runCostBudgetUsd, setRunCostBudgetUsd] = useState(0);
@@ -82,6 +83,7 @@ export default function WorkspaceSettingsPage() {
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
     setAssignmentSlaMinutes(current.assignmentSlaMinutes);
     setAgentRunStaleMinutes(current.agentRunStaleMinutes);
+    setReviewStartTimeoutMinutes(current.reviewStartTimeoutMinutes);
     setRunTokenBudget(current.runTokenBudget ?? 0);
     setRunCostBudgetUsd(Number(current.runCostBudgetUsd ?? 0));
     setRunMaxMinutes(current.runMaxMinutes ?? 0);
@@ -161,6 +163,10 @@ export default function WorkspaceSettingsPage() {
       ["agentIdleTimeoutMinutes", agentIdleTimeoutMinutes !== current.agentIdleTimeoutMinutes],
       ["assignmentSlaMinutes", assignmentSlaMinutes !== current.assignmentSlaMinutes],
       ["agentRunStaleMinutes", agentRunStaleMinutes !== current.agentRunStaleMinutes],
+      [
+        "reviewStartTimeoutMinutes",
+        reviewStartTimeoutMinutes !== current.reviewStartTimeoutMinutes,
+      ],
       ["runTokenBudget", runTokenBudget !== (current.runTokenBudget ?? 0)],
       ["runCostBudgetUsd", runCostBudgetUsd !== Number(current.runCostBudgetUsd ?? 0)],
       ["runMaxMinutes", runMaxMinutes !== (current.runMaxMinutes ?? 0)],
@@ -202,6 +208,7 @@ export default function WorkspaceSettingsPage() {
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
+    reviewStartTimeoutMinutes,
     runTokenBudget,
     runCostBudgetUsd,
     runMaxMinutes,
@@ -241,6 +248,7 @@ export default function WorkspaceSettingsPage() {
       agentIdleTimeoutMinutes,
       assignmentSlaMinutes,
       agentRunStaleMinutes,
+      reviewStartTimeoutMinutes,
       // Persist unlimited as NULL (not 0) so the column matches its documented
       // null = unlimited semantics; the form treats both as "no cap".
       runTokenBudget: runTokenBudget > 0 ? runTokenBudget : null,
@@ -275,6 +283,7 @@ export default function WorkspaceSettingsPage() {
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
+    reviewStartTimeoutMinutes,
     runTokenBudget,
     runCostBudgetUsd,
     runMaxMinutes,
@@ -530,6 +539,21 @@ export default function WorkspaceSettingsPage() {
                     value={agentRunStaleMinutes}
                     onChange={(e) =>
                       setAgentRunStaleMinutes(Number(e.target.value) || 0)
+                    }
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Review start timeout (minutes)"
+                  hint="Open a human fallback when an agent reviewer was dispatched but never acknowledged. 0 disables."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={reviewStartTimeoutMinutes}
+                    onChange={(e) =>
+                      setReviewStartTimeoutMinutes(Number(e.target.value) || 0)
                     }
                     disabled={!canEdit}
                   />

@@ -3,6 +3,7 @@ import {
   ActionRequestStatus,
   AgentRunStatus,
   AgentProvider,
+  EngagementMode,
   ExecutionPlanStatus,
   ExecutionStepStatus,
   GoalStatus,
@@ -17,6 +18,7 @@ import {
   cascadeReadiness,
   createGoal,
   decomposeGoal,
+  dispatchJudge,
   getGoal,
   recordVerdict,
   requestPlanApproval,
@@ -415,8 +417,91 @@ describe("orchestration: judge loop", () => {
         planId,
       }),
     );
-    return { fixture, prisma, planId, stepId: stepIds[0], goalId: goal.id };
+    return {
+      fixture,
+      prisma,
+      planId,
+      stepId: stepIds[0],
+      goalId: goal.id,
+      reviewerId: reviewer.id,
+    };
   }
+
+  it("dispatches review as a first-class REVIEW run and closes it with the verdict", async () => {
+    const { fixture, prisma, stepId, reviewerId } = await buildRunningPlanWithStep();
+    await prisma.executionStep.update({
+      where: { id: stepId },
+      data: { status: ExecutionStepStatus.REVIEW },
+    });
+
+    const dispatched = await dispatchJudge(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId,
+    });
+
+    expect(dispatched.judgeAgentId).toBe(reviewerId);
+    expect(dispatched.runId).toBeTruthy();
+    expect(dispatched.issueId).toBeTruthy();
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: dispatched.runId! } });
+    expect(run).toMatchObject({
+      agentId: reviewerId,
+      executionStepId: stepId,
+      engagementMode: EngagementMode.REVIEW,
+      status: AgentRunStatus.ACTIVE,
+    });
+
+    await recordVerdict(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: null,
+      actorAgentId: reviewerId,
+      stepId,
+      verdict: "PASS",
+      feedback: "reviewed and approved",
+    });
+    const completed = await prisma.agentRun.findUniqueOrThrow({
+      where: { id: dispatched.runId! },
+    });
+    expect(completed.status).toBe(AgentRunStatus.COMPLETED);
+    expect(completed.completedAt).not.toBeNull();
+  });
+
+  it("opens a human fallback when an agent review never acknowledges", async () => {
+    const { fixture, prisma, stepId } = await buildRunningPlanWithStep();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { reviewStartTimeoutMinutes: 1 },
+    });
+    await prisma.executionStep.update({
+      where: { id: stepId },
+      data: { status: ExecutionStepStatus.REVIEW },
+    });
+    const dispatched = await dispatchJudge(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId,
+    });
+    const old = new Date(Date.now() - 2 * 60_000);
+    await prisma.agentRun.update({
+      where: { id: dispatched.runId! },
+      data: { startedAt: old, lastEventAt: old, lastWakeAt: old, acknowledgedAt: null },
+    });
+
+    const result = await sweepOrchestrationBudget({ workspaceId: fixture.workspace.id });
+
+    expect(result.stalled).toBeGreaterThanOrEqual(1);
+    const run = await prisma.agentRun.findUniqueOrThrow({ where: { id: dispatched.runId! } });
+    expect(run.status).toBe(AgentRunStatus.STALLED);
+    const gate = await prisma.reviewGate.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        targetType: "execution-step",
+        targetId: stepId,
+        status: ReviewGateStatus.PENDING,
+      },
+    });
+    expect(gate?.prompt).toContain("did not start");
+  });
 
   it("judge PASS marks the step DONE and achieves the goal", async () => {
     const { fixture, prisma, stepId, goalId } = await buildRunningPlanWithStep();

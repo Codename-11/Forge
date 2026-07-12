@@ -1,14 +1,20 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { EventKind, ExecutionPlanStatus, ExecutionStepStatus, Prisma } from "@prisma/client";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { adminProcedure, router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
 import {
   createExecutionStepComment,
   listExecutionStepComments,
 } from "@/server/services/execution-step-comments";
-import { activatePlan, retryExecutionStep } from "@/server/services/orchestration-service";
+import {
+  activatePlan,
+  dispatchJudge,
+  recordVerdict,
+  retryExecutionStep,
+} from "@/server/services/orchestration-service";
+import { resolveReviewGate } from "@/server/services/agent-crew-service";
 import {
   addExecutionStep,
   createExecutionPlan,
@@ -324,6 +330,76 @@ export const executionPlanRouter = router({
         actorId: ctx.session?.user?.id ?? null,
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
         stepId: input.stepId,
+      });
+    }),
+
+  requestReview: workspaceProcedure
+    .input(
+      z.object({
+        stepId: z.string().cuid(),
+        judgeAgentId: agentIdSchema.nullable().optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const result = await dispatchJudge(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session?.user?.id ?? null,
+        stepId: input.stepId,
+        judgeAgentId: input.judgeAgentId ?? null,
+      });
+      if (!result.judgeAgentId || !result.runId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "No reviewer is assigned to this plan crew.",
+        });
+      }
+      return result;
+    }),
+
+  reviewStep: adminProcedure
+    .input(
+      z.object({
+        stepId: z.string().cuid(),
+        verdict: z.enum(["PASS", "FAIL"]),
+        feedback: z.string().max(50_000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.verdict === "FAIL" && !input.feedback?.trim()) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Requesting changes requires feedback.",
+        });
+      }
+      const pendingGate = await ctx.db.reviewGate.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          targetType: "execution-step",
+          targetId: input.stepId,
+          status: "PENDING",
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true },
+      });
+      const feedback =
+        input.feedback?.trim() ||
+        (input.verdict === "PASS" ? "Approved by human reviewer." : "Changes requested.");
+      if (pendingGate) {
+        await resolveReviewGate(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          gateId: pendingGate.id,
+          decision: input.verdict === "PASS" ? "APPROVED" : "REJECTED",
+          resolution: feedback,
+        });
+        return { outcome: input.verdict === "PASS" ? "DONE" : "REVIEWED" };
+      }
+      return recordVerdict(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        stepId: input.stepId,
+        verdict: input.verdict,
+        feedback,
       });
     }),
 

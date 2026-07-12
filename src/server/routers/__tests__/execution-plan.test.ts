@@ -145,6 +145,62 @@ describe("executionPlanRouter", () => {
     expect(event?.payload).toMatchObject({ retry: true, stepId: step.id });
   });
 
+  it("lets an operator start agent review and record a human verdict", async () => {
+    const { fixture, caller } = await setup();
+    const prisma = getPrisma();
+    const reviewer = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `reviewer-${Date.now().toString(36)}`,
+        name: "Plan Reviewer",
+      },
+    });
+    const crew = await prisma.agentCrew.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: `Review crew ${Date.now()}`,
+        members: {
+          create: {
+            workspaceId: fixture.workspace.id,
+            agentId: reviewer.id,
+            role: "REVIEWER",
+          },
+        },
+      },
+    });
+    const plan = await caller.create({
+      title: "Review plan",
+      steps: [{ title: "Review this" }],
+    });
+    const got = await caller.get({ id: plan.id });
+    await prisma.executionPlan.update({
+      where: { id: plan.id },
+      data: { status: ExecutionPlanStatus.RUNNING, crewId: crew.id, startedAt: new Date() },
+    });
+    await prisma.executionStep.update({
+      where: { id: got.steps[0].id },
+      data: { status: ExecutionStepStatus.REVIEW },
+    });
+
+    const requested = await caller.requestReview({ stepId: got.steps[0].id });
+    expect(requested.judgeAgentId).toBe(reviewer.id);
+    expect(requested.runId).toBeTruthy();
+
+    await caller.reviewStep({
+      stepId: got.steps[0].id,
+      verdict: "PASS",
+      feedback: "Human verified the result.",
+    });
+    const step = await prisma.executionStep.findUniqueOrThrow({
+      where: { id: got.steps[0].id },
+    });
+    expect(step.status).toBe(ExecutionStepStatus.DONE);
+    const reviewRun = await prisma.agentRun.findUniqueOrThrow({
+      where: { id: requested.runId! },
+    });
+    expect(reviewRun.status).toBe(AgentRunStatus.ABANDONED);
+  });
+
   it("transitions a step to DONE and records audit", async () => {
     const { fixture, caller } = await setup();
     const created = await caller.create({

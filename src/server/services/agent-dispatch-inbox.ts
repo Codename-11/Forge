@@ -427,7 +427,10 @@ export interface RecordWakeParams {
   workspaceId: string;
   agentId: string;
   /** Pinpoint the canonical work unit. Exactly one branch must be set. */
-  target: { kind: "issue"; issueId: string } | { kind: "chat-message"; chatMessageId: string };
+  target:
+    | { kind: "issue"; issueId: string }
+    | { kind: "execution-step"; stepId: string }
+    | { kind: "chat-message"; chatMessageId: string };
   deliveryId: string;
   eventId: string;
   eventKind: EventKind;
@@ -480,6 +483,44 @@ export async function recordWakeAttempt(
       // Keep the timeline informative: a WAKE_DELIVERED event makes
       // "Victor got the wake at 14:23" visible without needing the
       // WebhookDelivery table.
+      await appendRunEvent(tx, {
+        runId: run.id,
+        workspaceId: params.workspaceId,
+        issueId: run.issueId,
+        agentId: params.agentId,
+        kind: "WAKE_DELIVERED",
+        payload: {
+          eventId: params.eventId,
+          eventKind: params.eventKind,
+          deliveryId: params.deliveryId,
+        },
+      });
+    }
+    return { runId: run.id, chatMessageId: null };
+  }
+
+  if (params.target.kind === "execution-step") {
+    const run = await tx.agentRun.findFirst({
+      where: {
+        workspaceId: params.workspaceId,
+        agentId: params.agentId,
+        executionStepId: params.target.stepId,
+        triggerEventId: params.eventId,
+        status: AgentRunStatus.ACTIVE,
+      },
+      orderBy: { startedAt: "desc" },
+      select: { id: true, issueId: true },
+    });
+    if (!run) return { runId: null, chatMessageId: null };
+    await tx.agentRun.update({
+      where: { id: run.id },
+      data: {
+        lastWakeAt: new Date(),
+        wakeAttempts: { increment: 1 },
+        lastWakeDeliveryId: params.deliveryId,
+      },
+    });
+    if (params.ok) {
       await appendRunEvent(tx, {
         runId: run.id,
         workspaceId: params.workspaceId,

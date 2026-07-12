@@ -20,7 +20,7 @@ import { logger } from "@/server/logger";
 import { recordChange, agentDispatchUrlFor } from "@/server/audit";
 import { openReviewGateTx } from "@/server/services/agent-crew-service";
 import { createActionRequest } from "@/server/services/action-request-service";
-import { openOrTouchRun } from "@/server/services/agent-run";
+import { finishRun, openOrTouchRun } from "@/server/services/agent-run";
 import {
   resolveRunEngineWithSource,
   type AgentRuntimeRef,
@@ -55,18 +55,21 @@ const ORCH_WORKER_SELECT = {
 } as const;
 
 /** Resolve the engine + the EXECUTE-mode stamp for an orchestration worker. */
-function orchestrationRunStamp(worker: {
-  provider: AgentProvider;
-  runEngine: RunEngine | null;
-  runtime: AgentRuntimeRef;
-}) {
+function orchestrationRunStamp(
+  worker: {
+    provider: AgentProvider;
+    runEngine: RunEngine | null;
+    runtime: AgentRuntimeRef;
+  },
+  engagementMode: EngagementMode = EngagementMode.EXECUTE,
+) {
   const engine = resolveRunEngineWithSource({
     runEngine: worker.runEngine,
     provider: worker.provider,
     runtime: worker.runtime,
   });
   return {
-    engagementMode: EngagementMode.EXECUTE,
+    engagementMode,
     engagementSource: "surface-default" as const,
     runEngine: engine.engine,
     runEngineSource: engine.source,
@@ -2155,7 +2158,7 @@ export async function dispatchJudge(
     stepId: string;
     judgeAgentId?: string | null;
   },
-): Promise<{ judgeAgentId: string | null }> {
+): Promise<{ judgeAgentId: string | null; runId: string | null; issueId: string | null }> {
   const step = await db.executionStep.findFirst({
     where: { id: params.stepId, workspaceId: params.workspaceId },
     select: {
@@ -2166,11 +2169,18 @@ export async function dispatchJudge(
       expectedOutput: true,
       verification: true,
       status: true,
-      plan: { select: { id: true, crewId: true } },
+      issueId: true,
+      plan: { select: { id: true, crewId: true, issueId: true, contextSetId: true } },
     },
   });
   if (!step) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+  }
+  if (step.status !== ExecutionStepStatus.REVIEW) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: `Step must be in review before a reviewer can start (is ${step.status.toLowerCase()}).`,
+    });
   }
   let judgeAgentId: string | null = params.judgeAgentId ?? null;
   if (judgeAgentId) {
@@ -2186,7 +2196,27 @@ export async function dispatchJudge(
     judgeAgentId = await pickCrewMember(db, step.plan.crewId, "REVIEWER");
   }
 
-  await db.$transaction(async (tx) => {
+  if (!judgeAgentId) {
+    return { judgeAgentId: null, runId: null, issueId: null };
+  }
+  const judge = await db.agent.findFirst({
+    where: { id: judgeAgentId, workspaceId: params.workspaceId, archivedAt: null },
+    select: ORCH_WORKER_SELECT,
+  });
+  if (!judge) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Reviewer not found." });
+  }
+
+  return db.$transaction(async (tx) => {
+    let runIssueId = step.issueId ?? step.plan.issueId ?? null;
+    if (!runIssueId) {
+      const materialized = await materializeStepAsIssueTx(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        stepId: step.id,
+      });
+      runIssueId = materialized.issueId;
+    }
     const event = await tx.activityEvent.create({
       data: {
         workspaceId: params.workspaceId,
@@ -2202,7 +2232,10 @@ export async function dispatchJudge(
           body: step.body,
           expectedOutput: step.expectedOutput,
           verification: step.verification ?? null,
+          contextSetId: step.plan.contextSetId,
           judgeAgentId,
+          assignedAgentId: judgeAgentId,
+          engagementMode: EngagementMode.REVIEW,
           prompt:
             `You are the JUDGE for step "${step.title}". Evaluate the worker's ` +
             `output against expectedOutput + verification, then call ` +
@@ -2210,15 +2243,28 @@ export async function dispatchJudge(
         } as Prisma.InputJsonValue,
       },
     });
-    if (judgeAgentId) {
+    const { run } = await openOrTouchRun(tx, {
+      workspaceId: params.workspaceId,
+      issueId: runIssueId,
+      agentId: judgeAgentId,
+      actorId: params.actorId,
+      assignmentEventId: event.id,
+      triggerEventId: event.id,
+      triggerKind: EventKind.EXECUTION_STEP_READY,
+      currentStep: `Reviewing: ${step.title}`,
+      executionStepId: step.id,
+      ...orchestrationRunStamp(judge, EngagementMode.REVIEW),
+    });
+    const isRuntimeOnlyJudge = Boolean(judge.runtimeId && !judge.webhookUrl);
+    if (!isRuntimeOnlyJudge) {
       await queueAgentDispatch(tx, {
         workspaceId: params.workspaceId,
         agentId: judgeAgentId,
         eventId: event.id,
       });
     }
+    return { judgeAgentId, runId: run.id, issueId: runIssueId };
   });
-  return { judgeAgentId };
 }
 
 /**
@@ -2295,6 +2341,69 @@ export async function recordVerdictTx(
   };
 
   let nextRetryCount = step.retryCount;
+  const settleReviewerRuns = async () => {
+    const activeReviewRuns = await tx.agentRun.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        executionStepId: step.id,
+        engagementMode: EngagementMode.REVIEW,
+        status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      },
+      select: { id: true, issueId: true, agentId: true },
+    });
+    for (const run of activeReviewRuns) {
+      const completedByThisReviewer = params.actorAgentId === run.agentId;
+      await finishRun(tx, {
+        runId: run.id,
+        workspaceId: params.workspaceId,
+        issueId: run.issueId,
+        agentId: run.agentId,
+        status: completedByThisReviewer ? "COMPLETED" : "ABANDONED",
+        summary: completedByThisReviewer
+          ? `Review ${params.verdict.toLowerCase()}: ${params.feedback}`
+          : `Review resolved by ${params.actorAgentId ? "another agent" : "a human reviewer"}.`,
+        actorId: params.actorId,
+        actorAgentId: params.actorAgentId ?? null,
+      });
+    }
+    if (params.actorAgentId) {
+      const pendingGates = await tx.reviewGate.findMany({
+        where: {
+          workspaceId: params.workspaceId,
+          targetType: "execution-step",
+          targetId: step.id,
+          status: "PENDING",
+        },
+        select: { id: true, status: true },
+      });
+      for (const gate of pendingGates) {
+        const status = params.verdict === "PASS" ? "APPROVED" : "REJECTED";
+        await tx.reviewGate.update({
+          where: { id: gate.id },
+          data: {
+            status,
+            resolvedByAgentId: params.actorAgentId,
+            resolvedAt: new Date(),
+            resolution: params.feedback,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: params.workspaceId,
+          actorId: params.actorId,
+          actorAgentId: params.actorAgentId,
+          entity: "review-gate",
+          entityId: gate.id,
+          action: "resolved",
+          before: { status: gate.status },
+          after: { status, verdict: params.verdict },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "review-gate",
+          subjectId: gate.id,
+          payload: { status, verdict: params.verdict, stepId: step.id },
+        });
+      }
+    }
+  };
 
   if (params.verdict === "PASS") {
     await tx.executionStep.update({
@@ -2316,6 +2425,7 @@ export async function recordVerdictTx(
       planId: step.planId,
       actorId: params.actorId,
     });
+    await settleReviewerRuns();
     return { outcome: "DONE", retryCount: nextRetryCount };
   }
 
@@ -2337,6 +2447,7 @@ export async function recordVerdictTx(
       stepId: step.id,
       actorId: params.actorId,
     });
+    await settleReviewerRuns();
     return { outcome: "RETRY", retryCount: nextRetryCount };
   }
 
@@ -2363,6 +2474,7 @@ export async function recordVerdictTx(
     requiredRole: null,
     crewId: step.plan.crewId,
   });
+  await settleReviewerRuns();
   return { outcome: "BLOCKED", retryCount: nextRetryCount };
 }
 
@@ -2413,46 +2525,39 @@ export async function maybeAutoJudge(
   });
   if (!step) return { dispatched: false };
   if (step.status !== ExecutionStepStatus.REVIEW) return { dispatched: false };
-  const ensureHumanReviewGate = async (reason: string) => {
-    const existing = await db.reviewGate.findFirst({
-      where: {
-        workspaceId: params.workspaceId,
-        targetType: "execution-step",
-        targetId: step.id,
-        status: "PENDING",
-      },
-      select: { id: true },
-    });
-    if (!existing) {
-      await db.$transaction((tx) =>
-        openReviewGateTx(tx, {
-          workspaceId: params.workspaceId,
-          actorId: params.actorId,
-          targetType: "execution-step",
-          targetId: step.id,
-          prompt: reason,
-          requiredRole: null,
-          crewId: step.plan.crewId,
-        }),
-      );
-    }
-    return { dispatched: false, humanReviewRequired: true } as const;
-  };
   if (!step.plan.autoJudge) {
-    return ensureHumanReviewGate(
-      "This completed plan step is ready for manual review. Record a PASS or FAIL verdict to continue the plan.",
-    );
+    await ensureHumanReviewGate(db, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      stepId: step.id,
+      crewId: step.plan.crewId,
+      reason:
+        "This completed plan step is ready for manual review. Record a PASS or FAIL verdict to continue the plan.",
+    });
+    return { dispatched: false, humanReviewRequired: true };
   }
   if (!step.plan.crewId) {
-    return ensureHumanReviewGate(
-      "This completed plan step has no crew or REVIEWER. Review it manually or assign a reviewer to continue the plan.",
-    );
+    await ensureHumanReviewGate(db, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      stepId: step.id,
+      crewId: null,
+      reason:
+        "This completed plan step has no crew or REVIEWER. Review it manually or assign a reviewer to continue the plan.",
+    });
+    return { dispatched: false, humanReviewRequired: true };
   }
   const reviewer = await pickCrewMember(db, step.plan.crewId, "REVIEWER");
   if (!reviewer) {
-    return ensureHumanReviewGate(
-      "This completed plan step has no REVIEWER in its crew. Review it manually or add a reviewer to continue the plan.",
-    );
+    await ensureHumanReviewGate(db, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      stepId: step.id,
+      crewId: step.plan.crewId,
+      reason:
+        "This completed plan step has no REVIEWER in its crew. Review it manually or add a reviewer to continue the plan.",
+    });
+    return { dispatched: false, humanReviewRequired: true };
   }
   await dispatchJudge(db, {
     workspaceId: params.workspaceId,
@@ -2461,6 +2566,38 @@ export async function maybeAutoJudge(
     judgeAgentId: reviewer,
   });
   return { dispatched: true };
+}
+
+async function ensureHumanReviewGate(
+  db: Tx,
+  params: {
+    workspaceId: string;
+    actorId: string | null;
+    stepId: string;
+    crewId: string | null;
+    reason: string;
+  },
+): Promise<string> {
+  const existing = await db.reviewGate.findFirst({
+    where: {
+      workspaceId: params.workspaceId,
+      targetType: "execution-step",
+      targetId: params.stepId,
+      status: "PENDING",
+    },
+    select: { id: true },
+  });
+  if (existing) return existing.id;
+  const gate = await openReviewGateTx(db, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    targetType: "execution-step",
+    targetId: params.stepId,
+    prompt: params.reason,
+    requiredRole: null,
+    crewId: params.crewId,
+  });
+  return gate.id;
 }
 
 /**
@@ -2902,6 +3039,7 @@ export async function sweepOrchestrationBudget(params?: { workspaceId?: string }
       createdAt: true,
       startedAt: true,
       updatedAt: true,
+      workspace: { select: { reviewStartTimeoutMinutes: true } },
     },
     take: 200,
   });
@@ -2985,7 +3123,11 @@ export async function sweepOrchestrationBudget(params?: { workspaceId?: string }
       const hasProgressState = current.some((step) => progressStatuses.has(step.status));
       const remaining = current.filter((step) => remainingStatuses.has(step.status)).length;
 
-      let reasonCode: "review_without_reviewer" | "no_progress_path" | null = null;
+      let reasonCode:
+        | "review_without_reviewer"
+        | "review_reviewer_noack"
+        | "no_progress_path"
+        | null = null;
       let reason: string | null = null;
       if (reviewStep) {
         const reviewer = plan.crewId ? await pickCrewMember(db, plan.crewId, "REVIEWER") : null;
@@ -2997,6 +3139,59 @@ export async function sweepOrchestrationBudget(params?: { workspaceId?: string }
           });
           reasonCode = "review_without_reviewer";
           reason = `“${reviewStep.title}” completed, but this plan has no REVIEWER. A human decision is required.`;
+        } else {
+          const reviewRun = await db.agentRun.findFirst({
+            where: {
+              workspaceId: plan.workspaceId,
+              executionStepId: reviewStep.id,
+              engagementMode: EngagementMode.REVIEW,
+            },
+            orderBy: { startedAt: "desc" },
+            select: {
+              id: true,
+              issueId: true,
+              agentId: true,
+              status: true,
+              startedAt: true,
+              lastWakeAt: true,
+              acknowledgedAt: true,
+            },
+          });
+          if (!reviewRun) {
+            await maybeAutoJudge(db, {
+              workspaceId: plan.workspaceId,
+              actorId: null,
+              stepId: reviewStep.id,
+            });
+          } else if (
+            reviewRun.status === AgentRunStatus.ACTIVE &&
+            !reviewRun.acknowledgedAt &&
+            plan.workspace.reviewStartTimeoutMinutes > 0 &&
+            (reviewRun.lastWakeAt ?? reviewRun.startedAt).getTime() <=
+              Date.now() - plan.workspace.reviewStartTimeoutMinutes * 60_000
+          ) {
+            await db.$transaction(async (tx) => {
+              await finishRun(tx, {
+                runId: reviewRun.id,
+                workspaceId: plan.workspaceId,
+                issueId: reviewRun.issueId,
+                agentId: reviewRun.agentId,
+                status: "STALLED",
+                summary: `Reviewer did not acknowledge within ${plan.workspace.reviewStartTimeoutMinutes} minute${plan.workspace.reviewStartTimeoutMinutes === 1 ? "" : "s"}.`,
+              });
+              await ensureHumanReviewGate(tx, {
+                workspaceId: plan.workspaceId,
+                actorId: null,
+                stepId: reviewStep.id,
+                crewId: plan.crewId,
+                reason:
+                  `Agent review did not start within ${plan.workspace.reviewStartTimeoutMinutes} minute${plan.workspace.reviewStartTimeoutMinutes === 1 ? "" : "s"}. ` +
+                  "Retry the agent reviewer or record a human PASS/FAIL verdict to continue.",
+              });
+            });
+            reasonCode = "review_reviewer_noack";
+            reason = `“${reviewStep.title}” is waiting because its reviewer did not start.`;
+          }
         }
       } else if (!hasLiveRun && !hasProgressState && remaining > 0) {
         reasonCode = "no_progress_path";

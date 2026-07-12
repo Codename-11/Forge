@@ -366,6 +366,58 @@ describe("agent-dispatch-inbox — recordWakeAttempt", () => {
     expect(r.lastWakeDeliveryId).toBe("delivery-2");
     expect(r.lastWakeAt).not.toBeNull();
   });
+
+  it("records wake delivery on the exact step review run", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WSR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "step-reviewer");
+    const issue = await createIssue(fixture);
+    const plan = await prisma.executionPlan.create({
+      data: { workspaceId: fixture.workspace.id, title: "Review", status: "RUNNING" },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        title: "Judge",
+        position: 0,
+        status: "REVIEW",
+        issueId: issue.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        executionStepId: step.id,
+        engagementMode: "REVIEW",
+        triggerEventId: "review-event",
+        status: "ACTIVE",
+      },
+    });
+
+    const result = await prisma.$transaction((tx) =>
+      recordWakeAttempt(tx, {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        target: { kind: "execution-step", stepId: step.id },
+        deliveryId: "review-delivery",
+        eventId: "review-event",
+        eventKind: EventKind.EXECUTION_STEP_READY,
+        ok: true,
+      }),
+    );
+
+    expect(result.runId).toBe(run.id);
+    const updated = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(updated.wakeAttempts).toBe(1);
+    expect(updated.lastWakeDeliveryId).toBe("review-delivery");
+    expect(
+      await prisma.agentRunEvent.count({ where: { runId: run.id, kind: "WAKE_DELIVERED" } }),
+    ).toBe(1);
+  });
 });
 
 describe("agent-dispatch-inbox — listInbox", () => {

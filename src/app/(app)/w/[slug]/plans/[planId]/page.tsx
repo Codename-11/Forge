@@ -276,6 +276,25 @@ export default function PlanDetailPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  const requestReview = trpc.executionPlan.requestReview.useMutation({
+    onSuccess: (result) => {
+      const reviewer = agentsById.get(result.judgeAgentId ?? "");
+      toast.success(reviewer ? `Review sent to @${reviewer.profileKey}` : "Agent review started");
+      utils.executionPlan.get.invalidate({ id: params.planId });
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const humanReview = trpc.executionPlan.reviewStep.useMutation({
+    onSuccess: () => {
+      toast.success("Review recorded");
+      utils.executionPlan.get.invalidate({ id: params.planId });
+      utils.reviewGate.list.invalidate();
+      utils.commandCenter.summary.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
   // AXI-56 — turn an orchestration step into a first-class tracked Issue.
   const materializeStep = trpc.executionPlan.materializeStep.useMutation({
     onSuccess: (res) => {
@@ -906,6 +925,23 @@ export default function PlanDetailPage() {
               materializingStepId={
                 materializeStep.isPending ? (materializeStep.variables?.stepId ?? null) : null
               }
+              reviewers={[...agentsById.values()]}
+              defaultReviewerId={
+                crew?.members.find((member) => member.role === "REVIEWER")?.agent.id ?? null
+              }
+              canHumanReview={ws.role === "OWNER" || ws.role === "ADMIN"}
+              reviewingStepId={
+                requestReview.isPending ? (requestReview.variables?.stepId ?? null) : null
+              }
+              humanReviewingStepId={
+                humanReview.isPending ? (humanReview.variables?.stepId ?? null) : null
+              }
+              onRequestReview={(stepId, judgeAgentId) =>
+                requestReview.mutate({ stepId, judgeAgentId })
+              }
+              onHumanReview={(stepId, verdict, feedback) =>
+                humanReview.mutate({ stepId, verdict, feedback })
+              }
               editable={editingPlan}
             />
           ) : view === "timeline" ? (
@@ -1371,6 +1407,13 @@ function StepsList({
   onRemoveStep,
   onMaterializeStep,
   materializingStepId,
+  reviewers,
+  defaultReviewerId,
+  canHumanReview,
+  reviewingStepId,
+  humanReviewingStepId,
+  onRequestReview,
+  onHumanReview,
   editable,
 }: {
   steps: StepRow[];
@@ -1387,6 +1430,13 @@ function StepsList({
   onRemoveStep: (id: string) => void;
   onMaterializeStep: (id: string) => void;
   materializingStepId: string | null;
+  reviewers: AgentLite[];
+  defaultReviewerId: string | null;
+  canHumanReview: boolean;
+  reviewingStepId: string | null;
+  humanReviewingStepId: string | null;
+  onRequestReview: (stepId: string, judgeAgentId: string | null) => void;
+  onHumanReview: (stepId: string, verdict: "PASS" | "FAIL", feedback?: string) => void;
   editable: boolean;
 }) {
   if (steps.length === 0) {
@@ -1417,6 +1467,13 @@ function StepsList({
             onRemove={() => onRemoveStep(step.id)}
             onMaterialize={() => onMaterializeStep(step.id)}
             materializing={step.id === materializingStepId}
+            reviewers={reviewers}
+            defaultReviewerId={defaultReviewerId}
+            canHumanReview={canHumanReview}
+            reviewPending={step.id === reviewingStepId}
+            humanReviewPending={step.id === humanReviewingStepId}
+            onRequestReview={(judgeAgentId) => onRequestReview(step.id, judgeAgentId)}
+            onHumanReview={(verdict, feedback) => onHumanReview(step.id, verdict, feedback)}
             editable={editable}
           />
         </li>
@@ -1438,6 +1495,13 @@ function StepCard({
   onRemove,
   onMaterialize,
   materializing,
+  reviewers,
+  defaultReviewerId,
+  canHumanReview,
+  reviewPending,
+  humanReviewPending,
+  onRequestReview,
+  onHumanReview,
   editable,
 }: {
   step: StepRow;
@@ -1456,6 +1520,13 @@ function StepCard({
   onRemove: () => void;
   onMaterialize: () => void;
   materializing: boolean;
+  reviewers: AgentLite[];
+  defaultReviewerId: string | null;
+  canHumanReview: boolean;
+  reviewPending: boolean;
+  humanReviewPending: boolean;
+  onRequestReview: (judgeAgentId: string | null) => void;
+  onHumanReview: (verdict: "PASS" | "FAIL", feedback?: string) => void;
   editable: boolean;
 }) {
   const [title, setTitle] = useState(step.title);
@@ -1576,6 +1647,19 @@ function StepCard({
             className="mt-2"
           />
 
+          {step.status === ExecutionStepStatus.REVIEW ? (
+            <ReviewRecoveryPanel
+              step={step}
+              reviewers={reviewers}
+              defaultReviewerId={defaultReviewerId}
+              canHumanReview={canHumanReview}
+              reviewPending={reviewPending}
+              humanReviewPending={humanReviewPending}
+              onRequestReview={onRequestReview}
+              onHumanReview={onHumanReview}
+            />
+          ) : null}
+
           {step.judgeVerdict ? (
             <JudgeVerdictBlock verdict={step.judgeVerdict} agentName={agent?.name ?? null} />
           ) : null}
@@ -1684,6 +1768,146 @@ function StepCard({
           <Button size="sm" variant="ghost" className="text-warning" onClick={onRemove}>
             <Trash2 className="h-3 w-3" />
           </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ReviewRecoveryPanel({
+  step,
+  reviewers,
+  defaultReviewerId,
+  canHumanReview,
+  reviewPending,
+  humanReviewPending,
+  onRequestReview,
+  onHumanReview,
+}: {
+  step: StepRow;
+  reviewers: AgentLite[];
+  defaultReviewerId: string | null;
+  canHumanReview: boolean;
+  reviewPending: boolean;
+  humanReviewPending: boolean;
+  onRequestReview: (judgeAgentId: string | null) => void;
+  onHumanReview: (verdict: "PASS" | "FAIL", feedback?: string) => void;
+}) {
+  const reviewRun = step.runs?.find((run) => run.engagementMode === "REVIEW") ?? null;
+  const initialReviewerId = reviewRun?.agentId ?? defaultReviewerId ?? reviewers[0]?.id ?? null;
+  const [reviewerId, setReviewerId] = useState<string | null>(initialReviewerId);
+  const [humanOpen, setHumanOpen] = useState(false);
+  const [feedback, setFeedback] = useState("");
+
+  useEffect(() => {
+    if (!reviewerId && initialReviewerId) setReviewerId(initialReviewerId);
+  }, [initialReviewerId, reviewerId]);
+
+  const reviewer = reviewerId ? reviewers.find((agent) => agent.id === reviewerId) : null;
+  const active = reviewRun?.status === "ACTIVE";
+  const acknowledged = Boolean(reviewRun?.acknowledgedAt);
+  const waiting = reviewRun?.status === "WAITING";
+  const failed = reviewRun?.status === "STALLED" || reviewRun?.status === "ABANDONED";
+  const canDispatch = !reviewRun || failed || waiting || (active && !acknowledged);
+  const title = failed
+    ? "Reviewer didn't start"
+    : waiting
+      ? "Reviewer is waiting"
+      : active && acknowledged
+        ? "Agent review in progress"
+        : active
+          ? "Review requested"
+          : "Agent review needed";
+  const actionLabel = failed
+    ? "Retry agent review"
+    : active
+      ? "Send review again"
+      : "Start agent review";
+
+  return (
+    <div className="mt-2 rounded-md border border-warning/35 bg-warning/[0.06] p-2.5">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-foreground">{title}</p>
+          <p className="text-meta mt-0.5 text-muted-foreground" role="status" aria-live="polite">
+            {active && acknowledged
+              ? `${reviewRun?.agent?.name ?? "The reviewer"} acknowledged and is evaluating the result.`
+              : failed
+                ? "The automatic review did not begin. Retry it or record the decision yourself."
+                : "Choose a reviewer to evaluate the completed work, or review it yourself."}
+          </p>
+        </div>
+        {reviewRun?.lastWakeAt ? (
+          <span className="text-meta shrink-0 text-muted-foreground">
+            sent {relativeTime(reviewRun.lastWakeAt)}
+          </span>
+        ) : null}
+      </div>
+
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Combobox
+          ariaLabel="Agent reviewer"
+          className="h-8 min-w-44"
+          value={reviewerId}
+          onChange={setReviewerId}
+          options={reviewers.map((agent) => ({
+            value: agent.id,
+            label: `${agent.name} · @${agent.profileKey}`,
+          }))}
+          placeholder="Choose reviewer"
+        />
+        {canDispatch ? (
+          <Button
+            size="sm"
+            variant="ember"
+            disabled={reviewPending || !reviewerId}
+            onClick={() => onRequestReview(reviewerId)}
+          >
+            <RotateCcw className={cn("h-3.5 w-3.5", reviewPending && "animate-spin")} />
+            {reviewPending ? "Sending…" : actionLabel}
+          </Button>
+        ) : (
+          <span className="text-meta rounded bg-success/10 px-2 py-1 text-success">
+            {reviewer ? `@${reviewer.profileKey} reviewing` : "Review in progress"}
+          </span>
+        )}
+        {canHumanReview ? (
+          <Button size="sm" variant="outline" onClick={() => setHumanOpen((open) => !open)}>
+            Review myself
+          </Button>
+        ) : null}
+      </div>
+
+      {humanOpen ? (
+        <div className="mt-2 flex flex-col gap-2 border-t border-border/60 pt-2">
+          <textarea
+            value={feedback}
+            onChange={(event) => setFeedback(event.target.value)}
+            rows={2}
+            maxLength={50_000}
+            placeholder="Review note; required when requesting changes"
+            className="w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-sm"
+            aria-label="Human review note"
+          />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              size="sm"
+              variant="ember"
+              disabled={humanReviewPending}
+              onClick={() => onHumanReview("PASS", feedback.trim() || undefined)}
+            >
+              <CheckCircle2 className="h-3.5 w-3.5" /> Pass & continue
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-warning"
+              disabled={humanReviewPending || !feedback.trim()}
+              onClick={() => onHumanReview("FAIL", feedback.trim())}
+            >
+              <XCircle className="h-3.5 w-3.5" /> Request changes
+            </Button>
+          </div>
         </div>
       ) : null}
     </div>

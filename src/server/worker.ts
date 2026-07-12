@@ -14,10 +14,7 @@
 import "server-only";
 import { Worker, QueueEvents } from "bullmq";
 import { db } from "@/server/db";
-import {
-  AGENT_DISPATCH_WEBHOOK_URL,
-  AGENT_DISPATCH_WEBHOOK_URL_PREFIX,
-} from "@/server/audit";
+import { AGENT_DISPATCH_WEBHOOK_URL, AGENT_DISPATCH_WEBHOOK_URL_PREFIX } from "@/server/audit";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { sweepIdleAgents, recordAgentReachable } from "@/server/services/heartbeat";
 import { sweepRuntimeHealth } from "@/server/services/runtime-health";
@@ -183,6 +180,18 @@ export const webhookWorker = new Worker(
             workspaceId: delivery.event.workspaceId,
             agentId: presenceAgentId!,
             target: { kind: "issue", issueId: delivery.event.subjectId },
+            deliveryId,
+            eventId: delivery.event.id,
+            eventKind: delivery.event.kind,
+            ok: res.ok,
+          });
+        });
+      } else if (delivery.event.subjectType === "execution-step") {
+        await db.$transaction(async (tx) => {
+          await recordWakeAttempt(tx, {
+            workspaceId: delivery.event.workspaceId,
+            agentId: presenceAgentId!,
+            target: { kind: "execution-step", stepId: delivery.event.subjectId },
             deliveryId,
             eventId: delivery.event.id,
             eventKind: delivery.event.kind,

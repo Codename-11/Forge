@@ -2,6 +2,34 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-11 — Recoverable agent review handoff
+
+Closed the Plan state-machine gap where a step could say “Needs review” after
+the judge webhook returned `202`, but no reviewer run, trace, fallback gate, or
+operator action existed.
+
+- **Canonical reviewer work.** `plans.judge` and automatic judging now open a
+  step-bound `AgentRun` stamped `REVIEW`, materialize an issue when the Plan has
+  no anchor, preserve wake diagnostics, and give RUNS-engine reviewers the full
+  judge prompt. Agent verdicts finish the reviewer run and resolve any fallback
+  gate; a human verdict abandons the superseded reviewer turn cleanly.
+- **Actionable Plan review.** REVIEW steps now include a reviewer picker,
+  Start/Retry agent review, live dispatch/acknowledgement state, and an inline
+  admin-only “Review myself” path with Pass & continue / Request changes.
+- **Human fallback.** Added workspace setting
+  `reviewStartTimeoutMinutes` (default 5, 0 disables) and migration 0096. The
+  orchestration watchdog marks an unacknowledged reviewer run STALLED and opens
+  one human Review Gate after the configured window instead of leaving the Plan
+  parked invisibly.
+- **Coverage.** Added integration coverage for reviewer run creation and
+  completion, exact step wake telemetry, timeout fallback, operator-triggered
+  review, human verdicts, and the workspace setting.
+
+Verification: `pnpm lint` (existing repository warnings only), `pnpm
+typecheck`, full Vitest suite (**1,104 passed; 1 skipped**), fresh production
+build, and full Playwright suite (**37 passed**). Migration 0096 was applied to
+the local development and isolated E2E databases. Not deployed.
+
 ## 2026-07-11 — Goals + Plans live operations cockpit
 
 Reworked orchestration UI from record/status pages into run-aware operating
