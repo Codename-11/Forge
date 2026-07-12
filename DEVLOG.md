@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-12 — AXI-97 rich issue rendering integration
+
+Integrated the shared rich body renderer into the remaining issue-adjacent
+description surface. The main issue detail description and comment timeline
+already render through `RichContentRenderer`; the fullscreen focus issue view
+now uses the same renderer instead of raw `whitespace-pre-wrap` text, so image
+URLs, video URLs, normal links, provider embeds, and Forge attachment/link
+tokens preview consistently without changing stored issue description data or
+the existing edit/save flows.
+
+Verification: `corepack pnpm lint` passed and `corepack pnpm typecheck` passed.
+DB-backed tests were not run in this bridge container because it has no
+Postgres/Redis/MinIO/Docker services.
+
 ## 2026-07-11 — AXI-95 rich preview rendering contract
 
 Defined the shared rich preview contract for chat/message markdown surfaces.

@@ -6,6 +6,7 @@ import { ArrowLeft, Check, Pause, Play, RotateCcw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { RichContentRenderer } from "@/components/markdown/attachment-renderer";
 import { trpc } from "@/lib/trpc";
 import { formatIssueId } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -105,8 +106,10 @@ export default function FocusPage({ params }: { params: Promise<{ id: string }> 
 
       <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col overflow-y-auto px-8 py-10">
         <h1 className="text-2xl font-semibold tracking-tight">{issue.title}</h1>
-        <article className="prose prose-sm mt-6 max-w-none whitespace-pre-wrap text-[0.875rem] leading-relaxed text-foreground/90">
-          {issue.description || (
+        <article className="prose prose-sm mt-6 max-w-none text-[0.875rem] leading-relaxed text-foreground/90">
+          {issue.description ? (
+            <RichContentRenderer body={issue.description} />
+          ) : (
             <span className="text-muted-foreground">No description.</span>
           )}
         </article>
