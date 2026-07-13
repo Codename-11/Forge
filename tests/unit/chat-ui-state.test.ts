@@ -41,6 +41,8 @@ describe("readStreamedSnapshot", () => {
         run_external_id: "run_123",
         clientTurnId: "turn_123",
         started_at: "2026-07-13T12:00:00.000Z",
+        streamUpdatedAt: "2026-07-13T12:00:01.000Z",
+        usage: { tokensIn: 120, tokensOut: 30, tokensCached: 10, costUsd: 0.0025 },
         tool_calls: [
           {
             id: "call_1",
@@ -57,9 +59,27 @@ describe("readStreamedSnapshot", () => {
       thinking: "Checking the runtime",
       runExternalId: "run_123",
       turnId: "turn_123",
+      streamUpdatedAt: Date.parse("2026-07-13T12:00:01.000Z"),
+      usage: { tokensIn: 120, tokensOut: 30, tokensCached: 10, costUsd: 0.0025 },
       toolCalls: [
         expect.objectContaining({ id: "call_1", status: "pending", requiresConfirm: true }),
       ],
+    });
+  });
+
+  it("distinguishes durable MCP drafts from direct runtime streams", () => {
+    expect(
+      readStreamedSnapshot({
+        draft: true,
+        draftId: "draft_1",
+        running: true,
+        partial_text: "Drafting",
+      }),
+    ).toMatchObject({
+      draft: true,
+      draftId: "draft_1",
+      running: true,
+      partialText: "Drafting",
     });
   });
 

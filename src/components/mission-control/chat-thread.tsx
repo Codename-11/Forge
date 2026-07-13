@@ -44,6 +44,7 @@ import {
   type ChatTurnPhase,
   type ChatTurnStatusView,
   type PersistedOutbound,
+  type StreamedSnapshot,
 } from "./chat-ui-state";
 
 /**
@@ -358,6 +359,7 @@ type DraftBubble = {
   startedAt: number;
   messageId: string | null;
   finalizedAt: number | null;
+  stalled: boolean;
 };
 
 /**
@@ -370,6 +372,7 @@ const STREAM_STOP_SENTINEL = "__forge_stream_stopped__";
 const ALWAYS_ALLOW_KEY = (threadId: string, toolName: string) =>
   `forge.chat.alwaysAllow.${threadId}.${toolName}`;
 const OUTBOX_STORAGE_KEY = (threadId: string) => `forge.chat.outbox.${threadId}`;
+const PROGRESS_INVALIDATION_MS = 1_500;
 
 function isAlwaysAllowed(threadId: string, toolName: string): boolean {
   if (typeof window === "undefined") return false;
@@ -402,6 +405,7 @@ type StreamBubble = {
   body: string;
   thinking: string;
   toolCalls: StreamToolCall[];
+  usage: StreamedSnapshot["usage"];
   startedAt: number;
   finishedAt: number | null;
   error: string | null;
@@ -469,6 +473,7 @@ function AgentStreamBubble({
           thinking={bubble.thinking}
           tools={bubble.toolCalls}
           elapsedMs={elapsedMs}
+          usage={bubble.usage}
           live={isLive}
           threadId={threadId}
           onApprove={onApprove}
@@ -867,6 +872,7 @@ export function ChatThreadView({
   }, []);
   const draftDeltaBufferRef = useRef<{ draftId: string; delta: string } | null>(null);
   const draftFlushRafRef = useRef<number | null>(null);
+  const lastProgressInvalidationRef = useRef(0);
 
   const flushDraftDeltas = useCallback(() => {
     if (draftFlushRafRef.current !== null) {
@@ -885,6 +891,7 @@ export function ChatThreadView({
           startedAt: Date.now(),
           messageId: null,
           finalizedAt: null,
+          stalled: false,
         };
       }
       return { ...current, body: current.body + buffered.delta };
@@ -926,6 +933,7 @@ export function ChatThreadView({
           startedAt: Date.now(),
           messageId: null,
           finalizedAt: null,
+          stalled: false,
         });
       } else if (p.phase === "delta" && p.delta) {
         queueDraftDelta(p.draftId, p.delta);
@@ -955,6 +963,19 @@ export function ChatThreadView({
       evt.subjectType === "chat-thread-state";
     if (!isThreadStateEvent) return;
     if (evt.subjectId !== threadId) return;
+    if (
+      evt.subjectType === "chat-thread-state" &&
+      (evt.payload as { phase?: unknown } | null)?.phase === "progress"
+    ) {
+      const now = Date.now();
+      if (now - lastProgressInvalidationRef.current < PROGRESS_INVALIDATION_MS) return;
+      lastProgressInvalidationRef.current = now;
+      void utils.chat.threadDiagnostics.invalidate({ threadId });
+      if (selectedThreadId) {
+        void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
+      }
+      return;
+    }
     void utils.chat.threadDiagnostics.invalidate({ threadId });
     void utils.chat.threads.invalidate();
     if (selectedThreadId) {
@@ -1334,6 +1355,7 @@ export function ChatThreadView({
         body: "",
         thinking: "",
         toolCalls: [],
+        usage: null,
         startedAt: Date.now(),
         finishedAt: null,
         error: null,
@@ -1461,18 +1483,37 @@ export function ChatThreadView({
           return;
         }
         if (event === "meta") {
-          const { messageId, userMessageId, acknowledgedAt, outputStartedAt } = parsed as {
-            messageId?: string;
-            userMessageId?: string;
-            acknowledgedAt?: string;
-            outputStartedAt?: string;
-          };
+          const { messageId, userMessageId, acknowledgedAt, outputStartedAt, running, snapshot } =
+            parsed as {
+              messageId?: string;
+              userMessageId?: string;
+              acknowledgedAt?: string;
+              outputStartedAt?: string;
+              running?: boolean;
+              snapshot?: unknown;
+            };
           const runExternalId =
             typeof (parsed as { runExternalId?: unknown }).runExternalId === "string"
               ? (parsed as { runExternalId: string }).runExternalId
               : undefined;
           const dispatchOnly = (parsed as { dispatch?: boolean }).dispatch === true;
-          if (messageId) {
+          const reattached = running === true ? readStreamedSnapshot(snapshot) : null;
+          if (messageId && reattached?.running && !reattached.draft) {
+            setStreamBubble({
+              ...initialStreamBubble(),
+              messageId,
+              runExternalId: reattached.runExternalId,
+              body: reattached.partialText,
+              thinking: reattached.thinking,
+              toolCalls: reattached.toolCalls.map((tool) => ({
+                ...tool,
+                requiresConfirm: tool.requiresConfirm === true,
+              })),
+              usage: reattached.usage,
+              startedAt: reattached.startedAt ?? Date.now(),
+              recovered: true,
+            });
+          } else if (messageId) {
             setStreamBubble((b) => ({
               ...(b ?? initialStreamBubble()),
               messageId,
@@ -1625,9 +1666,22 @@ export function ChatThreadView({
           flushStreamDeltas();
           const { message } = parsed as { message?: string };
           failSend(message ?? "Stream error");
+        } else if (event === "stopped") {
+          flushStreamDeltas();
+          setStreamBubble((bubble) => {
+            const base = bubble ?? initialStreamBubble();
+            return {
+              ...base,
+              error: STREAM_STOP_SENTINEL,
+              finishedAt: base.finishedAt ?? Date.now(),
+            };
+          });
         } else if (event === "done") {
           flushStreamDeltas();
-          setStreamBubble((b) => (b ? { ...b, finishedAt: Date.now() } : b));
+          const stillRunning = (parsed as { running?: boolean }).running === true;
+          if (!stillRunning) {
+            setStreamBubble((b) => (b ? { ...b, finishedAt: Date.now() } : b));
+          }
         }
       };
 
@@ -1761,9 +1815,18 @@ export function ChatThreadView({
           }),
         };
       });
-      if (approved && alwaysAllow && toolName && threadId) {
-        rememberAlwaysAllowed(threadId, toolName);
-      }
+      const restorePending = () => {
+        setStreamBubble((bubble) =>
+          bubble
+            ? {
+                ...bubble,
+                toolCalls: bubble.toolCalls.map((call) =>
+                  call.id === callId ? { ...call, status: "pending" } : call,
+                ),
+              }
+            : bubble,
+        );
+      };
       try {
         const res = await fetch("/api/chat/tool/approve", {
           method: "POST",
@@ -1772,9 +1835,15 @@ export function ChatThreadView({
           body: JSON.stringify({ callId, approved }),
         });
         if (!res.ok) {
-          toast.error(`Approval response failed (${res.status})`);
+          restorePending();
+          toast.error(`Approval response failed (${res.status}). You can retry.`);
+          return;
+        }
+        if (approved && alwaysAllow && toolName && threadId) {
+          rememberAlwaysAllowed(threadId, toolName);
         }
       } catch (err) {
+        restorePending();
         const msg = err instanceof Error ? err.message : "Approval failed";
         toast.error(msg);
       }
@@ -2006,6 +2075,10 @@ export function ChatThreadView({
       clearThread: async () => {
         if (!threadId) return;
         await clearThreadM.mutateAsync({ threadId });
+        setStreamBubble(null);
+        setDraft(null);
+        setLocalMessages([]);
+        setOutbox([]);
       },
       newConversation: async (options) => {
         const result = await createConversationM.mutateAsync({ agentId });
@@ -2129,6 +2202,26 @@ export function ChatThreadView({
       ),
     [messageRows],
   );
+  const persistedRunningDraft = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message || message.role !== "AGENT") continue;
+      const snapshot = readStreamedSnapshot(
+        (message as { contextSnapshot?: unknown }).contextSnapshot,
+      );
+      if (!snapshot?.running || !snapshot.draft) continue;
+      return {
+        draftId: snapshot.draftId ?? message.id,
+        agentId,
+        body: snapshot.partialText || message.body,
+        startedAt: snapshot.startedAt ?? new Date(message.createdAt).getTime(),
+        messageId: message.id,
+        finalizedAt: null,
+        stalled: diagnostics?.turnStatus?.phase === "stalled",
+      } satisfies DraftBubble;
+    }
+    return null;
+  }, [agentId, diagnostics?.turnStatus?.phase, messages]);
   const persistedRunningStream = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const message = messages[index];
@@ -2136,7 +2229,8 @@ export function ChatThreadView({
       const snapshot = readStreamedSnapshot(
         (message as { contextSnapshot?: unknown }).contextSnapshot,
       );
-      if (!snapshot?.running) continue;
+      if (!snapshot?.running || snapshot.draft) continue;
+      const stalled = diagnostics?.turnStatus?.phase === "stalled";
       let lastPrompt = "";
       for (let promptIndex = index - 1; promptIndex >= 0; promptIndex -= 1) {
         const candidate = messages[promptIndex];
@@ -2154,15 +2248,26 @@ export function ChatThreadView({
           ...tool,
           requiresConfirm: tool.requiresConfirm === true,
         })),
+        usage: snapshot.usage,
         startedAt: snapshot.startedAt ?? new Date(message.createdAt).getTime(),
-        finishedAt: null,
-        error: null,
+        finishedAt: stalled ? Date.now() : null,
+        error: stalled ? "This reply stopped making progress. Retry or inspect the runtime." : null,
         lastPrompt,
         recovered: true,
       } satisfies StreamBubble;
     }
     return null;
-  }, [messages]);
+  }, [diagnostics?.turnStatus?.phase, messages]);
+
+  useEffect(() => {
+    if (!persistedRunningDraft) return;
+    setDraft((current) => {
+      if (!current || current.draftId === persistedRunningDraft.draftId) {
+        return persistedRunningDraft;
+      }
+      return current;
+    });
+  }, [persistedRunningDraft]);
 
   useEffect(() => {
     if (isStreaming) return;
@@ -2671,7 +2776,11 @@ export function ChatThreadView({
               onDecline={(callId) => void respondToTool(callId, false)}
             />
           ) : draft ? (
-            <AgentDraftBubble body={draft.body} agentName={agent?.name} live={!draft.finalizedAt} />
+            <AgentDraftBubble
+              body={draft.body}
+              agentName={agent?.name}
+              live={!draft.finalizedAt && !draft.stalled}
+            />
           ) : showThinking ? (
             <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
           ) : showWakeDiagnostic ? (

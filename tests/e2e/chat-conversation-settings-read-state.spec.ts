@@ -4,8 +4,8 @@ const readStateKey = "forge.chat.lastSeen.forge";
 
 function createdThreadIdFromResponse(payload: unknown): string {
   const row = Array.isArray(payload) ? payload[0] : payload;
-  const threadId = (row as { result?: { data?: { json?: { thread?: { id?: unknown } } } } })
-    ?.result?.data?.json?.thread?.id;
+  const threadId = (row as { result?: { data?: { json?: { thread?: { id?: unknown } } } } })?.result
+    ?.data?.json?.thread?.id;
   if (typeof threadId !== "string") {
     throw new Error("Expected chat.createConversation response to include thread.id");
   }
@@ -28,9 +28,7 @@ test.describe("Chat conversation settings and read state", () => {
     await page.getByRole("button", { name: /new conversation/i }).click();
 
     const agentSelect = page.getByTestId("new-conversation-agent");
-    const value = await agentSelect
-      .locator("option", { hasText: "e2ebot" })
-      .getAttribute("value");
+    const value = await agentSelect.locator("option", { hasText: "e2ebot" }).getAttribute("value");
     await agentSelect.selectOption(value!);
     await page.getByLabel(/^Title$/).fill(title);
     const createResponse = page.waitForResponse(
@@ -59,9 +57,7 @@ test.describe("Chat conversation settings and read state", () => {
 
     await page.getByRole("button", { name: /^conversation$/i }).click();
     await expect(modal.getByRole("textbox", { name: /^Title$/ })).toHaveValue(renamed);
-    await expect(modal.getByRole("textbox", { name: /^Topic$/ })).toHaveValue(
-      "Pinned test topic",
-    );
+    await expect(modal.getByRole("textbox", { name: /^Topic$/ })).toHaveValue("Pinned test topic");
     await expect(modal.getByRole("combobox", { name: /^Context mode$/ })).toHaveValue(
       "FULL_SUMMARY",
     );
@@ -74,9 +70,7 @@ test.describe("Chat conversation settings and read state", () => {
     await page.getByRole("button", { name: /new conversation/i }).click();
 
     const agentSelect = page.getByTestId("new-conversation-agent");
-    const value = await agentSelect
-      .locator("option", { hasText: "e2ebot" })
-      .getAttribute("value");
+    const value = await agentSelect.locator("option", { hasText: "e2ebot" }).getAttribute("value");
     await agentSelect.selectOption(value!);
     await page.getByLabel(/^Title$/).fill(title);
     const createResponse = page.waitForResponse(
@@ -101,7 +95,7 @@ test.describe("Chat conversation settings and read state", () => {
         page.evaluate(
           ([key, id]) => {
             const raw = localStorage.getItem(key);
-            return raw ? (JSON.parse(raw)[id] as number | undefined) ?? 0 : 0;
+            return raw ? ((JSON.parse(raw)[id] as number | undefined) ?? 0) : 0;
           },
           [readStateKey, threadId],
         ),
@@ -125,7 +119,7 @@ test.describe("Chat conversation settings and read state", () => {
         page.evaluate(
           ([key, id]) => {
             const raw = localStorage.getItem(key);
-            return raw ? (JSON.parse(raw)[id] as number | undefined) ?? 0 : 0;
+            return raw ? ((JSON.parse(raw)[id] as number | undefined) ?? 0) : 0;
           },
           [readStateKey, threadId],
         ),
@@ -140,9 +134,7 @@ test.describe("Chat conversation settings and read state", () => {
     await page.getByRole("button", { name: /new conversation/i }).click();
 
     const agentSelect = page.getByTestId("new-conversation-agent");
-    const value = await agentSelect
-      .locator("option", { hasText: "e2ebot" })
-      .getAttribute("value");
+    const value = await agentSelect.locator("option", { hasText: "e2ebot" }).getAttribute("value");
     await agentSelect.selectOption(value!);
     await page.getByLabel(/^Title$/).fill(title);
     const createResponse = page.waitForResponse(
@@ -155,7 +147,7 @@ test.describe("Chat conversation settings and read state", () => {
     await expect(page).toHaveURL(new RegExp(`thread=${threadId}`));
 
     const composer = page.getByTestId("chat-composer");
-    const composerText = composer.getByRole("textbox").first();
+    const composerText = composer.getByRole("combobox").first();
     await expect(page.getByTestId("chat-suggested-prompts")).toBeVisible();
     await expect(composerText).toBeEditable();
     await composerText.fill("activity read marker");
@@ -172,7 +164,10 @@ test.describe("Chat conversation settings and read state", () => {
       page.getByTestId("chat-message-user").filter({ hasText: "activity read marker" }),
     ).toBeVisible();
     await expect(
-      page.getByTestId("chat-message-agent").filter({ hasText: /E2E mock reply: pong/i }).first(),
+      page
+        .getByTestId("chat-message-agent")
+        .filter({ hasText: /E2E mock reply: pong/i })
+        .first(),
     ).toBeVisible({ timeout: 25_000 });
 
     await page.evaluate(
@@ -192,7 +187,7 @@ test.describe("Chat conversation settings and read state", () => {
         page.evaluate(
           ([key, id]) => {
             const raw = localStorage.getItem(key);
-            return raw ? (JSON.parse(raw)[id] as number | undefined) ?? 0 : 0;
+            return raw ? ((JSON.parse(raw)[id] as number | undefined) ?? 0) : 0;
           },
           [readStateKey, threadId],
         ),

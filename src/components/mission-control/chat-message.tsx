@@ -475,6 +475,7 @@ function StreamedRehydration({
         thinking={snapshot.thinking}
         tools={tools}
         elapsedMs={snapshot.elapsedMs}
+        usage={snapshot.usage}
         live={live}
       />
       {stateNotice && (

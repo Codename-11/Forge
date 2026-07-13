@@ -206,4 +206,34 @@ describe("makeHermesRunsConnector", () => {
 
     expect(events).toEqual([{ type: "stopped", reason: "Stopped by operator" }]);
   });
+
+  it("maps a run.cancelled SSE terminal to stopped", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/events")) {
+          const payload = `data: ${JSON.stringify({
+            event: "run.cancelled",
+            reason: "Stopped by operator",
+          })}\n\n`;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(new TextEncoder().encode(payload));
+                controller.close();
+              },
+            }),
+            { status: 200, headers: { "content-type": "text/event-stream" } },
+          );
+        }
+        return Response.json({ status: "cancelled" });
+      }),
+    );
+
+    const events: Array<Record<string, unknown>> = [];
+    const connector = makeHermesRunsConnector({ baseUrl: "http://hermes.local/v1" });
+    await connector.subscribe("run_cancelled_sse", (event) => events.push(event));
+
+    expect(events).toEqual([{ type: "stopped", reason: "Stopped by operator" }]);
+  });
 });

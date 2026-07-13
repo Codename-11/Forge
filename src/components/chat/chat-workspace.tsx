@@ -120,6 +120,7 @@ function latestMessageLabel(role: string | undefined): string {
     case "USER":
       return "Latest prompt";
     case "ASSISTANT":
+    case "AGENT":
       return "Latest reply";
     case "TOOL":
       return "Latest tool note";

@@ -775,7 +775,7 @@ describe("chatRouter deferred dispatch", () => {
     expect(diagnostics).toMatchObject({
       waitingForReply: true,
       dispatchState: "running",
-      turnStatus: { phase: "thinking" },
+      turnStatus: { phase: "responding" },
     });
 
     const thread = await caller.getThread({ threadId: sent.threadId });

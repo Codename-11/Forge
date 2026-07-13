@@ -12401,3 +12401,35 @@ responsive constraints.
 
 Verification: `pnpm test tests/unit/rich-rendering.test.ts` pass (10);
 `pnpm lint` clean; `pnpm typecheck` pass; `git diff --check` clean.
+
+---
+
+## 2026-07-13 — Chat lifecycle and Hermes runtime hardening
+
+Hardened the direct-stream, deferred-dispatch, and MCP draft chat paths as one
+durable lifecycle. The UI now restores active replies after reload, batches
+stream deltas, keeps scrolling user-controlled, distinguishes accepted,
+thinking, tool work, approval, responding, finalizing, stopped, failed, and
+stalled phases, and displays usage metadata without treating intentional stops
+as failures.
+
+Made user turns and agent replies exactly correlated, persisted streaming
+placeholders/tool approvals/checkpoints, added idempotent stop/finalize paths,
+and closed retry, attachment-only, reconnect, stale snapshot, approval race,
+and pre-stream failure gaps. Hermes runs now retain profile identity, stable
+tool-call IDs, usage, and truthful cancellation terminals.
+
+Implemented in isolated Sol and Med worktrees with mutual review, then merged
+onto `codex/chat-runtime-integration`. Hermes contract changes were merged onto
+its `axiom` branch. Verification: Forge lint and typecheck passed; focused chat
+and runtime suites passed (209 tests plus the Redis reconnect test); the full
+suite reached 1,179 passing tests and 2 skips, with one unrelated cross-suite
+stale-work race that passes independently. A fresh production build and all 8
+focused chat Playwright tests passed; the 5-test multi-workspace spec also
+passed independently after Chromium crashed during the wider parallel run.
+
+The live Hermes topology was also split from one shared default gateway into
+named Victor (`:8642`) and Mizu (`:8646`) services. Forge now binds each agent
+to its profile-specific runtime and secret. Both stored runtime credentials
+return HTTP 200 from `/v1/models`, and each gateway rejects the opposite
+profile with the expected HTTP 409 `profile_mismatch` response.

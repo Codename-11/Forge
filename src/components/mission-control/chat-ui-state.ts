@@ -98,6 +98,8 @@ export type RehydratedToolCall = ChatTraceToolCall & { requiresConfirm?: boolean
 export interface StreamedSnapshot {
   streamed: boolean;
   running: boolean;
+  draft: boolean;
+  draftId: string | null;
   partialText: string;
   thinking: string;
   toolCalls: RehydratedToolCall[];
@@ -108,6 +110,13 @@ export interface StreamedSnapshot {
   turnId: string | null;
   startedAt: number | null;
   finishedAt: number | null;
+  streamUpdatedAt: number | null;
+  usage: {
+    tokensIn?: number;
+    tokensOut?: number;
+    tokensCached?: number;
+    costUsd?: number;
+  } | null;
 }
 
 function timestamp(value: unknown): number | null {
@@ -160,6 +169,20 @@ export function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
           : "";
   const thinking = typeof obj.thinking === "string" ? obj.thinking : "";
   const error = typeof obj.error === "string" && obj.error.trim() ? obj.error : null;
+  const usageRaw =
+    obj.usage && typeof obj.usage === "object" && !Array.isArray(obj.usage)
+      ? (obj.usage as Record<string, unknown>)
+      : null;
+  const usage = usageRaw
+    ? {
+        ...(typeof usageRaw.tokensIn === "number" ? { tokensIn: usageRaw.tokensIn } : {}),
+        ...(typeof usageRaw.tokensOut === "number" ? { tokensOut: usageRaw.tokensOut } : {}),
+        ...(typeof usageRaw.tokensCached === "number"
+          ? { tokensCached: usageRaw.tokensCached }
+          : {}),
+        ...(typeof usageRaw.costUsd === "number" ? { costUsd: usageRaw.costUsd } : {}),
+      }
+    : null;
   const status = typeof obj.status === "string" ? obj.status.toLowerCase() : "";
   const stopped =
     obj.stopped === true || obj.aborted === true || status === "stopped" || status === "cancelled";
@@ -187,6 +210,13 @@ export function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
   return {
     streamed,
     running,
+    draft: obj.draft === true,
+    draftId:
+      typeof obj.draftId === "string"
+        ? obj.draftId
+        : typeof obj.draft_id === "string"
+          ? obj.draft_id
+          : null,
     partialText,
     thinking,
     toolCalls,
@@ -207,6 +237,8 @@ export function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
           : null,
     startedAt: timestamp(obj.startedAt ?? obj.started_at),
     finishedAt: timestamp(obj.finishedAt ?? obj.finished_at),
+    streamUpdatedAt: timestamp(obj.streamUpdatedAt ?? obj.stream_updated_at),
+    usage: usage && Object.keys(usage).length > 0 ? usage : null,
   };
 }
 

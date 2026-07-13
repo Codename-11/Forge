@@ -134,9 +134,12 @@ export async function POST(req: NextRequest) {
   }
   const threadId = String(parsed.threadId ?? "").trim();
   const body = String(parsed.body ?? "");
-  if (!threadId || !body.trim()) {
+  const requestedAttachmentIds = Array.isArray(parsed.attachments)
+    ? parsed.attachments.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  if (!threadId || (!body.trim() && requestedAttachmentIds.length === 0)) {
     return NextResponse.json(
-      { error: "threadId and non-empty body are required" },
+      { error: "threadId and a message or attachment are required" },
       { status: 400 },
     );
   }
@@ -239,9 +242,6 @@ export async function POST(req: NextRequest) {
   // leave a half-written user message if one points outside the workspace.
   // Only image attachments are passed to the model as vision blocks today;
   // anything else is persisted on the message but skipped from the prompt.
-  const requestedAttachmentIds = Array.isArray(parsed.attachments)
-    ? parsed.attachments.filter((id): id is string => typeof id === "string" && id.length > 0)
-    : [];
   const attachmentRows = requestedAttachmentIds.length
     ? await db.attachment.findMany({
         where: {
@@ -251,6 +251,9 @@ export async function POST(req: NextRequest) {
         },
       })
     : [];
+  if (!body.trim() && attachmentRows.length === 0) {
+    return NextResponse.json({ error: "No accessible attachments were provided" }, { status: 400 });
+  }
   const imageBlocks: ChatStreamContentBlock[] = [];
   for (const a of attachmentRows) {
     const mime = (a.mimeType ?? "").toLowerCase();
@@ -283,6 +286,18 @@ export async function POST(req: NextRequest) {
         "chat-stream: failed to presign image attachment; skipping",
       );
     }
+  }
+  if (!body.trim() && imageBlocks.length === 0) {
+    return NextResponse.json(
+      { error: "A text message is required when no supported image is attached." },
+      { status: 400 },
+    );
+  }
+  if (imageBlocks.length > 0 && !transport.capabilities.vision) {
+    return NextResponse.json(
+      { error: `${transport.transportLabel} does not support image input.` },
+      { status: 400 },
+    );
   }
 
   // Persist the USER row and the audit/event in one transaction. Mirrors
@@ -324,6 +339,66 @@ export async function POST(req: NextRequest) {
             orderBy: { createdAt: "desc" },
             select: { id: true, body: true, contextSnapshot: true },
           });
+      if (attachmentIds.length > 0) {
+        await tx.attachment.updateMany({
+          where: { id: { in: attachmentIds }, workspaceId },
+          data: { targetType: "chat-message", targetId: existingUser.id },
+        });
+      }
+      if (
+        typeof parsed.pendingMessageId === "string" &&
+        parsed.pendingMessageId.length > 0 &&
+        parsed.pendingMessageId !== existingUser.id
+      ) {
+        await tx.chatMessage.deleteMany({
+          where: {
+            id: parsed.pendingMessageId,
+            workspaceId,
+            threadId: thread.id,
+            role: ChatRole.USER,
+            dispatchedAt: null,
+          },
+        });
+      }
+      const existingSnapshot = jsonObject(existingAgent?.contextSnapshot);
+      if (
+        existingAgent &&
+        existingSnapshot.retryable === true &&
+        existingSnapshot.running !== true &&
+        typeof existingSnapshot.runExternalId !== "string"
+      ) {
+        const {
+          error: _error,
+          finishedAt: _finishedAt,
+          retryable: _retryable,
+          ...retainedSnapshot
+        } = existingSnapshot;
+        const revived = await tx.chatMessage.update({
+          where: { id: existingAgent.id },
+          data: {
+            body: "",
+            outputStartedAt: agentStartedAt,
+            contextSnapshot: {
+              ...retainedSnapshot,
+              running: true,
+              status: "running",
+              startedAt: agentStartedAt.toISOString(),
+              streamUpdatedAt: agentStartedAt.toISOString(),
+            } as Prisma.InputJsonObject,
+          },
+          select: { id: true, body: true, contextSnapshot: true },
+        });
+        await tx.chatMessage.update({
+          where: { id: existingUser.id },
+          data: { acknowledgedAt: agentStartedAt, outputStartedAt: agentStartedAt },
+        });
+        return {
+          userMessageId: existingUser.id,
+          agentMessageId: revived.id,
+          existingAgent: revived,
+          reused: false,
+        };
+      }
       return {
         userMessageId: existingUser.id,
         agentMessageId: existingAgent?.id ?? null,
@@ -359,6 +434,7 @@ export async function POST(req: NextRequest) {
             contextSnapshot: {
               streamed: true,
               turnId: clientTurnId,
+              replyToMessageId: message.id,
               running: true,
               status: "running",
               startedAt: agentStartedAt.toISOString(),
@@ -444,128 +520,30 @@ export async function POST(req: NextRequest) {
         running,
         snapshot: existingSnapshot,
       }),
-      ...(persistedTurn.existingAgent?.body
+      ...(!running && persistedTurn.existingAgent?.body
         ? [sse("content", { delta: persistedTurn.existingAgent.body, replay: true })]
         : []),
-      sse("done", {
-        messageId: persistedTurn.agentMessageId,
-        deduplicated: true,
-        running,
-      }),
+      ...(!running
+        ? [
+            sse("done", {
+              messageId: persistedTurn.agentMessageId,
+              deduplicated: true,
+              running: false,
+            }),
+          ]
+        : []),
     ]);
   }
 
-  // Load recent history *after* the USER row is persisted so it appears in
-  // the context array we send to the provider. Take last 20 chronological,
-  // including the just-inserted user message.
-  const recent = await db.chatMessage.findMany({
-    where: {
-      workspaceId,
-      threadId: thread.id,
-      ...(persistedTurn.agentMessageId ? { id: { not: persistedTurn.agentMessageId } } : {}),
-      OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
-    },
-    orderBy: { createdAt: "desc" },
-    take: 20,
-    select: { role: true, body: true },
-  });
-  const history = recent.reverse();
-
-  // Resolve the canvas binding once up-front so an invalid id fails fast
-  // (rather than silently dropping the binding mid-stream).
-  let boundCanvasId: string | null = null;
-  if (canvasId) {
-    const canvas = await db.workspaceCanvas.findFirst({
-      where: { id: canvasId, workspaceId, archivedAt: null },
-      select: { id: true },
-    });
-    if (canvas) boundCanvasId = canvas.id;
-  }
-
-  const baseSystemPrompt =
-    `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
-    `management workspace. Be concise and direct. ` +
-    (agent.capabilities && agent.capabilities.length > 0
-      ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
-      : "") +
-    (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
-
-  const buildSystemPrompt = async (): Promise<string> => {
-    if (!boundCanvasId) return baseSystemPrompt;
-    const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
-    const storyboardHint =
-      `When the operator asks you to lay out, storyboard, sketch, ` +
-      `organize, or "set up a canvas for" something, reach for the ` +
-      `compound MCP gestures:\n` +
-      `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
-      `the plan card + notes lane + sources column + next-steps lane.\n` +
-      `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
-      `with the issue card + related + comments + attachments.\n` +
-      `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
-      `with a scratchpad + sources column + next-steps lane.\n` +
-      `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
-      `hatch when the three presets don't fit. Provide a panels[] ` +
-      `array of \`{ label, body?, x, y, width, height }\`.\n` +
-      `One storyboard call is the grammar — don't scatter 25 floating ` +
-      `nodes by hand.`;
-    if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
-    return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
-  };
-  const systemPrompt = await buildSystemPrompt();
-
-  // Build the model-facing message array. History rows stay plain text —
-  // we only attach image blocks to the *latest* user turn, which is the
-  // one we just persisted. (Historical attachments aren't replayed; the
-  // model already saw them in their original turn.)
-  const messages: ChatStreamMessage[] = [{ role: "system", content: systemPrompt }];
-  for (let i = 0; i < history.length; i++) {
-    const m = history[i];
-    const isLatest = i === history.length - 1;
-    const role: "user" | "assistant" = m.role === ChatRole.USER ? "user" : "assistant";
-    if (isLatest && role === "user" && imageBlocks.length > 0) {
-      const blocks: ChatStreamContentBlock[] = [];
-      if (m.body) blocks.push({ type: "text", text: m.body });
-      blocks.push(...imageBlocks);
-      messages.push({ role, content: blocks });
-    } else {
-      messages.push({ role, content: m.body });
-    }
-  }
-
   if (useDispatch) {
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const enqueue = (chunk: string) => {
-          try {
-            controller.enqueue(encoder.encode(chunk));
-          } catch {
-            /* controller already closed */
-          }
-        };
-        enqueue(
-          sse("meta", {
-            userMessageId,
-            dispatch: true,
-            transport: transport.transportLabel,
-          }),
-        );
-        enqueue(sse("done", { userMessageId, dispatch: true }));
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        "x-accel-buffering": "no",
-      },
-    });
+    return streamResponse([
+      sse("meta", {
+        userMessageId,
+        dispatch: true,
+        transport: transport.transportLabel,
+      }),
+      sse("done", { userMessageId, dispatch: true }),
+    ]);
   }
 
   // Non-dispatch turns create their durable placeholder in the same
@@ -575,6 +553,115 @@ export async function POST(req: NextRequest) {
   if (!agentMessageId) {
     return NextResponse.json({ error: "Failed to initialize chat turn" }, { status: 500 });
   }
+
+  const prepared = await (async () => {
+    // Load recent history *after* the USER row is persisted so it appears in
+    // the context array we send to the provider. Take last 20 chronological,
+    // including the just-inserted user message.
+    const recent = await db.chatMessage.findMany({
+      where: {
+        workspaceId,
+        threadId: thread.id,
+        ...(persistedTurn.agentMessageId ? { id: { not: persistedTurn.agentMessageId } } : {}),
+        OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { role: true, body: true },
+    });
+    const history = recent.reverse();
+
+    // Resolve the canvas binding once up-front so an invalid id fails fast
+    // (rather than silently dropping the binding mid-stream).
+    let boundCanvasId: string | null = null;
+    if (canvasId) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: canvasId, workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (canvas) boundCanvasId = canvas.id;
+    }
+
+    const baseSystemPrompt =
+      `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
+      `management workspace. Be concise and direct. ` +
+      (agent.capabilities && agent.capabilities.length > 0
+        ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
+        : "") +
+      (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
+
+    const buildSystemPrompt = async (): Promise<string> => {
+      if (!boundCanvasId) return baseSystemPrompt;
+      const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
+      const storyboardHint =
+        `When the operator asks you to lay out, storyboard, sketch, ` +
+        `organize, or "set up a canvas for" something, reach for the ` +
+        `compound MCP gestures:\n` +
+        `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
+        `the plan card + notes lane + sources column + next-steps lane.\n` +
+        `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
+        `with the issue card + related + comments + attachments.\n` +
+        `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
+        `with a scratchpad + sources column + next-steps lane.\n` +
+        `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
+        `hatch when the three presets don't fit. Provide a panels[] ` +
+        `array of \`{ label, body?, x, y, width, height }\`.\n` +
+        `One storyboard call is the grammar — don't scatter 25 floating ` +
+        `nodes by hand.`;
+      if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
+      return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
+    };
+    const systemPrompt = await buildSystemPrompt();
+
+    // Build the model-facing message array. History rows stay plain text —
+    // we only attach image blocks to the *latest* user turn, which is the
+    // one we just persisted. (Historical attachments aren't replayed; the
+    // model already saw them in their original turn.)
+    const messages: ChatStreamMessage[] = [{ role: "system", content: systemPrompt }];
+    for (let i = 0; i < history.length; i++) {
+      const m = history[i];
+      const isLatest = i === history.length - 1;
+      const role: "user" | "assistant" = m.role === ChatRole.USER ? "user" : "assistant";
+      if (isLatest && role === "user" && imageBlocks.length > 0) {
+        const blocks: ChatStreamContentBlock[] = [];
+        if (m.body) blocks.push({ type: "text", text: m.body });
+        blocks.push(...imageBlocks);
+        messages.push({ role, content: blocks });
+      } else {
+        messages.push({ role, content: m.body });
+      }
+    }
+    return { boundCanvasId, buildSystemPrompt, history, messages, systemPrompt };
+  })().catch(async (err) => {
+    const failedAt = new Date().toISOString();
+    const message = streamErrorMessage(err, "Failed to prepare the chat turn.");
+    await db.chatMessage
+      .update({
+        where: { id: agentMessageId },
+        data: {
+          body: "(The chat turn could not be prepared. Retry to try again.)",
+          contextSnapshot: {
+            streamed: true,
+            turnId: clientTurnId,
+            replyToMessageId: userMessageId,
+            running: false,
+            status: "failed",
+            error: message,
+            retryable: true,
+            startedAt: agentStartedAt.toISOString(),
+            finishedAt: failedAt,
+            streamUpdatedAt: failedAt,
+          },
+        },
+      })
+      .catch(() => undefined);
+    logger.warn({ err, threadId: thread.id, agentMessageId }, "chat-stream: preparation failed");
+    return null;
+  });
+  if (!prepared) {
+    return NextResponse.json({ error: "Failed to prepare chat turn" }, { status: 500 });
+  }
+  const { boundCanvasId, buildSystemPrompt, history, messages, systemPrompt } = prepared;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -605,6 +692,7 @@ export async function POST(req: NextRequest) {
           name: string;
           args: Record<string, unknown>;
           status: "pending" | "approved" | "declined" | "executed" | "error";
+          requiresConfirm: boolean;
           summary?: string;
           result?: unknown;
         };
@@ -644,6 +732,7 @@ export async function POST(req: NextRequest) {
                 contextSnapshot: {
                   streamed: true,
                   turnId: clientTurnId,
+                  replyToMessageId: userMessageId,
                   provider: effectiveProvider,
                   model: effectiveModel ?? undefined,
                   yoloModeOverride,
@@ -794,6 +883,7 @@ export async function POST(req: NextRequest) {
             name: call.name,
             args: call.args,
             status: "pending",
+            requiresConfirm: findChatTool(call.name)?.requiresConfirm ?? true,
           };
           toolCalls.push(fresh);
           queueCheckpoint();
@@ -975,7 +1065,13 @@ export async function POST(req: NextRequest) {
                   const queued = toolIdsByName.get(e.tool) ?? [];
                   queued.push(id);
                   toolIdsByName.set(e.tool, queued);
-                  toolCalls.push({ id, name: e.tool, args: {}, status: "pending" });
+                  toolCalls.push({
+                    id,
+                    name: e.tool,
+                    args: {},
+                    status: "pending",
+                    requiresConfirm: false,
+                  });
                   queueCheckpoint();
                   enqueue(
                     sse("tool_call_started", {
@@ -1022,14 +1118,22 @@ export async function POST(req: NextRequest) {
                   const cmd =
                     typeof e.raw.command === "string" ? e.raw.command : (e.tool ?? "approval");
                   const label = cmd.length > 64 ? `${cmd.slice(0, 61)}…` : cmd;
-                  const approvalRecord: ToolCallRecord = {
+                  const existingRecord = toolCalls.find((call) => call.id === id);
+                  const approvalRecord: ToolCallRecord = existingRecord ?? {
                     id,
                     name: label,
                     args: e.raw,
                     status: "pending",
-                    summary: "Waiting for operator approval.",
+                    requiresConfirm: true,
                   };
-                  toolCalls.push(approvalRecord);
+                  Object.assign(approvalRecord, {
+                    name: label,
+                    args: e.raw,
+                    status: "pending" as const,
+                    requiresConfirm: true,
+                    summary: "Waiting for operator approval.",
+                  });
+                  if (!existingRecord) toolCalls.push(approvalRecord);
                   queueCheckpoint(true);
                   // Resolve out-of-band — Hermes holds the run open until we
                   // respond. Approve → allow once; decline → STOP the run
@@ -1129,16 +1233,10 @@ export async function POST(req: NextRequest) {
                   };
                   queueCheckpoint();
                   break;
-                default: {
-                  // Newer connectors expose provider-side cancellation as a
-                  // truthful terminal `stopped` event. Keep this guarded cast
-                  // backward-compatible with connectors on the older union.
-                  const terminal = e as { type: string; reason?: string };
-                  if (terminal.type === "stopped") {
-                    stopObserved = true;
-                    enqueue(sse("stopped", { reason: terminal.reason ?? "Runtime stopped." }));
-                    queueCheckpoint(true);
-                  }
+                case "stopped": {
+                  stopObserved = true;
+                  enqueue(sse("stopped", { reason: e.reason ?? "Runtime stopped." }));
+                  queueCheckpoint(true);
                   break;
                 }
               }
@@ -1309,6 +1407,7 @@ export async function POST(req: NextRequest) {
                   ...currentSnapshot,
                   streamed: true,
                   turnId: clientTurnId,
+                  replyToMessageId: userMessageId,
                   provider: effectiveProvider,
                   model: effectiveModel ?? undefined,
                   yoloModeOverride,

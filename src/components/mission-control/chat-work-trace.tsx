@@ -39,6 +39,7 @@ export function ChatWorkTrace({
   thinking,
   tools = [],
   elapsedMs,
+  usage,
   live = false,
   threadId,
   onApprove,
@@ -48,6 +49,12 @@ export function ChatWorkTrace({
   thinking?: string;
   tools?: ChatTraceToolCall[];
   elapsedMs?: number | null;
+  usage?: {
+    tokensIn?: number;
+    tokensOut?: number;
+    tokensCached?: number;
+    costUsd?: number;
+  } | null;
   live?: boolean;
   threadId?: string;
   onApprove?: (callId: string, alwaysAllow?: boolean) => void;
@@ -56,6 +63,12 @@ export function ChatWorkTrace({
 }) {
   const hasThinking = Boolean(thinking?.trim());
   const hasTools = tools.length > 0;
+  const hasUsage = Boolean(
+    usage &&
+    [usage.tokensIn, usage.tokensOut, usage.tokensCached, usage.costUsd].some(
+      (value) => typeof value === "number",
+    ),
+  );
   const pendingApprovals = tools.filter(
     (call) => call.status === "pending" && Boolean(call.requiresConfirm),
   ).length;
@@ -82,7 +95,20 @@ export function ChatWorkTrace({
     (call) => call.status === "error" || call.status === "declined",
   ).length;
 
-  if (!hasThinking && !hasTools) return null;
+  if (!hasThinking && !hasTools && !hasUsage) return null;
+
+  const tokenTotal = (usage?.tokensIn ?? 0) + (usage?.tokensOut ?? 0);
+  const usageLabel = hasUsage
+    ? [
+        tokenTotal > 0 ? `${tokenTotal.toLocaleString()} tokens` : null,
+        typeof usage?.tokensCached === "number" && usage.tokensCached > 0
+          ? `${usage.tokensCached.toLocaleString()} cached`
+          : null,
+        typeof usage?.costUsd === "number" ? `$${usage.costUsd.toFixed(4)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" / ")
+    : null;
 
   const elapsedLabel =
     typeof elapsedMs === "number" && elapsedMs > 0
@@ -118,6 +144,7 @@ export function ChatWorkTrace({
             runtimeTools.length
               ? `${runtimeTools.length} tool${runtimeTools.length === 1 ? "" : "s"}`
               : null,
+            usageLabel,
           ]
             .filter(Boolean)
             .join(" / ")}
@@ -189,6 +216,11 @@ export function ChatWorkTrace({
               onApprove={onApprove}
               onDecline={onDecline}
             />
+          )}
+          {usageLabel && (
+            <div className="rounded border border-border/45 bg-background/35 px-1.5 py-1 font-mono text-[0.625rem] text-muted-foreground">
+              Usage · {usageLabel}
+            </div>
           )}
         </div>
       )}

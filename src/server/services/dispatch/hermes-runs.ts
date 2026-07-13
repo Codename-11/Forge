@@ -1,12 +1,6 @@
 import "server-only";
 import { logger } from "@/server/logger";
-import type {
-  DispatchConnector,
-  RunEvent,
-  RunInput,
-  RunStatus,
-  StartedRun,
-} from "./types";
+import type { DispatchConnector, RunEvent, RunInput, RunStatus, StartedRun } from "./types";
 
 function mapStatus(raw: string): RunStatus["state"] {
   const s = raw.toLowerCase();
@@ -36,9 +30,7 @@ function usageFrom(value: unknown): RunStatus["usage"] | undefined {
     tokensIn: num(usageRaw.input_tokens ?? usageRaw.prompt_tokens),
     tokensOut: num(usageRaw.output_tokens ?? usageRaw.completion_tokens),
     tokensCached: num(
-      usageRaw.cached_tokens ??
-        usageRaw.cache_read_input_tokens ??
-        usageRaw.cached_input_tokens,
+      usageRaw.cached_tokens ?? usageRaw.cache_read_input_tokens ?? usageRaw.cached_input_tokens,
     ),
     costUsd: num(usageRaw.cost_usd ?? usageRaw.costUsd),
   };
@@ -301,9 +293,7 @@ export function makeHermesRunsConnector(opts?: {
             }
             onEvent({
               type: "approval_required",
-              choices: Array.isArray(evt.choices)
-                ? (evt.choices as string[])
-                : ["once", "deny"],
+              choices: Array.isArray(evt.choices) ? (evt.choices as string[]) : ["once", "deny"],
               callId: eventCallId(evt),
               tool: typeof evt.tool === "string" ? evt.tool : undefined,
               raw: evt,
@@ -329,7 +319,13 @@ export function makeHermesRunsConnector(opts?: {
             break;
           case "run.cancelled":
             terminal = true;
-            onEvent({ type: "completed" });
+            onEvent({
+              type: "stopped",
+              reason:
+                (typeof evt.reason === "string" && evt.reason) ||
+                (typeof evt.message === "string" && evt.message) ||
+                "Runtime run was cancelled.",
+            });
             break;
           case "run.failed":
             terminal = true;

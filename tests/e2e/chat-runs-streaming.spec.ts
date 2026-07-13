@@ -14,15 +14,13 @@ test.describe("Chat runs streaming", () => {
     const agentSelect = page.getByTestId("new-conversation-agent");
     await expect(agentSelect).toBeVisible();
     // Resolve the E2E Bot's option value (avoids matching the "·" label).
-    const value = await agentSelect
-      .locator("option", { hasText: "e2ebot" })
-      .getAttribute("value");
+    const value = await agentSelect.locator("option", { hasText: "e2ebot" }).getAttribute("value");
     await agentSelect.selectOption(value!);
     await page.getByRole("button", { name: /^create$/i }).click();
 
     const composer = page.getByTestId("chat-composer");
     await expect(composer).toBeVisible();
-    const textbox = composer.getByRole("textbox").first();
+    const textbox = composer.getByRole("combobox").first();
     await textbox.fill("ping");
     await textbox.press("Enter"); // Enter (no shift) submits — chat-composer.tsx
 

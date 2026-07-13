@@ -5439,8 +5439,22 @@ export const mcpTools = {
         .describe(
           "Optional AgentRun id to link the chat reply to a longer agent run for deep-linking.",
         ),
+      replyToMessageId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe("Exact inbound USER ChatMessage.id this reply satisfies."),
     }),
-    async run(input: { threadId: string; body: string; sourceRunId?: string }, ctx: McpContext) {
+    async run(
+      input: {
+        threadId: string;
+        body: string;
+        sourceRunId?: string;
+        replyToMessageId?: string;
+      },
+      ctx: McpContext,
+    ) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
         throw new Error("chat.appendMessage requires an API key with linkedAgentId set.");
@@ -5464,11 +5478,17 @@ export const mcpTools = {
             threadId: thread.id,
             workspaceId: ctx.workspaceId,
             role: "USER",
-            outputStartedAt: null,
+            dispatchedAt: { not: null },
+            ...(input.replyToMessageId
+              ? { id: input.replyToMessageId }
+              : { outputStartedAt: null }),
           },
           orderBy: { createdAt: "desc" },
           select: { id: true, acknowledgedAt: true },
         });
+        if (input.replyToMessageId && !pendingUserMessage) {
+          throw new Error("Reply target was not found in this chat thread.");
+        }
         if (pendingUserMessage) {
           const now = new Date();
           await tx.chatMessage.update({
@@ -5486,6 +5506,9 @@ export const mcpTools = {
             role: "AGENT",
             body: input.body,
             sourceRunId: input.sourceRunId ?? null,
+            contextSnapshot: pendingUserMessage
+              ? { replyToMessageId: pendingUserMessage.id }
+              : undefined,
           },
         });
         await tx.chatThread.update({
@@ -5529,8 +5552,14 @@ export const mcpTools = {
         .min(1)
         .max(40)
         .describe("ChatThread.id from the inbound webhook payload."),
+      replyToMessageId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe("Exact inbound USER ChatMessage.id this draft replies to."),
     }),
-    async run(input: { threadId: string }, ctx: McpContext) {
+    async run(input: { threadId: string; replyToMessageId?: string }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
         throw new Error("chat.startDraft requires an API key with linkedAgentId set.");
@@ -5555,6 +5584,7 @@ export const mcpTools = {
           workspaceId: ctx.workspaceId,
           role: "USER",
           dispatchedAt: { not: null },
+          ...(input.replyToMessageId ? { id: input.replyToMessageId } : {}),
         },
         orderBy: { createdAt: "desc" },
         select: { id: true, acknowledgedAt: true, outputStartedAt: true },
@@ -5753,22 +5783,6 @@ export const mcpTools = {
         actorId: null,
         createdAt: now,
       });
-      void publish({
-        id: nanoid(),
-        workspaceId: ctx.workspaceId,
-        kind: EventKind.CHAT_MESSAGE_POSTED,
-        subjectType: "chat-thread-state",
-        subjectId: input.threadId,
-        payload: {
-          phase: "progress",
-          threadId: input.threadId,
-          messageId: input.draftId,
-          draftId: input.draftId,
-          updatedAt: now,
-        },
-        actorId: null,
-        createdAt: now,
-      });
       return { ok: true, duplicate: false, seq: result.seq };
     },
   },
@@ -5799,15 +5813,47 @@ export const mcpTools = {
       }
       return db.$transaction(async (tx) => {
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${input.draftId}))`;
+        const durableDraft = await tx.chatMessage.findFirst({
+          where: {
+            id: input.draftId,
+            workspaceId: ctx.workspaceId,
+            threadId: thread.id,
+            role: "AGENT",
+          },
+          select: { id: true, body: true, contextSnapshot: true },
+        });
+        const durableSnapshot =
+          durableDraft?.contextSnapshot &&
+          typeof durableDraft.contextSnapshot === "object" &&
+          !Array.isArray(durableDraft.contextSnapshot)
+            ? (durableDraft.contextSnapshot as Record<string, Prisma.JsonValue>)
+            : {};
+        if (durableDraft && durableSnapshot.running === false) {
+          return {
+            messageId: durableDraft.id,
+            threadId: thread.id,
+            draftId: input.draftId,
+            duplicate: true,
+          };
+        }
+
         // Inbox lifecycle: finalizing a draft is a definitive
         // "user turn satisfied" — mirror the single-shot
-        // chat.appendMessage path so canonical state stays in sync.
+        // chat.appendMessage path so canonical state stays in sync. A newer
+        // user turn may arrive while this draft is streaming, so acknowledge
+        // the exact turn captured by startDraft rather than whichever USER row
+        // happens to be newest at finalize time.
+        const replyToMessageId =
+          typeof durableSnapshot.replyToMessageId === "string"
+            ? durableSnapshot.replyToMessageId
+            : null;
         const pendingUserMessage = await tx.chatMessage.findFirst({
           where: {
             threadId: thread.id,
             workspaceId: ctx.workspaceId,
             role: "USER",
             dispatchedAt: { not: null },
+            ...(replyToMessageId ? { id: replyToMessageId } : {}),
           },
           orderBy: { createdAt: "desc" },
           select: { id: true, acknowledgedAt: true, outputStartedAt: true },
@@ -5822,15 +5868,6 @@ export const mcpTools = {
             },
           });
         }
-        const durableDraft = await tx.chatMessage.findFirst({
-          where: {
-            id: input.draftId,
-            workspaceId: ctx.workspaceId,
-            threadId: thread.id,
-            role: "AGENT",
-          },
-          select: { id: true, contextSnapshot: true },
-        });
         const finishedAt = new Date().toISOString();
         const message = durableDraft
           ? await tx.chatMessage.update({
@@ -5839,15 +5876,12 @@ export const mcpTools = {
                 body: input.body,
                 sourceRunId: input.sourceRunId ?? null,
                 contextSnapshot: {
-                  ...(durableDraft.contextSnapshot &&
-                  typeof durableDraft.contextSnapshot === "object" &&
-                  !Array.isArray(durableDraft.contextSnapshot)
-                    ? (durableDraft.contextSnapshot as Record<string, Prisma.JsonValue>)
-                    : {}),
+                  ...durableSnapshot,
                   draft: true,
                   partial_text: input.body,
                   running: false,
                   status: "completed",
+                  replyToMessageId: pendingUserMessage?.id,
                   finishedAt,
                   draftUpdatedAt: finishedAt,
                   streamUpdatedAt: finishedAt,
@@ -5930,7 +5964,12 @@ export const mcpTools = {
           actorId: null,
           createdAt: finishedAt,
         });
-        return { messageId: message.id, threadId: thread.id, draftId: input.draftId };
+        return {
+          messageId: message.id,
+          threadId: thread.id,
+          draftId: input.draftId,
+          duplicate: false,
+        };
       });
     },
   },

@@ -91,6 +91,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Streaming reply not found" }, { status: 404 });
   }
 
+  const currentSnapshot =
+    message.contextSnapshot &&
+    typeof message.contextSnapshot === "object" &&
+    !Array.isArray(message.contextSnapshot)
+      ? (message.contextSnapshot as Record<string, unknown>)
+      : {};
+  const currentStatus =
+    typeof currentSnapshot.status === "string" ? currentSnapshot.status.toLowerCase() : "";
+  if (
+    currentSnapshot.running !== true ||
+    currentSnapshot.stopped === true ||
+    ["stopped", "completed", "failed", "cancelled"].includes(currentStatus)
+  ) {
+    return NextResponse.json({
+      ok: true,
+      alreadyTerminal: true,
+      runExternalId: readRunExternalId(message.contextSnapshot),
+    });
+  }
+
   const runExternalId = readRunExternalId(message.contextSnapshot);
   const effectiveProvider = message.thread.providerOverride ?? message.thread.agent.provider;
   const connector = getRunsConnectorForAgent({
@@ -107,8 +127,11 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     logger.warn({ err, threadId, messageId, runExternalId }, "chat-stream: stop failed");
     const failedAt = new Date().toISOString();
-    await db.chatMessage.update({
-      where: { id: message.id },
+    const result = await db.chatMessage.updateMany({
+      where: {
+        id: message.id,
+        contextSnapshot: { path: ["running"], equals: true },
+      },
       data: {
         contextSnapshot: mergeContext(message.contextSnapshot, {
           stopFailedAt: failedAt,
@@ -119,6 +142,9 @@ export async function POST(req: NextRequest) {
         }),
       },
     });
+    if (result.count === 0) {
+      return NextResponse.json({ ok: true, alreadyTerminal: true, runExternalId });
+    }
     await publish({
       id: randomUUID(),
       workspaceId: message.workspaceId,

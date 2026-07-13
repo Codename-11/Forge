@@ -148,8 +148,13 @@ type ChatThreadDiagnostics = {
       | "queued"
       | "delivered"
       | "read"
+      | "accepted"
       | "thinking"
       | "running"
+      | "working"
+      | "awaiting_approval"
+      | "responding"
+      | "finalizing"
       | "completed"
       | "stopped"
       | "stalled"
@@ -269,14 +274,27 @@ async function buildThreadDiagnostics(
     : null;
   const delivery = lastEvent?.deliveries[0] ?? null;
   const now = Date.now();
-  const agentReplySupersededByUser = Boolean(
-    latestUser && latestAgent && latestAgent.createdAt.getTime() < latestUser.createdAt.getTime(),
+  const rawLatestAgentSnapshot = jsonObject(latestAgent?.contextSnapshot);
+  const explicitReplyToMessageId =
+    typeof rawLatestAgentSnapshot?.replyToMessageId === "string"
+      ? rawLatestAgentSnapshot.replyToMessageId
+      : null;
+  const latestAgentMatchesUser = Boolean(
+    latestUser &&
+    latestAgent &&
+    (!explicitReplyToMessageId || explicitReplyToMessageId === latestUser.id),
   );
-  const latestAgentSnapshot = agentReplySupersededByUser
-    ? null
-    : jsonObject(latestAgent?.contextSnapshot);
+  const agentReplySupersededByUser = Boolean(
+    latestUser &&
+    latestAgent &&
+    (latestAgent.createdAt.getTime() < latestUser.createdAt.getTime() || !latestAgentMatchesUser),
+  );
+  const latestAgentSnapshot = agentReplySupersededByUser ? null : rawLatestAgentSnapshot;
   const currentAgentRowExists = Boolean(
-    latestUser && latestAgent && latestAgent.createdAt.getTime() >= latestUser.createdAt.getTime(),
+    latestUser &&
+    latestAgent &&
+    latestAgentMatchesUser &&
+    latestAgent.createdAt.getTime() >= latestUser.createdAt.getTime(),
   );
   const agentPlaceholderRunning = currentAgentRowExists && latestAgentSnapshot?.running === true;
   // A streaming placeholder is not a reply until its terminal checkpoint
@@ -337,6 +355,45 @@ async function buildThreadDiagnostics(
     waitingForReply && latestUser ? Math.max(0, now - latestUser.createdAt.getTime()) : null;
   const deliveryFailed = delivery?.status === "FAILED";
   const readAt = latestUser?.acknowledgedAt ?? latestUser?.outputStartedAt ?? null;
+  const snapshotTools = Array.isArray(latestAgentSnapshot?.tool_calls)
+    ? latestAgentSnapshot.tool_calls.flatMap((tool) => {
+        const record = jsonObject(tool);
+        return record ? [record] : [];
+      })
+    : [];
+  const pendingApproval = snapshotTools.some(
+    (tool) => tool.status === "pending" && tool.requiresConfirm === true,
+  );
+  const hasToolWork = snapshotTools.length > 0;
+  const hasResponseText = Boolean(
+    latestAgent?.body.trim() ||
+    (typeof latestAgentSnapshot?.partial_text === "string" &&
+      latestAgentSnapshot.partial_text.trim()),
+  );
+  const hasThinking = Boolean(
+    typeof latestAgentSnapshot?.thinking === "string" && latestAgentSnapshot.thinking.trim(),
+  );
+  const activePhase = pendingApproval
+    ? ({
+        phase: "awaiting_approval",
+        label: "Approval required",
+        detail: "Waiting for your approval.",
+      } as const)
+    : hasResponseText
+      ? ({ phase: "responding", label: "Responding", detail: "The reply is streaming." } as const)
+      : hasToolWork || run
+        ? ({
+            phase: "working",
+            label: "Working",
+            detail: run?.currentStep ?? "The agent is using tools.",
+          } as const)
+        : hasThinking
+          ? ({ phase: "thinking", label: "Thinking", detail: "The agent is reasoning." } as const)
+          : ({
+              phase: "accepted",
+              label: "Accepted",
+              detail: "The agent accepted the turn and is preparing a response.",
+            } as const);
   const turnStatus: ChatThreadDiagnostics["turnStatus"] = !latestUser
     ? {
         phase: "idle",
@@ -349,7 +406,8 @@ async function buildThreadDiagnostics(
         waitingMs: null,
         runId: null,
       }
-    : currentAgentReplyExists && latestAgentSnapshot?.stopped === true
+    : currentAgentReplyExists &&
+        (latestAgentSnapshot?.stopped === true || latestAgentSnapshot?.status === "stopped")
       ? {
           phase: "stopped",
           label: "Stopped",
@@ -421,9 +479,9 @@ async function buildThreadDiagnostics(
                 }
               : dispatchState === "running"
                 ? {
-                    phase: run ? "running" : "thinking",
-                    label: run ? "Running" : "Thinking",
-                    detail: run?.currentStep ?? "Agent accepted the turn and is drafting.",
+                    phase: activePhase.phase,
+                    label: activePhase.label,
+                    detail: activePhase.detail,
                     tone: "info",
                     startedAt: latestUser.createdAt,
                     readAt,
