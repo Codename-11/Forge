@@ -59,6 +59,26 @@ describe("workspaceRouter — admin member management", () => {
     expect(workspace.agentRunStaleMinutes).toBe(45);
   });
 
+  it("updates agent progress cadence and non-terminal quiet threshold", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+
+    await caller.update({
+      agentProgressUpdateMinutes: 8,
+      agentRunQuietMinutes: 12,
+    });
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: fixture.workspace.id },
+      select: {
+        agentProgressUpdateMinutes: true,
+        agentRunQuietMinutes: true,
+      },
+    });
+    expect(workspace.agentProgressUpdateMinutes).toBe(8);
+    expect(workspace.agentRunQuietMinutes).toBe(12);
+  });
+
   it("updates the reviewer-start fallback window", async () => {
     const { caller, fixture } = await adminSetup();
     const prisma = getPrisma();

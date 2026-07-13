@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 
 /**
  * Realtime event wire format — mirrors `RealtimeEvent` on the server but
@@ -20,6 +20,61 @@ export interface RealtimeEventShape {
 type EventHandler = (evt: RealtimeEventShape) => void;
 
 const listeners = new Set<EventHandler>();
+
+export type RealtimeConnectionStatus =
+  | "connecting"
+  | "live"
+  | "reconnecting"
+  | "offline";
+
+export interface RealtimeConnectionHealth {
+  status: RealtimeConnectionStatus;
+  lastConnectedAt: string | null;
+  lastEventAt: string | null;
+}
+
+const connectionListeners = new Set<() => void>();
+const INITIAL_CONNECTION_HEALTH: RealtimeConnectionHealth = {
+  status: "connecting",
+  lastConnectedAt: null,
+  lastEventAt: null,
+};
+let connectionHealth = INITIAL_CONNECTION_HEALTH;
+
+/** Internal provider bridge; exported so the transport stays decoupled from UI. */
+export function setRealtimeConnectionHealth(
+  next: Partial<RealtimeConnectionHealth>,
+): void {
+  const value = { ...connectionHealth, ...next };
+  if (
+    value.status === connectionHealth.status &&
+    value.lastConnectedAt === connectionHealth.lastConnectedAt &&
+    value.lastEventAt === connectionHealth.lastEventAt
+  ) {
+    return;
+  }
+  connectionHealth = value;
+  for (const listener of connectionListeners) listener();
+}
+
+/**
+ * Current workspace stream health for connection badges and degraded-mode
+ * messaging. `offline` means the browser is offline; `reconnecting` means the
+ * network is up but EventSource is retrying. Existing query polling remains the
+ * fallback in either degraded state.
+ */
+export function useRealtimeConnection(): RealtimeConnectionHealth {
+  return useSyncExternalStore(
+    (listener) => {
+      connectionListeners.add(listener);
+      return () => {
+        connectionListeners.delete(listener);
+      };
+    },
+    () => connectionHealth,
+    () => INITIAL_CONNECTION_HEALTH,
+  );
+}
 
 /**
  * Global registry the `RealtimeProvider` feeds SSE events into. Hooks

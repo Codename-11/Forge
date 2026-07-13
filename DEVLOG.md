@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — Issue Workstream + durable realtime progress
+
+Consolidated the issue's repeated agent-status surfaces into one first-class
+Workstream beneath the issue author metadata. It now keeps agent presence,
+operational state, engagement mode, execution runtime, effective tool policy,
+elapsed/last-signal timing, rolling semantic status, approval handling,
+operator controls, and an expandable ten-event trace together. Active rolling
+STATUS comments no longer jump through the conversation timeline; terminal
+summaries remain in history. Activity now leads the issue-rail navigation and
+shows live work, while bare issue URLs preserve the historical Attachments
+default.
+
+Kept the browser transport on SSE and closed its reliability gap with durable
+cursor replay across `ActivityEvent` and `AgentRunEvent`, subscription-before-
+replay buffering, bounded reconciliation, persisted per-workspace cursors, and
+visible connecting/live/reconnecting/offline health. Granular run publishes now
+use their durable row id/timestamp instead of an unrelated transient id.
+
+Added workspace settings and migration 0100 for semantic progress cadence and
+the non-terminal quiet threshold. The versioned agent protocol now separates
+mechanical trace events from human-facing STATUS checkpoints, asks for concise
+phase/result updates at the configured cadence, and explicitly rejects
+chain-of-thought/tool-log narration. Run diagnostics expose acknowledgement,
+output, progress, and completion signals independently, and UI copy keeps Quiet
+distinct from the canonical persisted STALLED state.
+
+Verification: `pnpm lint` passed with existing repository warnings; `pnpm
+typecheck` passed; the full Vitest suite passed (**1,187 passed; 1 skipped**);
+`git diff --check` passed; and a fresh production build completed. The full
+Playwright run passed **36/37** before Chromium itself segfaulted while creating
+one workspace-switcher context; that test passed in an isolated single-worker
+rerun (**1/1**). No deployment or push performed.
+
 ## 2026-07-13 — AXI-102 expired runtime approval recovery
 
 Diagnosed AXI-102's failed approval against Hermes: Forge retained WAITING run

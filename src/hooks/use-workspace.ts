@@ -20,6 +20,10 @@ export type WorkspaceContextValue = {
   cycleCooldownDays: number;
   timeTrackingEnabled: boolean;
   attachmentQuotaMb: number;
+  /** Requested cadence for human-facing agent progress checkpoints. */
+  agentProgressUpdateMinutes: number;
+  /** Non-terminal quiet threshold used by live run surfaces. */
+  agentRunQuietMinutes: number;
 };
 
 export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);

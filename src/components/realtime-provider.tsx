@@ -1,7 +1,11 @@
 "use client";
 import { useEffect } from "react";
 import { trpc } from "@/lib/trpc";
-import { dispatchRealtimeEvent, type RealtimeEventShape } from "@/hooks/use-realtime";
+import {
+  dispatchRealtimeEvent,
+  setRealtimeConnectionHealth,
+  type RealtimeEventShape,
+} from "@/hooks/use-realtime";
 
 /**
  * Subscribes to the workspace SSE stream and invalidates tRPC queries on
@@ -18,7 +22,26 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => {
     if (!workspaceId) return;
-    const es = new EventSource(`/api/realtime?workspaceId=${workspaceId}`);
+    setRealtimeConnectionHealth({
+      status: typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "connecting",
+      lastConnectedAt: null,
+      lastEventAt: null,
+    });
+    const cursorKey = `forge.realtime.cursor.${workspaceId}`;
+    let savedCursor: string | null = null;
+    try {
+      savedCursor = window.sessionStorage.getItem(cursorKey);
+    } catch {
+      // Storage can be unavailable in hardened/private browser contexts.
+    }
+    const search = new URLSearchParams({ workspaceId });
+    if (savedCursor) search.set("cursor", savedCursor);
+    const es = new EventSource(`/api/realtime?${search.toString()}`);
+    es.onopen = () => {
+      // HTTP is open, but remain connecting until the server finishes durable
+      // replay and emits its ready control frame.
+      setRealtimeConnectionHealth({ status: "connecting" });
+    };
     es.onmessage = (msg) => {
       let evt: RealtimeEventShape;
       try {
@@ -26,6 +49,31 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
       } catch {
         return;
       }
+      if (msg.lastEventId) {
+        try {
+          window.sessionStorage.setItem(cursorKey, msg.lastEventId);
+        } catch {
+          // Cursor persistence is an enhancement; native EventSource retries
+          // still carry Last-Event-ID for the lifetime of this instance.
+        }
+      }
+      if (evt.type === "ready") {
+        const now = new Date().toISOString();
+        setRealtimeConnectionHealth({ status: "live", lastConnectedAt: now });
+        return;
+      }
+      if (evt.type === "reconcile") {
+        // The cursor was invalid or the bounded replay window overflowed.
+        // Reconcile all mounted tRPC observers once; subsequent live events
+        // return to the existing fine-grained invalidation path.
+        void utils.invalidate();
+        dispatchRealtimeEvent(evt);
+        return;
+      }
+      setRealtimeConnectionHealth({
+        status: "live",
+        lastEventAt: evt.createdAt ?? new Date().toISOString(),
+      });
       // Fan out to hook subscribers first — their handlers often want to
       // patch local state before the tRPC invalidation kicks in.
       dispatchRealtimeEvent(evt);
@@ -89,7 +137,26 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
       // the issue branch above already triggers a rail refresh (issue.byId
       // bundles relations) — no extra case needed.
     };
-    return () => es.close();
+    es.onerror = () => {
+      setRealtimeConnectionHealth({
+        status: typeof navigator !== "undefined" && !navigator.onLine
+          ? "offline"
+          : "reconnecting",
+      });
+    };
+    const onOffline = () => setRealtimeConnectionHealth({ status: "offline" });
+    const onOnline = () => {
+      if (es.readyState !== EventSource.OPEN) {
+        setRealtimeConnectionHealth({ status: "reconnecting" });
+      }
+    };
+    window.addEventListener("offline", onOffline);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.removeEventListener("offline", onOffline);
+      window.removeEventListener("online", onOnline);
+      es.close();
+    };
   }, [workspaceId, utils]);
 
   return null;

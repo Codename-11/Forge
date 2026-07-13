@@ -59,10 +59,10 @@ runs. Hermes `/v1/runs` dispatch also carries:
 ```json
 {
   "engagement_mode": "REVIEW",
-  "forge_contract_version": "2026-06-06.2",
+  "forge_contract_version": "2026-07-13.1",
   "tool_allowlist": [],
   "runtime_policy": {
-    "contract_version": "2026-06-06.2",
+    "contract_version": "2026-07-13.1",
     "engagement_mode": "REVIEW",
     "allowed_host_tools": [],
     "enforcement_layers": [

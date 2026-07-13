@@ -818,6 +818,17 @@ model Workspace {
   /// enough that a finished turn an agent didn't close via `runs.complete`
   /// stops lingering as a live run on the issue page. 0 disables the sweep.
   agentRunStaleMinutes          Int                      @default(30)
+  /// Expected cadence for meaningful, human-facing status checkpoints while
+  /// an agent run is active. Injected into the run protocol so agents refresh
+  /// their rolling STATUS comment during long phases without narrating every
+  /// internal thought. 0 disables the cadence reminder.
+  agentProgressUpdateMinutes    Int                      @default(5)
+  /// Operator-facing quiet threshold for ACTIVE runs. After this many minutes
+  /// without an AgentRunEvent, surfaces may label the run QUIET / needing
+  /// attention. This does not mutate run state; `agentRunStaleMinutes` remains
+  /// the separate watchdog that canonically closes a run as STALLED. 0 disables
+  /// the early quiet signal.
+  agentRunQuietMinutes          Int                      @default(5)
   /// Minutes a REVIEW step may wait for its dispatched reviewer to
   /// acknowledge before Forge opens a human fallback gate. 0 disables the
   /// fallback. The orchestration watchdog evaluates this workspace setting.

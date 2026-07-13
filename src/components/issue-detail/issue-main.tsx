@@ -14,7 +14,6 @@ import {
   RichContentRenderer,
 } from "@/components/markdown/attachment-renderer";
 import { DescriptionAiAssist } from "@/components/issue-detail/description-ai-assist";
-import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import {
   PlanStepContextCards,
   type PlanStepIssueContext,
@@ -261,14 +260,6 @@ function timestampMs(value: Date | string | null | undefined): number {
   return value instanceof Date ? value.getTime() : new Date(value).getTime();
 }
 
-function commentTimelineMs(comment: Comment): number {
-  // STATUS comments are rolling run updates: their meaningful timeline
-  // position is the last update, not the row creation time. BODY comments
-  // stay at creation time so edited comments don't jump around.
-  if (comment.kind === "STATUS") return timestampMs(comment.updatedAt ?? comment.createdAt);
-  return timestampMs(comment.createdAt);
-}
-
 /**
  * Agent comments often start with a one-line provenance tag like
  *
@@ -341,7 +332,6 @@ export function IssueMain({
     <div className="flex min-w-0 flex-col gap-8">
       <ParentIssueBacklink parent={parent} />
       <PlanStepContextCards contexts={executionSteps} />
-      <AgentRunStrip issueId={issueId} />
       <IssueActionRequests issueId={issueId} canResolve={canResolveActions} />
       <IssueGoalsStrip issueId={issueId} />
       <IssuePlansStrip issueId={issueId} />
@@ -1040,14 +1030,19 @@ function Comments({
     onChange: setDraft,
   });
 
-  // STATUS comments are rolling agent-run updates. They stay in the same
-  // chronological thread as BODY/SYSTEM rows, but use updatedAt as their
-  // effective time so the status card moves when the agent actually reports
-  // new progress. The separate AgentRunStrip is the always-current control
-  // surface for live runs.
-  const timelineComments = [...comments].sort(
-    (a, b) => commentTimelineMs(a) - commentTimelineMs(b),
-  );
+  // The active rolling STATUS row is presented in Workstream, where its
+  // revisions and live run trace belong. Conversation rows keep a stable
+  // createdAt position; a status update can no longer jump through replies.
+  // Finished status summaries remain available as historical context.
+  const timelineComments = comments
+    .filter(
+      (comment) =>
+        !(
+          comment.kind === "STATUS" &&
+          (comment.run?.status === "ACTIVE" || comment.run?.status === "WAITING")
+        ),
+    )
+    .sort((a, b) => timestampMs(a.createdAt) - timestampMs(b.createdAt));
   // Identify the most recent agent-authored BODY comment — only its
   // quick-reply chips render (older chips are stale CTAs). STATUS rows
   // never carry chips, so the BODY filter is sufficient.
@@ -1076,14 +1071,6 @@ function Comments({
             showQuickReplies={c.id === latestAgentBodyId}
           />
         ))}
-      </div>
-      {/* Live run status repeated directly above the composer so the
-          operator sees "working… / waiting on you" right where they type
-          — on a long thread the top-of-page strip has scrolled away. The
-          strip self-hides when there's no active run, so it only appears
-          when an agent is actually in the loop. */}
-      <div className="mt-4">
-        <AgentRunStrip issueId={issueId} />
       </div>
       <form
         onSubmit={(e) => {

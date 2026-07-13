@@ -19,7 +19,11 @@ const ws: WorkspaceEngagementConfig = {
 describe("resolveEngagementMode", () => {
   it("explicit override wins on every surface", () => {
     for (const surface of ["assignment", "mention", "chat", "plan", "watcher", "queue"] as const) {
-      const r = resolveEngagementMode({ surface, explicit: EngagementMode.RESEARCH, workspace: ws });
+      const r = resolveEngagementMode({
+        surface,
+        explicit: EngagementMode.RESEARCH,
+        workspace: ws,
+      });
       expect(r.mode).toBe(EngagementMode.RESEARCH);
       expect(r.source).toBe("explicit");
     }
@@ -66,9 +70,10 @@ describe("resolveEngagementMode", () => {
         }),
       ).toMatchObject({ mode: "RESEARCH", source: "sticky-active-run" });
       // none set → surface default
-      expect(
-        resolveEngagementMode({ surface: "assignment", workspace: ws }),
-      ).toMatchObject({ mode: "EXECUTE", source: "surface-default" });
+      expect(resolveEngagementMode({ surface: "assignment", workspace: ws })).toMatchObject({
+        mode: "EXECUTE",
+        source: "surface-default",
+      });
     });
 
     it("null/undefined tiers are skipped (don't short-circuit)", () => {
@@ -103,8 +108,13 @@ describe("resolveEngagementMode", () => {
   it("assignment + queue use the workspace assignment default", () => {
     expect(resolveEngagementMode({ surface: "assignment", workspace: ws }).mode).toBe("EXECUTE");
     expect(resolveEngagementMode({ surface: "queue", workspace: ws }).mode).toBe("EXECUTE");
-    const research: WorkspaceEngagementConfig = { ...ws, assignmentEngagementMode: EngagementMode.RESEARCH };
-    expect(resolveEngagementMode({ surface: "assignment", workspace: research }).mode).toBe("RESEARCH");
+    const research: WorkspaceEngagementConfig = {
+      ...ws,
+      assignmentEngagementMode: EngagementMode.RESEARCH,
+    };
+    expect(resolveEngagementMode({ surface: "assignment", workspace: research }).mode).toBe(
+      "RESEARCH",
+    );
   });
 
   it("assignment + queue honor the agent binding override before the workspace default", () => {
@@ -138,7 +148,10 @@ describe("resolveEngagementMode", () => {
   });
 
   it("mention FIXED → default mode, not inferable", () => {
-    const fixed: WorkspaceEngagementConfig = { ...ws, mentionEngagementPolicy: MentionEngagementPolicy.FIXED };
+    const fixed: WorkspaceEngagementConfig = {
+      ...ws,
+      mentionEngagementPolicy: MentionEngagementPolicy.FIXED,
+    };
     const r = resolveEngagementMode({ surface: "mention", workspace: fixed });
     expect(r.mode).toBe("DISCUSS");
     expect(r.source).toBe("policy-fixed");
@@ -146,15 +159,25 @@ describe("resolveEngagementMode", () => {
   });
 
   it("mention REQUIRE_MARKER → DISCUSS (no execution without a marker)", () => {
-    const req: WorkspaceEngagementConfig = { ...ws, mentionEngagementPolicy: MentionEngagementPolicy.REQUIRE_MARKER };
+    const req: WorkspaceEngagementConfig = {
+      ...ws,
+      mentionEngagementPolicy: MentionEngagementPolicy.REQUIRE_MARKER,
+    };
     const r = resolveEngagementMode({ surface: "mention", workspace: req });
     expect(r.mode).toBe("DISCUSS");
     expect(r.source).toBe("policy-require-marker");
   });
 
   it("mention with explicit marker beats REQUIRE_MARKER", () => {
-    const req: WorkspaceEngagementConfig = { ...ws, mentionEngagementPolicy: MentionEngagementPolicy.REQUIRE_MARKER };
-    const r = resolveEngagementMode({ surface: "mention", explicit: EngagementMode.EXECUTE, workspace: req });
+    const req: WorkspaceEngagementConfig = {
+      ...ws,
+      mentionEngagementPolicy: MentionEngagementPolicy.REQUIRE_MARKER,
+    };
+    const r = resolveEngagementMode({
+      surface: "mention",
+      explicit: EngagementMode.EXECUTE,
+      workspace: req,
+    });
     expect(r.mode).toBe("EXECUTE");
     expect(r.source).toBe("explicit");
   });
@@ -181,6 +204,33 @@ describe("resolveEngagementMode", () => {
     expect(text).toContain("agent.inbox.outputStarted");
     expect(text).toContain("runs.setWaiting");
     expect(text).toContain("runs.complete");
+  });
+
+  it("separates semantic status checkpoints from the automatic mechanical trace", () => {
+    const text = forgeRunProtocolInstruction();
+    expect(text).toContain(
+      "Automatic runtime events and tool-call events are the mechanical trace",
+    );
+    expect(text).toContain("comments.upsertStatus");
+    expect(text).toContain("when the work changes phase");
+    expect(text).toContain("outcome so far and the next action");
+    expect(text).toContain("never publish chain-of-thought");
+  });
+
+  it("injects the workspace semantic-checkpoint cadence when configured", () => {
+    expect(forgeRunProtocolInstruction({ progressUpdateMinutes: 1 })).toContain(
+      "at least every 1 minute",
+    );
+    expect(forgeRunProtocolInstruction({ progressUpdateMinutes: 12 })).toContain(
+      "at least every 12 minutes",
+    );
+  });
+
+  it("keeps phase-change checkpoints but disables timed reminders when cadence is zero", () => {
+    const text = forgeRunProtocolInstruction({ progressUpdateMinutes: 0 });
+    expect(text).toContain("cadence reminders are disabled");
+    expect(text).toContain("meaningful phase changes");
+    expect(text).not.toContain("at least every 0 minutes");
   });
 
   it("forgeRunInstruction combines mode contract with run protocol", () => {

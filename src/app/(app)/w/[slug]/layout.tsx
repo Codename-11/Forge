@@ -54,6 +54,8 @@ export default async function WorkspaceShellLayout({
       cycleCooldownDays: true,
       timeTrackingEnabled: true,
       attachmentQuotaMb: true,
+      agentProgressUpdateMinutes: true,
+      agentRunQuietMinutes: true,
       deletedAt: true,
     },
   });
@@ -105,6 +107,8 @@ export default async function WorkspaceShellLayout({
     cycleCooldownDays: workspace.cycleCooldownDays,
     timeTrackingEnabled: workspace.timeTrackingEnabled,
     attachmentQuotaMb: workspace.attachmentQuotaMb,
+    agentProgressUpdateMinutes: workspace.agentProgressUpdateMinutes,
+    agentRunQuietMinutes: workspace.agentRunQuietMinutes,
   };
 
   return (
