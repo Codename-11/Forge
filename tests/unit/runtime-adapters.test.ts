@@ -25,7 +25,7 @@ describe("runtime adapter registry", () => {
     const h = getRuntimeAdapter("hermes");
     expect(h).not.toBeNull();
     expect(h!.managed).toBe(true);
-    expect(h!.multiAgent).toBe(true);
+    expect(h!.multiAgent).toBe(false);
     expect(h!.transport).toBe("runs-api");
     expect(h!.defaultRunEngine).toBe("RUNS");
     expect(h!.capabilities.streaming).toBe(true);

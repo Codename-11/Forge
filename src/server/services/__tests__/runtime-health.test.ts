@@ -127,6 +127,11 @@ describe("runtime-health — sweepRuntimeHealth", () => {
         res.end(JSON.stringify({ object: "list", data: [{ id: "hermes-agent" }] }));
         return;
       }
+      if (req.url?.startsWith("/v1/health")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({ status: "ok", platform: "hermes-agent", version: "0.18.2" }));
+        return;
+      }
       if (req.url?.startsWith("/v1/runs")) {
         res.writeHead(405, { "content-type": "text/plain" });
         res.end("Method Not Allowed");
@@ -164,6 +169,8 @@ describe("runtime-health — sweepRuntimeHealth", () => {
           lastProbeAttempted: true,
           lastProbeReachable: true,
           lastProbeDetail: true,
+          runtimeInfo: true,
+          lastInfoAt: true,
         },
       });
       expect(runtime.heartbeatAt).toBeNull();
@@ -171,6 +178,13 @@ describe("runtime-health — sweepRuntimeHealth", () => {
       expect(runtime.lastProbeAttempted).toBe(true);
       expect(runtime.lastProbeReachable).toBe(true);
       expect(runtime.lastProbeDetail).toContain("Gateway contract ok");
+      expect(runtime.lastInfoAt).not.toBeNull();
+      expect(runtime.runtimeInfo).toMatchObject({
+        adapterKey: "hermes",
+        runtimeName: "hermes-agent",
+        runtimeVersion: "0.18.2",
+        transport: "runs-api",
+      });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

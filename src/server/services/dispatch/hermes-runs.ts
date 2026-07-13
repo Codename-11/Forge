@@ -23,6 +23,28 @@ function mapStatus(raw: string): RunStatus["state"] {
   return s.trim() ? "running" : "unknown";
 }
 
+function eventCallId(evt: Record<string, unknown>): string | undefined {
+  const raw = evt.call_id ?? evt.tool_call_id ?? evt.id;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+}
+
+function usageFrom(value: unknown): RunStatus["usage"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const usageRaw = value as Record<string, unknown>;
+  const num = (v: unknown): number | undefined => (typeof v === "number" ? v : undefined);
+  const usage = {
+    tokensIn: num(usageRaw.input_tokens ?? usageRaw.prompt_tokens),
+    tokensOut: num(usageRaw.output_tokens ?? usageRaw.completion_tokens),
+    tokensCached: num(
+      usageRaw.cached_tokens ??
+        usageRaw.cache_read_input_tokens ??
+        usageRaw.cached_input_tokens,
+    ),
+    costUsd: num(usageRaw.cost_usd ?? usageRaw.costUsd),
+  };
+  return Object.values(usage).some((entry) => entry !== undefined) ? usage : undefined;
+}
+
 /**
  * Connector for Hermes' structured agent-run API:
  *   POST   /v1/runs                 → { run_id }            (202, async)
@@ -101,6 +123,25 @@ export function makeHermesRunsConnector(opts?: {
   const authHeaders = (): Record<string, string> => {
     const token = opts ? (opts.token ?? "") : envGatewayToken();
     return token ? { authorization: `Bearer ${token}` } : {};
+  };
+
+  const fetchRunStatus = async (externalRunId: string): Promise<RunStatus> => {
+    const res = await fetch(`${base()}/runs/${externalRunId}`, {
+      method: "GET",
+      headers: { accept: "application/json", ...authHeaders() },
+    });
+    // A swept terminal record cannot be resumed. Treat it as completed so a
+    // worker does not poll forever, while keeping the normal live path strict.
+    if (res.status === 404) return { state: "completed" };
+    if (!res.ok) throw new Error(`Run status failed (${res.status})`);
+    const json = (await res.json()) as Record<string, unknown>;
+    return {
+      state: mapStatus(String(json.status ?? "")),
+      lastEvent: typeof json.last_event === "string" ? json.last_event : undefined,
+      output: typeof json.output === "string" ? json.output : undefined,
+      error: typeof json.error === "string" ? json.error : undefined,
+      usage: usageFrom(json.usage),
+    };
   };
 
   // Throws on network failure OR a non-2xx response so the caller can surface
@@ -236,6 +277,7 @@ export function makeHermesRunsConnector(opts?: {
             onEvent({
               type: "tool_started",
               tool: String(evt.tool ?? "tool"),
+              callId: eventCallId(evt),
               preview: typeof evt.preview === "string" ? evt.preview : undefined,
             });
             break;
@@ -243,6 +285,7 @@ export function makeHermesRunsConnector(opts?: {
             onEvent({
               type: "tool_completed",
               tool: String(evt.tool ?? "tool"),
+              callId: eventCallId(evt),
               durationMs:
                 typeof evt.duration === "number" ? Math.round(evt.duration * 1000) : undefined,
               isError: evt.error === true,
@@ -261,6 +304,7 @@ export function makeHermesRunsConnector(opts?: {
               choices: Array.isArray(evt.choices)
                 ? (evt.choices as string[])
                 : ["once", "deny"],
+              callId: eventCallId(evt),
               tool: typeof evt.tool === "string" ? evt.tool : undefined,
               raw: evt,
             });
@@ -268,11 +312,16 @@ export function makeHermesRunsConnector(opts?: {
           case "approval.responded":
             onEvent({
               type: "approval_resolved",
+              callId: eventCallId(evt),
               choice: typeof evt.choice === "string" ? evt.choice : undefined,
             });
             break;
           case "run.completed":
             terminal = true;
+            {
+              const usage = usageFrom(evt.usage);
+              if (usage) onEvent({ type: "usage", ...usage });
+            }
             onEvent({
               type: "completed",
               finalText: typeof evt.output === "string" ? evt.output : undefined,
@@ -302,6 +351,9 @@ export function makeHermesRunsConnector(opts?: {
           const { value, done } = await reader.read();
           if (done) break;
           pending += decoder.decode(value, { stream: true });
+          // SSE permits CRLF framing. Normalize complete CRLF pairs while
+          // retaining a trailing `\r` until the next chunk arrives.
+          pending = pending.replace(/\r\n/g, "\n");
           let sep = pending.indexOf("\n\n");
           while (sep !== -1) {
             const block = pending.slice(0, sep);
@@ -329,40 +381,34 @@ export function makeHermesRunsConnector(opts?: {
           /* already closed */
         }
       }
-      // Defensive: if the stream closed without a terminal event, synthesise one.
-      if (!terminal) onEvent({ type: "completed" });
+      // A network/proxy disconnect is not run completion. Hermes keeps
+      // pollable status after its single-consumer SSE buffer closes, so follow
+      // status until terminal and recover the final output/usage. This avoids
+      // persisting a blank successful reply while the provider is still live.
+      while (!terminal && !signal?.aborted) {
+        try {
+          const status = await fetchRunStatus(externalRunId);
+          if (status.usage) onEvent({ type: "usage", ...status.usage });
+          if (status.state === "completed" || status.state === "cancelled") {
+            terminal = true;
+            onEvent({ type: "completed", finalText: status.output });
+            break;
+          }
+          if (status.state === "failed") {
+            terminal = true;
+            onEvent({ type: "error", message: status.error || "Run failed" });
+            break;
+          }
+        } catch (err) {
+          logger.warn({ err, externalRunId }, "hermes-runs: status recovery failed");
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 750));
+      }
       runYoloOverrides.delete(externalRunId);
     },
 
     async getStatus(externalRunId: string): Promise<RunStatus> {
-      const res = await fetch(`${base()}/runs/${externalRunId}`, {
-        method: "GET",
-        headers: { accept: "application/json", ...authHeaders() },
-      });
-      if (!res.ok) {
-        // 404 = run swept (TTL) — treat as completed so the poller stops.
-        if (res.status === 404) return { state: "completed" };
-        throw new Error(`Run status failed (${res.status})`);
-      }
-      const json = (await res.json()) as Record<string, unknown>;
-      const usageRaw = (json.usage ?? {}) as Record<string, unknown>;
-      const num = (v: unknown): number | undefined =>
-        typeof v === "number" ? v : undefined;
-      return {
-        state: mapStatus(String(json.status ?? "")),
-        lastEvent: typeof json.last_event === "string" ? json.last_event : undefined,
-        output: typeof json.output === "string" ? json.output : undefined,
-        usage: {
-          tokensIn: num(usageRaw.input_tokens ?? usageRaw.prompt_tokens),
-          tokensOut: num(usageRaw.output_tokens ?? usageRaw.completion_tokens),
-          tokensCached: num(
-            usageRaw.cached_tokens ??
-              usageRaw.cache_read_input_tokens ??
-              usageRaw.cached_input_tokens,
-          ),
-          costUsd: num(usageRaw.cost_usd ?? usageRaw.costUsd),
-        },
-      };
+      return fetchRunStatus(externalRunId);
     },
 
     async approve(externalRunId: string, choice: string): Promise<void> {

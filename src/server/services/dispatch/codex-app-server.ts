@@ -194,13 +194,22 @@ export function mapCodexNotification(
       // stream via the delta event above, so skip them here.
       const type = typeof params.type === "string" ? params.type : "";
       if (type === "agentMessage" || type === "userMessage" || !type) return null;
-      return { type: "tool_started", tool: codexItemLabel(type, params) };
+      return {
+        type: "tool_started",
+        tool: codexItemLabel(type, params),
+        callId: codexItemId(params),
+      };
     }
     case "item/completed": {
       const type = typeof params.type === "string" ? params.type : "";
       if (type === "agentMessage" || type === "userMessage" || !type) return null;
       const isError = codexItemIsError(params);
-      return { type: "tool_completed", tool: codexItemLabel(type, params), isError };
+      return {
+        type: "tool_completed",
+        tool: codexItemLabel(type, params),
+        callId: codexItemId(params),
+        isError,
+      };
     }
     case "turn/completed": {
       // Status lives at params.turn.status (verified against codex-cli 0.133).
@@ -221,6 +230,15 @@ export function mapCodexNotification(
     default:
       return null;
   }
+}
+
+function codexItemId(params: Record<string, unknown>): string | undefined {
+  const item =
+    params.item && typeof params.item === "object" && !Array.isArray(params.item)
+      ? (params.item as Record<string, unknown>)
+      : null;
+  const raw = params.itemId ?? params.item_id ?? params.id ?? item?.id;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 function codexItemLabel(type: string, params: Record<string, unknown>): string {
@@ -450,6 +468,7 @@ export function makeCodexAppServerConnector(opts: {
           emit(run, {
             type: "approval_required",
             choices: ["once", "session", "deny"],
+            callId: String(id),
             tool: command,
             raw: { ...params, _codexRequestId: id },
           });
@@ -479,6 +498,7 @@ export function makeCodexAppServerConnector(opts: {
           run.terminalError = codexFailureMessage(turn ?? params);
         }
         run.usage = mapCodexUsage(params.usage as Record<string, unknown> | undefined);
+        if (run.usage) emit(run, { type: "usage", ...run.usage });
         run.terminal = true;
       }
       if (evt) {
@@ -632,8 +652,6 @@ export function makeCodexAppServerConnector(opts: {
       // Flush anything buffered before we attached, then live-stream.
       run.onEvent = onEvent;
       for (const e of run.buffer.splice(0)) onEvent(e);
-
-      if (run.usage) onEvent({ type: "usage", ...run.usage });
 
       await new Promise<void>((resolve) => {
         if (run.terminal) return resolve();

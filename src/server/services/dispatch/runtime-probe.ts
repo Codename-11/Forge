@@ -162,6 +162,34 @@ async function probeHermesHttp(
       };
     }
 
+    // Health metadata is optional and non-authoritative for reachability, but
+    // current Hermes exposes a safe platform/version payload. Harvest it so
+    // runtime settings and the chat status rail can identify the gateway build
+    // just like the Codex initialize handshake does.
+    let runtimeInfo: Prisma.JsonObject | null = null;
+    try {
+      const health = await fetch(hermesProbeUrl(endpoint, "health"), {
+        method: "GET",
+        headers,
+        signal: ctrl.signal,
+      });
+      if (health.ok) {
+        const payload = (await health.json()) as Record<string, unknown>;
+        runtimeInfo = {
+          adapterKey: "hermes",
+          transport: "runs-api",
+          runtimeName:
+            typeof payload.platform === "string" ? payload.platform : "hermes-agent",
+          ...(typeof payload.version === "string"
+            ? { runtimeVersion: payload.version }
+            : {}),
+        };
+      }
+    } catch {
+      // Older gateways may not expose health beneath the configured /v1 base.
+      // The models+runs contract remains the readiness authority.
+    }
+
     const runs = await fetch(hermesProbeUrl(endpoint, "runs"), {
       method: "GET",
       headers,
@@ -193,6 +221,7 @@ async function probeHermesHttp(
       attempted: true,
       reachable: true,
       detail: `Gateway contract ok (models HTTP ${models.status}; runs route HTTP ${runs.status}).`,
+      runtimeInfo,
     };
   } catch (err) {
     return {
@@ -205,7 +234,7 @@ async function probeHermesHttp(
   }
 }
 
-function hermesProbeUrl(endpoint: string, suffix: "models" | "runs"): string {
+function hermesProbeUrl(endpoint: string, suffix: "models" | "runs" | "health"): string {
   try {
     const url = new URL(endpoint);
     const path = url.pathname.replace(/\/+$/, "");

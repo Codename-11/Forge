@@ -127,7 +127,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
           provider,
           transportLabel: runtimeLabel(input, adapter?.title) ?? runsFallbackLabel(provider),
           reason: "runtime-probe-failed",
-          capabilities: chatCapabilities("runs", provider, false),
+          capabilities: chatCapabilities("runs", provider, false, input, adapter),
           hint:
             `The attached runtime failed its last contract probe: ` +
             `${input.runtime.lastProbeDetail || "probe did not succeed"}. ` +
@@ -140,7 +140,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
         provider,
         transportLabel: runtimeLabel(input, adapter?.title) ?? runsFallbackLabel(provider),
         reason: "runs-connector",
-        capabilities: chatCapabilities("runs", provider, true),
+        capabilities: chatCapabilities("runs", provider, true, input, adapter),
         hint: "",
       };
     }
@@ -153,7 +153,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
         provider,
         transportLabel: "—",
         reason: "no-runs-connector",
-        capabilities: chatCapabilities("none", provider, false),
+        capabilities: chatCapabilities("none", provider, false, input, adapter),
         hint: missingRunsConnectorHint(provider),
       };
     }
@@ -168,7 +168,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       provider,
       transportLabel: `Streaming · ${providerLabel(providerId)}`,
       reason: "model-configured",
-      capabilities: chatCapabilities("completions", provider, true),
+      capabilities: chatCapabilities("completions", provider, true, input, adapter),
       hint: "",
     };
   }
@@ -181,7 +181,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       provider,
       transportLabel: dispatchLabel(input, adapter),
       reason: "dispatch-path",
-      capabilities: chatCapabilities("dispatch", provider, true),
+      capabilities: chatCapabilities("dispatch", provider, true, input, adapter),
       hint:
         `Replies are delivered by this agent's ${dispatchLabel(input, adapter).toLowerCase()} ` +
         `(not a Forge-side model). Make sure it's running — the reply streams in ` +
@@ -198,7 +198,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       provider,
       transportLabel: "—",
       reason: "pull-act-only",
-      capabilities: chatCapabilities("none", provider, false),
+      capabilities: chatCapabilities("none", provider, false, input, adapter),
       hint:
         `${adapter?.title ?? "This connection"} reaches Forge to read context ` +
         `and take actions — it isn't a chat backend, and no daemon is linked to ` +
@@ -212,7 +212,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
     provider,
     transportLabel: "—",
     reason: "no-model",
-    capabilities: chatCapabilities("none", provider, false),
+    capabilities: chatCapabilities("none", provider, false, input, adapter),
     hint: noModelHint(providerId),
   };
 }
@@ -221,19 +221,35 @@ function chatCapabilities(
   mode: ChatTransportMode,
   provider: AgentProvider,
   ready: boolean,
+  input: ChatReadinessInput,
+  adapter: ReturnType<typeof getRuntimeAdapter>,
 ): ChatRuntimeCapabilities {
   const active = ready && mode !== "none";
   const forgeOwnedLoop = active && (mode === "runs" || mode === "completions");
   const richRuntime = active && (provider === "HERMES" || provider === "CODEX");
+  const dispatchStreaming =
+    active &&
+    mode === "dispatch" &&
+    Boolean(
+      input.daemonLinked ||
+        input.runtimeKind === "LOCAL_DAEMON" ||
+        adapter?.capabilities.streaming,
+    );
+  const runsApprovals =
+    mode === "runs" &&
+    (adapter?.capabilities.approvals ?? (provider === "HERMES" || provider === "CODEX"));
   return {
-    streaming: active && mode !== "dispatch",
+    streaming: active && (mode !== "dispatch" || dispatchStreaming),
     thinking: forgeOwnedLoop,
     tools: forgeOwnedLoop,
-    approvals: forgeOwnedLoop,
+    approvals: active && (mode === "completions" || runsApprovals),
     stop: forgeOwnedLoop,
     retry: true,
     files: true,
-    vision: forgeOwnedLoop,
+    // Structured Runs currently receive text/history only. Image blocks are
+    // passed through the Forge-owned completions loop; dispatch runtimes own
+    // their attachment ingestion and advertise it independently later.
+    vision: active && mode === "completions",
     runs: active && mode === "runs",
     dispatch: active && mode === "dispatch",
     commands: true,
@@ -268,7 +284,8 @@ function dispatchLabel(
 }
 
 function runtimeLabel(input: ChatReadinessInput, fallback?: string): string | null {
-  return fallback ?? null;
+  const name = input.runtime?.name?.trim();
+  return name || fallback || null;
 }
 
 function runsFallbackLabel(provider: AgentProvider): string {

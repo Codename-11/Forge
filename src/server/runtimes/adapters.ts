@@ -130,10 +130,15 @@ export const RUNTIME_ADAPTERS: RuntimeAdapter[] = [
   {
     key: "hermes",
     title: "Hermes",
-    tagline: "Persistent daemon hosting multiple agent profiles. Owns the loop, streams, approves.",
+    tagline: "Profile-scoped persistent gateway. Owns the loop, streams, and approvals.",
     iconKey: "Server",
     managed: true,
-    multiAgent: true,
+    // Hermes API-server processes are profile-scoped: config, credentials,
+    // tools, memory, and filesystem policy come from that process's
+    // HERMES_HOME. A run-level profile hint is validated by the gateway but
+    // cannot safely swap those resources in-process, so bind one Forge agent
+    // profile per runtime endpoint.
+    multiAgent: false,
     transport: "runs-api",
     chatMode: "runs",
     providers: ["HERMES"],
@@ -149,18 +154,20 @@ export const RUNTIME_ADAPTERS: RuntimeAdapter[] = [
     autoProvisionable: false,
     setupMarkdown: `# Hermes (managed runtime)
 
-A persistent daemon that hosts one or more agent profiles (Victor, Mizu, …)
-behind a single gateway. It owns the agent loop (\`/v1/runs\`), streams chat
-token-by-token, handles approvals, and reports presence.
+A profile-scoped persistent daemon that owns the agent loop (\`/v1/runs\`),
+streams chat token-by-token, handles approvals, and reports presence. Each
+Hermes profile runs on its own gateway endpoint so credentials, tools, memory,
+and filesystem policy cannot cross profile boundaries.
 
-**Connect the runtime once, attach profiles to it:**
+**Connect one runtime per profile:**
 1. Install Hermes and point this runtime's **endpoint** at the gateway base
    (e.g. \`http://127.0.0.1:8642/v1\`); set its **secret** to the gateway's
    \`API_SERVER_KEY\`.
-2. For each profile, register an Agent and **attach it to this runtime**.
+2. Register the matching Agent and **attach only that profile to this runtime**.
 3. Generate an AGENT key with \`linkedAgentId\` per agent; set it as the
    profile's \`FORGE_API_KEY\`.
-4. The \`forge-presence\` skill keeps runtime presence honest (cron poke to
+4. Repeat for another profile using that profile gateway's distinct port.
+5. The \`forge-presence\` skill keeps runtime presence honest (cron poke to
    \`agents.heartbeat\`).`,
   },
   {
