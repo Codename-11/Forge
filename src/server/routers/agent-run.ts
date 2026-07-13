@@ -1,13 +1,14 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentRunControlState, AgentRunStatus, EngagementMode, EventKind, Prisma } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import { AgentRunControlState, AgentRunStatus, EngagementMode, EventKind } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { adminProcedure, router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { appendRunEvent, finishRun } from "@/server/services/agent-run";
+import { resolveRunApproval } from "@/server/services/run-approval-lifecycle";
 import { getRunsConnectorForAgent, resolveRunEngine } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
@@ -110,9 +111,9 @@ export const agentRunRouter = router({
           workspaceId: ctx.workspaceId,
           deletedAt: null,
         },
-        select: { assignedAgentId: true },
+        select: { id: true },
       });
-      if (!issue?.assignedAgentId) return null;
+      if (!issue) return null;
       // Treat WAITING runs as "still in flight" for the live strip so a
       // patient agent doesn't disappear from the issue page just because
       // it self-blocked. The strip itself renders WAITING with a soft
@@ -121,10 +122,19 @@ export const agentRunRouter = router({
         where: {
           workspaceId: ctx.workspaceId,
           issueId: input.issueId,
-          agentId: issue.assignedAgentId,
           status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
         },
-        orderBy: { lastEventAt: "desc" },
+        // The run is the source of truth for who is doing the work. Issue
+        // assignment may be cleared or changed while a connector run is
+        // still paused, so never hide operator approvals behind the current
+        // `assignedAgentId`. Prefer approvals, then explicit WAITING runs,
+        // then the freshest remaining run.
+        orderBy: [
+          { awaitingApprovalAt: { sort: "desc", nulls: "last" } },
+          { status: "desc" },
+          { lastEventAt: "desc" },
+          { startedAt: "desc" },
+        ],
         include: {
           agent: {
             select: {
@@ -1257,23 +1267,15 @@ export const agentRunRouter = router({
           });
         }
         await ctx.db.$transaction(async (tx) => {
-          await tx.agentRun.update({
-            where: { id: run.id },
-            data: {
-              awaitingApprovalAt: null,
-              pendingApproval: Prisma.DbNull,
-              lastEventAt: new Date(),
-            },
-          });
-          await appendRunEvent(tx, {
+          await resolveRunApproval(tx, {
             runId: run.id,
             workspaceId: ctx.workspaceId,
             issueId: run.issueId,
             agentId: run.agentId,
-            kind: "STEP",
+            source: "operator",
+            decision: input.scope,
             currentStep:
               input.scope === "session" ? "approved (session) · resuming" : "approved · resuming",
-            payload: { approval: input.scope },
           });
         });
         return { ok: true as const, decision: "approve" as const };
@@ -1293,9 +1295,14 @@ export const agentRunRouter = router({
         });
       }
       await ctx.db.$transaction(async (tx) => {
-        await tx.agentRun.update({
-          where: { id: run.id },
-          data: { awaitingApprovalAt: null, pendingApproval: Prisma.DbNull },
+        await resolveRunApproval(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: run.issueId,
+          agentId: run.agentId,
+          source: "operator",
+          decision: "reject",
+          currentStep: "approval rejected · stopping",
         });
         await finishRun(tx, {
           runId: run.id,

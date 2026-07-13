@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — AXI-102 human-action visibility
+
+Traced AXI-102 from production: its intentionally unassigned Backlog issue had
+a valid Victor RESEARCH run in WAITING with a connector permission request,
+but no ActionRequest, notification, or approval-specific activity event. The
+floating agent overlay read the run directly; Command Center's priority queue
+only understood ActionRequests/recovery/gates; and issue detail rejected the
+run because it did not match `Issue.assignedAgentId`.
+
+Made runtime approvals a first-class Command Center decision with inline
+approve/reject controls and badge counts. Issue detail now resolves live runs
+from the issue relationship rather than mutable assignment, prioritizes
+approval/waiting work, renders the approval in the main flow and rail, and
+surfaces open issue-bound asks that were created outside a comment. Approval
+waits are excluded from generic stale recovery instead of recommending an
+incorrect abandon action.
+
+Added an atomic approval lifecycle boundary: poll and subscription producers
+deduplicate capture, late subscription detail enriches poll-first records,
+and capture writes both the run event and audited/realtime BLOCKED event with
+issue context. Provider and operator resolution races similarly produce one
+refresh event.
+
+Verification for v0.10.1: `pnpm ci:local` passed — lint (existing repository
+warnings only), typecheck, the full Vitest suite (**1,164 passed; 1 skipped**),
+a fresh Next.js production build, and the full Playwright suite (**37 passed**).
+The stale-work redispatch test raced once during the first parallel suite run;
+its isolated rerun passed **9/9**, and the complete clean rerun passed.
+
 ## 2026-07-13 — Rich-rendering recovery + human delivery acceptance
 
 Recovered the six AXI-95–99 rich-rendering commits from the stale Codex bridge

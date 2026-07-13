@@ -787,18 +787,20 @@ export const issueRouter = router({
         },
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
-      const currentAgentRun = issue.assignedAgentId
-        ? await ctx.db.agentRun.findFirst({
-            where: {
-              workspaceId: ctx.workspaceId,
-              issueId: issue.id,
-              agentId: issue.assignedAgentId,
-              status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
-            },
-            orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
-            select: { id: true, status: true, lastEventAt: true },
-          })
-        : null;
+      const currentAgentRun = await ctx.db.agentRun.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          issueId: issue.id,
+          status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+        },
+        orderBy: [
+          { awaitingApprovalAt: { sort: "desc", nulls: "last" } },
+          { status: "desc" },
+          { lastEventAt: "desc" },
+          { startedAt: "desc" },
+        ],
+        select: { id: true, status: true, lastEventAt: true },
+      });
       const runtimePreflight = runtimePreflightForIssue({
         title: issue.title,
         description: issue.description,

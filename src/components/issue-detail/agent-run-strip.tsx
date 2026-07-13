@@ -14,6 +14,7 @@ import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { relativeTime, cn } from "@/lib/utils";
 import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
+import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 
 /**
@@ -193,6 +194,19 @@ export function AgentRunStrip({ issueId }: { issueId: string }) {
           </span>
         </div>
       </div>
+      {run.awaitingApprovalAt ? (
+        <RunApprovalCard
+          runId={run.id}
+          agentName={run.agent.name}
+          pendingApproval={run.pendingApproval}
+          onResolved={() => {
+            void utils.agentRun.activeForIssue.invalidate({ issueId });
+            void utils.issue.byId.invalidate({ id: issueId });
+            void utils.commandCenter.summary.invalidate();
+            void utils.commandCenter.decisionsCount.invalidate();
+          }}
+        />
+      ) : null}
     </div>
   );
 }

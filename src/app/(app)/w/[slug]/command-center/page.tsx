@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import { Picker } from "@/components/ui/modal";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
+import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -108,6 +109,16 @@ export default function CommandCenterPage() {
       counts: { ...prev.counts, reviewGates: Math.max(0, prev.counts.reviewGates - 1) },
     });
   };
+  const dropRuntimeApproval = (id: string) => {
+    const prev = utils.commandCenter.summary.getData(summaryInput);
+    if (!prev) return;
+    const runtimeApprovals = prev.runtimeApprovals.filter((run) => run.id !== id);
+    utils.commandCenter.summary.setData(summaryInput, {
+      ...prev,
+      runtimeApprovals,
+      counts: { ...prev.counts, runtimeApprovals: runtimeApprovals.length },
+    });
+  };
   const dropRunFailures = (ids: string[]) => {
     const prev = utils.commandCenter.summary.getData(summaryInput);
     if (!prev) return;
@@ -142,10 +153,14 @@ export default function CommandCenterPage() {
     },
   });
   const attentionCount = data
-    ? data.actionRequests.length + data.reviewGates.length + data.stalledRuns.length
+    ? data.actionRequests.length +
+      data.runtimeApprovals.length +
+      data.reviewGates.length +
+      data.stalledRuns.length
     : 0;
   const activeAttentionGroups = data
     ? Number(data.actionRequests.length > 0) +
+      Number(data.runtimeApprovals.length > 0) +
       Number(data.stalledRuns.length > 0) +
       Number(data.reviewGates.length > 0)
     : 0;
@@ -156,7 +171,7 @@ export default function CommandCenterPage() {
         title="Command Center"
         subtitle={
           data
-            ? `Decisions & live agent ops · ${data.counts.actionRequests} asks · ${data.counts.reviewGates} gates · ${data.counts.activeRuns} active runs`
+            ? `Decisions & live agent ops · ${data.counts.actionRequests} asks · ${data.counts.runtimeApprovals} approvals · ${data.counts.reviewGates} gates · ${data.counts.activeRuns} active runs`
             : "Decisions & live agent ops"
         }
       />
@@ -204,6 +219,22 @@ export default function CommandCenterPage() {
                             request={row}
                             slug={ws.slug}
                             onResolved={() => dropActionRequest(row.id)}
+                          />
+                        ))}
+                      </AttentionGroup>
+                    ) : null}
+                    {data.runtimeApprovals.length > 0 ? (
+                      <AttentionGroup
+                        title="Runtime approvals"
+                        count={data.runtimeApprovals.length}
+                        empty="No runtime approvals."
+                      >
+                        {data.runtimeApprovals.map((run) => (
+                          <RuntimeApprovalDecisionCard
+                            key={run.id}
+                            run={run}
+                            slug={ws.slug}
+                            onResolved={() => dropRuntimeApproval(run.id)}
                           />
                         ))}
                       </AttentionGroup>
@@ -257,7 +288,6 @@ export default function CommandCenterPage() {
             </section>
 
             <section className="space-y-3" data-testid="command-center-live-operations">
-              <CommandZoneDivider label="Live operations" />
               <AgentAttentionPanel
                 slug={ws.slug}
                 showEmpty
@@ -485,6 +515,62 @@ type CCActionRequest = {
   } | null;
   requestedByUser: { name: string | null } | null;
 };
+
+type CCRuntimeApproval = {
+  id: string;
+  currentStep: string | null;
+  awaitingApprovalAt: Date | string | null;
+  pendingApproval: unknown;
+  agent: { name: string; profileKey: string };
+  issue: {
+    id: string;
+    number: number;
+    title: string;
+    workspace: { slug: string; key: string };
+  };
+};
+
+function RuntimeApprovalDecisionCard({
+  run,
+  slug,
+  onResolved,
+}: {
+  run: CCRuntimeApproval;
+  slug: string;
+  onResolved: () => void;
+}) {
+  const utils = trpc.useUtils();
+  const href = `/w/${run.issue.workspace.slug || slug}/i/${run.issue.workspace.key}-${run.issue.number}`;
+  return (
+    <div className="space-y-2 rounded-md border border-warning/35 bg-warning/[0.04] p-2">
+      <Link href={href} className="block min-w-0 hover:text-ember">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <span className="truncate text-sm font-medium">
+            {run.issue.workspace.key}-{run.issue.number} · {run.issue.title}
+          </span>
+          <span className="text-meta shrink-0 text-warning">@{run.agent.profileKey}</span>
+        </div>
+        {run.currentStep ? (
+          <p className="text-meta mt-0.5 line-clamp-2 text-muted-foreground">
+            {run.currentStep}
+          </p>
+        ) : null}
+      </Link>
+      <RunApprovalCard
+        runId={run.id}
+        agentName={run.agent.name}
+        pendingApproval={run.pendingApproval}
+        onResolved={() => {
+          onResolved();
+          void utils.commandCenter.summary.invalidate();
+          void utils.commandCenter.decisionsCount.invalidate();
+          void utils.issue.byId.invalidate({ id: run.issue.id });
+          void utils.agentRun.activeForIssue.invalidate({ issueId: run.issue.id });
+        }}
+      />
+    </div>
+  );
+}
 
 function ActionRequestDecisionCard({
   request,

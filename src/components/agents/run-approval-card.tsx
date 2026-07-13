@@ -1,13 +1,14 @@
 "use client";
 import { Check, ShieldAlert, X } from "lucide-react";
+import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 
 /**
  * Operator approval card for a connector-driven run paused awaiting
  * permission (Codex/Hermes flagged a command or file change). Shared by the
- * Mission Control Live tab (`RunRow`) and the issue right-rail
- * (`IssueAgentPanel`) so an approval is actionable wherever the operator is
- * looking — not buried in one surface.
+ * Mission Control Live tab (`RunRow`), Command Center priority queue, and
+ * issue detail so an approval is actionable wherever the operator is looking
+ * — not buried in one surface.
  *
  * Approve grants **session** scope by default (`acceptForSession`) so a
  * research sweep doesn't re-prompt on every command; the per-command "once"
@@ -42,10 +43,16 @@ export function RunApprovalCard({
   const utils = trpc.useUtils();
   const approval = readPendingApproval(pendingApproval);
   const respond = trpc.agentRun.respondApproval.useMutation({
+    onSuccess: (_result, variables) => {
+      toast.success(variables.decision === "approve" ? "Permission granted" : "Run stopped");
+      onResolved?.();
+    },
+    onError: (error) => toast.error(error.message),
     onSettled: () => {
       void utils.agentRun.activeAll.invalidate();
       void utils.agentRun.activeForIssue.invalidate();
-      onResolved?.();
+      void utils.commandCenter.summary.invalidate();
+      void utils.commandCenter.decisionsCount.invalidate();
     },
   });
 
