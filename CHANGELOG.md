@@ -11,6 +11,24 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-13] — v0.11.0 · Live agent operations
+
+### Added
+
+- **Issue work now has one live Workstream.** Agent identity, presence, engagement mode, runtime, effective tool policy, current semantic status, elapsed and last-signal timing, approvals, recovery controls, and an expandable event trace now live together directly beneath the issue context.
+- **Realtime reconnects recover durable activity.** The existing SSE transport now replays missed activity and granular run events from a persisted per-workspace cursor, reports connecting/live/reconnecting/offline health, and reconciles bounded overflow without requiring a manual refresh.
+- **Agent progress expectations are workspace-configurable.** Admins can set the cadence for concise operator-facing checkpoints and the early Quiet threshold independently from the canonical STALLED watchdog.
+
+### Changed
+
+- **Mission Control now reads like an operations console at both scopes.** The global overview leads with runtime readiness, dispatch posture, queue pressure, assigned attention, capacity, coverage, and activity; the workspace dock expands into a responsive Operations Shelf with Live, Queue, Agents, and Chat while keeping content and mobile navigation unobstructed.
+- **Agent comments separate semantic progress from mechanical trace.** Active rolling STATUS updates stay in Workstream instead of jumping through the conversation, while terminal summaries remain in history. The versioned run contract asks agents for concise phase/result checkpoints without exposing chain-of-thought or raw tool logs.
+- **Quiet is no longer mislabeled as Stalled.** An ACTIVE run with no recent signal is shown as Quiet and remains recoverable; only the persisted terminal run state is called STALLED.
+
+### Fixed
+
+- **Queue and live-state indicators now reflect durable truth.** Mission Control distinguishes total from unassigned queue pressure, uses canonical workspace issue keys, exposes loading/empty/error/retry states, and publishes granular run events with their persisted row identity and timestamp.
+
 ## [2026-07-13] — v0.10.3 · Durable chat runtime lifecycle
 
 ### Changed

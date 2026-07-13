@@ -30,7 +30,7 @@ test.describe("restructure follow-up", () => {
 
   test("Activity dock opens and switches tabs", async ({ page }) => {
     await page.goto("/w/forge/inbox", { waitUntil: "domcontentloaded" });
-    const liveTab = page.getByRole("button", { name: /^Live\b/ }).first();
+    const liveTab = page.getByRole("tab", { name: /^Live\b/ }).first();
 
     // Open the dock: click the presence pill (its label reports active/idle +
     // queued), with the cmd/ctrl+' toggle as a fallback.
@@ -42,9 +42,10 @@ test.describe("restructure follow-up", () => {
 
     // Tabs render only when the dock is open.
     await expect(liveTab).toBeVisible({ timeout: 10_000 });
-    for (const tab of ["Queue", "Agents", "Plans"]) {
-      const t = page.getByRole("button", { name: new RegExp(`^${tab}\\b`) }).first();
-      if (await t.count()) await t.click();
+    for (const tab of ["Queue", "Agents", "Chat"]) {
+      const t = page.getByRole("tab", { name: new RegExp(`^${tab}\\b`) }).first();
+      await expect(t).toBeVisible();
+      await t.click();
     }
     await expect(liveTab).toBeVisible();
   });

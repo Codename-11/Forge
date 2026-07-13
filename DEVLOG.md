@@ -2,6 +2,24 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — v0.11.0 live agent operations release candidate
+
+Integrated the issue Workstream and durable realtime stream with the global
+Mission Control operations overview and workspace Operations Shelf, rebased the
+combined release onto v0.10.3, and prepared the additive v0.11.0 release. Updated
+the browser contracts to address the shelf's real tab semantics and Live / Queue
+/ Agents / Chat information architecture, and made the global read-only assertion
+target the top-bar badge exactly now that the same policy is also explained in
+the page body.
+
+Verification: lint passed with existing repository warnings only; typecheck
+passed; the full Vitest suite passed (**1,209 passed; 1 skipped**); a fresh
+Next.js production build completed; the two corrected browser contract files
+passed **8/8** together; and the complete single-worker Playwright run reached
+**36/37** before the Chromium headless-shell process itself segfaulted while
+creating the last test context. That unaffected connection-affordance test then
+passed **3/3** in repeated isolated runs. `git diff --check` passed.
+
 ## 2026-07-13 — Mission Control operator hierarchy
 
 Audited the cross-workspace Mission Control overview and workspace quick-access
