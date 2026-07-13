@@ -60,7 +60,13 @@ type StaticAction = {
 };
 
 type FlatRow =
-  | { kind: "entity"; key: string; data: EntitySearchResultData; run: () => void; workspaceLabel?: string }
+  | {
+      kind: "entity";
+      key: string;
+      data: EntitySearchResultData;
+      run: () => void;
+      workspaceLabel?: string;
+    }
   | { kind: "action"; key: string; action: StaticAction }
   | { kind: "create"; key: string; run: () => void; query: string };
 
@@ -148,14 +154,13 @@ export function CommandPalette() {
             Icon: Plus,
             run: () => {
               setOpen(false);
-              // Trigger the existing QuickCreate via its data-attribute hook.
-              // Synthesizes a click on a hidden button so the overlay opens.
-              const synthetic = document.createElement("button");
-              synthetic.setAttribute("data-quick-create", "");
-              synthetic.style.display = "none";
-              document.body.appendChild(synthetic);
-              synthetic.click();
-              synthetic.remove();
+              // This action explicitly promises an issue, so bypass the
+              // pathname-aware default (issue detail normally opens Comment).
+              window.dispatchEvent(
+                new CustomEvent("forge:quick-create", {
+                  detail: { mode: "issue" },
+                }),
+              );
             },
           },
           {
@@ -299,7 +304,15 @@ export function CommandPalette() {
   // `target.targetType` and use the target's own workspace slug when
   // present (so cross-workspace pins still navigate to the right tenant).
   const dispatchPin = (
-    p: { target: { targetType: string; id: string; slug?: string; profileKey?: string; workspaceSlug?: string } | null },
+    p: {
+      target: {
+        targetType: string;
+        id: string;
+        slug?: string;
+        profileKey?: string;
+        workspaceSlug?: string;
+      } | null;
+    },
     fallbackSlug: string,
   ) => {
     setOpen(false);
@@ -533,15 +546,11 @@ export function CommandPalette() {
 
     // Filtered actions matching the query.
     const q = debouncedQuery.toLowerCase();
-    const matchingActions = staticActions.filter((a) =>
-      a.label.toLowerCase().includes(q),
-    );
+    const matchingActions = staticActions.filter((a) => a.label.toLowerCase().includes(q));
     if (matchingActions.length > 0) {
       out.push({
         title: "Actions",
-        rows: matchingActions.map(
-          (a): FlatRow => ({ kind: "action", key: a.id, action: a }),
-        ),
+        rows: matchingActions.map((a): FlatRow => ({ kind: "action", key: a.id, action: a })),
       });
     }
 
@@ -598,9 +607,7 @@ export function CommandPalette() {
     if (staticActions.length > 0) {
       out.push({
         title: "Actions",
-        rows: staticActions.map(
-          (a): FlatRow => ({ kind: "action", key: a.id, action: a }),
-        ),
+        rows: staticActions.map((a): FlatRow => ({ kind: "action", key: a.id, action: a })),
       });
     }
 
@@ -714,7 +721,7 @@ export function CommandPalette() {
                           kbdHint={selected ? "↵" : undefined}
                         />
                         {row.workspaceLabel && (
-                          <span className="ml-9 -mt-0.5 inline-block rounded border border-border/60 bg-card/40 px-1 py-px font-mono text-[0.625rem] text-muted-foreground">
+                          <span className="-mt-0.5 ml-9 inline-block rounded border border-border/60 bg-card/40 px-1 py-px font-mono text-[0.625rem] text-muted-foreground">
                             {row.workspaceLabel}
                           </span>
                         )}
@@ -791,7 +798,7 @@ export function CommandPalette() {
               </Section>
             ))}
             {emptySections.length === 0 && (
-              <div className="px-3 py-8 text-center text-meta text-muted-foreground">
+              <div className="text-meta px-3 py-8 text-center text-muted-foreground">
                 Start typing to search.
               </div>
             )}
@@ -875,4 +882,3 @@ function ActionRow({
     </div>
   );
 }
-

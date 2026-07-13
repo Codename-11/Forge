@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { AgentRunStatus, ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
+import {
+  AgentRunStatus,
+  EventKind,
+  ExecutionPlanStatus,
+  ExecutionStepStatus,
+} from "@prisma/client";
 import { executionPlanRouter } from "@/server/routers/execution-plan";
 import {
   buildContext,
@@ -63,6 +68,111 @@ describe("executionPlanRouter", () => {
     const got = await caller.get({ id: created.id });
     expect(got.steps).toHaveLength(2);
     expect(got.steps.find((s) => s.id === step.id)?.position).toBe(1);
+  });
+
+  it("rejects cross-workspace step assignees across create, add, and update", async () => {
+    const { fixture, caller } = await setup();
+    const foreign = await createWorkspaceFixture({ keyPrefix: "EXF" });
+    fixtures.push(foreign);
+    const prisma = getPrisma();
+    const foreignAgent = await prisma.agent.create({
+      data: {
+        workspaceId: foreign.workspace.id,
+        profileKey: `foreign-${Date.now().toString(36)}`,
+        name: "Foreign agent",
+      },
+    });
+
+    await expect(
+      caller.create({
+        title: "Invalid plan",
+        steps: [{ title: "Invalid step", assignedAgentId: foreignAgent.id }],
+      }),
+    ).rejects.toThrow(/not active agents in this workspace/);
+
+    const plan = await caller.create({ title: "Valid plan", steps: [{ title: "Root" }] });
+    await expect(
+      caller.addStep({
+        planId: plan.id,
+        title: "Invalid child",
+        assignedUserId: foreign.user.id,
+      }),
+    ).rejects.toThrow(/not members of this workspace/);
+
+    const root = (await caller.get({ id: plan.id })).steps[0];
+    await expect(
+      caller.updateStep({ id: root.id, assignedAgentId: foreignAgent.id }),
+    ).rejects.toThrow(/not active agents in this workspace/);
+
+    expect(await prisma.executionStep.count({ where: { workspaceId: fixture.workspace.id } })).toBe(
+      1,
+    );
+  });
+
+  it("rejects foreign, self, and cyclic dependencies instead of storing them", async () => {
+    const { caller } = await setup();
+    const otherPlan = await caller.create({ title: "Other", steps: [{ title: "Foreign" }] });
+    const foreignStep = (await caller.get({ id: otherPlan.id })).steps[0];
+    const plan = await caller.create({
+      title: "DAG",
+      steps: [{ title: "A" }, { title: "B", dependsOnStepIndexes: [0] }],
+    });
+    const [a, b] = (await caller.get({ id: plan.id })).steps;
+
+    await expect(
+      caller.addStep({ planId: plan.id, title: "Bad", dependsOnStepIds: [foreignStep.id] }),
+    ).rejects.toThrow(/same execution plan/);
+    await expect(caller.updateStep({ id: a.id, dependsOnStepIds: [a.id] })).rejects.toThrow(
+      /cannot depend on itself/,
+    );
+    await expect(caller.updateStep({ id: a.id, dependsOnStepIds: [b.id] })).rejects.toThrow(
+      /dependency cycle/,
+    );
+
+    const unchanged = await caller.get({ id: plan.id });
+    expect(unchanged.steps[0].dependsOnStepIds).toEqual([]);
+    expect(unchanged.steps[1].dependsOnStepIds).toEqual([a.id]);
+  });
+
+  it("rejects invalid create indexes, foreign source runs, and direct admission states", async () => {
+    const { caller } = await setup();
+    await expect(
+      caller.create({
+        title: "Self dependency",
+        steps: [{ title: "A", dependsOnStepIndexes: [0] }],
+      }),
+    ).rejects.toThrow(/cannot depend on itself/);
+    await expect(
+      caller.create({ title: "Bad index", steps: [{ title: "A", dependsOnStepIndexes: [1] }] }),
+    ).rejects.toThrow(/out of range/);
+
+    const foreign = await createWorkspaceFixture({ keyPrefix: "EXR" });
+    fixtures.push(foreign);
+    const prisma = getPrisma();
+    const foreignIssue = await createIssue(foreign);
+    const foreignAgent = await prisma.agent.create({
+      data: {
+        workspaceId: foreign.workspace.id,
+        profileKey: `run-${Date.now().toString(36)}`,
+        name: "Run agent",
+      },
+    });
+    const foreignRun = await prisma.agentRun.create({
+      data: {
+        workspaceId: foreign.workspace.id,
+        issueId: foreignIssue.id,
+        agentId: foreignAgent.id,
+      },
+    });
+    const plan = await caller.create({ title: "Plan", steps: [{ title: "Step" }] });
+    const step = (await caller.get({ id: plan.id })).steps[0];
+
+    await expect(caller.updateStep({ id: step.id, sourceRunId: foreignRun.id })).rejects.toThrow(
+      /agent run in this workspace/,
+    );
+    await expect(
+      caller.updateStep({ id: step.id, status: ExecutionStepStatus.READY }),
+    ).rejects.toThrow(/orchestration-owned states/);
   });
 
   it("transitions a plan from DRAFT to APPROVED to RUNNING", async () => {
@@ -237,6 +347,77 @@ describe("executionPlanRouter", () => {
     });
     const got = await caller.get({ id: plan.id });
     expect(got.contextSet?.id).toBe(set.id);
+  });
+
+  it("refuses destructive or structural step edits on a live plan", async () => {
+    const { caller } = await setup();
+    const plan = await caller.create({
+      title: "Live guarded plan",
+      steps: [{ title: "Live root" }],
+    });
+    const draft = await caller.get({ id: plan.id });
+    await caller.activate({ id: plan.id });
+
+    await expect(caller.archive({ id: plan.id })).rejects.toThrow(
+      /Cancel or complete this plan before archiving/,
+    );
+    await expect(caller.delete({ id: plan.id, confirm: "Live guarded plan" })).rejects.toThrow(
+      /Cancel or complete this plan before deleting/,
+    );
+    await expect(caller.removeStep({ id: draft.steps[0].id })).rejects.toThrow(
+      /only be removed while the plan is a draft/,
+    );
+    await expect(caller.addStep({ planId: plan.id, title: "Late addition" })).rejects.toThrow(
+      /only be added while the execution plan is a draft/,
+    );
+    await expect(
+      caller.updateStep({ id: draft.steps[0].id, dependsOnStepIds: [] }),
+    ).rejects.toThrow(/dependencies can only be edited while the execution plan is a draft/);
+
+    const after = await caller.get({ id: plan.id });
+    expect(after.archivedAt).toBeNull();
+    expect(after.steps).toHaveLength(1);
+  });
+
+  it("preserves draft dependency integrity when removing steps", async () => {
+    const { caller } = await setup();
+    const plan = await caller.create({
+      title: "Dependency guarded plan",
+      steps: [
+        { title: "Root" },
+        { title: "Child", dependsOnStepIndexes: [0] },
+        { title: "Independent leaf" },
+      ],
+    });
+    const draft = await caller.get({ id: plan.id });
+
+    await expect(caller.removeStep({ id: draft.steps[0].id })).rejects.toThrow(
+      /Remove the dependency from "Child"/,
+    );
+    await caller.removeStep({ id: draft.steps[2].id });
+
+    const after = await caller.get({ id: plan.id });
+    expect(after.steps.map((step) => step.title)).toEqual(["Root", "Child"]);
+  });
+
+  it("archives a settled plan with an observable change", async () => {
+    const { fixture, caller } = await setup();
+    const plan = await caller.create({ title: "Archivable draft" });
+
+    await caller.archive({ id: plan.id });
+
+    const row = await getPrisma().executionPlan.findUniqueOrThrow({ where: { id: plan.id } });
+    expect(row.archivedAt).not.toBeNull();
+    const event = await getPrisma().activityEvent.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "execution-plan",
+        subjectId: plan.id,
+        kind: EventKind.ISSUE_UPDATED,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event?.payload).toMatchObject({ action: "archived" });
   });
 });
 

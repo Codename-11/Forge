@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
+import { EventKind } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { recordChange } from "@/server/audit";
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
@@ -55,19 +57,49 @@ export const labelRouter = router({
     .input(z.object({ issueId: z.string().cuid(), labelIds: z.array(z.string().cuid()) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
-        await tx.issue.findFirstOrThrow({
-          where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        const issue = await tx.issue.findFirstOrThrow({
+          where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          include: { labels: { select: { labelId: true } } },
         });
+        const labelIds = Array.from(new Set(input.labelIds));
+        if (labelIds.length > 0) {
+          const labelCount = await tx.label.count({
+            where: { id: { in: labelIds }, workspaceId: ctx.workspaceId },
+          });
+          if (labelCount !== labelIds.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Every label must belong to this workspace.",
+            });
+          }
+        }
         await tx.issueLabel.deleteMany({ where: { issueId: input.issueId } });
-        if (input.labelIds.length) {
+        if (labelIds.length) {
           await tx.issueLabel.createMany({
-            data: input.labelIds.map((labelId) => ({ issueId: input.issueId, labelId })),
+            data: labelIds.map((labelId) => ({ issueId: input.issueId, labelId })),
           });
         }
-        return tx.issue.findUniqueOrThrow({
+        const updated = await tx.issue.findUniqueOrThrow({
           where: { id: input.issueId },
           include: { labels: { include: { label: true } } },
         });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "Issue",
+          entityId: issue.id,
+          action: "set-labels",
+          before: { labelIds: issue.labels.map((row) => row.labelId) },
+          after: { labelIds },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "issue",
+          subjectId: issue.id,
+          payload: { labelIds },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return updated;
       });
     }),
 });

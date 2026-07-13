@@ -23,14 +23,14 @@ tracking toggle. Bailey's standing rule is that workspace-level values
 should be columns here, not constants in handlers. See
 [Settings → Workspace](/guide/settings.html) for the full set.
 
-| Field of note | Meaning |
-| --- | --- |
-| `key` | Immutable issue prefix. |
-| `cycleLengthDays` | Default sprint length (default 7). |
-| `cycleCooldownDays` | Gap between sprints (default 0). |
-| `attachmentQuotaMb` | Per-workspace attachment cap (default 1024). |
-| `timeTrackingEnabled` | Master toggle for `TimeEntry`. |
-| `autoDispatch`, `autoDispatchMode` | Dispatcher config. |
+| Field of note                      | Meaning                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `key`                              | Immutable issue prefix.                      |
+| `cycleLengthDays`                  | Default sprint length (default 7).           |
+| `cycleCooldownDays`                | Gap between sprints (default 0).             |
+| `attachmentQuotaMb`                | Per-workspace attachment cap (default 1024). |
+| `timeTrackingEnabled`              | Master toggle for `TimeEntry`.               |
+| `autoDispatch`, `autoDispatchMode` | Dispatcher config.                           |
 
 ## Project
 
@@ -56,19 +56,25 @@ they reach them through their project.
 
 The unit of work.
 
-| Field of note | Meaning |
-| --- | --- |
-| `key` | Display id (e.g. `WRK-42`). Workspace key + auto-incremented number. |
-| `priority` | `NONE`, `LOW`, `MEDIUM`, `HIGH`, `URGENT`. |
-| `status` | One of the workspace's `Status` rows; default categories `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`, `CANCELED`. |
-| `claimedById` | Human user owning the issue (nullable). |
-| `assignedAgentId` | Agent doing the work (nullable). |
-| `projectId` | Optional project membership. |
-| `cycleId` | Optional sprint membership. |
-| `slaMinutes` | Per-issue SLA for the breach watchdog. |
+| Field of note     | Meaning                                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `key`             | Display id (e.g. `WRK-42`). Workspace key + auto-incremented number.                                                        |
+| `priority`        | `NONE`, `LOW`, `MEDIUM`, `HIGH`, `URGENT`.                                                                                  |
+| `status`          | One of the workspace's `Status` rows; default categories `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`, `CANCELED`. |
+| `claimedById`     | Human user owning the issue (nullable).                                                                                     |
+| `assignedAgentId` | Agent doing the work (nullable).                                                                                            |
+| `projectId`       | Optional project membership.                                                                                                |
+| `cycleId`         | Optional sprint membership.                                                                                                 |
+| `slaMinutes`      | Per-issue SLA for the breach watchdog.                                                                                      |
+| `deletedAt`       | Reversible archive timestamp. Archived issues leave active/agent surfaces until restored.                                   |
 
 The two assignment slots — `claimedById` and `assignedAgentId` — coexist
 intentionally. See [Agents → Overview](/agents/overview.html).
+
+Archiving an issue is operational teardown, not a hard delete: queue and
+claim state are cleared, live runs are abandoned, and one unambiguous active
+materialized plan step is canceled. Restoring clears `deletedAt` but does not
+restart that work automatically.
 
 The AI Triage columns (`aiTriageStatus`, `aiSuggestedPriority`,
 `aiSuggestedLabelIds`, `aiSuggestedAgentId`, `aiTriageReasoning`,
@@ -121,14 +127,15 @@ deliberate.
 
 Directed, typed link between two issues.
 
-| Field | Meaning |
-| --- | --- |
-| `fromIssueId` | The source issue. |
-| `toIssueId` | The target issue. |
-| `kind` | One of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `DUPLICATED_BY`, `RELATED`, `PARENT_OF`, `CHILD_OF`. |
+| Field         | Meaning                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `fromIssueId` | The source issue.                                          |
+| `toIssueId`   | The target issue.                                          |
+| `kind`        | One of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`. |
 
-Relations are cascade-deleted from either end — when you delete an
-issue, all relations involving it disappear. Pairs of inverse kinds
+Relations are cascade-deleted from either end only on hard deletion. Issue
+archive preserves the rows for restore and hides archived targets from active
+relation views. Pairs of inverse kinds
 (`BLOCKS` / `BLOCKED_BY`) are typically created as two rows so traversal
 is symmetric.
 
@@ -146,12 +153,12 @@ namespace.
 
 Polymorphic via `targetType` + `targetId`.
 
-| Field | Meaning |
-| --- | --- |
-| `targetType` | `issue`, `comment`, `project`, `initiative`, ... |
-| `targetId` | The id of the target row. |
-| `objectKey` | MinIO object key. |
-| `mimeType`, `sizeBytes`, `name` | Standard file metadata. |
+| Field                           | Meaning                                          |
+| ------------------------------- | ------------------------------------------------ |
+| `targetType`                    | `issue`, `comment`, `project`, `initiative`, ... |
+| `targetId`                      | The id of the target row.                        |
+| `objectKey`                     | MinIO object key.                                |
+| `mimeType`, `sizeBytes`, `name` | Standard file metadata.                          |
 
 Attachments live in MinIO behind presigned URLs. The init/finalize/
 download/delete pattern is in the `attachments.*` MCP namespace and the
@@ -215,7 +222,7 @@ ordering. See [Saved Views](/guide/saved-views.html).
 Per-(workspace, user) markdown scratchpad. Surfaced via the dashboard
 `<QuickNotesWidget />` and the `notes.*` MCP namespace. Pinned notes
 float to the top; `archivedAt` is the soft-delete path. Notes are
-**personal** — agents leave notes for *themselves*, not for the
+**personal** — agents leave notes for _themselves_, not for the
 operator. The `note.convertToIssue` mutation spawns a real Issue from
 a note's body without auto-archiving the source. See
 [Quick Notes](/guide/quick-notes.html).
@@ -297,10 +304,14 @@ agent starts work: `expectedOutput` (markdown spec),
 `artifactRequired` (must the agent attach an artifact?). On the
 other side, AgentRun gains `producedArtifactIds`,
 `verificationResult`, and `followUps` so the final response is
-structured.
+structured. `AgentRun.orchestrationContextSnapshot` stores the bounded Goal /
+Plan / Step / DAG context captured when the run opens, keeping historical run
+instructions stable after later orchestration edits.
 
-MCP `agent.context.bundle` for issues now exposes a
-`completionContract` block; MCP `runs.complete` is the structured
+MCP `agent.context.bundle` for issues exposes both a `completionContract`
+block and, for plan-linked issues, an `orchestrationContext` block with the
+Goal, Plan, current Step, dependencies, retry feedback, source-run evidence,
+and non-excluded ContextSet references. MCP `runs.complete` is the structured
 submission tool.
 
 ### ExecutionPlan + ExecutionStep
@@ -310,7 +321,10 @@ project. Steps form an ordered list with optional
 `dependsOnStepIds` so the runner can mark later steps READY only
 when prerequisites are DONE. Steps can be assigned to agents or
 humans and carry their own per-step `expectedOutput` /
-`verification`.
+`verification`. Assignee, source-run, and dependency references are validated
+inside the workspace; dependencies must remain inside one plan and acyclic.
+Materialized Issues mirror step lifecycle progress, while explicit operator
+Done/Cancel decisions feed back into their unique linked step.
 
 Plan lifecycle: `DRAFT` → `APPROVED` → `RUNNING` →
 `BLOCKED` / `COMPLETED` / `CANCELED`.
@@ -326,6 +340,8 @@ A crew is a group of agents bound to roles (`PLANNER`, `WORKER`,
 `REVIEWER`, `OBSERVER`, `OPERATOR_PROXY`). The same agent can
 hold multiple roles on the same crew. ExecutionPlans optionally
 point at a crew via `crewId`.
+`maxParallel` is a hard crew-wide cap on READY + RUNNING steps across its active
+plans (`0` means unlimited); readiness admission is serialized on the crew row.
 
 ReviewGate is an approval checkpoint attached to any reviewable
 target (artifact / execution-plan / execution-step /

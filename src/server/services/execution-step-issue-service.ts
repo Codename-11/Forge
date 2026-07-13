@@ -49,7 +49,10 @@ export async function materializeStepAsIssueTx(
     select: { id: true },
   });
   if (!status) {
-    throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Workspace has no default status." });
+    throw new TRPCError({
+      code: "INTERNAL_SERVER_ERROR",
+      message: "Workspace has no default status.",
+    });
   }
   const last = await tx.issue.findFirst({
     where: { workspaceId: params.workspaceId },
@@ -107,7 +110,20 @@ export async function materializeStepAsIssueTx(
     eventKind: EventKind.ISSUE_CREATED,
     subjectType: "issue",
     subjectId: issue.id,
-    payload: { number: issue.number, title: issue.title, fromStepId: step.id, planId: step.plan.id },
+    payload: {
+      number: issue.number,
+      title: issue.title,
+      fromStepId: step.id,
+      planId: step.plan.id,
+    },
+  });
+  const { syncMaterializedIssueStatusFromStep } =
+    await import("@/server/services/execution-step-issue-sync");
+  await syncMaterializedIssueStatusFromStep(tx, {
+    workspaceId: params.workspaceId,
+    stepId: step.id,
+    actorId: params.actorId,
+    actorAgentId: params.actorAgentId ?? null,
   });
 
   return { issueId: issue.id, created: true };

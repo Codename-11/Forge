@@ -7,26 +7,26 @@ queue concept, bulk operations, and how relations link issues together.
 
 ## Fields
 
-| Field | Type | Notes |
-|---|---|---|
-| `id` | uuid | Internal identifier |
-| `key` | string | Public key, e.g. `WRK-42`. Workspace-prefixed and unique within the workspace |
-| `kind` | enum | `ISSUE` or `TASK`. Tasks are lighter-weight; defaults are typically tighter |
-| `title` | string | Required, single line |
-| `description` | markdown | Optional, free-form |
-| `statusId` | fk | Status row in this workspace's status set |
-| `priority` | enum | `NONE` / `LOW` / `MEDIUM` / `HIGH` / `URGENT` |
-| `authorId` | fk | The user who created the issue |
-| `dueDate` | date | Optional |
-| `estimate` | int | Optional, dimensionless points |
-| `slaMinutes` | int | Optional per-issue SLA in minutes; nonzero overrides workspace default |
-| `projectId` | fk | Optional grouping |
-| `parentId` | fk | Optional sub-issue parent |
-| `cycleId` | fk | Optional sprint membership |
-| `claimedById` | fk | Human assignee (independent slot) |
-| `assignedAgentId` | fk | Agent assignee (independent slot) |
-| `queued` | bool | Is this issue ready for an agent to pick up? |
-| `aiTriageStatus` | enum | `PENDING` / `READY` / `APPLIED` / `DISMISSED` / `ERROR` / null |
+| Field             | Type     | Notes                                                                         |
+| ----------------- | -------- | ----------------------------------------------------------------------------- |
+| `id`              | uuid     | Internal identifier                                                           |
+| `key`             | string   | Public key, e.g. `WRK-42`. Workspace-prefixed and unique within the workspace |
+| `kind`            | enum     | `ISSUE` or `TASK`. Tasks are lighter-weight; defaults are typically tighter   |
+| `title`           | string   | Required, single line                                                         |
+| `description`     | markdown | Optional, free-form                                                           |
+| `statusId`        | fk       | Status row in this workspace's status set                                     |
+| `priority`        | enum     | `NONE` / `LOW` / `MEDIUM` / `HIGH` / `URGENT`                                 |
+| `authorId`        | fk       | The user who created the issue                                                |
+| `dueDate`         | date     | Optional                                                                      |
+| `estimate`        | int      | Optional, dimensionless points                                                |
+| `slaMinutes`      | int      | Optional per-issue SLA in minutes; nonzero overrides workspace default        |
+| `projectId`       | fk       | Optional grouping                                                             |
+| `parentId`        | fk       | Optional sub-issue parent                                                     |
+| `cycleId`         | fk       | Optional sprint membership                                                    |
+| `claimedById`     | fk       | Human assignee (independent slot)                                             |
+| `assignedAgentId` | fk       | Agent assignee (independent slot)                                             |
+| `queued`          | bool     | Is this issue ready for an agent to pick up?                                  |
+| `aiTriageStatus`  | enum     | `PENDING` / `READY` / `APPLIED` / `DISMISSED` / `ERROR` / null                |
 
 ::: info
 Status is not an enum — it's a foreign key to a workspace-defined status row.
@@ -41,14 +41,14 @@ can aggregate without caring about the local labels.
 Forge ships these status categories. Workspaces can have many statuses
 within each category, but the category set is fixed.
 
-| Category | Meaning |
-|---|---|
-| `BACKLOG` | Not yet planned |
-| `TODO` | Planned, not started |
-| `IN_PROGRESS` | Actively being worked |
-| `IN_REVIEW` | Submitted for review or QA |
-| `DONE` | Shipped, closed positively |
-| `CANCELED` | Closed without shipping |
+| Category      | Meaning                    |
+| ------------- | -------------------------- |
+| `BACKLOG`     | Not yet planned            |
+| `TODO`        | Planned, not started       |
+| `IN_PROGRESS` | Actively being worked      |
+| `IN_REVIEW`   | Submitted for review or QA |
+| `DONE`        | Shipped, closed positively |
+| `CANCELED`    | Closed without shipping    |
 
 ## The two assignment slots
 
@@ -102,9 +102,11 @@ re-route.
 
 Two paths.
 
-**Quick create.** Press <kbd>⇧C</kbd> from anywhere. The dialog covers
-title, description, status, priority, project, kind. <kbd>⌘ Enter</kbd> to
-submit. This is the path for ~95% of creation.
+**Quick create.** Press <kbd>⇧C</kbd> from anywhere. The dialog covers title,
+description, priority, project, and kind. <kbd>⌘ Enter</kbd> submits. Creating
+from a board column or status group also preserves that originating status;
+creating from the command palette always opens issue mode, even while viewing
+an existing issue. This is the primary creation path.
 
 The QuickCreate input also recognises [slash commands](/guide/slash-commands.html)
 at the start of the line:
@@ -121,14 +123,13 @@ the issue title; the matching field updates fire as
 `applyCommands` on `issue.create`. The same parsing works in the
 issue detail comment composer.
 
-**Full-page create.** Navigate to `/w/<slug>/issues/new` for the longer
-form: sub-issue parent, cycle, attachments, relations, agent assignment.
-
-Both paths call `issues.create` under the hood. From the API:
+Sub-issues are created from the parent issue's Sub-issues panel. Attachments,
+relations, sprint membership, and agent assignment can be added from the issue
+detail after capture. All creation paths call `issue.create` under the hood.
+From the API:
 
 ```ts
-await trpc.issues.create.mutate({
-  workspaceId,
+await trpc.issue.create.mutate({
   title: "Wire onboarding email",
   priority: "HIGH",
   projectId,
@@ -148,6 +149,7 @@ bulk operations that are also available on the API surface:
 - `issue.bulkAssignAgent` — set `assignedAgentId` across N issues
 - `issue.bulkArchive` — confirmation-gated soft-delete via
   `Issue.deletedAt`
+- `issue.bulkRestore` — restore selected rows from the Archived issues view
 - `issue.snoozeMany` — set `snoozedUntil` across N issues
 
 Each bulk call writes a single audit envelope per issue and fans out one
@@ -156,16 +158,29 @@ opaque batch.
 
 ### Selection chords
 
-| Chord | Action |
-|---|---|
-| <kbd>x</kbd> | Toggle selection on the row your cursor is over |
-| <kbd>⇧X</kbd> | Select range from the last selected row to the cursor |
-| <kbd>esc</kbd> | Clear selection |
+| Chord          | Action                                                |
+| -------------- | ----------------------------------------------------- |
+| <kbd>x</kbd>   | Toggle selection on the row your cursor is over       |
+| <kbd>⇧X</kbd>  | Select range from the last selected row to the cursor |
+| <kbd>esc</kbd> | Clear selection                                       |
 
 Selection is shared with the Inbox bulk bar — the same `<BulkBar />`
 primitive renders on both surfaces. The Issues board view intentionally
 skips bulk-select; drag-and-drop covers the highest-frequency op and
 checkbox-on-cards is visually noisy.
+
+## Archive and restore
+
+Issue archive is reversible. Archiving sets `Issue.deletedAt`, removes the
+issue from active lists and boards, clears queue/claim state, abandons live
+agent runs, and cancels an unambiguous active materialized plan step. History
+and relations remain stored for a later restore.
+
+Use **Archive** on an issue detail or select rows and choose **Archive** in the
+list bulk bar. The **Archive** control on the issues page opens the archived-only
+view. Open an archived issue or select archived rows to restore them. Restore
+only returns the issue to active visibility; it does not resurrect claims,
+agent runs, or canceled plan steps.
 
 ::: tip
 For very large bulk operations (hundreds of issues), use the MCP REST
@@ -202,14 +217,14 @@ When `Workspace.aiEnabled` and `aiTriageOnCreate` are both on, every newly
 created issue runs through AI triage. The state lives on the issue as
 `aiTriageStatus`:
 
-| State | Meaning |
-|---|---|
-| `null` | AI triage didn't run (feature off, or not yet) |
-| `PENDING` | Queued for triage |
-| `READY` | Suggestions generated, awaiting review |
-| `APPLIED` | Suggestions accepted by a human |
-| `DISMISSED` | Suggestions rejected |
-| `ERROR` | Triage failed (provider error, timeout, etc) |
+| State       | Meaning                                        |
+| ----------- | ---------------------------------------------- |
+| `null`      | AI triage didn't run (feature off, or not yet) |
+| `PENDING`   | Queued for triage                              |
+| `READY`     | Suggestions generated, awaiting review         |
+| `APPLIED`   | Suggestions accepted by a human                |
+| `DISMISSED` | Suggestions rejected                           |
+| `ERROR`     | Triage failed (provider error, timeout, etc)   |
 
 Triage suggestions cover priority, labels, and project — never the title or
 description. See [Agents → AI triage and coach](/agents/ai-triage-and-coach.html)
@@ -220,12 +235,12 @@ and SLA breaches.
 
 Issues are linked through `IssueRelation` rows: directed and typed.
 
-| Type | Meaning |
-|---|---|
-| `BLOCKS` | This issue blocks the target |
-| `BLOCKED_BY` | This issue is blocked by the target |
+| Type         | Meaning                                            |
+| ------------ | -------------------------------------------------- |
+| `BLOCKS`     | This issue blocks the target                       |
+| `BLOCKED_BY` | This issue is blocked by the target                |
 | `DUPLICATES` | This issue duplicates the target (close as dup of) |
-| `RELATES_TO` | Soft link, no semantic constraint |
+| `RELATES_TO` | Soft link, no semantic constraint                  |
 
 `BLOCKS` and `BLOCKED_BY` are inverses; creating one writes both records
 so both sides of the graph are queryable cheaply.
@@ -262,11 +277,11 @@ seven structured slash commands. Templates expand to a templated body
 in-place (and, in two cases, fire a follow-up mutation). They show up in
 the same autocomplete dropdown as the commands, listed after them.
 
-| Template | Expands to | Side-effect |
-|---|---|---|
-| `/status [<next-step>]` | `**Status:** Working on <next-step>` | — |
-| `/blocked <reason>` | `**Blocked:** <reason>` | Opens a `FREE_FORM` action request titled "Unblock needed" on this issue |
-| `/approve` | `**Approved** ✓` | — |
+| Template                        | Expands to                                                                           | Side-effect                                                                    |
+| ------------------------------- | ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `/status [<next-step>]`         | `**Status:** Working on <next-step>`                                                 | —                                                                              |
+| `/blocked <reason>`             | `**Blocked:** <reason>`                                                              | Opens a `FREE_FORM` action request titled "Unblock needed" on this issue       |
+| `/approve`                      | `**Approved** ✓`                                                                     | —                                                                              |
 | `/handoff @<agent> [<context>]` | Injects `/assign @<agent>` at the top, then `**Handing off to @<agent>:** <context>` | Reassigns the issue to the named agent via the existing `/assign` command path |
 
 Picking a template from the dropdown replaces the line and parks your

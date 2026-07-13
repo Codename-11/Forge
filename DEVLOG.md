@@ -2,6 +2,49 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — Plan context integrity + reversible issue archive
+
+Closed the execution-context gaps that let materialized plan issues look like
+standalone tasks, then carried the same integrity pass through issue creation,
+handling, and archive/restore.
+
+- **Durable plan context.** Materialized issue detail now shows Goal → Plan →
+  Step provenance, instructions, output/verification contracts, dependencies,
+  dependents, and sibling progress. Agent runs capture a versioned immutable
+  orchestration-context snapshot at dispatch; inbox and MCP context prefer that
+  snapshot so later plan edits cannot rewrite a run's instructions.
+- **Orchestration invariants.** Step dependencies, assignees, roles, and source
+  runs are workspace/plan validated; structural edits are draft-only; role
+  resolution never guesses between multiple crew members. Crew `maxParallel`
+  is enforced across all of a crew's plans under row locks, with fair refill.
+  Materialized Issue and ExecutionStep terminal lifecycle now synchronizes in
+  both directions, including reaper/abandon paths.
+- **Reversible issue archive.** Added `issue.archive`, `restore`, and
+  `bulkRestore`, an archived-only Issues view, archived detail tombstones, and
+  single/bulk restore. Archive atomically clears queue/claim/snooze state,
+  abandons live runs, cancels one unambiguous active materialized step, and
+  records audit/activity; restore returns visibility without resurrecting old
+  work. MCP, agent inbox, relations, comments, labels, and active mutations now
+  respect the archive boundary. Added migrations `0097` (run context snapshot)
+  and `0098` (archive-list index).
+- **Issue-flow cleanup.** Board/status quick-add preserves its originating
+  status; command-palette create always opens issue mode; MCP create accepts
+  status/labels and enforces narrowed-key creation lanes; bulk copy says
+  “Select loaded”; list/count invalidation stays coherent. Reversible archive
+  confirmations no longer use destructive type-to-confirm friction. Comment
+  deletion is now tenant-scoped and label assignment validates workspace ids.
+- **Usability evidence.** The flow pass was grounded in the live deployment
+  behavior already inspected plus current UI/contracts and existing Forge
+  components/tokens. No screenshot-based browser audit was claimed because an
+  in-app browser surface was unavailable; Playwright CLI was intentionally not
+  substituted without an explicit browser choice.
+
+Verification: Prisma validate/format, `pnpm lint` (existing repository warnings
+only), `pnpm typecheck`, the full Vitest suite (**1,149 passed; 1 skipped**),
+`git diff --check`, a fresh Next.js production build, and the full Playwright
+suite (**37 passed**). Prepared as the v0.9.0 production release; rollout and
+live smoke verification follow the merge to `main`.
+
 ## 2026-07-11 — Recoverable agent review handoff
 
 Closed the Plan state-machine gap where a step could say “Needs review” after
@@ -12194,3 +12237,47 @@ reconciliation mutation occurred: PostgreSQL's descending sort places null
 the newer COMPLETED run. v0.8.2 orders attempts by `lastEventAt` instead (set on
 every run state) and adds the exact stalled-then-completed history to the
 watchdog regression fixture.
+
+## 2026-07-13 — Plan-linked issue context and orchestration integrity
+
+Inspected the current `forge` and `forge-worker` production services, the live
+Rich Rendering goal/plan, current source, and orchestration references. Live
+data confirmed that materialized plan-step issues retained only a small plan
+backlink: four DONE steps still had BACKLOG issues, dependency edges were not
+visible on issue Relations, runtime prompts omitted Goal/Plan/DAG context, and
+terminal STALLED runs could be selected as an agent's current run.
+
+- Added a bounded shared orchestration-context builder used by provider runtime
+  starts/resumes, `agent.inbox.list`, and `agent.context.bundle`. It includes
+  Goal/Plan/Step contracts, retry feedback, dependency/dependent issue links,
+  completed worker evidence, and non-excluded ContextSet refs without guessing
+  a step for multi-step plan-anchor issues.
+- Materialized issue detail now renders a primary Goal → Plan → Step context
+  card with success criteria, instructions, completion/verification contract,
+  feedback, sibling progress, and navigable dependencies. The Relations graph
+  derives plan dependency edges from `dependsOnStepIds` without persisting
+  duplicate `IssueRelation` rows.
+- Runtime-only planners with a linked Goal issue now open durable DISCUSS runs
+  and receive the decompose prompt; unanchored runtime planners are reported as
+  non-dispatchable instead of queueing a webhook guaranteed to dead-letter.
+  Worker/reviewer evidence and the planner trigger survive runtime handoff.
+- Ordinary assignment of a materialized issue synchronizes its intended step
+  worker, but TODO/BLOCKED/REVIEW or non-running-plan steps are scheduled rather
+  than dispatched. Only readiness can open the step-bound execution run.
+  Both inbox delivery and the background runtime scanner honor that gate;
+  provider/output start now audits READY → RUNNING.
+- Current-run resolution is limited to ACTIVE/WAITING and the linked agent.
+  Verdicts require a REVIEW step on the active RUNNING attempt; agent verdicts
+  additionally require that agent's active REVIEW run. CANCELED steps no longer
+  count toward Goal achievement.
+- Added safety guards around live-plan archive/delete and step removal, routed
+  RUNNING transitions through activation, validated updated ContextSet scope,
+  and fixed initiative-only API-key narrowing for issue reads/list filters.
+- Updated orchestration, engagement-mode, primitive, and MCP reference docs to
+  match the delivered behavior and to state honestly that crew `maxParallel`
+  remains informational rather than enforced.
+
+Verification: lint and typecheck passed; 1,126 unit/integration tests passed
+(one live-only test skipped); and a forced fresh production build plus all 37
+Playwright tests passed. This change is local only; production was inspected
+read-only and was not deployed or mutated.

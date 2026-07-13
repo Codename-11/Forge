@@ -174,4 +174,74 @@ describe("relationRouter", () => {
       expect.objectContaining({ from: focus.id, to: child.id, kind: "child" }),
     );
   });
+
+  it("graphForIssue() derives materialized plan dependencies without storing issue relations", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const prerequisite = await createIssue(fixture, { title: "Prerequisite" });
+    const focus = await createIssue(fixture, { title: "Focus step" });
+    const downstream = await createIssue(fixture, { title: "Downstream" });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Materialized DAG",
+        status: "RUNNING",
+        createdById: fixture.user.id,
+      },
+    });
+    const first = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: prerequisite.id,
+        title: "First",
+        position: 0,
+        status: "DONE",
+      },
+    });
+    const second = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: focus.id,
+        title: "Second",
+        position: 1,
+        status: "RUNNING",
+        dependsOnStepIds: [first.id],
+      },
+    });
+    await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: downstream.id,
+        title: "Third",
+        position: 2,
+        status: "TODO",
+        dependsOnStepIds: [second.id],
+      },
+    });
+
+    const graph = await caller.graphForIssue({ issueId: focus.id, depth: 1 });
+    expect(graph.nodes.map((node) => node.id).sort()).toEqual(
+      [prerequisite.id, focus.id, downstream.id].sort(),
+    );
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: prerequisite.id,
+        to: focus.id,
+        kind: "plan-dependency",
+      }),
+    );
+    expect(graph.edges).toContainEqual(
+      expect.objectContaining({
+        from: focus.id,
+        to: downstream.id,
+        kind: "plan-dependency",
+      }),
+    );
+    expect(await prisma.issueRelation.count({ where: { workspaceId: fixture.workspace.id } })).toBe(
+      0,
+    );
+  });
 });

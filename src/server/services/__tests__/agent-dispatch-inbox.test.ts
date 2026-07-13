@@ -100,6 +100,127 @@ describe("agent-dispatch-inbox — ensureCanonicalFromEvent", () => {
     expect(run!.assignmentEventId).toBe(run!.triggerEventId);
   });
 
+  it("binds an ordinary materialized-issue assignment back to its single active step", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "INS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "ins-a1");
+    const issue = await createIssue(fixture);
+    const plan = await prisma.executionPlan.create({
+      data: { workspaceId: fixture.workspace.id, title: "Materialized", status: "RUNNING" },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Implement",
+        position: 0,
+        status: "READY",
+      },
+    });
+    await prisma.issue.update({ where: { id: issue.id }, data: { assignedAgentId: agent.id } });
+
+    await prisma.$transaction((tx) =>
+      recordChange(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Issue",
+        entityId: issue.id,
+        action: "assign",
+        eventKind: EventKind.AGENT_ASSIGNED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: { agentId: agent.id },
+      }),
+    );
+
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, issueId: issue.id, agentId: agent.id },
+    });
+    expect(run.executionStepId).toBe(step.id);
+    expect(run.orchestrationContextSnapshot).not.toBeNull();
+    expect(await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } })).toMatchObject({
+      assignedAgentId: agent.id,
+    });
+    await prisma.executionPlan.update({
+      where: { id: plan.id },
+      data: { title: "Edited after dispatch" },
+    });
+    await prisma.executionStep.update({
+      where: { id: step.id },
+      data: { title: "Edited step after dispatch" },
+    });
+    const inbox = await listInbox(prisma, {
+      workspaceId: fixture.workspace.id,
+      agentId: agent.id,
+      filter: "active",
+      limit: 10,
+    });
+    expect(inbox.find((item) => item.kind === "run")).toMatchObject({
+      executionStepId: step.id,
+      orchestrationContext: {
+        plan: { id: plan.id, title: "Materialized" },
+        step: { id: step.id, title: "Implement" },
+      },
+    });
+  });
+
+  it("schedules a blocked materialized step without opening work before readiness", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "IND" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "ind-a1");
+    const issue = await createIssue(fixture);
+    const plan = await prisma.executionPlan.create({
+      data: { workspaceId: fixture.workspace.id, title: "Dependencies", status: "RUNNING" },
+    });
+    const blocker = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        title: "Blocker",
+        position: 0,
+        status: "READY",
+      },
+    });
+    const child = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Blocked child",
+        position: 1,
+        status: "TODO",
+        dependsOnStepIds: [blocker.id],
+      },
+    });
+    await prisma.issue.update({ where: { id: issue.id }, data: { assignedAgentId: agent.id } });
+
+    await prisma.$transaction((tx) =>
+      recordChange(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Issue",
+        entityId: issue.id,
+        action: "assign",
+        eventKind: EventKind.AGENT_ASSIGNED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: { agentId: agent.id },
+      }),
+    );
+
+    expect(await prisma.executionStep.findUniqueOrThrow({ where: { id: child.id } })).toMatchObject(
+      { status: "TODO", assignedAgentId: agent.id },
+    );
+    expect(
+      await prisma.agentRun.count({
+        where: { workspaceId: fixture.workspace.id, issueId: issue.id, agentId: agent.id },
+      }),
+    ).toBe(0);
+  });
+
   it("creates one run per agent for COMMENT_CREATED mentions", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "INM" });
     fixtures.push(fixture);
@@ -458,6 +579,32 @@ describe("agent-dispatch-inbox — listInbox", () => {
     expect(runIds).toContain(r1.id);
     expect(runIds).not.toContain(r2.id);
   });
+
+  it("never returns an active legacy run whose issue is archived", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "LAR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "lar-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+    // Simulate a legacy archive that predates the centralized cleanup path.
+    await prisma.issue.update({ where: { id: issue.id }, data: { deletedAt: new Date() } });
+
+    const inbox = await listInbox(prisma, {
+      workspaceId: fixture.workspace.id,
+      agentId: agent.id,
+      filter: "all",
+      limit: 50,
+    });
+    expect(inbox.some((item) => item.kind === "run" && item.runId === run.id)).toBe(false);
+  });
 });
 
 describe("agent-dispatch-inbox — markOutputStarted", () => {
@@ -493,6 +640,53 @@ describe("agent-dispatch-inbox — markOutputStarted", () => {
     );
     expect(second.alreadyStarted).toBe(true);
     expect(second.outputStartedAt.getTime()).toBe(first.outputStartedAt.getTime());
+  });
+
+  it("moves the linked execution step from READY to RUNNING", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "OSR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "osr-a1");
+    const issue = await createIssue(fixture);
+    const plan = await prisma.executionPlan.create({
+      data: { workspaceId: fixture.workspace.id, title: "Start work", status: "RUNNING" },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Execute",
+        position: 0,
+        status: "READY",
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        executionStepId: step.id,
+        status: "ACTIVE",
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      markOutputStarted(tx, {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        target: { runId: run.id },
+      }),
+    );
+
+    expect(await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } })).toMatchObject({
+      status: "RUNNING",
+    });
+    expect(
+      await prisma.auditLog.count({
+        where: { workspaceId: fixture.workspace.id, entityId: step.id, action: "start" },
+      }),
+    ).toBe(1);
   });
 });
 

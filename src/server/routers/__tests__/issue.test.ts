@@ -79,15 +79,230 @@ describe("issueRouter — list filtering", () => {
         createdById: fixture.user.id,
       },
     });
-    const projectIssue = await createIssue(fixture, { title: "project issue", projectId: project.id });
+    const projectIssue = await createIssue(fixture, {
+      title: "project issue",
+      projectId: project.id,
+    });
     const unfiledIssue = await createIssue(fixture, { title: "unfiled issue" });
 
-    const projectRows = await caller.list({ projectIds: [project.id], includeDone: false, limit: 50 });
+    const projectRows = await caller.list({
+      projectIds: [project.id],
+      includeDone: false,
+      limit: 50,
+    });
     expect(projectRows.items.map((row) => row.id)).toEqual([projectIssue.id]);
 
-    const noProjectRows = await caller.list({ withoutProject: true, includeDone: false, limit: 50 });
+    const noProjectRows = await caller.list({
+      withoutProject: true,
+      includeDone: false,
+      limit: 50,
+    });
     expect(noProjectRows.items.map((row) => row.id)).toContain(unfiledIssue.id);
     expect(noProjectRows.items.map((row) => row.id)).not.toContain(projectIssue.id);
+  });
+});
+
+describe("issueRouter — archive integrity", () => {
+  it("archives reversibly, closes live work, clears dispatch state, and audits both directions", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Archive safely" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Archive worker",
+        profileKey: "archive-worker",
+      },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: {
+        queued: true,
+        claimedAt: new Date(),
+        claimedById: fixture.user.id,
+        claimedByAgentId: agent.id,
+        claimExpiresAt: new Date(Date.now() + 60_000),
+        snoozedUntil: new Date(Date.now() + 120_000),
+        assignedAgentId: agent.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const archived = await caller.archive({ id: issue.id });
+    expect(archived.archived).toBe(true);
+    const row = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(row).toMatchObject({
+      queued: false,
+      claimedAt: null,
+      claimedById: null,
+      claimedByAgentId: null,
+      claimExpiresAt: null,
+      snoozedUntil: null,
+      assignedAgentId: agent.id,
+    });
+    expect(row.deletedAt).not.toBeNull();
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      "ABANDONED",
+    );
+    await expect(caller.byId({ id: issue.id })).rejects.toThrow();
+    expect((await caller.byId({ id: issue.id, includeArchived: true })).id).toBe(issue.id);
+
+    const active = await caller.list({ archived: false, includeDone: true, limit: 50 });
+    expect(active.items.map((item) => item.id)).not.toContain(issue.id);
+    const archive = await caller.list({ archived: true, includeDone: true, limit: 50 });
+    expect(archive.items.map((item) => item.id)).toContain(issue.id);
+
+    const restored = await caller.restore({ id: issue.id });
+    expect(restored.restored).toBe(true);
+    const visible = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(visible.deletedAt).toBeNull();
+    expect(visible.queued).toBe(false);
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      "ABANDONED",
+    );
+    const actions = await prisma.auditLog.findMany({
+      where: { workspaceId: fixture.workspace.id, entity: "Issue", entityId: issue.id },
+      orderBy: { createdAt: "asc" },
+      select: { action: true },
+    });
+    expect(actions.map((entry) => entry.action)).toEqual(
+      expect.arrayContaining(["archive", "restore"]),
+    );
+    expect(
+      await prisma.activityEvent.count({
+        where: { workspaceId: fixture.workspace.id, subjectId: issue.id, kind: "ISSUE_DELETED" },
+      }),
+    ).toBe(1);
+  });
+
+  it("cancels one active materialized step and rejects ambiguous active step links", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Plan-backed archive" });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Archive plan",
+        status: "RUNNING",
+        createdById: fixture.user.id,
+      },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Active work",
+        position: 0,
+        status: "RUNNING",
+      },
+    });
+
+    await caller.archive({ id: issue.id });
+    expect((await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } })).status).toBe(
+      "CANCELED",
+    );
+    expect((await prisma.executionPlan.findUniqueOrThrow({ where: { id: plan.id } })).status).toBe(
+      "BLOCKED",
+    );
+
+    const ambiguousIssue = await createIssue(fixture, { title: "Ambiguous links" });
+    await prisma.executionStep.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          issueId: ambiguousIssue.id,
+          title: "One",
+          position: 1,
+          status: "TODO",
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          issueId: ambiguousIssue.id,
+          title: "Two",
+          position: 2,
+          status: "TODO",
+        },
+      ],
+    });
+    await expect(caller.archive({ id: ambiguousIssue.id })).rejects.toThrow(/more than one/i);
+    expect(
+      (await prisma.issue.findUniqueOrThrow({ where: { id: ambiguousIssue.id } })).deletedAt,
+    ).toBeNull();
+  });
+
+  it("bulk archive and restore use the same lifecycle path", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const first = await createIssue(fixture, { title: "Bulk one" });
+    const second = await createIssue(fixture, { title: "Bulk two" });
+    await prisma.issue.updateMany({
+      where: { id: { in: [first.id, second.id] } },
+      data: { queued: true },
+    });
+
+    expect((await caller.bulkArchive({ ids: [first.id, second.id] })).updated).toBe(2);
+    expect(
+      await prisma.issue.count({
+        where: { id: { in: [first.id, second.id] }, deletedAt: { not: null }, queued: false },
+      }),
+    ).toBe(2);
+    expect((await caller.bulkRestore({ ids: [first.id, second.id] })).updated).toBe(2);
+    expect(
+      await prisma.issue.count({
+        where: { id: { in: [first.id, second.id] }, deletedAt: null, queued: false },
+      }),
+    ).toBe(2);
+  });
+
+  it("assign rejects archived issues and users outside the workspace", async () => {
+    const { caller, fixture } = await setup();
+    const other = await createWorkspaceFixture({ keyPrefix: "ASG" });
+    fixtures.push(other);
+    const issue = await createIssue(fixture, { title: "Scoped assignment" });
+
+    await expect(caller.assign({ id: issue.id, userIds: [other.user.id] })).rejects.toThrow(
+      /member of this workspace/i,
+    );
+    await caller.archive({ id: issue.id });
+    await expect(caller.assign({ id: issue.id, userIds: [fixture.user.id] })).rejects.toThrow(
+      /not found/i,
+    );
+  });
+
+  it("keeps archived issues read-only across active-work mutations", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Read-only archive" });
+    const nextStatus = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "IN_PROGRESS" },
+    });
+    await caller.archive({ id: issue.id });
+
+    await expect(caller.update({ id: issue.id, title: "Should not change" })).rejects.toThrow();
+    expect((await caller.bulkStatus({ ids: [issue.id], statusId: nextStatus.id })).count).toBe(0);
+    await expect(caller.setQueued({ id: issue.id, queued: true })).rejects.toThrow();
+    await expect(caller.release({ id: issue.id })).rejects.toThrow();
+    await expect(
+      caller.applyCommands({
+        issueId: issue.id,
+        commands: [{ kind: "priority", level: "high" }],
+      }),
+    ).rejects.toThrow(/not found/i);
+    await expect(caller.watch({ issueId: issue.id })).rejects.toThrow(/not found/i);
+
+    const unchanged = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(unchanged.title).toBe("Read-only archive");
+    expect(unchanged.queued).toBe(false);
   });
 });
 
@@ -143,6 +358,71 @@ describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () 
     const superseded = await caller.byId({ id: issue.id });
     expect(superseded.agentRuns).toHaveLength(1);
     expect(superseded.agentRuns[0].status).toBe(AgentRunStatus.COMPLETED);
+  });
+
+  it("byId keeps goal, plan, contract, and DAG context on a materialized step issue", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const dependencyIssue = await createIssue(fixture, { title: "Dependency issue" });
+    const issue = await createIssue(fixture, { title: "Materialized issue" });
+    const goal = await prisma.goal.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Ship a coherent workflow",
+        description: "Make isolated work understandable.",
+        successCriteria: "Every issue retains its orchestration context.",
+        createdById: fixture.user.id,
+      },
+    });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        goalId: goal.id,
+        title: "Context propagation",
+        description: "Carry context through every handoff.",
+        status: "RUNNING",
+        createdById: fixture.user.id,
+      },
+    });
+    const dependency = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: dependencyIssue.id,
+        title: "Define the context",
+        position: 0,
+        status: "DONE",
+      },
+    });
+    await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Render the context",
+        body: "Show the user why this issue exists.",
+        position: 1,
+        status: "READY",
+        expectedOutput: "A visible context card.",
+        verification: [{ id: "visible", label: "Goal and plan are visible", kind: "manual" }],
+        dependsOnStepIds: [dependency.id],
+      },
+    });
+
+    const detail = await caller.byId({ id: issue.id });
+    expect(detail.executionSteps).toHaveLength(1);
+    const context = detail.executionSteps[0];
+    expect(context.body).toContain("why this issue exists");
+    expect(context.expectedOutput).toBe("A visible context card.");
+    expect(context.dependsOnStepIds).toEqual([dependency.id]);
+    expect(context.plan.goal).toMatchObject({
+      id: goal.id,
+      title: "Ship a coherent workflow",
+      successCriteria: "Every issue retains its orchestration context.",
+    });
+    expect(context.plan.steps).toHaveLength(2);
+    expect(context.plan.steps[0].issue?.id).toBe(dependencyIssue.id);
+    expect(context.plan.steps[1].issue?.id).toBe(issue.id);
   });
 
   it("queue exposes `unblocked` (true when nothing blocks the issue)", async () => {
@@ -254,9 +534,7 @@ describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () 
     expect("claimedAt" in claimed).toBe(true);
 
     // Specific id, out of scope: FORBIDDEN.
-    await expect(caller.claim({ issueId: outScope.id })).rejects.toThrow(
-      /scope/i,
-    );
+    await expect(caller.claim({ issueId: outScope.id })).rejects.toThrow(/scope/i);
   });
 });
 
@@ -298,9 +576,7 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
     const redRows = rows.filter((r) => r.labelId === red.id);
     const blueRows = rows.filter((r) => r.labelId === blue.id);
     expect(redRows).toHaveLength(0);
-    expect(blueRows.map((r) => r.issueId).sort()).toEqual(
-      [a.id, b.id, c.id].sort(),
-    );
+    expect(blueRows.map((r) => r.issueId).sort()).toEqual([a.id, b.id, c.id].sort());
 
     // Audit + activity events per issue — invariant from CLAUDE.md.
     const audits = await prisma.auditLog.findMany({
@@ -411,9 +687,9 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
       data: { email: `outsider-${Date.now()}@example.com` },
     });
     const a = await createIssue(fixture);
-    await expect(
-      caller.bulkAssign({ issueIds: [a.id], claimedById: outsider.id }),
-    ).rejects.toThrow(/member/i);
+    await expect(caller.bulkAssign({ issueIds: [a.id], claimedById: outsider.id })).rejects.toThrow(
+      /member/i,
+    );
     await prisma.user.delete({ where: { id: outsider.id } }).catch(() => {});
   });
 

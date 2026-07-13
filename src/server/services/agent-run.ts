@@ -3,10 +3,12 @@ import type { PrismaClient, AgentRun, EngagementMode, RunEngine } from "@prisma/
 import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
+import { engagementSourceToEnum, type EngagementSource } from "@/server/services/engagement-mode";
 import {
-  engagementSourceToEnum,
-  type EngagementSource,
-} from "@/server/services/engagement-mode";
+  createOrchestrationContextSnapshot,
+  loadIssueOrchestrationContext,
+  type IssueOrchestrationContext,
+} from "@/server/services/orchestration-context";
 import { nanoid } from "nanoid";
 
 /**
@@ -168,6 +170,11 @@ export async function openOrTouchRun(
     runEngineSource?: string | null;
     /** Dispatch-time runtime/tool policy snapshot. */
     runtimePolicy?: Prisma.InputJsonValue | null;
+    /**
+     * Context already loaded by a dispatch caller. Undefined hydrates it at
+     * this canonical boundary; null explicitly records that none was present.
+     */
+    orchestrationContext?: IssueOrchestrationContext | null;
     /** Latest ActivityEvent that woke this run. */
     triggerEventId?: string | null;
     /** String mirror of ActivityEvent.kind for the latest wake. */
@@ -178,6 +185,20 @@ export async function openOrTouchRun(
     issueId: params.issueId,
     agentId: params.agentId,
   });
+
+  const orchestrationContext =
+    existing?.orchestrationContextSnapshot != null
+      ? null
+      : params.orchestrationContext !== undefined
+        ? params.orchestrationContext
+        : await loadIssueOrchestrationContext(tx, {
+            workspaceId: params.workspaceId,
+            issueId: params.issueId,
+            executionStepId: params.executionStepId,
+          });
+  const orchestrationContextSnapshot = orchestrationContext
+    ? createOrchestrationContextSnapshot(orchestrationContext)
+    : null;
 
   if (existing) {
     // Auto-resume WAITING runs: a fresh action on a WAITING run is
@@ -244,9 +265,10 @@ export async function openOrTouchRun(
         ...(params.runtimePolicy && !existing.runtimePolicy
           ? { runtimePolicy: params.runtimePolicy }
           : {}),
-        ...(params.triggerEventId !== undefined
-          ? { triggerEventId: params.triggerEventId }
+        ...(orchestrationContextSnapshot && !existing.orchestrationContextSnapshot
+          ? { orchestrationContextSnapshot }
           : {}),
+        ...(params.triggerEventId !== undefined ? { triggerEventId: params.triggerEventId } : {}),
         ...(params.triggerKind !== undefined ? { triggerKind: params.triggerKind } : {}),
       },
     });
@@ -272,6 +294,7 @@ export async function openOrTouchRun(
         ? { runEngine: params.runEngine, runEngineSource: params.runEngineSource ?? null }
         : {}),
       ...(params.runtimePolicy ? { runtimePolicy: params.runtimePolicy } : {}),
+      ...(orchestrationContextSnapshot ? { orchestrationContextSnapshot } : {}),
     },
   });
 
@@ -403,10 +426,7 @@ export async function finishRun(
 ): Promise<AgentRun | null> {
   const existing = await tx.agentRun.findUnique({ where: { id: params.runId } });
   if (!existing) return null;
-  if (
-    existing.status !== AgentRunStatus.ACTIVE &&
-    existing.status !== AgentRunStatus.WAITING
-  ) {
+  if (existing.status !== AgentRunStatus.ACTIVE && existing.status !== AgentRunStatus.WAITING) {
     return existing;
   }
 
@@ -649,8 +669,7 @@ export async function abandonRunsForAgentReassignment(
       agentId: run.agentId,
       status: "ABANDONED",
       summary:
-        params.summary ??
-        "Abandoned because this issue was reassigned before the run completed.",
+        params.summary ?? "Abandoned because this issue was reassigned before the run completed.",
       actorId: params.actorId ?? null,
       actorAgentId: params.actorAgentId ?? null,
     });

@@ -297,15 +297,25 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const activate = input.status === ExecutionPlanStatus.RUNNING;
       await updateExecutionPlan(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
         planId: input.id,
         title: input.title,
         description: input.description === undefined ? undefined : input.description,
-        status: input.status,
+        status: activate ? undefined : input.status,
         contextSetId: input.contextSetId === undefined ? undefined : input.contextSetId,
       });
+      if (activate) {
+        await ctx.db.$transaction((tx) =>
+          activatePlan(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session?.user?.id ?? null,
+            planId: input.id,
+          }),
+        );
+      }
       return { ok: true };
     }),
 
@@ -419,14 +429,42 @@ export const executionPlanRouter = router({
     .mutation(async ({ ctx, input }) => {
       const plan = await ctx.db.executionPlan.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true },
+        select: { id: true, title: true, status: true, archivedAt: true },
       });
       if (!plan) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
       }
-      await ctx.db.executionPlan.update({
-        where: { id: input.id },
-        data: { archivedAt: new Date() },
+      if (
+        plan.status === ExecutionPlanStatus.APPROVED ||
+        plan.status === ExecutionPlanStatus.RUNNING ||
+        plan.status === ExecutionPlanStatus.BLOCKED
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Cancel or complete this plan before archiving it.",
+        });
+      }
+      if (plan.archivedAt) return { ok: true };
+      const archivedAt = new Date();
+      await ctx.db.$transaction(async (tx) => {
+        await tx.executionPlan.update({
+          where: { id: input.id },
+          data: { archivedAt },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "execution-plan",
+          entityId: plan.id,
+          action: "archive",
+          before: { archivedAt: plan.archivedAt, status: plan.status },
+          after: { archivedAt, status: plan.status },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-plan",
+          subjectId: plan.id,
+          payload: { action: "archived", planTitle: plan.title },
+        });
       });
       return { ok: true };
     }),
@@ -591,6 +629,16 @@ export const executionPlanRouter = router({
           message: "Confirmation text does not match the plan title.",
         });
       }
+      if (
+        plan.status === ExecutionPlanStatus.APPROVED ||
+        plan.status === ExecutionPlanStatus.RUNNING ||
+        plan.status === ExecutionPlanStatus.BLOCKED
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Cancel or complete this plan before deleting it.",
+        });
+      }
       await ctx.db.$transaction(async (tx) => {
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
@@ -677,15 +725,61 @@ export const executionPlanRouter = router({
     .mutation(async ({ ctx, input }) => {
       const step = await ctx.db.executionStep.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true, planId: true },
+        select: { id: true, title: true, planId: true, plan: { select: { status: true } } },
       });
       if (!step) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
       }
-      await ctx.db.executionStep.delete({ where: { id: input.id } });
-      await ctx.db.executionPlan.update({
-        where: { id: step.planId },
-        data: { updatedAt: new Date() },
+      if (step.plan.status !== ExecutionPlanStatus.DRAFT) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Steps can only be removed while the plan is a draft.",
+        });
+      }
+      const [dependent, liveRun] = await Promise.all([
+        ctx.db.executionStep.findFirst({
+          where: { planId: step.planId, dependsOnStepIds: { has: step.id } },
+          select: { id: true, title: true },
+        }),
+        ctx.db.agentRun.findFirst({
+          where: {
+            executionStepId: step.id,
+            status: { in: ["ACTIVE", "WAITING"] },
+          },
+          select: { id: true },
+        }),
+      ]);
+      if (dependent) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: `Remove the dependency from "${dependent.title}" before deleting this step.`,
+        });
+      }
+      if (liveRun) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Stop the active run before deleting this step.",
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session?.user?.id ?? null,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "execution-step",
+          entityId: step.id,
+          action: "delete",
+          before: { title: step.title, planId: step.planId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-step",
+          subjectId: step.id,
+          payload: { action: "deleted", planId: step.planId, stepTitle: step.title },
+        });
+        await tx.executionStep.delete({ where: { id: input.id } });
+        await tx.executionPlan.update({
+          where: { id: step.planId },
+          data: { updatedAt: new Date() },
+        });
       });
       return { ok: true };
     }),

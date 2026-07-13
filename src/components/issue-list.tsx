@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import {
   ArrowRightLeft,
   Archive,
+  ArchiveRestore,
   CalendarClock,
   CalendarRange,
   FolderInput,
@@ -53,6 +54,7 @@ export function IssueList({
   emptyHint,
   emptyOverride,
   enableBulk = true,
+  archived = false,
 }: {
   workspaceKey: string;
   projectId?: string;
@@ -89,6 +91,8 @@ export function IssueList({
    */
   emptyOverride?: React.ReactNode;
   enableBulk?: boolean;
+  /** Show only soft-archived issues and replace mutation actions with restore. */
+  archived?: boolean;
 }) {
   const { data: statuses } = trpc.status.list.useQuery();
   // The global /issues list hides DONE/CANCELED rows by default
@@ -101,7 +105,9 @@ export function IssueList({
   // saved view that pins `includeDone` stays authoritative unless the
   // active filter explicitly asks for a completed status.
   const doneIds = useMemo(() => doneStatusIds(statuses ?? []), [statuses]);
-  const effectiveIncludeDone = resolveIncludeDone(extraFilters, includeDone, doneIds);
+  const effectiveIncludeDone = archived
+    ? true
+    : resolveIncludeDone(extraFilters, includeDone, doneIds);
 
   const { data, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } =
     trpc.issue.list.useInfiniteQuery(
@@ -115,6 +121,7 @@ export function IssueList({
         dueOn,
         ...(extraFilters ?? {}),
         includeDone: effectiveIncludeDone,
+        archived,
         sort,
       },
       { getNextPageParam: (last) => last.nextCursor },
@@ -376,9 +383,7 @@ export function IssueList({
     if (activeIndex < 0) return;
     const id = filtered[activeIndex]?.id;
     if (!id) return;
-    document
-      .querySelector(`[data-row-id="${id}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    document.querySelector(`[data-row-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
   }, [activeIndex, filtered]);
 
   useHotkey("j", () => moveActive(1), [moveActive]);
@@ -390,9 +395,9 @@ export function IssueList({
     () => {
       if (activeIndex < 0) return;
       const issue = filtered[activeIndex];
-      if (issue) router.push(`${base}/issues/${issue.id}`);
+      if (issue) router.push(`${base}/issues/${issue.id}${archived ? "?archived=1" : ""}`);
     },
-    [activeIndex, filtered, router, base],
+    [activeIndex, filtered, router, base, archived],
   );
 
   // `x` toggles the active row, falling back to the mouse-hovered row.
@@ -412,9 +417,7 @@ export function IssueList({
       if (e.key !== "Escape") return;
       const target = e.target as HTMLElement | null;
       const isEditable =
-        target?.tagName === "INPUT" ||
-        target?.tagName === "TEXTAREA" ||
-        target?.isContentEditable;
+        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
       if (isEditable) return;
       if (enableBulk && selected.size > 0) {
         e.preventDefault();
@@ -443,12 +446,19 @@ export function IssueList({
   );
   const { data: cyclesData } = trpc.cycle.list.useQuery({}, { enabled: cyclePickerOpen });
 
+  // Bulk edits can move rows into or out of the active filtered view. Keep
+  // the separate header count query in lockstep with the paginated rows.
+  const invalidateVisibleIssues = () => {
+    void utils.issue.list.invalidate();
+    void utils.issue.count.invalidate();
+  };
+
   // ---- Bulk mutations (Phase 0 procs) ----------------------------------
   const bulkTransition = trpc.issue.bulkTransition.useMutation({
     onSuccess: (res) => {
       toast.success(`Status changed on ${res.updated} issue(s).`);
       clearSelection();
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -456,7 +466,7 @@ export function IssueList({
   const bulkAddLabel = trpc.issue.bulkAddLabel.useMutation({
     onSuccess: (res) => {
       toast.success(`Added label to ${res.updated} issue(s).`);
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -464,7 +474,7 @@ export function IssueList({
   const bulkRemoveLabel = trpc.issue.bulkRemoveLabel.useMutation({
     onSuccess: (res) => {
       toast.success(`Removed label from ${res.updated} issue(s).`);
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -473,7 +483,7 @@ export function IssueList({
     onSuccess: (res) => {
       toast.success(`Assigned ${res.updated} issue(s).`);
       clearSelection();
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -482,7 +492,7 @@ export function IssueList({
     onSuccess: (res) => {
       toast.success(`Agent updated on ${res.updated} issue(s).`);
       clearSelection();
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -491,7 +501,7 @@ export function IssueList({
     onSuccess: ({ updated }) => {
       toast.success(`Snoozed ${updated} issue${updated === 1 ? "" : "s"}.`);
       clearSelection();
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -502,6 +512,17 @@ export function IssueList({
       clearSelection();
       setBulkArchiveOpen(false);
       utils.issue.list.invalidate();
+      utils.issue.count.invalidate();
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const bulkRestoreM = trpc.issue.bulkRestore.useMutation({
+    onSuccess: ({ updated }) => {
+      toast.success(`Restored ${updated} issue${updated === 1 ? "" : "s"}.`);
+      clearSelection();
+      utils.issue.list.invalidate();
+      utils.issue.count.invalidate();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -511,7 +532,7 @@ export function IssueList({
       toast.success(`Moved ${updated} issue${updated === 1 ? "" : "s"}.`);
       clearSelection();
       setProjectPickerOpen(false);
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -521,7 +542,7 @@ export function IssueList({
       toast.success(`Moved ${updated} issue${updated === 1 ? "" : "s"}.`);
       clearSelection();
       setCyclePickerOpen(false);
-      utils.issue.list.invalidate();
+      invalidateVisibleIssues();
     },
     onError: (e) => toast.error(e.message),
   });
@@ -534,6 +555,7 @@ export function IssueList({
     bulkAssignAgent.isPending ||
     snoozeManyM.isPending ||
     bulkArchiveM.isPending ||
+    bulkRestoreM.isPending ||
     bulkSetProjectM.isPending ||
     bulkSetCycleM.isPending;
 
@@ -551,71 +573,87 @@ export function IssueList({
     return counts;
   }, [filtered, selected]);
 
-  const bulkActions: BulkBarAction[] = [
-    {
-      id: "status",
-      label: "Status…",
-      icon: <ArrowRightLeft className="h-3 w-3" />,
-      title: "Move to status",
-      disabled: bulkPending,
-      onClick: () => setStatusPickerOpen(true),
-    },
-    {
-      id: "assign",
-      label: "Assign…",
-      icon: <UserCircle2 className="h-3 w-3" />,
-      title: "Assign selected",
-      disabled: bulkPending,
-      onClick: () => setAssigneePickerOpen(true),
-    },
-    {
-      id: "project",
-      label: "Project…",
-      icon: <FolderInput className="h-3 w-3" />,
-      title: "Move to project",
-      disabled: bulkPending,
-      onClick: () => setProjectPickerOpen(true),
-    },
-    {
-      id: "sprint",
-      label: "Sprint…",
-      icon: <CalendarRange className="h-3 w-3" />,
-      title: "Move to sprint",
-      disabled: bulkPending,
-      onClick: () => setCyclePickerOpen(true),
-    },
-    {
-      id: "snooze",
-      label: null,
-      render: (cls) => (
-        <SnoozeMenu
-          onSelect={(until) => snoozeManyM.mutate({ ids: selectedArray, until })}
-          trigger={
-            <button type="button" disabled={bulkPending} title="Snooze selected" className={cls}>
-              <CalendarClock className="h-3 w-3" />
-              Snooze for…
-            </button>
-          }
-        />
-      ),
-    },
-    {
-      id: "label",
-      label: "Label…",
-      icon: <Tag className="h-3 w-3" />,
-      title: "Add or remove labels",
-      disabled: bulkPending,
-      onClick: () => setLabelPickerOpen(true),
-    },
-    {
-      id: "archive",
-      label: "Archive",
-      icon: <Archive className="h-3 w-3" />,
-      title: "Archive (soft delete) selected",
-      disabled: bulkPending,
-      onClick: () => setBulkArchiveOpen(true),
-    },
-  ];
+  const bulkActions: BulkBarAction[] = archived
+    ? [
+        {
+          id: "restore",
+          label: "Restore",
+          icon: <ArchiveRestore className="h-3 w-3" />,
+          title: "Restore selected issues",
+          disabled: bulkPending,
+          onClick: () => bulkRestoreM.mutate({ ids: selectedArray }),
+        },
+      ]
+    : [
+        {
+          id: "status",
+          label: "Status…",
+          icon: <ArrowRightLeft className="h-3 w-3" />,
+          title: "Move to status",
+          disabled: bulkPending,
+          onClick: () => setStatusPickerOpen(true),
+        },
+        {
+          id: "assign",
+          label: "Assign…",
+          icon: <UserCircle2 className="h-3 w-3" />,
+          title: "Assign selected",
+          disabled: bulkPending,
+          onClick: () => setAssigneePickerOpen(true),
+        },
+        {
+          id: "project",
+          label: "Project…",
+          icon: <FolderInput className="h-3 w-3" />,
+          title: "Move to project",
+          disabled: bulkPending,
+          onClick: () => setProjectPickerOpen(true),
+        },
+        {
+          id: "sprint",
+          label: "Sprint…",
+          icon: <CalendarRange className="h-3 w-3" />,
+          title: "Move to sprint",
+          disabled: bulkPending,
+          onClick: () => setCyclePickerOpen(true),
+        },
+        {
+          id: "snooze",
+          label: null,
+          render: (cls) => (
+            <SnoozeMenu
+              onSelect={(until) => snoozeManyM.mutate({ ids: selectedArray, until })}
+              trigger={
+                <button
+                  type="button"
+                  disabled={bulkPending}
+                  title="Snooze selected"
+                  className={cls}
+                >
+                  <CalendarClock className="h-3 w-3" />
+                  Snooze for…
+                </button>
+              }
+            />
+          ),
+        },
+        {
+          id: "label",
+          label: "Label…",
+          icon: <Tag className="h-3 w-3" />,
+          title: "Add or remove labels",
+          disabled: bulkPending,
+          onClick: () => setLabelPickerOpen(true),
+        },
+        {
+          id: "archive",
+          label: "Archive",
+          icon: <Archive className="h-3 w-3" />,
+          title: "Archive selected issues",
+          disabled: bulkPending,
+          onClick: () => setBulkArchiveOpen(true),
+        },
+      ];
 
   if (isLoading) {
     return (
@@ -634,13 +672,15 @@ export function IssueList({
         <EmptyState
           variant="section"
           icon={<Inbox />}
-          title="No active issues."
+          title={archived ? "No archived issues." : "No active issues."}
           description={
-            emptyHint ?? (
-              <span>
-                Press <Kbd>⇧C</Kbd> to create one.
-              </span>
-            )
+            archived
+              ? "Archived issues remain recoverable here."
+              : (emptyHint ?? (
+                  <span>
+                    Press <Kbd>⇧C</Kbd> to create one.
+                  </span>
+                ))
           }
         />
       </div>
@@ -664,11 +704,11 @@ export function IssueList({
               onChange={toggleAll}
               className="h-3.5 w-3.5 rounded border-border"
             />
-            <span className="text-muted-foreground">Select all</span>
+            <span className="text-muted-foreground">Select loaded</span>
           </label>
           <span className="text-meta hidden text-muted-foreground/70 sm:inline">
-            <Kbd>j</Kbd>/<Kbd>k</Kbd> move · <Kbd>↵</Kbd> open · <Kbd>x</Kbd> select ·
-            Shift+Click for range
+            <Kbd>j</Kbd>/<Kbd>k</Kbd> move · <Kbd>↵</Kbd> open · <Kbd>x</Kbd> select · Shift+Click
+            for range
           </span>
         </div>
       )}
@@ -686,11 +726,8 @@ export function IssueList({
                 {group.issues.length}
               </span>
               {/* Per-group quick-add (status + project groupings only).
-                  Fires the shared new-issue flow; the `forge:quick-create`
-                  event detail only supports a `projectId` prefill (the
-                  group's project when grouping by project, else the list's
-                  own scope), NOT a `statusId`, so the new issue lands in the
-                  workspace default status. */}
+                  The shared capture flow preserves the originating project
+                  and status when either grouping supplies one. */}
               {(groupBy === "status" || groupBy === "project") && (
                 <button
                   type="button"
@@ -700,7 +737,10 @@ export function IssueList({
                     const pid = group.projectId ?? projectId;
                     window.dispatchEvent(
                       new CustomEvent("forge:quick-create", {
-                        detail: pid ? { projectId: pid } : {},
+                        detail: {
+                          ...(pid ? { projectId: pid } : {}),
+                          ...(group.status ? { statusId: group.status.id } : {}),
+                        },
                       }),
                     );
                   }}
@@ -770,7 +810,7 @@ export function IssueList({
                     />
                   )}
                   <Link
-                    href={`${base}/issues/${issue.id}`}
+                    href={`${base}/issues/${issue.id}${archived ? "?archived=1" : ""}`}
                     className={cn("min-w-0 flex-1", compact ? "py-0" : "sm:h-10")}
                   >
                     <div className="min-w-0 space-y-1.5 sm:hidden">
@@ -809,13 +849,19 @@ export function IssueList({
                           </Badge>
                         )}
                       </div>
-                      <IssueHoverPreview
-                        issueKey={formatIssueId(workspaceKey, issue.number)}
-                        workspaceSlug={ws?.slug}
-                        className={cn("block min-w-0 break-words leading-snug", titleCls)}
-                      >
-                        {issue.title}
-                      </IssueHoverPreview>
+                      {archived ? (
+                        <span className={cn("block min-w-0 break-words leading-snug", titleCls)}>
+                          {issue.title}
+                        </span>
+                      ) : (
+                        <IssueHoverPreview
+                          issueKey={formatIssueId(workspaceKey, issue.number)}
+                          workspaceSlug={ws?.slug}
+                          className={cn("block min-w-0 break-words leading-snug", titleCls)}
+                        >
+                          {issue.title}
+                        </IssueHoverPreview>
+                      )}
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                         <span className="flex shrink-0 items-center gap-1.5">
                           <StatusDot status={issue.status} />
@@ -861,7 +907,9 @@ export function IssueList({
                           </span>
                         )}
                         <span className="text-meta text-muted-foreground">
-                          {relativeTime(issue.createdAt)}
+                          {archived && issue.deletedAt
+                            ? `archived ${relativeTime(issue.deletedAt)}`
+                            : relativeTime(issue.createdAt)}
                         </span>
                       </div>
                       {issue.labels.length > 0 && (
@@ -895,13 +943,17 @@ export function IssueList({
                         <StatusDot status={issue.status} />
                         <span className="text-meta text-muted-foreground">{issue.status.name}</span>
                       </span>
-                      <IssueHoverPreview
-                        issueKey={formatIssueId(workspaceKey, issue.number)}
-                        workspaceSlug={ws?.slug}
-                        className={cn("block min-w-0", titleCls)}
-                      >
-                        {issue.title}
-                      </IssueHoverPreview>
+                      {archived ? (
+                        <span className={cn("block min-w-0", titleCls)}>{issue.title}</span>
+                      ) : (
+                        <IssueHoverPreview
+                          issueKey={formatIssueId(workspaceKey, issue.number)}
+                          workspaceSlug={ws?.slug}
+                          className={cn("block min-w-0", titleCls)}
+                        >
+                          {issue.title}
+                        </IssueHoverPreview>
+                      )}
                       {/* Up to 2 label chips — hidden on narrow viewports so the
                     title + key never get crowded out. */}
                       {issue.labels.length > 0 && (
@@ -936,7 +988,9 @@ export function IssueList({
                           </span>
                         )}
                         <span className="text-meta text-muted-foreground">
-                          {relativeTime(issue.createdAt)}
+                          {archived && issue.deletedAt
+                            ? `archived ${relativeTime(issue.deletedAt)}`
+                            : relativeTime(issue.createdAt)}
                         </span>
                         {issue.assignedAgent && (
                           <AgentHoverPreview agentId={issue.assignedAgent.id}>
@@ -990,11 +1044,9 @@ export function IssueList({
       <Confirm
         open={bulkArchiveOpen}
         onOpenChange={setBulkArchiveOpen}
-        variant="destructive"
         title={`Archive ${selectedArray.length} issue${selectedArray.length === 1 ? "" : "s"}?`}
-        description="Archived issues are soft-deleted — hidden from active lists but recoverable by an admin via the audit trail. Type the count to confirm."
+        description="Archived issues leave active views and stop active agent work. You can restore them from the issue archive."
         primaryLabel="Archive"
-        typeToConfirm={String(selectedArray.length)}
         loading={bulkArchiveM.isPending}
         onConfirm={() => bulkArchiveM.mutate({ ids: selectedArray })}
       />

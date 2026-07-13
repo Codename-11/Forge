@@ -92,7 +92,7 @@ Both compose with **scope pruning**: whenever a key is presented, `tools/list`
 drops any tool the key couldn't call anyway (same check as `tools/call`). A
 FULL-scope key sees everything within the selected profile; a narrowly-scoped
 key sees less. `tools/call` is never restricted by these selectors — they only
-shape what's *advertised*, so full capability stays reachable for any tool the
+shape what's _advertised_, so full capability stays reachable for any tool the
 caller names and is authorized for.
 
 ```
@@ -125,22 +125,22 @@ long tail without advertising every direct tool:
 
 ### `issues`
 
-| Tool         | Summary                                                                      |
-|--------------|------------------------------------------------------------------------------|
-| `list`       | Paged list with filters: `status`, `priority`, `projectId`, `assignedAgentId`, `labelIds[]`, `queued`. |
-| `get`        | Fetch by `id`. Optional `include` hydrates description / comments / attachments / relations / currentRun / labels in one round-trip. |
-| `create`     | `{ title, description?, projectId?, priority?, statusId?, labelIds? }` → full issue. |
-| `queue`      | Set `queued: true`. Dispatcher only sees queued + unassigned issues.         |
-| `transition` | Change status by `statusId`.                                                 |
-| `claim`      | Set human `claimedById = caller`. Sets soft expiry `claimExpiresAt`.         |
-| `release`    | Clear human claim.                                                           |
-| `assign`     | Assign agent. Identify by `agentId` or `profileKey`.                         |
-| `reassign`   | Atomic handoff — see below.                                                  |
-| `assigned`   | List issues assigned to an agent.                                            |
-| `watch`      | Add the caller as a watcher of `issueId`. Idempotent. Identity is inferred from the API key (`linkedAgentId` → agent-watch, otherwise user-watch). |
-| `unwatch`    | Remove the caller's watch on `issueId`.                                      |
-| `listWatchers` | List watchers of an issue with user/agent identity fields.                |
-| `listWatching` | List issues the caller is currently watching.                             |
+| Tool           | Summary                                                                                                                                            |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`         | Paged list with filters: `status`, `priority`, `projectId`, `assignedAgentId`, `labelIds[]`, `queued`.                                             |
+| `get`          | Fetch by `id`. Optional `include` hydrates description / comments / attachments / relations / currentRun / labels in one round-trip.               |
+| `create`       | `{ title, description?, projectId?, priority?, statusId?, labelIds? }` → full issue.                                                               |
+| `queue`        | Set `queued: true`. Dispatcher only sees queued + unassigned issues.                                                                               |
+| `transition`   | Change status by `statusId`.                                                                                                                       |
+| `claim`        | Set human `claimedById = caller`. Sets soft expiry `claimExpiresAt`.                                                                               |
+| `release`      | Clear human claim.                                                                                                                                 |
+| `assign`       | Assign agent. Identify by `agentId` or `profileKey`.                                                                                               |
+| `reassign`     | Atomic handoff — see below.                                                                                                                        |
+| `assigned`     | List issues assigned to an agent.                                                                                                                  |
+| `watch`        | Add the caller as a watcher of `issueId`. Idempotent. Identity is inferred from the API key (`linkedAgentId` → agent-watch, otherwise user-watch). |
+| `unwatch`      | Remove the caller's watch on `issueId`.                                                                                                            |
+| `listWatchers` | List watchers of an issue with user/agent identity fields.                                                                                         |
+| `listWatching` | List issues the caller is currently watching.                                                                                                      |
 
 Agent-linked keys are mode-gated for issue state. When the calling agent has an
 active/waiting `AgentRun` on the issue in **RESEARCH**, **REVIEW**, or
@@ -171,27 +171,33 @@ to hydrate optional sections in one round-trip:
   "id": "cle9k...",
   "include": {
     "description": true,
-    "comments": true,            // or { "limit": 50 } — max 100, default 20
+    "comments": true, // or { "limit": 50 } — max 100, default 20
     "attachments": true,
     "relations": true,
-    "currentRun": true,          // most recent non-terminal AgentRun
+    "currentRun": true, // most recent non-terminal AgentRun
     "labels": true
   }
 }
 ```
 
-`currentRun` is the most recent AgentRun whose status is not `COMPLETED`
-or `ABANDONED` (so `ACTIVE` and `STALLED` qualify).
+`currentRun` is the most recent `ACTIVE` or `WAITING` AgentRun. Agent-linked
+keys only see their own run; terminal `STALLED`, `ABANDONED`, and `COMPLETED`
+history never masquerades as current work.
+
+Archived issues are excluded from `issues.list`, `issues.get`, agent inboxes,
+and `agent.context.bundle`. Archiving is an operator lifecycle action in the
+web app; restoring visibility does not restart abandoned runs or canceled plan
+steps.
 
 ### `comments`
 
-| Tool             | Summary                                                                |
-|------------------|------------------------------------------------------------------------|
-| `create`         | Post a comment on an issue. Optional `confidence: "LOW" \| "MEDIUM" \| "HIGH"` annotates how much to scrutinize the claim (only rendered for agent-authored rows). Optional `actionRequest` bundles a recommendation card in the same call; pass `actionRequest.options[]` to make that card a multi-vote poll. |
-| `update`         | Edit an issue comment body. Input `{ id, body }`; authors can edit their own comments, while workspace OWNER/ADMIN or ADMIN-scoped MCP keys can override. Preserves prior bodies in `revisions`, sets `editedAt`, and emits normal comment audit/activity. |
-| `delete`         | Soft-delete/archive an issue comment. Input `{ id }`; same author/admin authorization as `update`. Sets `deletedAt`, keeps the row for audit/history, and removes it from agent-facing comment lists/context bundles. |
-| `upsertStatus`   | Idempotent rolling STATUS comment for the calling agent's run.         |
-| `list`           | Paginated history. `{ issueId, before?, limit? = 50 (max 200) }` — newest first, hides soft-deleted, includes `author` + `authoringAgent`. Scope: `READ_ISSUES`. |
+| Tool           | Summary                                                                                                                                                                                                                                                                                                         |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `create`       | Post a comment on an issue. Optional `confidence: "LOW" \| "MEDIUM" \| "HIGH"` annotates how much to scrutinize the claim (only rendered for agent-authored rows). Optional `actionRequest` bundles a recommendation card in the same call; pass `actionRequest.options[]` to make that card a multi-vote poll. |
+| `update`       | Edit an issue comment body. Input `{ id, body }`; authors can edit their own comments, while workspace OWNER/ADMIN or ADMIN-scoped MCP keys can override. Preserves prior bodies in `revisions`, sets `editedAt`, and emits normal comment audit/activity.                                                      |
+| `delete`       | Soft-delete/archive an issue comment. Input `{ id }`; same author/admin authorization as `update`. Sets `deletedAt`, keeps the row for audit/history, and removes it from agent-facing comment lists/context bundles.                                                                                           |
+| `upsertStatus` | Idempotent rolling STATUS comment for the calling agent's run.                                                                                                                                                                                                                                                  |
+| `list`         | Paginated history. `{ issueId, before?, limit? = 50 (max 200) }` — newest first, hides soft-deleted, includes `author` + `authoringAgent`. Scope: `READ_ISSUES`.                                                                                                                                                |
 
 **`confidence`** is persisted regardless of caller, but the UI only
 renders the chip for agent-authored comments. Use it from agents to
@@ -213,48 +219,48 @@ capped at 20 entries — oldest dropped first). Read history via
 
 ### `projects`
 
-| Tool      | Summary                                |
-|-----------|----------------------------------------|
-| `list`    | List workspace projects.               |
-| `create`  | Create a project.                      |
-| `update`  | Update name/description/initiativeId.  |
-| `archive` | Archive (soft-delete).                 |
+| Tool      | Summary                               |
+| --------- | ------------------------------------- |
+| `list`    | List workspace projects.              |
+| `create`  | Create a project.                     |
+| `update`  | Update name/description/initiativeId. |
+| `archive` | Archive (soft-delete).                |
 
 ### `cycles`
 
 > The product label is **"Sprints"**, but the namespace, route, and data
 > model stay `cycle*` — only display strings were renamed.
 
-| Tool          | Summary                                                |
-|---------------|--------------------------------------------------------|
-| `list`        | List cycles for the workspace.                         |
-| `get`         | Fetch by id.                                           |
-| `current`     | Return the active cycle (or `null`).                   |
-| `create`      | Create a cycle.                                        |
-| `update`      | Update name/dates.                                     |
-| `plan`        | Bulk add/remove issues for upcoming cycle.             |
-| `rollover`    | Move incomplete issues from current to next cycle.     |
-| `addIssue`    | Add a single issue to a cycle.                         |
-| `removeIssue` | Remove a single issue from a cycle.                    |
+| Tool          | Summary                                            |
+| ------------- | -------------------------------------------------- |
+| `list`        | List cycles for the workspace.                     |
+| `get`         | Fetch by id.                                       |
+| `current`     | Return the active cycle (or `null`).               |
+| `create`      | Create a cycle.                                    |
+| `update`      | Update name/dates.                                 |
+| `plan`        | Bulk add/remove issues for upcoming cycle.         |
+| `rollover`    | Move incomplete issues from current to next cycle. |
+| `addIssue`    | Add a single issue to a cycle.                     |
+| `removeIssue` | Remove a single issue from a cycle.                |
 
 ### `initiatives`
 
-| Tool            | Summary                                          |
-|-----------------|--------------------------------------------------|
-| `list`          | List initiatives.                                |
-| `get`           | Fetch by id.                                     |
-| `create`        | Create initiative.                               |
-| `update`        | Update name/description.                         |
-| `linkProject`   | Attach a project to this initiative.             |
-| `unlinkProject` | Detach a project (sets `initiativeId = null`).   |
+| Tool            | Summary                                        |
+| --------------- | ---------------------------------------------- |
+| `list`          | List initiatives.                              |
+| `get`           | Fetch by id.                                   |
+| `create`        | Create initiative.                             |
+| `update`        | Update name/description.                       |
+| `linkProject`   | Attach a project to this initiative.           |
+| `unlinkProject` | Detach a project (sets `initiativeId = null`). |
 
 ### `relations`
 
-| Tool           | Summary                                                          |
-|----------------|------------------------------------------------------------------|
-| `add`          | `{ fromIssueId, toIssueId, kind }` — directed link.              |
-| `remove`       | Remove a relation by id.                                         |
-| `listForIssue` | List both inbound and outbound relations for an issue.           |
+| Tool           | Summary                                                |
+| -------------- | ------------------------------------------------------ |
+| `add`          | `{ fromIssueId, toIssueId, kind }` — directed link.    |
+| `remove`       | Remove a relation by id.                               |
+| `listForIssue` | List both inbound and outbound relations for an issue. |
 
 `kind` is one of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`.
 
@@ -265,14 +271,14 @@ workspace's active `ConnectionMapping(kind="repo")` and only mutate Forge
 state. They do not comment on GitHub, close GitHub issues, edit PRs, or apply
 GitHub labels.
 
-| Tool | Summary |
-|---|---|
-| `parseUrl` | Parse a GitHub issue/PR URL into `{ owner, repo, repoFullName, type, number, url }`. Scope: `READ_ISSUES`. |
-| `listLinked` | List GitHub resources linked to a Forge issue. Scope: `READ_ISSUES`. |
-| `link` | Link a GitHub issue or PR URL to an existing Forge issue with `kind: SOURCE \| IMPLEMENTS \| REVIEWS \| RELATES_TO`. Scope: `WRITE_ISSUES`. |
-| `importIssue` | Create or return the Forge issue sourced from a mapped GitHub issue number. Scope: `WRITE_ISSUES`. |
-| `sync` | Refresh a linked GitHub resource snapshot and apply configured Forge status/title rules. Scope: `WRITE_ISSUES`. |
-| `search` | Search issues/PRs within a mapped repository. Scope: `READ_ISSUES`. |
+| Tool          | Summary                                                                                                                                     |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parseUrl`    | Parse a GitHub issue/PR URL into `{ owner, repo, repoFullName, type, number, url }`. Scope: `READ_ISSUES`.                                  |
+| `listLinked`  | List GitHub resources linked to a Forge issue. Scope: `READ_ISSUES`.                                                                        |
+| `link`        | Link a GitHub issue or PR URL to an existing Forge issue with `kind: SOURCE \| IMPLEMENTS \| REVIEWS \| RELATES_TO`. Scope: `WRITE_ISSUES`. |
+| `importIssue` | Create or return the Forge issue sourced from a mapped GitHub issue number. Scope: `WRITE_ISSUES`.                                          |
+| `sync`        | Refresh a linked GitHub resource snapshot and apply configured Forge status/title rules. Scope: `WRITE_ISSUES`.                             |
+| `search`      | Search issues/PRs within a mapped repository. Scope: `READ_ISSUES`.                                                                         |
 
 `importIssue` input accepts `{ mappingId?, repoFullName?, number, projectId?,
 labelIds?, queue? }`; pass either `mappingId` or a repo full name that has an
@@ -284,26 +290,26 @@ already imported.
 
 > Gated on `Workspace.timeTrackingEnabled`. All tools `403` when disabled.
 
-| Tool      | Summary                                                  |
-|-----------|----------------------------------------------------------|
-| `start`   | Start a running timer on an issue.                       |
-| `stop`    | Stop the caller's running timer.                         |
-| `log`     | Manually log a `{ issueId, durationMin }` entry.         |
-| `list`    | List entries (filter by user/issue/date range).          |
-| `summary` | Aggregated totals by user/issue/day.                     |
-| `running` | Return the caller's running timer (or `null`).           |
+| Tool      | Summary                                          |
+| --------- | ------------------------------------------------ |
+| `start`   | Start a running timer on an issue.               |
+| `stop`    | Stop the caller's running timer.                 |
+| `log`     | Manually log a `{ issueId, durationMin }` entry. |
+| `list`    | List entries (filter by user/issue/date range).  |
+| `summary` | Aggregated totals by user/issue/day.             |
+| `running` | Return the caller's running timer (or `null`).   |
 
 ### `attachments`
 
-| Tool             | Summary                                                              |
-|------------------|----------------------------------------------------------------------|
-| `initUpload`     | Get a presigned MinIO/S3 PUT URL. Returns `{ uploadUrl, key }`.      |
-| `finalize`       | Register the uploaded blob as an Attachment row.                     |
-| `attachLink`     | Record an external URL (LINK kind). No bytes uploaded.               |
-| `list`           | List attachments for a `(targetType, targetId)` pair.                |
-| `getDownloadUrl` | Get a presigned GET URL for browser/agent download.                  |
-| `getInline`      | Server-side bytes fetch — returns `{ id, mimeType, sizeBytes, filename, base64 }`. Default cap 1 MB; allowlist is image/*+pdf+text. |
-| `delete`         | Delete attachment + remove blob.                                     |
+| Tool             | Summary                                                                                                                              |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `initUpload`     | Get a presigned MinIO/S3 PUT URL. Returns `{ uploadUrl, key }`.                                                                      |
+| `finalize`       | Register the uploaded blob as an Attachment row.                                                                                     |
+| `attachLink`     | Record an external URL (LINK kind). No bytes uploaded.                                                                               |
+| `list`           | List attachments for a `(targetType, targetId)` pair.                                                                                |
+| `getDownloadUrl` | Get a presigned GET URL for browser/agent download.                                                                                  |
+| `getInline`      | Server-side bytes fetch — returns `{ id, mimeType, sizeBytes, filename, base64 }`. Default cap 1 MB; allowlist is image/\*+pdf+text. |
+| `delete`         | Delete attachment + remove blob.                                                                                                     |
 
 **`attachLink`** input: `{ targetType, targetId, externalUrl, linkTitle? }`.
 `targetType` is one of `"issue" | "initiative" | "cycle" | "comment"`.
@@ -324,7 +330,7 @@ suggestion to fall back to `getDownloadUrl`. `maxBytes` defaults to
 ### `pins`
 
 | Tool   | Summary                                                       |
-|--------|---------------------------------------------------------------|
+| ------ | ------------------------------------------------------------- |
 | `list` | List the caller's pinned issues.                              |
 | `set`  | Set the full pinned set (idempotent — pass the desired list). |
 
@@ -338,19 +344,19 @@ is tRPC-only via `pin.listAll` / `pin.add` / `pin.remove` /
 ### `notes`
 
 Per-(workspace, user) markdown scratchpad. Each tool operates **only**
-on the calling actor's own notes — agents leave notes for *themselves*,
+on the calling actor's own notes — agents leave notes for _themselves_,
 not for the operator. To leave a note for someone else, use
 `comments.create` on the relevant issue (their inbox picks up the
 @-mention via the existing fan-out).
 
-| Tool            | Scope          | Summary                                                                |
-|-----------------|----------------|------------------------------------------------------------------------|
-| `notes.create`  | `WRITE_ISSUES` | Create a personal note. Inputs: `{ title?, body, pinned?, kind?, journalDate? }`. |
-| `notes.list`    | `READ_ISSUES`  | List the caller's own notes (NOTE-kind by default). Inputs: `{ archived?, kind?, limit? }`. |
-| `notes.update`  | `WRITE_ISSUES` | Patch one of the caller's notes. Inputs: `{ id, title?, body?, pinned? }`. |
-| `notes.archive` | `WRITE_ISSUES` | Soft-archive one of the caller's notes. Inputs: `{ id }`.               |
-| `notes.todayJournal` | `WRITE_ISSUES` | Get-or-create today's JOURNAL entry for the caller (timezone-aware). Idempotent. |
-| `notes.listJournal` | `READ_ISSUES` | List recent journal entries. Inputs: `{ from?, to?, limit? = 30 }`.    |
+| Tool                 | Scope          | Summary                                                                                     |
+| -------------------- | -------------- | ------------------------------------------------------------------------------------------- |
+| `notes.create`       | `WRITE_ISSUES` | Create a personal note. Inputs: `{ title?, body, pinned?, kind?, journalDate? }`.           |
+| `notes.list`         | `READ_ISSUES`  | List the caller's own notes (NOTE-kind by default). Inputs: `{ archived?, kind?, limit? }`. |
+| `notes.update`       | `WRITE_ISSUES` | Patch one of the caller's notes. Inputs: `{ id, title?, body?, pinned? }`.                  |
+| `notes.archive`      | `WRITE_ISSUES` | Soft-archive one of the caller's notes. Inputs: `{ id }`.                                   |
+| `notes.todayJournal` | `WRITE_ISSUES` | Get-or-create today's JOURNAL entry for the caller (timezone-aware). Idempotent.            |
+| `notes.listJournal`  | `READ_ISSUES`  | List recent journal entries. Inputs: `{ from?, to?, limit? = 30 }`.                         |
 
 Returns the resulting `Note` row(s). Cross-actor mutation is blocked
 at the resolver — passing an `id` owned by another user yields a
@@ -362,8 +368,8 @@ tRPC proc covers that case.
 
 ### `analytics`
 
-| Tool      | Summary                                                                |
-|-----------|------------------------------------------------------------------------|
+| Tool      | Summary                                                                 |
+| --------- | ----------------------------------------------------------------------- |
 | `summary` | Workspace summary: counts by status, throughput, breaches. Coarse only. |
 
 > Dispatch analytics (`analytics.dispatch.*`) are tRPC-only — see
@@ -371,8 +377,8 @@ tRPC proc covers that case.
 
 ### `standup`
 
-| Tool    | Summary                                                              |
-|---------|----------------------------------------------------------------------|
+| Tool    | Summary                                                                                                                             |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------- |
 | `draft` | Compose a "closed / opened / continuing / blocked" markdown draft from the caller's last 24h (configurable up to 168h) of activity. |
 
 `standup.draft` accepts `{ sinceHours?: number }` (default 24, max 168)
@@ -388,10 +394,10 @@ matching `issues.create`'s fallback). Scopes: `READ_ISSUES`,
 
 ### `agents`
 
-| Tool        | Summary                                                              |
-|-------------|----------------------------------------------------------------------|
-| `me`        | Returns the calling agent's row. Inferred from `ApiKey.linkedAgentId`. |
-| `heartbeat` | Update presence: `{ status?: ONLINE | BUSY | OFFLINE }`.             |
+| Tool        | Summary                                                                                                                                                                                                 |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ----------- |
+| `me`        | Returns the calling agent's row. Inferred from `ApiKey.linkedAgentId`.                                                                                                                                  |
+| `heartbeat` | Update presence: `{ status?: ONLINE                                                                                                                                                                     | BUSY | OFFLINE }`. |
 | `list`      | Workspace agents. `{ includeArchived? = false, runtimeId? }` → `{ id, profileKey, name, status, runtimeMode, provider, capabilities, archivedAt, runtime: { id, name, kind } }[]`. Scope: `READ_USERS`. |
 
 **`me`** rejects keys without `linkedAgentId` set. The intended pattern is
@@ -415,13 +421,13 @@ Forge expects a persistent or single-session runtime.
 
 Scope required: `WRITE_COMMENTS`.
 
-| Tool | Summary |
-|---|---|
-| `appendMessage` | Single-shot agent reply. Persists a `ChatMessage` (role: AGENT). |
-| `startDraft` | Begin a streaming reply. Returns `{ draftId }`. Publishes a `started` event on the `chat-thread-stream` channel. Nothing persisted yet. |
-| `appendDraftChunk` | Publish one token delta. Ephemeral SSE only; no DB write. |
-| `finalizeDraft` | Persist the complete reply, swap the client draft bubble, publish `finalized`. |
-| `getThread` | Read `{ thread, messages[] }` for a thread the calling agent is the addressee of. `{ threadId, before?, limit? = 50 (max 200) }`. Each message includes `id, role, body, contextSnapshot, sourceRunId, createdAt, finalizedDraftId`. |
+| Tool               | Summary                                                                                                                                                                                                                              |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `appendMessage`    | Single-shot agent reply. Persists a `ChatMessage` (role: AGENT).                                                                                                                                                                     |
+| `startDraft`       | Begin a streaming reply. Returns `{ draftId }`. Publishes a `started` event on the `chat-thread-stream` channel. Nothing persisted yet.                                                                                              |
+| `appendDraftChunk` | Publish one token delta. Ephemeral SSE only; no DB write.                                                                                                                                                                            |
+| `finalizeDraft`    | Persist the complete reply, swap the client draft bubble, publish `finalized`.                                                                                                                                                       |
+| `getThread`        | Read `{ thread, messages[] }` for a thread the calling agent is the addressee of. `{ threadId, before?, limit? = 50 (max 200) }`. Each message includes `id, role, body, contextSnapshot, sourceRunId, createdAt, finalizedDraftId`. |
 
 **Single-shot:**
 
@@ -430,7 +436,7 @@ Scope required: `WRITE_COMMENTS`.
 {
   "threadId": "cle9k...",
   "body": "Here's the summary: ...",
-  "sourceRunId": "run_01H..."   // optional — links to an AgentRun
+  "sourceRunId": "run_01H..." // optional — links to an AgentRun
 }
 // → { "messageId": "...", "threadId": "..." }
 ```
@@ -465,13 +471,13 @@ Scope required: `ADMIN`. Powers the `forge` CLI's local daemon registration
 and heartbeat loop. See [/agents/runtimes.html](/agents/runtimes.html) for
 the broader Runtime primitive.
 
-| Tool | Summary |
-|---|---|
-| `register` | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable, info? }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null. |
-| `heartbeat` | Bump `Runtime.heartbeatAt`. `{ runtimeId, info? }`. Optional `info` updates sanitized runtime version/environment metadata. |
-| `list` | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. Secrets are redacted to `hasSecret`. |
-| `configure` | Update adapter config. `{ runtimeId, config, merge? = true }`. Hermes accepts `localWorkspaceTools`, `toolCapabilities`, `workspaceRoot`, and `modeToolPolicyEnforced`; Codex app-server also accepts sandbox/approval config. Scope `ADMIN`. |
-| `archive` | Deregister (archive) a runtime — `{ runtimeId }` sets `archivedAt`, so it drops out of `list` (unless `includeArchived`). The teardown counterpart of `register`; exposed as `forge runtimes archive <id>`. Scope `ADMIN`. |
+| Tool         | Summary                                                                                                                                                                                                                                                                                      |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `register`   | Create (or restore) a Runtime row. `{ name, kind, endpoint?, providersAvailable, info? }`. `ownerId` is set from the calling key's `userId`; AGENT-kind keys leave it null.                                                                                                                  |
+| `heartbeat`  | Bump `Runtime.heartbeatAt`. `{ runtimeId, info? }`. Optional `info` updates sanitized runtime version/environment metadata.                                                                                                                                                                  |
+| `list`       | List workspace runtimes. `{ kind?, includeArchived? = false }` → mirror of `trpc.runtime.list` shape, includes `_count: { agents }` + `owner` summary. Secrets are redacted to `hasSecret`.                                                                                                  |
+| `configure`  | Update adapter config. `{ runtimeId, config, merge? = true }`. Hermes accepts `localWorkspaceTools`, `toolCapabilities`, `workspaceRoot`, and `modeToolPolicyEnforced`; Codex app-server also accepts sandbox/approval config. Scope `ADMIN`.                                                |
+| `archive`    | Deregister (archive) a runtime — `{ runtimeId }` sets `archivedAt`, so it drops out of `list` (unless `includeArchived`). The teardown counterpart of `register`; exposed as `forge runtimes archive <id>`. Scope `ADMIN`.                                                                   |
 | `reportInfo` | Agent-linked runtime metadata report. `{ runtimeId?, info }`; omitted `runtimeId` resolves to the calling agent's attached Runtime. Stores a sanitized whitelist such as `runtimeVersion`, `bridgeVersion`, `codexVersion`, `containerImage`, `hostname`, `os`, `arch`, and `workspaceRoot`. |
 
 **`register`** is intentionally not deduping server-side — the CLI caches
@@ -483,14 +489,14 @@ heartbeat returns a missing-row error.
 `recordUsage` requires `WRITE_ISSUES` and an agent-linked key whose
 `linkedAgentId` matches the run's `agentId`. `list` requires `READ_ISSUES`.
 
-| Tool | Summary |
-|---|---|
-| `open` | Open (or resume) a tracked run on an issue **you** are working — `{ issueId, summary?, mode? }`. Requires an agent-linked key; the run belongs to the key's `linkedAgentId`. Resumes an existing ACTIVE/WAITING run for the `(issue, agent)` pair instead of stacking a duplicate, and stamps a STARTED event so it shows in Mission Control. Lets an agent (e.g. a local CLI session) proactively self-report work rather than only getting a run as a dispatch side-effect. Issue-anchored; drive it afterward with `recordUsage` / `setWaiting` / `complete`. Scope `WRITE_ISSUES`. |
-| `recordUsage` | Update token + cost columns on an `AgentRun`. `{ runId, tokensIn?, tokensOut?, tokensCached?, costUsd? }`. Idempotent — latest call replaces (cumulative as reported by the agent). |
-| `complete` | Close an active/waiting run. `{ runId, summary, producedArtifactIds?, verificationResult?, followUps?, confidence?, verdict? }`. Requires an agent-linked key matching the run. Execute enforces issue artifact/checklist gates; Research requires `confidence`; Review requires `verdict`; Discuss is reply-only. Stores `completionMeta` with the Forge run contract version. |
-| `setWaiting` / `resumeWork` | Mark a run blocked on the operator, or resume it. Requires an agent-linked key matching the run. |
-| `list` | List `AgentRun` rows for "my recent history" introspection. `{ agentId?, issueId?, status?, limit? = 50, before? }` → newest-first by `startedAt`. Each row includes scalars (status, currentStep, startedAt, finishedAt, lastEventAt, tokensIn, tokensOut, tokensCached, costUsd) plus `issue { id, number, title, workspace: { key } }` and `agent { id, profileKey }`. |
-| `kick` | Operator-driven nudge for a stalled run. `{ runId }`. Re-fires the dispatch webhook for the underlying issue without changing assignment or `controlState`. Only kicks an `ACTIVE` run that's been quiet 5+ minutes; younger runs return `{ ok: true, kicked: false }`. Records `AGENT_RUN_KICKED`. Scope: `WRITE_ISSUES`. |
+| Tool                        | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `open`                      | Open (or resume) a tracked run on an issue **you** are working — `{ issueId, summary?, mode? }`. Requires an agent-linked key; the run belongs to the key's `linkedAgentId`. Resumes an existing ACTIVE/WAITING run for the `(issue, agent)` pair instead of stacking a duplicate, and stamps a STARTED event so it shows in Mission Control. Lets an agent (e.g. a local CLI session) proactively self-report work rather than only getting a run as a dispatch side-effect. Issue-anchored; drive it afterward with `recordUsage` / `setWaiting` / `complete`. Scope `WRITE_ISSUES`. |
+| `recordUsage`               | Update token + cost columns on an `AgentRun`. `{ runId, tokensIn?, tokensOut?, tokensCached?, costUsd? }`. Idempotent — latest call replaces (cumulative as reported by the agent).                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `complete`                  | Close an active/waiting run. `{ runId, summary, producedArtifactIds?, verificationResult?, followUps?, confidence?, verdict? }`. Requires an agent-linked key matching the run. Execute enforces issue artifact/checklist gates; Research requires `confidence`; Review requires `verdict`; Discuss is reply-only. Stores `completionMeta` with the Forge run contract version.                                                                                                                                                                                                        |
+| `setWaiting` / `resumeWork` | Mark a run blocked on the operator, or resume it. Requires an agent-linked key matching the run.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `list`                      | List `AgentRun` rows for "my recent history" introspection. `{ agentId?, issueId?, status?, limit? = 50, before? }` → newest-first by `startedAt`. Each row includes scalars (status, currentStep, startedAt, finishedAt, lastEventAt, tokensIn, tokensOut, tokensCached, costUsd) plus `issue { id, number, title, workspace: { key } }` and `agent { id, profileKey }`.                                                                                                                                                                                                              |
+| `kick`                      | Operator-driven nudge for a stalled run. `{ runId }`. Re-fires the dispatch webhook for the underlying issue without changing assignment or `controlState`. Only kicks an `ACTIVE` run that's been quiet 5+ minutes; younger runs return `{ ok: true, kicked: false }`. Records `AGENT_RUN_KICKED`. Scope: `WRITE_ISSUES`.                                                                                                                                                                                                                                                             |
 
 `costUsd` is taken verbatim from the agent for v1; a server-side
 rate table per model is a future enhancement.
@@ -500,25 +506,25 @@ rate table per model is a future enhancement.
 Scope: `READ_ISSUES`. Reads `ActivityEvent` rows for the calling
 workspace.
 
-| Tool | Summary |
-|---|---|
+| Tool     | Summary                                                                                                                                                                                                                                                            |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `recent` | `{ subjectType?, subjectId?, kinds?, limit? = 50 (max 200), before? }` → newest-first by `createdAt`. Includes `actor { id, name, image }`. When `subjectType="issue"` + `subjectId` are set, the calling key's project/label narrowing is enforced on that issue. |
 
 ### `workspace`
 
 Scope: `READ_ISSUES`.
 
-| Tool | Summary |
-|---|---|
+| Tool  | Summary                                                                                                                                                                                                    |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `get` | Returns dispatch-time settings: `{ id, slug, key, name, cycleLengthDays, cycleCooldownDays, timeTrackingEnabled, attachmentQuotaMb, requiredAckSeconds, autoDispatch, autoDispatchMode }`. No member list. |
 
 ### `statuses`
 
 Scope: `READ_ISSUES`.
 
-| Tool | Summary |
-|---|---|
-| `list` | `{ category? }`. Returns `{ id, name, category, color, position, isDefault }[]` ordered by `position`. Optional `category` filter (`BACKLOG | TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). Used by agents to discover the right `statusId` for an `issues.transition` call without inventing ids — e.g., the local `forge` daemon calls `statuses.list({ category: "IN_PROGRESS" })` on `AGENT_ASSIGNED` to flip the issue into work-in-progress before spawning Claude. |
+| Tool   | Summary                                                                                                                                     |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ---- | ----------- | --------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list` | `{ category? }`. Returns `{ id, name, category, color, position, isDefault }[]` ordered by `position`. Optional `category` filter (`BACKLOG | TODO | IN_PROGRESS | IN_REVIEW | DONE | CANCELED`). Used by agents to discover the right `statusId`for an`issues.transition`call without inventing ids — e.g., the local`forge`daemon calls`statuses.list({ category: "IN_PROGRESS" })`on`AGENT_ASSIGNED` to flip the issue into work-in-progress before spawning Claude. |
 
 ### `actionRequests`
 
@@ -530,16 +536,16 @@ Accept / Decline. Created by `comments.create` (inline via the
 
 Scope: `WRITE_ISSUES` for mutations, `READ_ISSUES` for queries.
 
-| Tool | Summary |
-|---|---|
-| `list` | `{ status?, assignedAgentId?, assignedUserId?, issueId?, limit? = 50 }`. Newest first. |
-| `create` | Create a request. See "Polls" below for multi-vote variant. |
-| `transition` | Flip status (RESOLVED / DISMISSED / SNOOZED / REJECTED). |
-| `accept` | Run the bound dispatch (transition / setLabels / etc.) and resolve. Permission-gated to assignee / watcher / OWNER / ADMIN. |
-| `decline` | Reject without dispatching. Same permission gate as Accept. |
-| `vote` | Cast or update the caller's vote on a poll-style request. `{ id, optionKey }`. |
-| `results` | Live vote tallies for a poll. `{ id }` → `{ options[], total, myVote, winningOptionKey, votingClosedAt }`. |
-| `closeVoting` | Close voting on a poll. Only the requester can call this. `{ id }` → `{ id, winningOptionKey }`. |
+| Tool          | Summary                                                                                                                     |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `list`        | `{ status?, assignedAgentId?, assignedUserId?, issueId?, limit? = 50 }`. Newest first.                                      |
+| `create`      | Create a request. See "Polls" below for multi-vote variant.                                                                 |
+| `transition`  | Flip status (RESOLVED / DISMISSED / SNOOZED / REJECTED).                                                                    |
+| `accept`      | Run the bound dispatch (transition / setLabels / etc.) and resolve. Permission-gated to assignee / watcher / OWNER / ADMIN. |
+| `decline`     | Reject without dispatching. Same permission gate as Accept.                                                                 |
+| `vote`        | Cast or update the caller's vote on a poll-style request. `{ id, optionKey }`.                                              |
+| `results`     | Live vote tallies for a poll. `{ id }` → `{ options[], total, myVote, winningOptionKey, votingClosedAt }`.                  |
+| `closeVoting` | Close voting on a poll. Only the requester can call this. `{ id }` → `{ id, winningOptionKey }`.                            |
 
 **`create`** accepts the usual fields (`title, body, severity, kind,
 payload, assignedUserId, assignedAgentId, issueId, dueAt, sourceType,
@@ -552,9 +558,13 @@ sourceId`) plus an optional `options[]` for poll-style requests:
   "kind": "FREE_FORM",
   "issueId": "iss_...",
   "options": [
-    { "key": "retry",    "label": "Add retry-on-failure", "description": "Cheapest, masks the underlying race." },
-    { "key": "isolate",  "label": "Isolate the test in its own worker" },
-    { "key": "rewrite",  "label": "Rewrite against a deterministic fixture" }
+    {
+      "key": "retry",
+      "label": "Add retry-on-failure",
+      "description": "Cheapest, masks the underlying race."
+    },
+    { "key": "isolate", "label": "Isolate the test in its own worker" },
+    { "key": "rewrite", "label": "Rewrite against a deterministic fixture" }
   ]
 }
 ```
@@ -608,12 +618,12 @@ Scope: `READ_ISSUES` for reads, `WRITE_ISSUES` for the loop mutations,
 
 #### Goals
 
-| Tool | Summary |
-|---|---|
-| `goals.list` | `{ status?, includeArchived?, limit? }` → goal rows with plan counts. |
-| `goals.get` | `{ id }` → goal + its plans + an `aggregate` block (`activePlanId`, `totalSteps`, `doneSteps`, `blockedSteps`). |
-| `goals.create` | `{ title, description?, issueId?, crewId?, maxTotalCostUsd?, maxWallTimeMinutes? }` → `{ id }`. Emits `GOAL_CREATED`. |
-| `goals.abandon` | `{ id, reason? }` → terminal `ABANDONED`; cancels any active plan attempt. |
+| Tool            | Summary                                                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `goals.list`    | `{ status?, includeArchived?, limit? }` → goal rows with plan counts.                                                 |
+| `goals.get`     | `{ id }` → goal + its plans + an `aggregate` block (`activePlanId`, `totalSteps`, `doneSteps`, `blockedSteps`).       |
+| `goals.create`  | `{ title, description?, issueId?, crewId?, maxTotalCostUsd?, maxWallTimeMinutes? }` → `{ id }`. Emits `GOAL_CREATED`. |
+| `goals.abandon` | `{ id, reason? }` → terminal `ABANDONED`; cancels any active plan attempt.                                            |
 
 ```json
 // goals.create
@@ -623,14 +633,14 @@ Scope: `READ_ISSUES` for reads, `WRITE_ISSUES` for the loop mutations,
 
 #### Plans (loop)
 
-| Tool | Summary |
-|---|---|
-| `plans.decompose` | `{ goalId, plannerAgentId?, contextSetId? }` → `{ planId, status: "PLANNING", plannerAgentId }`. Creates a DRAFT plan (`isActiveAttempt=true`, prior attempts flipped false), flips goal → PLANNING, dispatches the PLANNER (override > crew PLANNER > caller's agent). |
-| `plans.addSteps` | `{ planId, steps: [{ title, body?, expectedOutput?, verification?, dependsOnStepIndexes?, assignedAgentId?, assignedRole? }] }` → `{ stepIds }`. Bulk-adds to a DRAFT plan; `dependsOnStepIndexes` are 0-based positions within the batch, resolved to real ids. |
-| `plans.requestApproval` | `{ planId, assignedUserId? }` → `{ actionRequestId }`. Raises a FREE_FORM ActionRequest (`sourceType="execution-plan"`). Accepting it activates the plan. |
-| `plans.activate` | `{ planId }` → `{ ok }`. DRAFT/APPROVED → RUNNING, goal → ACTIVE + `startedAt`, root steps cascade READY. Usually fired by accepting the approval ActionRequest. |
-| `plans.judge` | `{ stepId, judgeAgentId? }` → `{ judgeAgentId }`. Dispatches a REVIEWER (override > crew REVIEWER) to evaluate a step in REVIEW. |
-| `plans.recordVerdict` | `{ stepId, verdict: "PASS"\|"FAIL", feedback, score? }` → `{ outcome: "DONE"\|"RETRY"\|"BLOCKED", retryCount }`. PASS → DONE + cascade. FAIL → READY+retry (feedback stored) or BLOCKED + ReviewGate when retries exhausted. Emits `EXECUTION_STEP_JUDGED`. |
+| Tool                    | Summary                                                                                                                                                                                                                                                                                                                                                                               |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plans.decompose`       | `{ goalId, plannerAgentId?, contextSetId? }` → `{ planId, status: "PLANNING", plannerAgentId }`. Creates a DRAFT plan (`isActiveAttempt=true`, prior attempts flipped false), flips goal → PLANNING, dispatches the PLANNER (override > crew PLANNER > caller's agent).                                                                                                               |
+| `plans.addSteps`        | `{ planId, steps: [{ title, body?, expectedOutput?, verification?, dependsOnStepIndexes?, assignedAgentId?, assignedRole? }] }` → `{ stepIds }`. Bulk-adds to a DRAFT plan; dependency indexes must be in-range, non-self, and acyclic. `assignedRole` auto-resolves a unique crew member; multiple matches require an explicit matching `assignedAgentId`, and no match is rejected. |
+| `plans.requestApproval` | `{ planId, assignedUserId? }` → `{ actionRequestId }`. Raises a FREE_FORM ActionRequest (`sourceType="execution-plan"`). Accepting it activates the plan.                                                                                                                                                                                                                             |
+| `plans.activate`        | `{ planId }` → `{ ok }`. DRAFT/APPROVED → RUNNING, goal → ACTIVE + `startedAt`, root steps cascade READY. Usually fired by accepting the approval ActionRequest.                                                                                                                                                                                                                      |
+| `plans.judge`           | `{ stepId, judgeAgentId? }` → `{ judgeAgentId }`. Dispatches a REVIEWER (override > crew REVIEWER) to evaluate a step in REVIEW.                                                                                                                                                                                                                                                      |
+| `plans.recordVerdict`   | `{ stepId, verdict: "PASS"\|"FAIL", feedback, score? }` → `{ outcome: "DONE"\|"RETRY"\|"BLOCKED", retryCount }`. PASS → DONE + cascade. FAIL → READY+retry (feedback stored) or BLOCKED + ReviewGate when retries exhausted. Emits `EXECUTION_STEP_JUDGED`.                                                                                                                           |
 
 ```json
 // plans.addSteps  — index-based deps
@@ -650,27 +660,27 @@ Scope: `READ_ISSUES` for reads, `WRITE_ISSUES` for the loop mutations,
 
 #### Plan substrate (existing)
 
-| Tool | Summary |
-|---|---|
-| `executionPlans.list` / `.get` / `.create` / `.transition` | Plan CRUD + status transitions. |
-| `executionPlans.transitionStep` | `{ stepId, status, sourceRunId? }`. Marking a step DONE cascades downstream readiness; marking REVIEW triggers auto-judge when the plan opts in. |
+| Tool                                                       | Summary                                                                                                                                                                                                                                                     |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `executionPlans.list` / `.get` / `.create` / `.transition` | Plan CRUD + status transitions.                                                                                                                                                                                                                             |
+| `executionPlans.transitionStep`                            | `{ stepId, status, sourceRunId? }`. References are workspace/plan validated. READY/RUNNING are orchestration-owned and cannot be forced through this generic mutation. Marking DONE cascades downstream readiness; REVIEW triggers auto-judge when enabled. |
 
 #### Crews
 
-| Tool | Summary |
-|---|---|
-| `agentCrews.list` | Existing read. Crews + member/plan counts. |
-| `agentCrews.create` | `{ name, description?, maxParallel?, members?: [{ agentId, role }] }` → `{ id }`. Roles: `PLANNER`/`WORKER`/`REVIEWER`/`OBSERVER`/`OPERATOR_PROXY`. |
-| `agentCrews.update` | `{ id, name?, description?, maxParallel? }`. |
-| `agentCrews.addMember` | `{ crewId, agentId, role }` → `{ id }`. |
-| `agentCrews.removeMember` | `{ memberId }`. |
-| `agentCrews.setMemberRole` | `{ memberId, role }` → `{ id }`. |
-| `agentCrews.archive` | `{ id }`. Soft-archive. |
+| Tool                       | Summary                                                                                                                                             |
+| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agentCrews.list`          | Existing read. Crews + member/plan counts.                                                                                                          |
+| `agentCrews.create`        | `{ name, description?, maxParallel?, members?: [{ agentId, role }] }` → `{ id }`. Roles: `PLANNER`/`WORKER`/`REVIEWER`/`OBSERVER`/`OPERATOR_PROXY`. |
+| `agentCrews.update`        | `{ id, name?, description?, maxParallel? }`. The cap is enforced across READY + RUNNING steps on every plan sharing the crew; `0` is unlimited.     |
+| `agentCrews.addMember`     | `{ crewId, agentId, role }` → `{ id }`.                                                                                                             |
+| `agentCrews.removeMember`  | `{ memberId }`.                                                                                                                                     |
+| `agentCrews.setMemberRole` | `{ memberId, role }` → `{ id }`.                                                                                                                    |
+| `agentCrews.archive`       | `{ id }`. Soft-archive.                                                                                                                             |
 
 #### Review gates
 
-| Tool | Summary |
-|---|---|
+| Tool                                      | Summary                                                                                                            |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `reviewGates.list` / `.open` / `.resolve` | Approval checkpoints. The loop auto-opens gates on a step BLOCKED (retries exhausted) and on a plan budget breach. |
 
 ### `notification`
@@ -682,8 +692,8 @@ the whole notification feed.
 
 Scope: `READ_USERS` for the query, `WRITE_USERS` for the mutation.
 
-| Tool | Summary |
-|---|---|
+| Tool            | Summary                                                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `setPreference` | Upsert a preference row. `{ eventKind, enabled, delivery?, scope? = "workspace" }`. Pass `scope: "global"` to set the cross-workspace default. |
 
 ```json
@@ -702,11 +712,12 @@ ships).
 
 Scope: `READ_ISSUES`. The single composite tool that saves agents 4–5
 round-trips on dispatch — bundles workspace + issue (or thread) + comments
-+ attachments + relations + currentRun in one call.
 
-| Tool | Summary |
-|---|---|
-| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun, artifacts, completionContract, runProtocol, externalResources }`. `externalResources` contains linked GitHub issues/PRs with their link kind and latest local snapshot. `runProtocol` includes `{ contractVersion, runId, engagementMode, modeInstruction, protocolInstruction, mayMutateIssue }` so agents can ack/output-start/complete the correct run and know whether issue mutations are allowed. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
+- attachments + relations + currentRun in one call.
+
+| Tool             | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context.bundle` | `{ issueId? }` xor `{ threadId? }`. For `issueId`: returns `{ workspace, issue (full row), description, comments (last 50), attachments, relations, currentRun, artifacts, orchestrationContext, completionContract, runProtocol, externalResources }`. `currentRun` is limited to `ACTIVE`/`WAITING` and, for an agent key, to that linked agent. `orchestrationContext` carries the Goal, Plan, current Step (when unambiguous), dependencies/dependents, sibling progress, retry feedback, worker evidence, and non-excluded ContextSet refs. For a current run it prefers the immutable dispatch snapshot; legacy/no-run contexts use live hydration. `externalResources` contains linked GitHub issues/PRs with their link kind and latest local snapshot. `runProtocol` includes `{ contractVersion, runId, engagementMode, modeInstruction, protocolInstruction, mayMutateIssue }` so agents can ack/output-start/complete the correct run and know whether issue mutations are allowed. For `threadId`: returns `{ workspace, thread, messages (last 50), agent (peer summary), linkedIssues (any issues mentioned in messages' contextSnapshots) }`. Addressee gating mirrors `chat.getThread` for the threadId branch; issue-narrowing applies for the issueId branch. |
 
 ## Not on MCP
 
@@ -738,16 +749,16 @@ JSON shape on every error response:
 
 `issues` is present only on Zod validation failures; otherwise just `error`.
 
-| Status | Meaning                                                       |
-|--------|---------------------------------------------------------------|
-| 400    | Invalid input (Zod). `issues` map populated.                  |
-| 401    | Auth failed (invalid/revoked/expired key, missing JWT).       |
-| 403    | Scope or narrowing rejected.                                  |
-| 404    | Subject does not exist or is not visible to this key.         |
-| 409    | Conflict (e.g., reassigning to the same agent).               |
-| 422    | Workspace precondition failed (e.g. time tracking disabled).  |
-| 429    | Rate limited. Includes `Retry-After` header in seconds.       |
-| 5xx    | Server error.                                                 |
+| Status | Meaning                                                      |
+| ------ | ------------------------------------------------------------ |
+| 400    | Invalid input (Zod). `issues` map populated.                 |
+| 401    | Auth failed (invalid/revoked/expired key, missing JWT).      |
+| 403    | Scope or narrowing rejected.                                 |
+| 404    | Subject does not exist or is not visible to this key.        |
+| 409    | Conflict (e.g., reassigning to the same agent).              |
+| 422    | Workspace precondition failed (e.g. time tracking disabled). |
+| 429    | Rate limited. Includes `Retry-After` header in seconds.      |
+| 5xx    | Server error.                                                |
 
 tRPC errors over the in-app client follow `TRPCClientError` shape — code,
 message, data with `httpStatus` and `path`. The MCP transports translate

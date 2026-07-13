@@ -626,23 +626,129 @@ export async function recordChange(
     subjectId: params.subjectId,
     payload: payloadOut,
   });
+  // Materialized plan-step Issues are projections of the orchestration step
+  // while work is in flight, but an explicit operator terminal transition is
+  // authoritative. Feed DONE/CANCELED back into the one unambiguous linked
+  // step at the common audit boundary so tRPC, MCP, bulk, and integration
+  // writers cannot drift. Step-originated projections carry the marker below
+  // and are skipped to avoid a sync loop.
+  if (
+    params.eventKind === EventKind.ISSUE_STATUS_CHANGED &&
+    params.subjectType === "issue" &&
+    payloadRecord(payloadOut).orchestrationStatusSync !== true
+  ) {
+    const issueStatus = await tx.issue.findFirst({
+      where: { id: params.subjectId, workspaceId: params.workspaceId },
+      select: { status: { select: { category: true } } },
+    });
+    if (issueStatus?.status.category === "DONE" || issueStatus?.status.category === "CANCELED") {
+      const { syncMaterializedStepTerminalFromIssue } =
+        await import("@/server/services/execution-step-issue-sync");
+      await syncMaterializedStepTerminalFromIssue(tx, {
+        workspaceId: params.workspaceId,
+        issueId: params.subjectId,
+        category: issueStatus.status.category,
+        actorId: params.actorId,
+        actorAgentId: params.actorAgentId ?? null,
+      });
+    }
+  }
+  // Most step lifecycle writers already converge on recordChange. Project the
+  // persisted state (rather than trusting a caller payload) onto its optional
+  // materialized Issue here so manual transitions, verdicts, and run handoffs
+  // share one synchronization rule. READY/RUNNING fast paths that intentionally
+  // write lighter events call the same helper directly.
+  if (params.eventKind === EventKind.ISSUE_UPDATED && params.subjectType === "execution-step") {
+    const { syncMaterializedIssueStatusFromStep } =
+      await import("@/server/services/execution-step-issue-sync");
+    await syncMaterializedIssueStatusFromStep(tx, {
+      workspaceId: params.workspaceId,
+      stepId: params.subjectId,
+      actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
+    });
+  }
   if (params.eventKind === EventKind.AGENT_ASSIGNED && params.subjectType === "issue") {
+    // A materialized execution-step issue is still part of the plan DAG.
+    // Assignment producers historically emitted only the issue/agent ids, so
+    // the durable inbox opened a plain issue run with executionStepId=null;
+    // runs.complete then had no way to hand the result back to the step. Add
+    // the unambiguous active step link at this single producer boundary and
+    // keep the step's worker assignment aligned with the issue assignment.
+    // (More than one active step on one issue is intentionally left alone —
+    // choosing one would silently attach work to the wrong plan.)
+    const linkedSteps = await tx.executionStep.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        issueId: params.subjectId,
+        status: { notIn: ["DONE", "CANCELED"] },
+      },
+      orderBy: [{ updatedAt: "desc" }, { position: "asc" }],
+      take: 2,
+      select: {
+        id: true,
+        planId: true,
+        status: true,
+        assignedAgentId: true,
+        plan: { select: { status: true } },
+      },
+    });
+    const linkedStep = linkedSteps.length === 1 ? linkedSteps[0] : null;
+    const rawAssignmentPayload = payloadRecord(params.payload ?? {});
+    const payloadHasAgentId = Object.prototype.hasOwnProperty.call(rawAssignmentPayload, "agentId");
+    const nextStepAgentId = payloadString(rawAssignmentPayload, "agentId");
+    if (linkedStep) {
+      const stepCanRun =
+        linkedStep.plan.status === "RUNNING" &&
+        (linkedStep.status === "READY" || linkedStep.status === "RUNNING");
+      payloadOut = {
+        ...payloadRecord(payloadOut),
+        planId: linkedStep.planId,
+        planStepId: linkedStep.id,
+        ...(stepCanRun ? { executionStepId: linkedStep.id } : { orchestrationDeferred: true }),
+      } as unknown as Prisma.InputJsonValue;
+      if (
+        payloadHasAgentId &&
+        (nextStepAgentId !== null || rawAssignmentPayload.agentId === null) &&
+        linkedStep.assignedAgentId !== nextStepAgentId
+      ) {
+        await tx.executionStep.update({
+          where: { id: linkedStep.id },
+          data: { assignedAgentId: nextStepAgentId },
+        });
+        await recordChange(tx, {
+          workspaceId: params.workspaceId,
+          actorId: params.actorId,
+          actorAgentId: params.actorAgentId ?? null,
+          entity: "execution-step",
+          entityId: linkedStep.id,
+          action: "sync-issue-agent-assignment",
+          before: { assignedAgentId: linkedStep.assignedAgentId },
+          after: { assignedAgentId: nextStepAgentId, issueId: params.subjectId },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "execution-step",
+          subjectId: linkedStep.id,
+          payload: {
+            issueId: params.subjectId,
+            assignedAgentId: nextStepAgentId,
+            source: "issue-assignment",
+          } as Prisma.InputJsonValue,
+        });
+      }
+    }
     const assignMode =
       params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
         ? ((params.payload as Record<string, unknown>).engagementMode as string | undefined)
         : undefined;
-    const transitionedTo = await maybeAutoTransitionOnAssign(
-      tx,
-      params.workspaceId,
-      params.subjectId,
-      assignMode,
-    );
+    const assignmentIsDeferred = payloadRecord(payloadOut).orchestrationDeferred === true;
+    const transitionedTo = assignmentIsDeferred
+      ? null
+      : await maybeAutoTransitionOnAssign(tx, params.workspaceId, params.subjectId, assignMode);
     const snapshot = await loadIssueSnapshot(tx, params.subjectId);
     if (snapshot) {
-      const base =
-        params.payload && typeof params.payload === "object"
-          ? (params.payload as Record<string, Prisma.InputJsonValue>)
-          : {};
+      // Build on the already-enriched payload so canonical links added above
+      // (notably executionStepId) survive snapshot enrichment.
+      const base = payloadRecord(payloadOut) as Record<string, Prisma.InputJsonValue>;
       payloadOut = {
         ...base,
         issueSnapshot: snapshot,
@@ -753,7 +859,8 @@ export async function recordChange(
   const isAssigneeRouted =
     (params.eventKind === EventKind.AGENT_ASSIGNED ||
       params.eventKind === EventKind.ISSUE_QUEUED) &&
-    params.subjectType === "issue";
+    params.subjectType === "issue" &&
+    payloadRecord(payloadOut).orchestrationDeferred !== true;
   if (isAssigneeRouted) {
     const issue = await tx.issue.findUnique({
       where: { id: params.subjectId },

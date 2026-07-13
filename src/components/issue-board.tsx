@@ -134,10 +134,12 @@ function BoardColumn({
   projectId?: string;
   columnFilter: Parameters<typeof trpc.issue.list.useInfiniteQuery>[0];
 }) {
-  const { data, hasNextPage, isFetchingNextPage, fetchNextPage } =
-    trpc.issue.list.useInfiniteQuery(columnFilter, {
+  const { data, hasNextPage, isFetchingNextPage, fetchNextPage } = trpc.issue.list.useInfiniteQuery(
+    columnFilter,
+    {
       getNextPageParam: (last) => last.nextCursor,
-    });
+    },
+  );
   const items = data?.pages.flatMap((p) => p.items) ?? [];
 
   return (
@@ -149,10 +151,8 @@ function BoardColumn({
           {items.length}
           {hasNextPage ? "+" : ""}
         </span>
-        {/* Quick-add into this column. Opens the shared new-issue flow
-            (prefilled to the project when the board is project-scoped).
-            Status prefill isn't supported by quick-create yet, so the new
-            issue lands in the default status. */}
+        {/* Quick-add into this column. The shared capture flow preserves
+            both the project scope and this column's status. */}
         <button
           type="button"
           title="New issue"
@@ -160,7 +160,10 @@ function BoardColumn({
           onClick={() =>
             window.dispatchEvent(
               new CustomEvent("forge:quick-create", {
-                detail: projectId ? { projectId } : {},
+                detail: {
+                  statusId: status.id,
+                  ...(projectId ? { projectId } : {}),
+                },
               }),
             )
           }
@@ -202,7 +205,7 @@ function BoardColumn({
               {i.assignedAgent && (
                 <AgentHoverPreview agentId={i.assignedAgent.id}>
                   <span
-                    className="inline-flex min-w-0 items-center gap-1 text-meta text-muted-foreground"
+                    className="text-meta inline-flex min-w-0 items-center gap-1 text-muted-foreground"
                     title={`Agent: ${i.assignedAgent.name}`}
                   >
                     <AgentPresenceDot
@@ -210,7 +213,7 @@ function BoardColumn({
                       size="sm"
                       availability={presenceAvailability(i.assignedAgent)}
                     />
-                    <span className="truncate text-id">@{i.assignedAgent.profileKey}</span>
+                    <span className="text-id truncate">@{i.assignedAgent.profileKey}</span>
                   </span>
                 </AgentHoverPreview>
               )}

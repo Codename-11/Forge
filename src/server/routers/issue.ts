@@ -1,14 +1,20 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentRunStatus, EngagementMode, EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
+import {
+  AgentRunStatus,
+  EngagementMode,
+  EventKind,
+  Prisma,
+  Priority,
+  RelationKind,
+  StatusCategory,
+  WorkItemKind,
+} from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
-import {
-  maybeAutoDispatch,
-  recordManualDispatchReason,
-} from "@/server/services/dispatcher";
+import { maybeAutoDispatch, recordManualDispatchReason } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
@@ -19,6 +25,12 @@ import {
 } from "@/server/services/agent-run";
 import { runtimePreflightForIssue } from "@/server/services/runtime-preflight";
 import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
+import {
+  archiveIssue,
+  IssueArchiveConflictError,
+  IssueArchiveNotFoundError,
+  restoreIssue,
+} from "@/server/services/issue-archive";
 import {
   autoWatchAgent,
   autoWatchUser,
@@ -66,6 +78,16 @@ const slashCommandSchema = z.discriminatedUnion("kind", [
  * callers expect the issue to land regardless.
  */
 type DbHandle = typeof DbHandleType;
+
+function rethrowIssueArchiveError(error: unknown): never {
+  if (error instanceof IssueArchiveNotFoundError) {
+    throw new TRPCError({ code: "NOT_FOUND", message: error.message });
+  }
+  if (error instanceof IssueArchiveConflictError) {
+    throw new TRPCError({ code: "CONFLICT", message: error.message });
+  }
+  throw error;
+}
 
 async function applySlashCommandsToIssue(opts: {
   db: DbHandle;
@@ -117,9 +139,7 @@ async function applySlashCommandsToIssue(opts: {
             // auto-transition gate (maybeAutoTransitionOnAssign) sees the real
             // mode — otherwise a slash /assign to a non-EXECUTE agent silently
             // auto-starts the issue.
-            const { resolveEngagementMode } = await import(
-              "@/server/services/engagement-mode"
-            );
+            const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
             const ws = await tx.workspace.findUniqueOrThrow({
               where: { id: opts.workspaceId },
               select: {
@@ -271,6 +291,8 @@ const filterSchema = z.object({
   priority: z.nativeEnum(Priority).optional(),
   query: z.string().max(200).optional(),
   includeDone: z.boolean().default(true),
+  /** False = active issues; true = archived issues only. */
+  archived: z.boolean().default(false),
   /**
    * Cycle filter. `undefined` = any cycle (no filter). Pass a cycle id to
    * pin. Pass `null` to match "backlog" — issues with no cycle.
@@ -335,9 +357,7 @@ const filterSchema = z.object({
     .refine((s) => {
       const [y, m, d] = s.split("-").map(Number);
       const dt = new Date(Date.UTC(y, m - 1, d));
-      return (
-        dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
-      );
+      return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
     }, "dueOn must be a real calendar date")
     .optional(),
 
@@ -479,7 +499,7 @@ async function buildIssueListWhere(
 
   return {
     workspaceId: ctx.workspaceId,
-    deletedAt: null,
+    deletedAt: input.archived ? { not: null } : null,
     ...keyWhere,
     ...(input.projectId ? { projectId: input.projectId } : {}),
     ...(input.statusId ? { statusId: input.statusId } : {}),
@@ -487,9 +507,7 @@ async function buildIssueListWhere(
     ...(input.assigneeIds?.length
       ? { assignees: { some: { userId: { in: input.assigneeIds } } } }
       : {}),
-    ...(input.labelIds?.length
-      ? { labels: { some: { labelId: { in: input.labelIds } } } }
-      : {}),
+    ...(input.labelIds?.length ? { labels: { some: { labelId: { in: input.labelIds } } } } : {}),
     ...(input.priority ? { priority: input.priority } : {}),
     ...(input.priorities?.length ? { priority: { in: input.priorities } } : {}),
     ...(input.kinds?.length ? { kind: { in: input.kinds } } : {}),
@@ -506,9 +524,7 @@ async function buildIssueListWhere(
       : input.assignedAgentId
         ? { assignedAgentId: input.assignedAgentId }
         : {}),
-    ...(input.updatedSince
-      ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } }
-      : {}),
+    ...(input.updatedSince ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } } : {}),
     ...(input.excludeSnoozed
       ? { OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: new Date() } }] }
       : {}),
@@ -608,10 +624,19 @@ export const issueRouter = router({
     }),
 
   byId: workspaceProcedure
-    .input(z.object({ id: z.string().cuid() }))
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        includeArchived: z.boolean().default(false),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       const issue = await ctx.db.issue.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+        where: {
+          id: input.id,
+          workspaceId: ctx.workspaceId,
+          ...(input.includeArchived ? {} : { deletedAt: null }),
+        },
         include: {
           status: true,
           project: true,
@@ -700,19 +725,63 @@ export const issueRouter = router({
           },
           attachments: true,
           children: {
+            where: { deletedAt: null },
             select: { id: true, number: true, title: true, statusId: true },
             orderBy: { number: "asc" },
           },
-          parent: { select: { id: true, number: true, title: true } },
-          // Plan-step provenance (AXI-56): when this issue was materialized
-          // from an ExecutionStep, surface the originating step + plan so the
-          // issue can deep-link back to its plan.
+          parent: { select: { id: true, number: true, title: true, deletedAt: true } },
+          // Plan-step provenance and execution context (AXI-56). A
+          // materialized step is still a standalone Issue, but its detail
+          // view must retain the goal, completion contract, and neighboring
+          // DAG so a human or agent never has to infer why the issue exists.
           executionSteps: {
             select: {
               id: true,
               title: true,
+              body: true,
               position: true,
-              plan: { select: { id: true, title: true } },
+              status: true,
+              expectedOutput: true,
+              verification: true,
+              dependsOnStepIds: true,
+              retryCount: true,
+              lastFeedback: true,
+              plan: {
+                select: {
+                  id: true,
+                  title: true,
+                  description: true,
+                  status: true,
+                  goal: {
+                    select: {
+                      id: true,
+                      title: true,
+                      description: true,
+                      successCriteria: true,
+                      status: true,
+                    },
+                  },
+                  steps: {
+                    orderBy: { position: "asc" },
+                    select: {
+                      id: true,
+                      title: true,
+                      position: true,
+                      status: true,
+                      dependsOnStepIds: true,
+                      issue: {
+                        select: {
+                          id: true,
+                          number: true,
+                          title: true,
+                          deletedAt: true,
+                          status: { select: { name: true, category: true, color: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -843,9 +912,7 @@ export const issueRouter = router({
           workspaceId: ctx.workspaceId,
           OR: [
             { subjectType: "issue", subjectId: input.issueId },
-            ...(runIds.length
-              ? [{ subjectType: "agent-run", subjectId: { in: runIds } }]
-              : []),
+            ...(runIds.length ? [{ subjectType: "agent-run", subjectId: { in: runIds } }] : []),
             ...(actionRequestIds.length
               ? [{ subjectType: "action-request", subjectId: { in: actionRequestIds } }]
               : []),
@@ -1072,7 +1139,7 @@ export const issueRouter = router({
       const { id, mode: explicitMode, ...patch } = input;
       return ctx.db.$transaction(async (tx) => {
         const before = await tx.issue.findFirstOrThrow({
-          where: { id, workspaceId: ctx.workspaceId },
+          where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
           include: { status: true },
         });
 
@@ -1155,7 +1222,7 @@ export const issueRouter = router({
               ? { verificationChecklist: Prisma.JsonNull }
               : { verificationChecklist: verificationChecklist as Prisma.InputJsonValue };
         const updateRes = await tx.issue.updateMany({
-          where: { id, workspaceId: ctx.workspaceId },
+          where: { id, workspaceId: ctx.workspaceId, deletedAt: null },
           data: { ...patchRest, ...checklistData, ...extra },
         });
         if (updateRes.count === 0) {
@@ -1228,8 +1295,7 @@ export const issueRouter = router({
           // Manual assignment / unassignment — stamp a `dispatchReason`
           // when an agent is being set, clear it on unassign.
           let manualReason: Record<string, unknown> | null = null;
-          let agentRow: { profileKey: string; engagementMode: EngagementMode | null } | null =
-            null;
+          let agentRow: { profileKey: string; engagementMode: EngagementMode | null } | null = null;
           if (nextAgentId) {
             agentRow = await tx.agent.findFirstOrThrow({
               where: { id: nextAgentId, workspaceId: ctx.workspaceId },
@@ -1256,9 +1322,7 @@ export const issueRouter = router({
           let engagementMode: EngagementMode | undefined;
           let engagementSource: string | undefined;
           if (nextAgentId && agentRow) {
-            const { resolveEngagementMode } = await import(
-              "@/server/services/engagement-mode"
-            );
+            const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
             const ws = await tx.workspace.findUniqueOrThrow({
               where: { id: ctx.workspaceId },
               select: {
@@ -1394,6 +1458,28 @@ export const issueRouter = router({
     .input(z.object({ id: z.string().cuid(), userIds: z.array(z.string().cuid()) }))
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!issue) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Issue not found in this workspace.",
+          });
+        }
+        const userIds = Array.from(new Set(input.userIds));
+        if (userIds.length > 0) {
+          const memberCount = await tx.membership.count({
+            where: { workspaceId: ctx.workspaceId, userId: { in: userIds } },
+          });
+          if (memberCount !== userIds.length) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "Every assignee must be a member of this workspace.",
+            });
+          }
+        }
         // Snapshot current assignees so we can identify newly-added user
         // ids (those get auto-watched). Removed assignees keep watching —
         // once watching, stays watching until manual unwatch.
@@ -1403,10 +1489,10 @@ export const issueRouter = router({
         });
         const previousUserIds = new Set(before.map((a) => a.userId));
 
-        await tx.issueAssignee.deleteMany({ where: { issueId: input.id } });
-        if (input.userIds.length) {
+        await tx.issueAssignee.deleteMany({ where: { issueId: issue.id } });
+        if (userIds.length) {
           await tx.issueAssignee.createMany({
-            data: input.userIds.map((userId) => ({ issueId: input.id, userId })),
+            data: userIds.map((userId) => ({ issueId: issue.id, userId })),
           });
         }
 
@@ -1414,11 +1500,11 @@ export const issueRouter = router({
         // either already watching (from a prior assign / create / etc.)
         // or have manually unwatched at some point — we don't re-watch
         // those on every re-assign, only the brand-new additions.
-        for (const userId of input.userIds) {
+        for (const userId of userIds) {
           if (!previousUserIds.has(userId)) {
             await autoWatchUser(tx, {
               workspaceId: ctx.workspaceId,
-              issueId: input.id,
+              issueId: issue.id,
               userId,
             });
           }
@@ -1429,41 +1515,91 @@ export const issueRouter = router({
           actorId: ctx.session.user.id,
           actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
           entity: "Issue",
-          entityId: input.id,
+          entityId: issue.id,
           action: "assign",
-          after: { assigneeIds: input.userIds },
+          after: { assigneeIds: userIds },
           eventKind: EventKind.ISSUE_ASSIGNED,
           subjectType: "issue",
-          subjectId: input.id,
-          payload: { assigneeIds: input.userIds },
+          subjectId: issue.id,
+          payload: { assigneeIds: userIds },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
         return tx.issue.findUniqueOrThrow({
-          where: { id: input.id },
+          where: { id: issue.id },
           include: { assignees: { include: { user: true } } },
         });
       });
     }),
 
+  archive: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          archiveIssue(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.id,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          }),
+        );
+      } catch (error) {
+        rethrowIssueArchiveError(error);
+      }
+    }),
+
+  /** Backward-compatible alias for older clients; archive is reversible. */
   softDelete: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      const res = await ctx.db.issue.updateMany({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        data: { deletedAt: new Date() },
-      });
-      if (res.count === 0) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found in this workspace." });
+      try {
+        const result = await ctx.db.$transaction((tx) =>
+          archiveIssue(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.id,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          }),
+        );
+        return { ok: true, ...result };
+      } catch (error) {
+        rethrowIssueArchiveError(error);
       }
-      return { ok: true };
+    }),
+
+  restore: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          restoreIssue(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: input.id,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          }),
+        );
+      } catch (error) {
+        rethrowIssueArchiveError(error);
+      }
     }),
 
   bulkStatus: workspaceProcedure
     .input(z.object({ ids: z.array(z.string().cuid()).max(200), statusId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) =>
       ctx.db.issue.updateMany({
-        where: { id: { in: input.ids }, workspaceId: ctx.workspaceId },
+        where: {
+          id: { in: input.ids },
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+        },
         data: { statusId: input.statusId },
       }),
     ),
@@ -1821,8 +1957,7 @@ export const issueRouter = router({
 
         // Resolve the bulk-set agent once for dispatchReason + engagement
         // mode stamping (only when assigning, not on clear).
-        let bulkAgent: { profileKey: string; engagementMode: EngagementMode | null } | null =
-          null;
+        let bulkAgent: { profileKey: string; engagementMode: EngagementMode | null } | null = null;
         if (input.assignedAgentId) {
           const a = await tx.agent.findUnique({
             where: { id: input.assignedAgentId },
@@ -1856,9 +1991,7 @@ export const issueRouter = router({
         let engagementMode: EngagementMode | undefined;
         let engagementSource: string | undefined;
         if (input.assignedAgentId && bulkAgent) {
-          const { resolveEngagementMode } = await import(
-            "@/server/services/engagement-mode"
-          );
+          const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
           const ws = await tx.workspace.findUniqueOrThrow({
             where: { id: ctx.workspaceId },
             select: {
@@ -1883,7 +2016,8 @@ export const issueRouter = router({
         for (let i = 0; i < validIds.length; i += CHUNK) {
           const chunk = issues.slice(i, i + CHUNK);
           for (const row of chunk) {
-            const assignmentChanged = (row.assignedAgentId ?? null) !== (input.assignedAgentId ?? null);
+            const assignmentChanged =
+              (row.assignedAgentId ?? null) !== (input.assignedAgentId ?? null);
             await setIssueAgentWakeTarget(tx, {
               workspaceId: ctx.workspaceId,
               issueId: row.id,
@@ -1935,7 +2069,7 @@ export const issueRouter = router({
     .mutation(async ({ ctx, input }) => {
       return ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findFirstOrThrow({
-          where: { id: input.id, workspaceId: ctx.workspaceId },
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
         });
         const updated = await tx.issue.update({
           where: { id: issue.id },
@@ -1980,7 +2114,7 @@ export const issueRouter = router({
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       const issue = await ctx.db.issue.findFirstOrThrow({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
+        where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
       });
       return ctx.db.issue.update({
         where: { id: issue.id },
@@ -2336,9 +2470,7 @@ export const issueRouter = router({
             action: input.until ? "snooze" : "unsnooze",
             before: { snoozedUntil: row.snoozedUntil },
             after: { snoozedUntil: input.until },
-            eventKind: input.until
-              ? EventKind.ISSUE_SNOOZED
-              : EventKind.ISSUE_UNSNOOZED,
+            eventKind: input.until ? EventKind.ISSUE_SNOOZED : EventKind.ISSUE_UNSNOOZED,
             subjectType: "issue",
             subjectId: row.id,
             payload: input.until
@@ -2388,13 +2520,9 @@ export const issueRouter = router({
         });
         const daysSince = Math.max(
           1,
-          Math.round(
-            (Date.now() - issue.updatedAt.getTime()) / (24 * 60 * 60 * 1000),
-          ),
+          Math.round((Date.now() - issue.updatedAt.getTime()) / (24 * 60 * 60 * 1000)),
         );
-        const mention = issue.assignedAgent
-          ? `@${issue.assignedAgent.profileKey} `
-          : "";
+        const mention = issue.assignedAgent ? `@${issue.assignedAgent.profileKey} ` : "";
         const body =
           input.body ??
           `${mention}Gentle nudge — this issue has been quiet for ${daysSince} day${daysSince === 1 ? "" : "s"}.`;
@@ -2730,47 +2858,70 @@ export const issueRouter = router({
     .input(z.object({ ids: z.array(z.string().cuid()).max(500) }))
     .mutation(async ({ ctx, input }) => {
       if (input.ids.length === 0) return { updated: 0 };
-      return ctx.db.$transaction(async (tx) => {
-        const issues = await tx.issue.findMany({
-          where: {
-            id: { in: input.ids },
-            workspaceId: ctx.workspaceId,
-            deletedAt: null,
-          },
-          select: { id: true },
-        });
-        const validIds = issues.map((i) => i.id);
-        if (validIds.length === 0) return { updated: 0 };
-
-        const now = new Date();
-        await tx.issue.updateMany({
-          where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
-          data: { deletedAt: now },
-        });
-
-        const CHUNK = 50;
-        for (let i = 0; i < validIds.length; i += CHUNK) {
-          const chunk = validIds.slice(i, i + CHUNK);
-          for (const issueId of chunk) {
-            await recordChange(tx, {
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          let updated = 0;
+          const now = new Date();
+          const issues = await tx.issue.findMany({
+            where: {
+              id: { in: Array.from(new Set(input.ids)) },
               workspaceId: ctx.workspaceId,
+              deletedAt: null,
+            },
+            select: { id: true },
+          });
+          for (const { id: issueId } of issues) {
+            const result = await archiveIssue(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId,
               actorId: ctx.session.user.id,
               actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
-              entity: "Issue",
-              entityId: issueId,
               action: "bulk-archive",
-              after: { deletedAt: now },
-              eventKind: EventKind.ISSUE_DELETED,
-              subjectType: "issue",
-              subjectId: issueId,
-              payload: { archivedAt: now.toISOString() },
+              via: "bulk",
+              now,
               ip: ctx.ip,
               userAgent: ctx.userAgent,
             });
+            if (result.archived) updated += 1;
           }
-        }
-        return { updated: validIds.length };
-      });
+          return { updated };
+        });
+      } catch (error) {
+        rethrowIssueArchiveError(error);
+      }
+    }),
+
+  bulkRestore: workspaceProcedure
+    .input(z.object({ ids: z.array(z.string().cuid()).max(500) }))
+    .mutation(async ({ ctx, input }) => {
+      if (input.ids.length === 0) return { updated: 0 };
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          let updated = 0;
+          const issues = await tx.issue.findMany({
+            where: {
+              id: { in: Array.from(new Set(input.ids)) },
+              workspaceId: ctx.workspaceId,
+              deletedAt: { not: null },
+            },
+            select: { id: true },
+          });
+          for (const issue of issues) {
+            const result = await restoreIssue(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: issue.id,
+              actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+              ip: ctx.ip,
+              userAgent: ctx.userAgent,
+            });
+            if (result.restored) updated += 1;
+          }
+          return { updated };
+        });
+      } catch (error) {
+        rethrowIssueArchiveError(error);
+      }
     }),
 
   // ----------------------------------------------------- Slash commands apply
@@ -2790,7 +2941,7 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const issue = await ctx.db.issue.findFirst({
-        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
         select: { id: true },
       });
       if (!issue) {
@@ -2825,7 +2976,7 @@ export const issueRouter = router({
     .input(z.object({ issueId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       const issue = await ctx.db.issue.findFirst({
-        where: { id: input.issueId, workspaceId: ctx.workspaceId },
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
         select: { id: true },
       });
       if (!issue) {
@@ -2937,9 +3088,7 @@ export const issueRouter = router({
           issue: r.issue!,
         }));
       items.sort(
-        (a, b) =>
-          new Date(b.issue.updatedAt).getTime() -
-          new Date(a.issue.updatedAt).getTime(),
+        (a, b) => new Date(b.issue.updatedAt).getTime() - new Date(a.issue.updatedAt).getTime(),
       );
       return { items };
     }),
@@ -2967,56 +3116,54 @@ export const issueRouter = router({
    * construction on the client. Empty array when the user watches
    * nothing.
    */
-  unreadIds: workspaceProcedure
-    .input(z.object({}).optional())
-    .query(async ({ ctx }) => {
-      const watches = await ctx.db.issueWatcher.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          userId: ctx.session.user.id,
-        },
-        select: {
-          issueId: true,
-          issue: { select: { id: true, updatedAt: true, deletedAt: true } },
-        },
-      });
-      if (watches.length === 0) return { ids: [] as string[] };
+  unreadIds: workspaceProcedure.input(z.object({}).optional()).query(async ({ ctx }) => {
+    const watches = await ctx.db.issueWatcher.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+      },
+      select: {
+        issueId: true,
+        issue: { select: { id: true, updatedAt: true, deletedAt: true } },
+      },
+    });
+    if (watches.length === 0) return { ids: [] as string[] };
 
-      const watchedIds = watches
-        .filter((w) => w.issue && w.issue.deletedAt === null)
-        .map((w) => w.issueId);
-      if (watchedIds.length === 0) return { ids: [] as string[] };
+    const watchedIds = watches
+      .filter((w) => w.issue && w.issue.deletedAt === null)
+      .map((w) => w.issueId);
+    if (watchedIds.length === 0) return { ids: [] as string[] };
 
-      // Pull the user's `RecentItem.visitedAt` for each watched issue
-      // in one query. Missing rows = never-viewed = always unread.
-      const recents = await ctx.db.recentItem.findMany({
-        where: {
-          userId: ctx.session.user.id,
-          workspaceId: ctx.workspaceId,
-          targetType: "ISSUE",
-          targetId: { in: watchedIds },
-        },
-        select: { targetId: true, visitedAt: true },
-      });
-      const visitedAtByIssue = new Map<string, Date>();
-      for (const r of recents) {
-        visitedAtByIssue.set(r.targetId, r.visitedAt);
+    // Pull the user's `RecentItem.visitedAt` for each watched issue
+    // in one query. Missing rows = never-viewed = always unread.
+    const recents = await ctx.db.recentItem.findMany({
+      where: {
+        userId: ctx.session.user.id,
+        workspaceId: ctx.workspaceId,
+        targetType: "ISSUE",
+        targetId: { in: watchedIds },
+      },
+      select: { targetId: true, visitedAt: true },
+    });
+    const visitedAtByIssue = new Map<string, Date>();
+    for (const r of recents) {
+      visitedAtByIssue.set(r.targetId, r.visitedAt);
+    }
+
+    const ids: string[] = [];
+    for (const w of watches) {
+      if (!w.issue || w.issue.deletedAt !== null) continue;
+      const visitedAt = visitedAtByIssue.get(w.issueId);
+      if (!visitedAt) {
+        ids.push(w.issueId);
+        continue;
       }
-
-      const ids: string[] = [];
-      for (const w of watches) {
-        if (!w.issue || w.issue.deletedAt !== null) continue;
-        const visitedAt = visitedAtByIssue.get(w.issueId);
-        if (!visitedAt) {
-          ids.push(w.issueId);
-          continue;
-        }
-        if (w.issue.updatedAt.getTime() > visitedAt.getTime()) {
-          ids.push(w.issueId);
-        }
+      if (w.issue.updatedAt.getTime() > visitedAt.getTime()) {
+        ids.push(w.issueId);
       }
-      return { ids };
-    }),
+    }
+    return { ids };
+  }),
 });
 
 // -- Helpers ----------------------------------------------------------------

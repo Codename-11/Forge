@@ -1181,6 +1181,7 @@ model Issue {
   @@index([workspaceId, cycleId])
   @@index([workspaceId, assignedAgentId])
   @@index([workspaceId, aiTriageStatus])
+  @@index([workspaceId, deletedAt, updatedAt])
   @@index([snoozedUntil])
 }
 
@@ -2443,96 +2444,101 @@ model DispatchRule {
 /// can exist over an issues lifetime if it is re-dispatched. The single
 /// 1:1 STATUS Comment for this run is referenced via Comment.runId.
 model AgentRun {
-  id                   String               @id @default(cuid())
-  workspaceId          String
-  issueId              String
-  agentId              String
-  status               AgentRunStatus       @default(ACTIVE)
-  startedAt            DateTime             @default(now())
+  id                           String               @id @default(cuid())
+  workspaceId                  String
+  issueId                      String
+  agentId                      String
+  status                       AgentRunStatus       @default(ACTIVE)
+  startedAt                    DateTime             @default(now())
   /// Updated on every appended AgentRunEvent — what the watchdog reads.
-  lastEventAt          DateTime             @default(now())
-  finishedAt           DateTime?
+  lastEventAt                  DateTime             @default(now())
+  finishedAt                   DateTime?
   /// Compact label rendered by the live pulse strip ("running tests").
-  currentStep          String?
+  currentStep                  String?
   /// Optional final summary populated when the agent reports completion.
-  summary              String?              @db.Text
+  summary                      String?              @db.Text
   /// Optional list of artifact ids the agent produced for this run.
   /// Populated by `runs.complete` so the UI can render evidence links
   /// alongside the summary.
-  producedArtifactIds  String[]             @default([])
+  producedArtifactIds          String[]             @default([])
   /// Optional structured verification result: snapshot of the issue's
   /// verificationChecklist at completion time with `done` flags set.
-  verificationResult   Json?
+  verificationResult           Json?
   /// Optional list of follow-up items the agent flagged for next steps.
   /// Shape: array of `{ title: string, body?: string, kind?: string }`.
-  followUps            Json?
+  followUps                    Json?
   /// Mode-specific structured completion metadata. Examples:
   /// `{ confidence: "HIGH" }` for RESEARCH, `{ verdict: "APPROVE" }`
   /// for REVIEW, plus the Forge run contract version used at completion.
-  completionMeta       Json?
+  completionMeta               Json?
   /// Provider-side run id when this AgentRun is backed by a structured
   /// agent-run connector (e.g. Hermes `/v1/runs`). Lets Forge poll /
   /// approve / stop the live run and correlate streamed `/events`.
   /// Null for webhook/completions-driven runs.
-  externalRunId        String?
+  externalRunId                String?
   /// Effective runtime/tool policy snapshot captured at dispatch. Stored
   /// on the run so old cards remain truthful after Runtime.config changes.
-  runtimePolicy        Json?
+  runtimePolicy                Json?
+  /// Immutable, bounded Goal / Plan / ExecutionStep context captured when
+  /// this run is opened (or first dispatched for legacy rows). Run-scoped
+  /// consumers prefer this snapshot so later plan edits cannot rewrite the
+  /// instructions and dependency evidence that the agent actually received.
+  orchestrationContextSnapshot Json?
   /// Set when a connector-driven run is paused awaiting operator
   /// permission (e.g. Hermes flagged a dangerous command). Drives the
   /// Approve/Reject affordance in the Live tab; cleared when the run
   /// resumes (approved) or finishes (rejected/stopped). The stale
   /// watchdog skips runs with this set so a blocked run isn't
   /// misclassified as STALLED.
-  awaitingApprovalAt   DateTime?
+  awaitingApprovalAt           DateTime?
   /// Detail of the pending approval captured from the live `/events`
   /// stream (Hermes `approval.request`): `{ command, description,
   /// choices }`. Lets the Live-tab banner show *what* is being approved,
   /// not just that something is. Null when not blocked.
-  pendingApproval      Json?
+  pendingApproval              Json?
   /// Optional pointer at the AGENT_ASSIGNED ActivityEvent that triggered
   /// this run. Useful for ack-window reasoning later.
-  assignmentEventId    String?
+  assignmentEventId            String?
   /// ActivityEvent.id that *caused* the most recent wake. For
   /// AGENT_ASSIGNED runs this mirrors `assignmentEventId`; for runs
   /// kept warm by mentions / priority bumps / watcher fan-out it holds
   /// the latest trigger so the inbox can distinguish "Victor was just
   /// re-mentioned" from "Victor is the static assignee".
-  triggerEventId       String?
+  triggerEventId               String?
   /// String mirror of ActivityEvent.kind for the latest trigger. Not
   /// enum-typed on purpose — EventKind grows and we don't want to
   /// migrate AgentRun every time. Conventional values: AGENT_ASSIGNED,
   /// ISSUE_QUEUED, ISSUE_PRIORITY_CHANGED, COMMENT_CREATED,
   /// CHAT_MESSAGE_POSTED.
-  triggerKind          String?
+  triggerKind                  String?
   /// Set when the assigned agent has acknowledged the dispatch and
   /// intends to act on it. Drives the UI transition from "wake sent" →
   /// "acknowledged" and silences the chat typing animation diagnostic.
-  acknowledgedAt       DateTime?
+  acknowledgedAt               DateTime?
   /// Set the first time the agent's reply / status / step output lands.
   /// Drives the UI transition from "acknowledged" → "running".
-  outputStartedAt      DateTime?
+  outputStartedAt              DateTime?
   /// Worker-side: latest wake attempt timestamp regardless of HTTP
   /// success. Diagnostic only — canonical work state lives elsewhere.
-  lastWakeAt           DateTime?
+  lastWakeAt                   DateTime?
   /// Number of wake attempts the worker has made for this run. Distinct
   /// from WebhookDelivery.attempt (which counts retries on one row).
-  wakeAttempts         Int                  @default(0)
+  wakeAttempts                 Int                  @default(0)
   /// Optional pointer at the most recent WebhookDelivery so the
   /// diagnostics panel can link straight to the (potentially failed)
   /// delivery row.
-  lastWakeDeliveryId   String?
+  lastWakeDeliveryId           String?
   /// Token-usage telemetry reported by the agent via `runs.recordUsage`.
   /// Cumulative as reported — the latest call replaces the prior values
   /// (idempotent), so agents should send running totals, not per-step
   /// deltas. Null = agent did not report.
-  tokensIn             Int?
-  tokensOut            Int?
-  tokensCached         Int?
+  tokensIn                     Int?
+  tokensOut                    Int?
+  tokensCached                 Int?
   /// Cost the agent attributes to the run, in USD. Source-of-truth is
   /// the agent's own pricing knowledge for v1; a server-side rate table
   /// is a future cleanup.
-  costUsd              Decimal?             @db.Decimal(10, 4)
+  costUsd                      Decimal?             @db.Decimal(10, 4)
   /// Operator-requested control signal. NONE is the steady state;
   /// PAUSE_REQUESTED / CANCEL_REQUESTED are pending instructions for
   /// the agent's runtime to honor on its next loop tick. The runtime
@@ -2540,19 +2546,19 @@ model AgentRun {
   /// transitioning the run to an appropriate terminal state on
   /// CANCEL). Webhook fan-out via `recordChange` carries the same
   /// payload to the agent's `webhookUrl`.
-  controlState         AgentRunControlState @default(NONE)
+  controlState                 AgentRunControlState @default(NONE)
   /// When the most recent control was requested. Null when
   /// `controlState = NONE` (no signal pending).
-  controlRequestedAt   DateTime?
+  controlRequestedAt           DateTime?
   /// User who requested the control. SetNull on user delete so the
   /// run row survives membership churn.
-  controlRequestedById String?
+  controlRequestedById         String?
   /// Operator-cleared terminal failures stay in durable history but are
   /// hidden from Command Center / pipeline failure queues by default.
-  clearedAt            DateTime?
+  clearedAt                    DateTime?
   /// User who cleared the terminal failure from operational surfaces.
   /// SetNull on user delete so the run row survives membership churn.
-  clearedById          String?
+  clearedById                  String?
   /// Set when a newer run for the same (issue, agent) supersedes this
   /// one (added 2026-06-23). A re-dispatch / kick / grant that opens a
   /// fresh run links the prior STALLED/abandoned attempts here so
@@ -2560,12 +2566,12 @@ model AgentRun {
   /// showing N repeated cards (the AXI-75 pathology). The run keeps its
   /// own terminal status for history; surfaces filter on
   /// `supersededByRunId IS NULL` to show only the head of each chain.
-  supersededByRunId    String?
+  supersededByRunId            String?
   /// Set only by clean completion via `runs.complete` (added
   /// 2026-06-23). Distinct from `finishedAt`, which is stamped for ANY
   /// terminal transition (including STALLED/ABANDONED). Rollups/surfaces
   /// that mean "succeeded" key off `completedAt`, not `finishedAt`.
-  completedAt          DateTime?
+  completedAt                  DateTime?
 
   /// Optional ExecutionStep this run is executing (migration: AXI-57). Set
   /// when the Goal-orchestration loop opens a run for a step, so orchestrated

@@ -25,40 +25,40 @@ error shapes all flow from this router definition.
 
 ## Router catalog
 
-| Router            | Procedures                                                                                                      |
-|-------------------|-----------------------------------------------------------------------------------------------------------------|
-| `workspace`       | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin)                |
-| `project`         | `list`, `byId`, `create`, `update`, `archive`                                                                    |
-| `issue`           | `list`, `byId`, `create`, `update`, `assign`, `softDelete`, `snooze`, `unsnooze`, `snoozeMany`, `nudge`, `bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`, `bulkArchive`, `applyCommands`, `watch`, `unwatch`, `watchers`, `watching` |
-| `comment`         | `create`, `update`, `softDelete`                                                                                 |
-| `analytics`       | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries` |
-| `plugin`          | `list`, `byId`, `register`, `restoreBackup`, `exportBackup`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`, `remove`, `rotateSecret` |
-| `status`          | `list`, `create`, `reorder`                                                                                      |
-| `template`        | `list`, `byId`, `create`, `update`, `delete` (issue templates)                                                   |
-| `projectTemplate` | `list`, `create`, `update`, `delete`                                                                             |
-| `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `testWebhook`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth` |
-| `agentRun`        | `activeForIssue`, `events`, `activeAll`, `recentTerminal`, `heatmap`, `eventsInRange`, `recentEventCounts`, `coachDiagnosis`, `runsInRange`, `eta`, `abandon`, `redispatch`, `nudge` |
+| Router            | Procedures                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `workspace`       | `list`, `current`, `create`, `listMembers`, `addMember`, `setMemberRole`, `removeMember` (admin)                                                                                                                                                                                                                                                                                                             |
+| `project`         | `list`, `byId`, `create`, `update`, `archive`                                                                                                                                                                                                                                                                                                                                                                |
+| `issue`           | `list`, `count`, `byId`, `create`, `update`, `assign`, `archive`, `restore`, `softDelete` (compat alias), `snooze`, `unsnooze`, `snoozeMany`, `nudge`, `bulkTransition`, `bulkAddLabel`, `bulkRemoveLabel`, `bulkAssign`, `bulkAssignAgent`, `bulkArchive`, `bulkRestore`, `applyCommands`, `watch`, `unwatch`, `watchers`, `watching`                                                                       |
+| `comment`         | `create`, `update`, `softDelete`                                                                                                                                                                                                                                                                                                                                                                             |
+| `analytics`       | `summary`, `statusDistribution`, `throughput`, `cycleTime`, `slaBreaches`, `dispatch.summary`, `dispatch.timeseries`                                                                                                                                                                                                                                                                                         |
+| `plugin`          | `list`, `byId`, `register`, `restoreBackup`, `exportBackup`, `approve`, `suspend`, `issueApiKey`, `revokeApiKey`, `remove`, `rotateSecret`                                                                                                                                                                                                                                                                   |
+| `status`          | `list`, `create`, `reorder`                                                                                                                                                                                                                                                                                                                                                                                  |
+| `template`        | `list`, `byId`, `create`, `update`, `delete` (issue templates)                                                                                                                                                                                                                                                                                                                                               |
+| `projectTemplate` | `list`, `create`, `update`, `delete`                                                                                                                                                                                                                                                                                                                                                                         |
+| `agent`           | `list`, `byId`, `byProfileKey`, `create`, `update`, `archive`, `delete`, `testWebhook`, `heartbeat`, `pipeline`, `timeline`, `uptime`, `webhookHealth`                                                                                                                                                                                                                                                       |
+| `agentRun`        | `activeForIssue`, `events`, `activeAll`, `recentTerminal`, `heatmap`, `eventsInRange`, `recentEventCounts`, `coachDiagnosis`, `runsInRange`, `eta`, `abandon`, `redispatch`, `nudge`                                                                                                                                                                                                                         |
 | `chat`            | `threads`, `defaultThread`, `thread`, `createConversation`, `forkThread`, `updateConversation`, `setOverride`, `markRead`, `compactThread`, `clearThread`, `getThread`, `send`, `createPendingMessage`, `dispatchMessage`, `appendAgentMessage`, `threadDiagnostics`, `chatReadiness`, `retryLastUserMessage`, `kickThreadRun`, `stopThreadRun`, `deleteThread`, `archiveThread`, `restoreThread`, `history` |
-| `event`           | `recent`, `unreadCount`                                                                                          |
-| `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                |
-| `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                      |
-| `user`            | `me`, `updateAppearance`                                                                                         |
-| `cycle`           | `list`, `byId`, `current`, `create`, `update`, `plan`, `rollover`, `addIssue`, `removeIssue`                     |
-| `initiative`      | `list`, `byId`, `create`, `update`, `linkProject`, `unlinkProject`                                               |
-| `relation`        | `add`, `remove`, `listForIssue`                                                                                  |
-| `time`            | `start`, `stop`, `log`, `list`, `summary`, `running`                                                             |
-| `attachment`      | `initUpload`, `finalize`, `attachLink`, `list`, `getDownloadUrl`, `delete`                                       |
-| `access`          | `list`, `create`, `update`, `revoke`, `delete`, `rotate`, `createPersonal`, `createSession`                      |
-| `integration`     | `list`, `byKind`, `applyToAgent`                                                                                 |
-| `runtime`         | `list`, `byId`, `register`, `heartbeat`, `archive`, `update`                                                     |
-| `pin`             | `list`, `set`, `toggle` (legacy issue-only); `listAll`, `add`, `remove`, `toggleEntity`, `reorder` (polymorphic) |
-| `recentItem`      | `list`, `track`                                                                                                  |
-| `commandPalette`  | `search`                                                                                                         |
-| `savedView`       | `list`, `create`, `update`, `delete`                                                                             |
-| `note`            | `list`, `create`, `update`, `archive`, `unarchive`, `delete`, `convertToIssue`, `todayJournal`, `listJournal`     |
-| `inbox`           | `list`, `badge`, `visit`                                                                                         |
-| `dashboard`       | `suggestions`, `stalledInProgress`                                                                               |
-| `notification`    | `list`, `markRead`, `markAllRead`, `dismiss`                                                                     |
+| `event`           | `recent`, `unreadCount`                                                                                                                                                                                                                                                                                                                                                                                      |
+| `dispatchRule`    | `list`, `create`, `update`, `reorder`, `toggle`, `delete` (admin)                                                                                                                                                                                                                                                                                                                                            |
+| `admin`           | `webhookDeliveries.list`, `webhookDeliveries.retry` (admin)                                                                                                                                                                                                                                                                                                                                                  |
+| `user`            | `me`, `updateAppearance`                                                                                                                                                                                                                                                                                                                                                                                     |
+| `cycle`           | `list`, `byId`, `current`, `create`, `update`, `plan`, `rollover`, `addIssue`, `removeIssue`                                                                                                                                                                                                                                                                                                                 |
+| `initiative`      | `list`, `byId`, `create`, `update`, `linkProject`, `unlinkProject`                                                                                                                                                                                                                                                                                                                                           |
+| `relation`        | `add`, `remove`, `listForIssue`                                                                                                                                                                                                                                                                                                                                                                              |
+| `time`            | `start`, `stop`, `log`, `list`, `summary`, `running`                                                                                                                                                                                                                                                                                                                                                         |
+| `attachment`      | `initUpload`, `finalize`, `attachLink`, `list`, `getDownloadUrl`, `delete`                                                                                                                                                                                                                                                                                                                                   |
+| `access`          | `list`, `create`, `update`, `revoke`, `delete`, `rotate`, `createPersonal`, `createSession`                                                                                                                                                                                                                                                                                                                  |
+| `integration`     | `list`, `byKind`, `applyToAgent`                                                                                                                                                                                                                                                                                                                                                                             |
+| `runtime`         | `list`, `byId`, `register`, `heartbeat`, `archive`, `update`                                                                                                                                                                                                                                                                                                                                                 |
+| `pin`             | `list`, `set`, `toggle` (legacy issue-only); `listAll`, `add`, `remove`, `toggleEntity`, `reorder` (polymorphic)                                                                                                                                                                                                                                                                                             |
+| `recentItem`      | `list`, `track`                                                                                                                                                                                                                                                                                                                                                                                              |
+| `commandPalette`  | `search`                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `savedView`       | `list`, `create`, `update`, `delete`                                                                                                                                                                                                                                                                                                                                                                         |
+| `note`            | `list`, `create`, `update`, `archive`, `unarchive`, `delete`, `convertToIssue`, `todayJournal`, `listJournal`                                                                                                                                                                                                                                                                                                |
+| `inbox`           | `list`, `badge`, `visit`                                                                                                                                                                                                                                                                                                                                                                                     |
+| `dashboard`       | `suggestions`, `stalledInProgress`                                                                                                                                                                                                                                                                                                                                                                           |
+| `notification`    | `list`, `markRead`, `markAllRead`, `dismiss`                                                                                                                                                                                                                                                                                                                                                                 |
 
 ## Notable procedures
 
@@ -153,7 +153,7 @@ agent.stalled({ agentId }) → {
 
 - **Stalled runs** are `AgentRun` rows still `ACTIVE` whose `lastEventAt`
   is older than `STALE_RUN_MS` (5 min). UI signal — distinct from the
-  watchdog that *closes* runs (`Workspace.agentRunStaleMinutes`).
+  watchdog that _closes_ runs (`Workspace.agentRunStaleMinutes`).
 - **Stalled issues** are issues currently assigned to the agent in an
   IN_PROGRESS / IN_REVIEW status that haven't been updated in
   `Workspace.stalledThresholdDays`. Snoozed rows are excluded. When
@@ -236,72 +236,72 @@ require a server-side read receipt model.
 
 The chat router manages per-(workspace, user, agent) persistent threads.
 
-| Procedure | Type | Summary |
-|---|---|---|
-| `threads` | query | List the caller's threads with all agents. Returns up to 75, newest last-message first, including `lastReadAt` for unread badges. |
-| `thread({ agentId })` | mutation | Upsert and open a thread. Returns `{ thread, agent, messages }` (last 50 messages). |
-| `getThread({ threadId })` | query | Fetch a concrete thread by id. Owner-scoped and includes `lastReadAt`, diagnostics, recent messages, and attachments. |
-| `markRead({ threadId, readAt? })` | mutation | Move the caller's per-thread read anchor forward. Used by the Chat page and Mission Control Chat tab; timestamps never move backward. |
-| `defaultThread({ agentId })` / `thread({ agentId })` | mutation | Upsert and open the caller's always-on DM thread for one agent. |
-| `createConversation({ agentId, title?, topic?, ... })` | mutation | Create a named side conversation with an agent. |
-| `forkThread({ threadId, fromMessageId? })` | mutation | Start a new conversation copied from an existing thread prefix. |
-| `updateConversation({ threadId, title?, topic?, contextMode? })` | mutation | Update conversation metadata and context policy. |
-| `setOverride({ threadId, provider? })` | mutation | Set or clear a per-thread provider override. |
-| `compactThread({ threadId })` | mutation | Summarize older messages into durable context and keep recent messages live. |
-| `clearThread({ threadId })` | mutation | Delete the thread's messages/attachments/events and reset summary context while preserving the thread row. |
-| `send({ agentId, body, context? })` | mutation | Legacy tRPC send path: persist a USER message and trigger dispatch. The interactive UI now uses `/api/chat/stream` so runs/completions can stream. |
-| `createPendingMessage({ threadId, ... })` / `dispatchMessage({ messageId })` | mutation | Two-step dispatch path used by clients that need an optimistic pending row before waking an agent. |
-| `appendAgentMessage({ threadId, body, sourceRunId? })` | mutation | Agent-only path. Requires the calling API key's `linkedAgentId` to match the thread's agent; acknowledges the latest unfinished USER turn and returns `{ messageId }`. |
-| `threadDiagnostics({ threadId })` | query | Return provider-neutral turn state, latest USER lifecycle, stream error/interruption, last run, and last delivery for the status rail. |
-| `chatReadiness({ agentId, threadId? })` | query | Resolve whether chat reaches a model/runtime and report the effective transport/capabilities/hint. |
-| `retryLastUserMessage({ threadId })` | mutation | Re-wake the latest dispatched USER message when a reply or delivery stalls. |
-| `kickThreadRun({ threadId, runId })` | mutation | Emit a kick event for a stale active run linked to the conversation. |
-| `stopThreadRun({ threadId, runId })` | mutation | Best-effort stop a live managed-runtime run and close the Forge mirror. |
-| `archiveThread({ threadId })` / `restoreThread({ threadId })` | mutation | Hide or restore a conversation without deleting its history. |
-| `deleteThread({ threadId })` | mutation | Permanently delete a conversation, its messages, and attachments; stops a live managed run when possible. |
-| `history({ threadId, before?, limit })` | query | Paginate older messages. `before` is a date cursor; `limit` max 100. Scoped to the caller's own threads. |
+| Procedure                                                                    | Type     | Summary                                                                                                                                                                |
+| ---------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `threads`                                                                    | query    | List the caller's threads with all agents. Returns up to 75, newest last-message first, including `lastReadAt` for unread badges.                                      |
+| `thread({ agentId })`                                                        | mutation | Upsert and open a thread. Returns `{ thread, agent, messages }` (last 50 messages).                                                                                    |
+| `getThread({ threadId })`                                                    | query    | Fetch a concrete thread by id. Owner-scoped and includes `lastReadAt`, diagnostics, recent messages, and attachments.                                                  |
+| `markRead({ threadId, readAt? })`                                            | mutation | Move the caller's per-thread read anchor forward. Used by the Chat page and Mission Control Chat tab; timestamps never move backward.                                  |
+| `defaultThread({ agentId })` / `thread({ agentId })`                         | mutation | Upsert and open the caller's always-on DM thread for one agent.                                                                                                        |
+| `createConversation({ agentId, title?, topic?, ... })`                       | mutation | Create a named side conversation with an agent.                                                                                                                        |
+| `forkThread({ threadId, fromMessageId? })`                                   | mutation | Start a new conversation copied from an existing thread prefix.                                                                                                        |
+| `updateConversation({ threadId, title?, topic?, contextMode? })`             | mutation | Update conversation metadata and context policy.                                                                                                                       |
+| `setOverride({ threadId, provider? })`                                       | mutation | Set or clear a per-thread provider override.                                                                                                                           |
+| `compactThread({ threadId })`                                                | mutation | Summarize older messages into durable context and keep recent messages live.                                                                                           |
+| `clearThread({ threadId })`                                                  | mutation | Delete the thread's messages/attachments/events and reset summary context while preserving the thread row.                                                             |
+| `send({ agentId, body, context? })`                                          | mutation | Legacy tRPC send path: persist a USER message and trigger dispatch. The interactive UI now uses `/api/chat/stream` so runs/completions can stream.                     |
+| `createPendingMessage({ threadId, ... })` / `dispatchMessage({ messageId })` | mutation | Two-step dispatch path used by clients that need an optimistic pending row before waking an agent.                                                                     |
+| `appendAgentMessage({ threadId, body, sourceRunId? })`                       | mutation | Agent-only path. Requires the calling API key's `linkedAgentId` to match the thread's agent; acknowledges the latest unfinished USER turn and returns `{ messageId }`. |
+| `threadDiagnostics({ threadId })`                                            | query    | Return provider-neutral turn state, latest USER lifecycle, stream error/interruption, last run, and last delivery for the status rail.                                 |
+| `chatReadiness({ agentId, threadId? })`                                      | query    | Resolve whether chat reaches a model/runtime and report the effective transport/capabilities/hint.                                                                     |
+| `retryLastUserMessage({ threadId })`                                         | mutation | Re-wake the latest dispatched USER message when a reply or delivery stalls.                                                                                            |
+| `kickThreadRun({ threadId, runId })`                                         | mutation | Emit a kick event for a stale active run linked to the conversation.                                                                                                   |
+| `stopThreadRun({ threadId, runId })`                                         | mutation | Best-effort stop a live managed-runtime run and close the Forge mirror.                                                                                                |
+| `archiveThread({ threadId })` / `restoreThread({ threadId })`                | mutation | Hide or restore a conversation without deleting its history.                                                                                                           |
+| `deleteThread({ threadId })`                                                 | mutation | Permanently delete a conversation, its messages, and attachments; stops a live managed run when possible.                                                              |
+| `history({ threadId, before?, limit })`                                      | query    | Paginate older messages. `before` is a date cursor; `limit` max 100. Scoped to the caller's own threads.                                                               |
 
 ### `agentRun.*` additions
 
 In addition to the original `activeForIssue`, `events`, `activeAll`, `recentTerminal`,
 and `heatmap` procedures, the following were added:
 
-| Procedure | Type | Summary |
-|---|---|---|
-| `recentEventCounts({ windowMinutes?, bucketSeconds? })` | query | Per-minute bucketed event counts for the activity sparkline in Mission Control. Default 30-minute window, 60-second buckets. |
-| `coachDiagnosis({ runId })` | query | Latest AI Coach comment for a run (or `null` when coaching is disabled). |
-| `runsInRange({ fromMinutesAgo?, limit? })` | query | All runs (active + terminal) overlapping a sliding window. Powers the swimlane/Gantt view. |
-| `eta({ runId })` | query | Predictive ETA based on median agent+label duration over the past 30 days. Returns `{ medianMs, sampleSize, etaMs }` or `null`. |
-| `eventsInRange({ from, to, limit? })` | query | `AgentRunEvent` rows in an explicit time range with run+agent+issue summary. Powers the timeline scrubber. |
-| `abandon({ runId, summary?, alsoUnassign? })` | mutation | Mark a run ABANDONED, optionally clear the issue assignment. |
-| `redispatch({ runId })` | mutation | Abandon the current run, re-queue the issue, and trigger auto-dispatch. |
-| `nudge({ runId, message? })` | mutation | Post a `@{profileKey} {message}` comment on the issue; the audit fan-out routes it to the agent's webhook. |
-| `kick({ runId })` | mutation | Re-fire the dispatch webhook for a stalled run without changing assignment or `controlState`. Eligibility: run is `ACTIVE` and quiet 5+ minutes (`STALE_RUN_MS` from `src/lib/agent-stale.ts`). Younger runs return `{ ok: true, kicked: false }`; non-active runs throw. Records `AGENT_RUN_KICKED`. |
+| Procedure                                               | Type     | Summary                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `recentEventCounts({ windowMinutes?, bucketSeconds? })` | query    | Per-minute bucketed event counts for the activity sparkline in Mission Control. Default 30-minute window, 60-second buckets.                                                                                                                                                                          |
+| `coachDiagnosis({ runId })`                             | query    | Latest AI Coach comment for a run (or `null` when coaching is disabled).                                                                                                                                                                                                                              |
+| `runsInRange({ fromMinutesAgo?, limit? })`              | query    | All runs (active + terminal) overlapping a sliding window. Powers the swimlane/Gantt view.                                                                                                                                                                                                            |
+| `eta({ runId })`                                        | query    | Predictive ETA based on median agent+label duration over the past 30 days. Returns `{ medianMs, sampleSize, etaMs }` or `null`.                                                                                                                                                                       |
+| `eventsInRange({ from, to, limit? })`                   | query    | `AgentRunEvent` rows in an explicit time range with run+agent+issue summary. Powers the timeline scrubber.                                                                                                                                                                                            |
+| `abandon({ runId, summary?, alsoUnassign? })`           | mutation | Mark a run ABANDONED, optionally clear the issue assignment.                                                                                                                                                                                                                                          |
+| `redispatch({ runId })`                                 | mutation | Abandon the current run, re-queue the issue, and trigger auto-dispatch.                                                                                                                                                                                                                               |
+| `nudge({ runId, message? })`                            | mutation | Post a `@{profileKey} {message}` comment on the issue; the audit fan-out routes it to the agent's webhook.                                                                                                                                                                                            |
+| `kick({ runId })`                                       | mutation | Re-fire the dispatch webhook for a stalled run without changing assignment or `controlState`. Eligibility: run is `ACTIVE` and quiet 5+ minutes (`STALE_RUN_MS` from `src/lib/agent-stale.ts`). Younger runs return `{ ok: true, kicked: false }`; non-active runs throw. Records `AGENT_RUN_KICKED`. |
 
 ### `access.*`
 
 Workspace API key management. Admin-gated for all mutations.
 
-| Procedure | Summary |
-|---|---|
-| `list` | List non-plugin keys for the workspace. |
-| `create` | Create a key with explicit `kind` (or infer from `linkedAgentId`). |
-| `createPersonal` | Shorthand for `kind: PERSONAL`. No agent link. Permanent until revoked. |
-| `createSession` | Shorthand for `kind: SESSION`. Requires `ttlHours` (1–168, default 24). Auto-expires. |
-| `update` | Edit name or narrowing arrays. Scopes and hash are immutable. |
-| `revoke` | Set `revokedAt`; immediately rejects all further calls. |
-| `delete` | Hard-delete a non-plugin key. |
-| `rotate` | Revoke and re-issue with the same name, scopes, and narrowing. Returns `rawKey` once. |
+| Procedure        | Summary                                                                               |
+| ---------------- | ------------------------------------------------------------------------------------- |
+| `list`           | List non-plugin keys for the workspace.                                               |
+| `create`         | Create a key with explicit `kind` (or infer from `linkedAgentId`).                    |
+| `createPersonal` | Shorthand for `kind: PERSONAL`. No agent link. Permanent until revoked.               |
+| `createSession`  | Shorthand for `kind: SESSION`. Requires `ttlHours` (1–168, default 24). Auto-expires. |
+| `update`         | Edit name or narrowing arrays. Scopes and hash are immutable.                         |
+| `revoke`         | Set `revokedAt`; immediately rejects all further calls.                               |
+| `delete`         | Hard-delete a non-plugin key.                                                         |
+| `rotate`         | Revoke and re-issue with the same name, scopes, and narrowing. Returns `rawKey` once. |
 
 ### `integration.*`
 
 Read-only adapter manifest queries plus one mutation for tagging legacy agents.
 
-| Procedure | Summary |
-|---|---|
-| `list` | Return all adapter manifests merged with matching agents in this workspace. |
-| `byKind({ kind, presence? })` | Return one adapter manifest + its installed agents. `presence` disambiguates the two `CLAUDE` adapters. |
-| `applyToAgent({ agentId, kind, presence? })` | Stamp an existing agent with the adapter's `provider` and `defaultRuntimeMode`. |
+| Procedure                                    | Summary                                                                                                 |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `list`                                       | Return all adapter manifests merged with matching agents in this workspace.                             |
+| `byKind({ kind, presence? })`                | Return one adapter manifest + its installed agents. `presence` disambiguates the two `CLAUDE` adapters. |
+| `applyToAgent({ agentId, kind, presence? })` | Stamp an existing agent with the adapter's `provider` and `defaultRuntimeMode`.                         |
 
 ### `runtime.*`
 
@@ -309,14 +309,14 @@ CRUD for the `Runtime` primitive — the compute environment that hosts one
 or more agents. See [/agents/runtimes.html](/agents/runtimes.html) for the
 broader concept.
 
-| Procedure | Summary |
-|---|---|
-| `list` | All non-archived runtimes for the workspace, with `_count: { agents }` and `owner` summary. |
-| `byId({ id })` | Single runtime + its agents (id, name, profileKey, status, runtimeMode). |
-| `register` | Create a runtime. `{ name, kind, endpoint?, providersAvailable }`. Sets `ownerId` from session. Used by the `forge` daemon and by admins manually wiring a REMOTE_HTTP runtime. |
-| `heartbeat({ id })` | Bump `heartbeatAt`. The local daemon calls every 60s. |
-| `update({ id, name?, providersAvailable? })` | Edit metadata. Endpoint and secret are not editable post-creation (rotate by archive + re-register). |
-| `archive({ id })` | Soft-delete. Agents on the runtime keep their `runtimeId` but the runtime is hidden from the index. |
+| Procedure                                    | Summary                                                                                                                                                                         |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list`                                       | All non-archived runtimes for the workspace, with `_count: { agents }` and `owner` summary.                                                                                     |
+| `byId({ id })`                               | Single runtime + its agents (id, name, profileKey, status, runtimeMode).                                                                                                        |
+| `register`                                   | Create a runtime. `{ name, kind, endpoint?, providersAvailable }`. Sets `ownerId` from session. Used by the `forge` daemon and by admins manually wiring a REMOTE_HTTP runtime. |
+| `heartbeat({ id })`                          | Bump `heartbeatAt`. The local daemon calls every 60s.                                                                                                                           |
+| `update({ id, name?, providersAvailable? })` | Edit metadata. Endpoint and secret are not editable post-creation (rotate by archive + re-register).                                                                            |
+| `archive({ id })`                            | Soft-delete. Agents on the runtime keep their `runtimeId` but the runtime is hidden from the index.                                                                             |
 
 ### `agent.unifiedTimeline`
 
@@ -348,29 +348,29 @@ Per-(workspace, user) markdown scratchpad. The dashboard
 `notes.*` mirrors a narrower agent-facing subset (no `unarchive`, no
 `delete`, no `convertToIssue` — those are human-only).
 
-| Procedure | Summary |
-|---|---|
-| `list({ archived?, kind?, limit? })` | Caller's notes ordered by `(pinned desc, updatedAt desc)`. Default `kind = NOTE`, unarchived. |
-| `create({ title?, body, pinned?, kind?, journalDate? })` | Create a note for the calling user. `kind = JOURNAL` requires `journalDate` (or defaults to now). |
-| `update({ id, title?, body?, pinned? })` | Patch a note the caller owns. `title: null` clears the title. Empty body allowed (for journal entries that are still being filled in). |
-| `archive({ id })` | Soft-archive. |
-| `unarchive({ id })` | Reverse archive. |
-| `delete({ id })` | Hard-delete. Prefer `archive` — this is the cleanup path. |
-| `convertToIssue({ id, projectId? })` | Spawn an Issue with `title = note.title \|\| first line of body` and `description = body`. The note is left in place. Returns `{ issueId, issueKey, number }`. |
-| `todayJournal()` | Get-or-create today's `JOURNAL` entry for the caller, anchored to UTC midnight on the user's wall-clock date (driven by `User.timezone`). Idempotent across calls in the same day. |
-| `listJournal({ from?, to?, limit? = 30 })` | List recent journal entries for the caller, ordered by `journalDate desc`. |
+| Procedure                                                | Summary                                                                                                                                                                            |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `list({ archived?, kind?, limit? })`                     | Caller's notes ordered by `(pinned desc, updatedAt desc)`. Default `kind = NOTE`, unarchived.                                                                                      |
+| `create({ title?, body, pinned?, kind?, journalDate? })` | Create a note for the calling user. `kind = JOURNAL` requires `journalDate` (or defaults to now).                                                                                  |
+| `update({ id, title?, body?, pinned? })`                 | Patch a note the caller owns. `title: null` clears the title. Empty body allowed (for journal entries that are still being filled in).                                             |
+| `archive({ id })`                                        | Soft-archive.                                                                                                                                                                      |
+| `unarchive({ id })`                                      | Reverse archive.                                                                                                                                                                   |
+| `delete({ id })`                                         | Hard-delete. Prefer `archive` — this is the cleanup path.                                                                                                                          |
+| `convertToIssue({ id, projectId? })`                     | Spawn an Issue with `title = note.title \|\| first line of body` and `description = body`. The note is left in place. Returns `{ issueId, issueKey, number }`.                     |
+| `todayJournal()`                                         | Get-or-create today's `JOURNAL` entry for the caller, anchored to UTC midnight on the user's wall-clock date (driven by `User.timezone`). Idempotent across calls in the same day. |
+| `listJournal({ from?, to?, limit? = 30 })`               | List recent journal entries for the caller, ordered by `journalDate desc`.                                                                                                         |
 
 ### `issue.watch / unwatch / watchers / watching`
 
 Per-(issue, user OR agent) subscriptions. See
 [Watching](/guide/watching.html) for the full breakdown.
 
-| Procedure | Summary |
-|---|---|
-| `watch({ issueId })` | Add caller as watcher. Idempotent. Identity inferred from API key (`linkedAgentId` → agent-watch, otherwise user-watch). |
-| `unwatch({ issueId })` | Remove caller's watch. No-op if not watching. |
-| `watchers({ issueId })` | List watchers with hydrated `user` / `agent` identity fields. |
-| `watching({ limit? = 50 })` | Issues the caller currently watches, ordered by issue `updatedAt desc`. Powers the inbox **Watching** section. |
+| Procedure                   | Summary                                                                                                                  |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `watch({ issueId })`        | Add caller as watcher. Idempotent. Identity inferred from API key (`linkedAgentId` → agent-watch, otherwise user-watch). |
+| `unwatch({ issueId })`      | Remove caller's watch. No-op if not watching.                                                                            |
+| `watchers({ issueId })`     | List watchers with hydrated `user` / `agent` identity fields.                                                            |
+| `watching({ limit? = 50 })` | Issues the caller currently watches, ordered by issue `updatedAt desc`. Powers the inbox **Watching** section.           |
 
 ### `issue.applyCommands`
 
@@ -388,7 +388,7 @@ issue.applyCommands.mutate({
     { kind: "label", name: "deploy" },
     { kind: "watch" },
   ],
-})
+});
 // → { results: [{ kind, status: "applied" | "skipped", reason? }] }
 ```
 
@@ -407,13 +407,13 @@ The legacy issue-only procs (`list`, `set`, `toggle`) are preserved
 verbatim for backward compat with existing Hermes/agent runtimes. New
 consumers use the polymorphic surface:
 
-| Procedure | Summary |
-|---|---|
-| `listAll({ workspaceId? })` | All pins for the caller, hydrated to small "card" objects. Dead targets are silently dropped. |
-| `add({ targetType, targetId, workspaceId? })` | Add a pin. |
-| `remove({ id })` | Remove by Pin id. |
-| `toggleEntity({ targetType, targetId, workspaceId? })` | Convenience: add if absent, remove if present. |
-| `reorder({ ids })` | Set `orderIndex` based on the array position. |
+| Procedure                                              | Summary                                                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------------------------------------- |
+| `listAll({ workspaceId? })`                            | All pins for the caller, hydrated to small "card" objects. Dead targets are silently dropped. |
+| `add({ targetType, targetId, workspaceId? })`          | Add a pin.                                                                                    |
+| `remove({ id })`                                       | Remove by Pin id.                                                                             |
+| `toggleEntity({ targetType, targetId, workspaceId? })` | Convenience: add if absent, remove if present.                                                |
+| `reorder({ ids })`                                     | Set `orderIndex` based on the array position.                                                 |
 
 `targetType` is `PinTargetType` (`ISSUE` / `PROJECT` / `INITIATIVE` /
 `SAVED_VIEW` / `CYCLE` / `AGENT`). `workspaceId` may be null for
@@ -421,10 +421,10 @@ cross-workspace pins (the legacy topbar-strip semantic).
 
 ### `recentItem.*`
 
-| Procedure | Summary |
-|---|---|
-| `list({ limit? })` | Most-recently-visited entities for the caller in this workspace, hydrated. |
-| `track({ targetType, targetId })` | Upsert a row. Server-side debounced 5s — fast nav doesn't spam writes. |
+| Procedure                         | Summary                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------- |
+| `list({ limit? })`                | Most-recently-visited entities for the caller in this workspace, hydrated. |
+| `track({ targetType, targetId })` | Upsert a row. Server-side debounced 5s — fast nav doesn't spam writes.     |
 
 ## Cross-references
 

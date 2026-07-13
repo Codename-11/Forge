@@ -12,6 +12,10 @@ import { Button } from "@/components/ui/button";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { DescriptionAiAssist } from "@/components/issue-detail/description-ai-assist";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
+import {
+  PlanStepContextCards,
+  type PlanStepIssueContext,
+} from "@/components/issue-detail/plan-step-context-card";
 import { SubIssuesPanel, ParentIssueBacklink } from "@/components/issue-detail/sub-issues-panel";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import {
@@ -54,10 +58,7 @@ function useSlashAttributes() {
   const { data: labels } = trpc.label.list.useQuery(undefined, {
     staleTime: 60_000,
   });
-  return useMemo(
-    () => ({ projects: projects?.items, agents, labels }),
-    [projects, agents, labels],
-  );
+  return useMemo(() => ({ projects: projects?.items, agents, labels }), [projects, agents, labels]);
 }
 
 type AgentRequestMode = "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
@@ -319,6 +320,7 @@ export function IssueMain({
   kind,
   projectId,
   parent,
+  executionSteps,
 }: {
   issueId: string;
   description: string | null;
@@ -328,11 +330,13 @@ export function IssueMain({
   canResolveActions?: boolean;
   kind: string;
   projectId: string | null;
-  parent: { id: string; number: number; title: string } | null;
+  parent: { id: string; number: number; title: string; deletedAt: Date | string | null } | null;
+  executionSteps: PlanStepIssueContext[];
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-8">
       <ParentIssueBacklink parent={parent} />
+      <PlanStepContextCards contexts={executionSteps} />
       <AgentRunStrip issueId={issueId} />
       <IssueGoalsStrip issueId={issueId} />
       <IssuePlansStrip issueId={issueId} />

@@ -179,7 +179,13 @@ function fmtDate(d: Date): string {
 type Suggestion =
   | { kind: "command"; keyword: string; example: string }
   | { kind: "project"; id: string; name: string; key: string; color?: string | null }
-  | { kind: "agent"; id: string; name: string | null; profileKey: string | null; avatar: string | null }
+  | {
+      kind: "agent";
+      id: string;
+      name: string | null;
+      profileKey: string | null;
+      avatar: string | null;
+    }
   | { kind: "label"; name: string; color: string }
   | { kind: "priority"; level: Priority }
   | { kind: "due"; label: string; date: Date };
@@ -201,7 +207,7 @@ function suggestionKey(s: Suggestion): string {
   }
 }
 
-type Mode =
+export type Mode =
   | { kind: "issue" }
   | { kind: "cycle" }
   | { kind: "initiative" }
@@ -211,6 +217,45 @@ type Mode =
   | { kind: "action-request" }
   | { kind: "issue-context"; issueId: string; intent: "comment" | "sub-issue" };
 
+export type QuickCreateOverride = {
+  projectId?: string;
+  statusId?: string;
+  title?: string;
+  body?: string;
+  archiveNoteId?: string;
+  /** Bypass pathname-aware capture when the caller promises a new issue. */
+  mode?: "issue";
+};
+
+/** Resolve the initial capture mode from the current route and caller intent. */
+export function resolveQuickCreateMode(path: string | null, override?: QuickCreateOverride): Mode {
+  // Explicit issue actions (for example the command palette) must stay
+  // issues even on an issue-detail route, where contextual capture defaults
+  // to a comment. Seeded note conversions have the same one-shot intent.
+  if (override?.mode === "issue" || override?.title || override?.body) {
+    return { kind: "issue" };
+  }
+  if (!path) return { kind: "issue" };
+  const tail = path.replace(/^\/w\/[^/]+/, "");
+  const issueMatch = tail.match(/^\/issues\/([^/?#]+)/);
+  if (issueMatch) {
+    return {
+      kind: "issue-context",
+      issueId: issueMatch[1],
+      intent: "comment",
+    };
+  }
+  if (tail === "/cycles" || tail.startsWith("/cycles?")) return { kind: "cycle" };
+  if (tail === "/initiatives" || tail.startsWith("/initiatives?")) {
+    return { kind: "initiative" };
+  }
+  if (tail === "/projects" || tail.startsWith("/projects?")) return { kind: "project" };
+  if (tail === "/artifacts" || tail.startsWith("/artifacts?") || tail.startsWith("/artifacts/")) {
+    return { kind: "artifact" };
+  }
+  return { kind: "issue" };
+}
+
 const DRAFT_KEY = "quickCreate";
 
 // Cyclable mode order for Tab / Shift+Tab / ⌘1..⌘7 mode jumping.
@@ -218,7 +263,14 @@ const DRAFT_KEY = "quickCreate";
 // issue first, then notes, then the planning surfaces, then artifacts
 // and action-requests. `issue-context` is excluded because it's
 // driven by the current URL, not by user choice.
-type CyclableMode = "issue" | "note" | "project" | "initiative" | "cycle" | "artifact" | "action-request";
+type CyclableMode =
+  | "issue"
+  | "note"
+  | "project"
+  | "initiative"
+  | "cycle"
+  | "artifact"
+  | "action-request";
 const CYCLABLE_MODES: readonly CyclableMode[] = [
   "issue",
   "note",
@@ -282,6 +334,8 @@ export function QuickCreate() {
   const [text, setText] = useState("");
   const [priority, setPriority] = useState<Priority>("NONE");
   const [projectId, setProjectId] = useState<string>("");
+  // Contextual board/list adds pin the new issue to the originating status.
+  const [statusId, setStatusId] = useState<string>("");
   // Slash commands the operator has "committed" into chips: assign / due /
   // label / watch / unwatch (and any /project whose key didn't resolve to a
   // loaded project). Priority + a resolved project sync onto the native
@@ -289,12 +343,8 @@ export function QuickCreate() {
   const [committed, setCommitted] = useState<SlashCommand[]>([]);
   const [restored, setRestored] = useState(false);
   // Per-mode extras for the new agentic-OS destinations.
-  const [artifactType, setArtifactType] = useState<ArtifactType>(
-    ArtifactType.DOCUMENT,
-  );
-  const [severity, setSeverity] = useState<NotificationSeverity>(
-    NotificationSeverity.INFO,
-  );
+  const [artifactType, setArtifactType] = useState<ArtifactType>(ArtifactType.DOCUMENT);
+  const [severity, setSeverity] = useState<NotificationSeverity>(NotificationSeverity.INFO);
 
   // Autocomplete state: active index + a per-token dismissal flag (Esc
   // closes the popover without closing the overlay; the next keystroke
@@ -314,8 +364,10 @@ export function QuickCreate() {
 
   // Escalation: when ⌘⏎ is hit on a mode that has a richer full form,
   // we route to the matching NewXDialog with a seeded name.
-  const [fullForm, setFullForm] =
-    useState<null | { kind: "cycle" | "initiative" | "project"; name: string }>(null);
+  const [fullForm, setFullForm] = useState<null | {
+    kind: "cycle" | "initiative" | "project";
+    name: string;
+  }>(null);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -327,12 +379,15 @@ export function QuickCreate() {
   const ws = useMaybeWorkspace();
   const utils = trpc.useUtils();
 
+  const invalidateIssueViews = async () => {
+    await Promise.all([utils.issue.list.invalidate(), utils.issue.count.invalidate()]);
+  };
+
   // Issue / sub-issue are the only modes with attribute tokens + slash
   // autocomplete. Drives query enablement, the badge row, and the add
   // pills.
   const isIssueLike =
-    mode.kind === "issue" ||
-    (mode.kind === "issue-context" && mode.intent === "sub-issue");
+    mode.kind === "issue" || (mode.kind === "issue-context" && mode.intent === "sub-issue");
 
   // Live data for the value autocomplete + badge rendering.
   const { data: projects } = trpc.project.list.useQuery(
@@ -361,8 +416,7 @@ export function QuickCreate() {
   }, [labels]);
 
   // Parent issue context (for inheriting its project on sub-issue).
-  const contextIssueId =
-    mode.kind === "issue-context" ? mode.issueId : undefined;
+  const contextIssueId = mode.kind === "issue-context" ? mode.issueId : undefined;
   const { data: contextIssue } = trpc.issue.byId.useQuery(
     { id: contextIssueId ?? "" },
     { enabled: open && !!contextIssueId },
@@ -452,27 +506,6 @@ export function QuickCreate() {
 
   // ----- open/close lifecycle --------------------------------------
 
-  const modeForPath = useCallback((path: string | null): Mode => {
-    if (!path) return { kind: "issue" };
-    const tail = path.replace(/^\/w\/[^/]+/, "");
-    const issueMatch = tail.match(/^\/issues\/([^/?#]+)/);
-    if (issueMatch) {
-      return {
-        kind: "issue-context",
-        issueId: issueMatch[1],
-        intent: "comment",
-      };
-    }
-    if (tail === "/cycles" || tail.startsWith("/cycles?")) return { kind: "cycle" };
-    if (tail === "/initiatives" || tail.startsWith("/initiatives?"))
-      return { kind: "initiative" };
-    if (tail === "/projects" || tail.startsWith("/projects?"))
-      return { kind: "project" };
-    if (tail === "/artifacts" || tail.startsWith("/artifacts?") || tail.startsWith("/artifacts/"))
-      return { kind: "artifact" };
-    return { kind: "issue" };
-  }, []);
-
   const close = useCallback(
     (persistDraft: boolean) => {
       // Don't persist the draft when we were seeded from an external
@@ -485,6 +518,7 @@ export function QuickCreate() {
       setText("");
       setPriority("NONE");
       setProjectId("");
+      setStatusId("");
       setCommitted([]);
       setRestored(false);
       setAcActive(0);
@@ -500,20 +534,12 @@ export function QuickCreate() {
   );
 
   const openFor = useCallback(
-    (override?: {
-      projectId?: string;
-      title?: string;
-      body?: string;
-      archiveNoteId?: string;
-    }) => {
-      const next = modeForPath(pathname);
-      // Force issue mode when seeded with a title/body (e.g. note
-      // convert) — picking that on a `/cycles` page should still go to
-      // an issue.
+    (override?: QuickCreateOverride) => {
+      const effectiveMode = resolveQuickCreateMode(pathname, override);
       const seeded = !!(override?.title || override?.body);
-      const effectiveMode: Mode = seeded ? { kind: "issue" } : next;
       setMode(effectiveMode);
       if (override?.projectId) setProjectId(override.projectId);
+      if (override?.statusId) setStatusId(override.statusId);
 
       if (seeded) {
         setText(override.title ?? "");
@@ -538,7 +564,7 @@ export function QuickCreate() {
       }
       setOpen(true);
     },
-    [modeForPath, pathname],
+    [pathname],
   );
 
   // Hotkey: ⇧C (does not fire inside editable fields unless the leader
@@ -549,22 +575,14 @@ export function QuickCreate() {
   // Legacy hooks: [data-quick-create] clicks + window event.
   useEffect(() => {
     const clickHandler = (e: MouseEvent) => {
-      const el = (e.target as HTMLElement).closest(
-        "[data-quick-create]",
-      ) as HTMLElement | null;
+      const el = (e.target as HTMLElement).closest("[data-quick-create]") as HTMLElement | null;
       if (!el) return;
       const pid = el.dataset.quickCreateProject;
       openFor(pid ? { projectId: pid } : undefined);
     };
     document.addEventListener("click", clickHandler);
     const evtHandler = (e: Event) => {
-      const detail =
-        (e as CustomEvent<{
-          projectId?: string;
-          title?: string;
-          body?: string;
-          archiveNoteId?: string;
-        }>).detail ?? {};
+      const detail = (e as CustomEvent<QuickCreateOverride>).detail ?? {};
       openFor(detail);
     };
     window.addEventListener("forge:quick-create", evtHandler);
@@ -653,16 +671,14 @@ export function QuickCreate() {
 
   // Some modes escalate on ⌘⏎; others have a real secondary action.
   const hasEscalation =
-    mode.kind === "cycle" ||
-    mode.kind === "initiative" ||
-    mode.kind === "project";
+    mode.kind === "cycle" || mode.kind === "initiative" || mode.kind === "project";
   const secondaryHint = hasEscalation
     ? "⌘⏎ more options"
     : mode.kind === "issue" || mode.kind === "artifact"
-    ? "⌘⏎ create + open"
-    : mode.kind === "note" || mode.kind === "action-request"
-    ? "⌘⏎ add description"
-    : null;
+      ? "⌘⏎ create + open"
+      : mode.kind === "note" || mode.kind === "action-request"
+        ? "⌘⏎ add description"
+        : null;
 
   // Compose the final issue input from the raw title + committed chips +
   // any command still trailing in the title. Returns the cleaned title,
@@ -686,17 +702,14 @@ export function QuickCreate() {
       if (c.kind === "priority") {
         priorityValue = LEVEL_TO_PRIORITY[c.level] ?? priorityValue;
       } else if (c.kind === "project") {
-        const match = projects?.items.find(
-          (p) => p.key.toUpperCase() === c.key.toUpperCase(),
-        );
+        const match = projects?.items.find((p) => p.key.toUpperCase() === c.key.toUpperCase());
         if (match) projectIdValue = match.id;
         else flushed.push(c);
       } else {
         flushed.push(c);
       }
     }
-    const { strippedBody, commands: leadingCommands } =
-      parseSlashCommands(working);
+    const { strippedBody, commands: leadingCommands } = parseSlashCommands(working);
     const all = [...committed, ...leadingCommands, ...flushed];
     return {
       finalTitle: strippedBody.trim(),
@@ -753,7 +766,7 @@ export function QuickCreate() {
               projectId: projectId || null,
               labelIds: explicitLabelIds,
             });
-            await utils.issue.list.invalidate();
+            await invalidateIssueViews();
             done(result.created ? "Imported GitHub issue." : "Opened existing imported issue.");
             if (secondary) {
               const base = ws ? `/w/${ws.slug}` : "";
@@ -774,23 +787,22 @@ export function QuickCreate() {
             toast.error("Title required after slash commands.");
             return;
           }
-          const { finalTitle, applyCommands, priorityValue, projectIdValue } =
-            resolved;
+          const { finalTitle, applyCommands, priorityValue, projectIdValue } = resolved;
           // Seed description (note → issue path). If empty after trim,
           // stay omitted so we don't write blank descriptions.
           const seededDesc = seedDescription.trim() || undefined;
           // Capture the archive intent before close() resets state.
-          const archiveTargetNoteId =
-            archiveNoteId && archiveOnCreate ? archiveNoteId : null;
+          const archiveTargetNoteId = archiveNoteId && archiveOnCreate ? archiveNoteId : null;
           const issue = await createIssue.mutateAsync({
             title: finalTitle,
             description: seededDesc,
             projectId: projectIdValue || undefined,
+            statusId: statusId || undefined,
             priority: priorityValue,
             labelIds: [],
             applyCommands,
           });
-          await utils.issue.list.invalidate();
+          await invalidateIssueViews();
           if (archiveTargetNoteId) {
             archiveNote.mutate({ id: archiveTargetNoteId });
           }
@@ -839,10 +851,13 @@ export function QuickCreate() {
             .map((w) => w[0]?.toUpperCase() ?? "")
             .join("")
             .slice(0, 6);
-          const key = suggestedKey.length >= 2 ? suggestedKey : value
-            .toUpperCase()
-            .replace(/[^A-Z0-9]/g, "")
-            .slice(0, 4) || "PRJ";
+          const key =
+            suggestedKey.length >= 2
+              ? suggestedKey
+              : value
+                  .toUpperCase()
+                  .replace(/[^A-Z0-9]/g, "")
+                  .slice(0, 4) || "PRJ";
           await createProject.mutateAsync({ name: value, key });
           await utils.project.list.invalidate();
           done("Project created.");
@@ -857,9 +872,7 @@ export function QuickCreate() {
             return;
           }
           const titleVal = showDescription ? value : null;
-          const bodyVal = showDescription
-            ? seedDescription.trim()
-            : value;
+          const bodyVal = showDescription ? seedDescription.trim() : value;
           if (!bodyVal) {
             toast.error("Note body required.");
             return;
@@ -926,7 +939,7 @@ export function QuickCreate() {
               labelIds: [],
               applyCommands: resolved.applyCommands,
             });
-            await utils.issue.list.invalidate();
+            await invalidateIssueViews();
             done(`Created sub-issue #${issue.number}`);
           }
           return;
@@ -952,9 +965,7 @@ export function QuickCreate() {
     if (!trailing) return [];
     if (!trailing.hasSpace) {
       const q = trailing.keyword;
-      return SLASH_COMMAND_HELP.filter((c) =>
-        c.keyword.slice(1).startsWith(q),
-      ).map((c) => ({
+      return SLASH_COMMAND_HELP.filter((c) => c.keyword.slice(1).startsWith(q)).map((c) => ({
         kind: "command" as const,
         keyword: c.keyword,
         example: c.example,
@@ -965,12 +976,7 @@ export function QuickCreate() {
     switch (trailing.keyword) {
       case "project":
         return (projects?.items ?? [])
-          .filter(
-            (p) =>
-              !q ||
-              p.name.toLowerCase().includes(q) ||
-              p.key.toLowerCase().includes(q),
-          )
+          .filter((p) => !q || p.name.toLowerCase().includes(q) || p.key.toLowerCase().includes(q))
           .slice(0, 8)
           .map((p) => ({
             kind: "project" as const,
@@ -983,9 +989,7 @@ export function QuickCreate() {
         return (agents ?? [])
           .filter(
             (a) =>
-              !q ||
-              a.name?.toLowerCase().includes(q) ||
-              a.profileKey?.toLowerCase().includes(q),
+              !q || a.name?.toLowerCase().includes(q) || a.profileKey?.toLowerCase().includes(q),
           )
           .slice(0, 8)
           .map((a) => ({
@@ -1002,9 +1006,9 @@ export function QuickCreate() {
           .map((l) => ({ kind: "label" as const, name: l.name, color: l.color }));
       case "priority":
       case "p":
-        return PRIORITIES.filter(
-          (p) => p !== "NONE" && (!q || p.toLowerCase().startsWith(q)),
-        ).map((level) => ({ kind: "priority" as const, level }));
+        return PRIORITIES.filter((p) => p !== "NONE" && (!q || p.toLowerCase().startsWith(q))).map(
+          (level) => ({ kind: "priority" as const, level }),
+        );
       case "due": {
         const out: Suggestion[] = [];
         const parsed = q ? parseDateExpression(trailing.arg.trim()) : null;
@@ -1050,35 +1054,25 @@ export function QuickCreate() {
         return;
       }
       if (cmd.kind === "project") {
-        const match = projects?.items.find(
-          (p) => p.key.toUpperCase() === cmd.key.toUpperCase(),
-        );
+        const match = projects?.items.find((p) => p.key.toUpperCase() === cmd.key.toUpperCase());
         if (match) {
           setProjectId(match.id);
           return;
         }
         // Unknown / not-yet-loaded key — keep it as a chip; the server
         // resolves it by key on create.
-        setCommitted((prev) => [
-          ...prev.filter((c) => c.kind !== "project"),
-          cmd,
-        ]);
+        setCommitted((prev) => [...prev.filter((c) => c.kind !== "project"), cmd]);
         return;
       }
       setCommitted((prev) => {
         if (cmd.kind === "label") {
           const dup = prev.some(
-            (c) =>
-              c.kind === "label" &&
-              c.name.toLowerCase() === cmd.name.toLowerCase(),
+            (c) => c.kind === "label" && c.name.toLowerCase() === cmd.name.toLowerCase(),
           );
           return dup ? prev : [...prev, cmd];
         }
         if (cmd.kind === "watch" || cmd.kind === "unwatch") {
-          return [
-            ...prev.filter((c) => c.kind !== "watch" && c.kind !== "unwatch"),
-            cmd,
-          ];
+          return [...prev.filter((c) => c.kind !== "watch" && c.kind !== "unwatch"), cmd];
         }
         // assign / due — single-valued.
         return [...prev.filter((c) => c.kind !== cmd.kind), cmd];
@@ -1155,13 +1149,10 @@ export function QuickCreate() {
   // Engagement mode for the committed /assign — unset means "use the
   // surface's resolved default" (same as not touching the field at all).
   const setAssignMode = useCallback((assignMode: EngagementModeValue) => {
-    setCommitted((prev) =>
-      prev.map((c) => (c.kind === "assign" ? { ...c, mode: assignMode } : c)),
-    );
+    setCommitted((prev) => prev.map((c) => (c.kind === "assign" ? { ...c, mode: assignMode } : c)));
   }, []);
 
-  const hasBadges =
-    priority !== "NONE" || !!projectId || committed.length > 0;
+  const hasBadges = priority !== "NONE" || !!projectId || committed.length > 0;
 
   // Backspace at caret-start pops the most-recent badge (committed →
   // project → priority).
@@ -1247,27 +1238,18 @@ export function QuickCreate() {
 
     // Tab / Shift+Tab cycles modes — only when the title is empty, so it
     // never fights tokenization mid-type. issue-context is sticky.
-    if (
-      e.key === "Tab" &&
-      mode.kind !== "issue-context" &&
-      text.trim() === ""
-    ) {
+    if (e.key === "Tab" && mode.kind !== "issue-context" && text.trim() === "") {
       e.preventDefault();
       const dir = e.shiftKey ? -1 : 1;
       const idx = CYCLABLE_MODES.indexOf(mode.kind as CyclableMode);
-      const next =
-        CYCLABLE_MODES[(idx + dir + CYCLABLE_MODES.length) % CYCLABLE_MODES.length];
+      const next = CYCLABLE_MODES[(idx + dir + CYCLABLE_MODES.length) % CYCLABLE_MODES.length];
       switchMode(next);
       return;
     }
 
     // ⌘1..⌘7 jump straight to a mode without dragging through the
     // dropdown — fastest path for muscle memory.
-    if (
-      (e.metaKey || e.ctrlKey) &&
-      /^[1-7]$/.test(e.key) &&
-      mode.kind !== "issue-context"
-    ) {
+    if ((e.metaKey || e.ctrlKey) && /^[1-7]$/.test(e.key) && mode.kind !== "issue-context") {
       const idx = Number(e.key) - 1;
       if (idx >= 0 && idx < CYCLABLE_MODES.length) {
         e.preventDefault();
@@ -1282,28 +1264,13 @@ export function QuickCreate() {
   // Full-form escalation takes over when open.
   if (fullForm) {
     if (fullForm.kind === "cycle") {
-      return (
-        <NewCycleDialog
-          open={true}
-          onClose={() => setFullForm(null)}
-        />
-      );
+      return <NewCycleDialog open={true} onClose={() => setFullForm(null)} />;
     }
     if (fullForm.kind === "initiative") {
-      return (
-        <NewInitiativeDialog
-          open={true}
-          onClose={() => setFullForm(null)}
-        />
-      );
+      return <NewInitiativeDialog open={true} onClose={() => setFullForm(null)} />;
     }
     if (fullForm.kind === "project") {
-      return (
-        <NewProjectDialog
-          open={true}
-          onClose={() => setFullForm(null)}
-        />
-      );
+      return <NewProjectDialog open={true} onClose={() => setFullForm(null)} />;
     }
   }
 
@@ -1330,7 +1297,9 @@ export function QuickCreate() {
       >
         <div className="flex items-start justify-between gap-3 border-b border-border/60 bg-card/60 px-4 py-3">
           <div className="min-w-0">
-            <div className="text-sm font-semibold text-foreground">Create {modeLabel.toLowerCase()}</div>
+            <div className="text-sm font-semibold text-foreground">
+              Create {modeLabel.toLowerCase()}
+            </div>
             <p className="text-meta mt-0.5 text-muted-foreground">
               Pick the target, add context, then press Enter to create.
             </p>
@@ -1358,7 +1327,7 @@ export function QuickCreate() {
             <div
               ref={boxRef}
               onClick={() => inputRef.current?.focus()}
-              className="focus-within:border-ember/60 flex flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background/40 px-2 py-1.5 transition-colors"
+              className="flex flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background/40 px-2 py-1.5 transition-colors focus-within:border-ember/60"
             >
               <ModeChip
                 mode={mode}
@@ -1405,9 +1374,7 @@ export function QuickCreate() {
                 <span className="hidden shrink-0 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[0.6875rem] text-ember sm:inline-flex">
                   <CornerDownLeft className="h-3 w-3" aria-hidden />
                   <span>apply</span>
-                  <span className="font-mono">
-                    {commandChipLabel(pendingCommand.command)}
-                  </span>
+                  <span className="font-mono">{commandChipLabel(pendingCommand.command)}</span>
                 </span>
               )}
             </div>
@@ -1445,9 +1412,7 @@ export function QuickCreate() {
             the matching slash so it shares the keyboard value picker. */}
         {isIssueLike && (
           <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-card/40 px-4 py-1.5 text-[0.6875rem] text-muted-foreground">
-            <span className="mr-0.5 font-mono uppercase tracking-wider opacity-60">
-              add
-            </span>
+            <span className="mr-0.5 font-mono uppercase tracking-wider opacity-60">add</span>
             <AddPill label="Priority" onClick={() => primeSlash("priority")} />
             <AddPill label="Project" onClick={() => primeSlash("project")} />
             <AddPill label="Assignee" onClick={() => primeSlash("assign")} />
@@ -1510,43 +1475,43 @@ export function QuickCreate() {
             mode.kind === "note" ||
             mode.kind === "artifact" ||
             mode.kind === "action-request") && (
-          <div className="border-t border-border/60 bg-card/30 px-3 py-2">
-            <label className="block">
-              <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                Description
-              </span>
-              <textarea
-                value={seedDescription}
-                onChange={(e) => setSeedDescription(e.target.value)}
-                onKeyDown={(e) => {
-                  // Match the title input's keymap: ⌘/Ctrl+⏎ submits
-                  // secondary (create + open). Plain ⏎ inserts newlines.
-                  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                    e.preventDefault();
-                    void submit(true);
-                  } else if (e.key === "Escape") {
-                    e.preventDefault();
-                    close(true);
-                  }
-                }}
-                rows={4}
-                className="focus-ring mt-1 w-full resize-y rounded-md border border-input bg-background/40 p-2 text-[0.8125rem] placeholder:text-muted-foreground/60 focus:outline-none"
-                placeholder="Description (markdown ok)…"
-              />
-            </label>
-            {archiveNoteId && (
-              <label className="mt-1.5 inline-flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={archiveOnCreate}
-                  onChange={(e) => setArchiveOnCreate(e.target.checked)}
-                  className="h-3 w-3 rounded border-border"
+            <div className="border-t border-border/60 bg-card/30 px-3 py-2">
+              <label className="block">
+                <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                  Description
+                </span>
+                <textarea
+                  value={seedDescription}
+                  onChange={(e) => setSeedDescription(e.target.value)}
+                  onKeyDown={(e) => {
+                    // Match the title input's keymap: ⌘/Ctrl+⏎ submits
+                    // secondary (create + open). Plain ⏎ inserts newlines.
+                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                      e.preventDefault();
+                      void submit(true);
+                    } else if (e.key === "Escape") {
+                      e.preventDefault();
+                      close(true);
+                    }
+                  }}
+                  rows={4}
+                  className="focus-ring mt-1 w-full resize-y rounded-md border border-input bg-background/40 p-2 text-[0.8125rem] placeholder:text-muted-foreground/60 focus:outline-none"
+                  placeholder="Description (markdown ok)…"
                 />
-                <span>Archive source note after creating issue</span>
               </label>
-            )}
-          </div>
-        )}
+              {archiveNoteId && (
+                <label className="mt-1.5 inline-flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={archiveOnCreate}
+                    onChange={(e) => setArchiveOnCreate(e.target.checked)}
+                    className="h-3 w-3 rounded border-border"
+                  />
+                  <span>Archive source note after creating issue</span>
+                </label>
+              )}
+            </div>
+          )}
 
         {/* Per-mode secondary row: issue-context intent tabs, artifact
             type, action-request severity. */}
@@ -1568,10 +1533,7 @@ export function QuickCreate() {
                 />
                 {mode.intent === "sub-issue" && contextIssue && (
                   <span className="ml-1 truncate text-muted-foreground">
-                    parent:{" "}
-                    <span className="font-mono text-foreground">
-                      {contextIssue.title}
-                    </span>
+                    parent: <span className="font-mono text-foreground">{contextIssue.title}</span>
                   </span>
                 )}
               </>
@@ -1579,9 +1541,7 @@ export function QuickCreate() {
 
             {mode.kind === "artifact" && (
               <>
-                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">
-                  type
-                </span>
+                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">type</span>
                 {Object.values(ArtifactType).map((t) => (
                   <PriorityChip
                     key={t}
@@ -1595,9 +1555,7 @@ export function QuickCreate() {
 
             {mode.kind === "action-request" && (
               <>
-                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">
-                  severity
-                </span>
+                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">severity</span>
                 {SEVERITIES.map((s) => (
                   <PriorityChip
                     key={s}
@@ -1655,16 +1613,14 @@ function GitHubImportStatus({
   linkabilityStatus: string | null;
   previewLoading: boolean;
   previewError: string | null;
-  snapshot:
-    | {
-        resourceType: string;
-        title: string;
-        state: string;
-        url: string;
-        repoFullName: string;
-        number: number;
-      }
-    | null;
+  snapshot: {
+    resourceType: string;
+    title: string;
+    state: string;
+    url: string;
+    repoFullName: string;
+    number: number;
+  } | null;
   fallbackRepo: string;
   fallbackNumber: number;
 }) {
@@ -1699,7 +1655,8 @@ function GitHubImportStatus({
       <div className="border-t border-border/60 bg-card/30 px-4 py-2">
         <p className={warningClass}>
           <AlertCircle className="h-3.5 w-3.5" />
-          Connect <span className="font-mono">{fallbackRepo}</span> in GitHub settings before importing.
+          Connect <span className="font-mono">{fallbackRepo}</span> in GitHub settings before
+          importing.
         </p>
       </div>
     );
@@ -1710,7 +1667,11 @@ function GitHubImportStatus({
       <div className="border-t border-border/60 bg-card/30 px-4 py-2">
         <p className={mutedClass}>
           <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          Loading <span className="font-mono">{fallbackRepo}#{fallbackNumber}</span>…
+          Loading{" "}
+          <span className="font-mono">
+            {fallbackRepo}#{fallbackNumber}
+          </span>
+          …
         </p>
       </div>
     );
@@ -1741,7 +1702,7 @@ function GitHubImportStatus({
           <p className="truncate text-[0.8125rem] font-medium" title={snapshot.title}>
             {snapshot.title}
           </p>
-          <div className="mt-0.5 flex items-center gap-1.5 text-meta text-muted-foreground">
+          <div className="text-meta mt-0.5 flex items-center gap-1.5 text-muted-foreground">
             <span className="font-mono">
               {snapshot.repoFullName}#{snapshot.number}
             </span>
@@ -1787,20 +1748,20 @@ function ModeChip({
     mode.kind === "issue"
       ? "Issue"
       : mode.kind === "cycle"
-      ? "Sprint"
-      : mode.kind === "initiative"
-      ? "Initiative"
-      : mode.kind === "project"
-      ? "Project"
-      : mode.kind === "note"
-      ? "Note"
-      : mode.kind === "artifact"
-      ? "Artifact"
-      : mode.kind === "action-request"
-      ? "Action req."
-      : mode.intent === "comment"
-      ? "Comment"
-      : "Sub-issue";
+        ? "Sprint"
+        : mode.kind === "initiative"
+          ? "Initiative"
+          : mode.kind === "project"
+            ? "Project"
+            : mode.kind === "note"
+              ? "Note"
+              : mode.kind === "artifact"
+                ? "Artifact"
+                : mode.kind === "action-request"
+                  ? "Action req."
+                  : mode.intent === "comment"
+                    ? "Comment"
+                    : "Sub-issue";
 
   const isIssueContext = mode.kind === "issue-context";
   const [open, setOpen] = useState(false);
@@ -1935,9 +1896,7 @@ function IntentChip({
       onClick={onClick}
       className={cn(
         "focus-ring rounded px-2 py-0.5 transition-colors",
-        selected
-          ? "bg-subtle text-foreground"
-          : "text-muted-foreground hover:text-foreground",
+        selected ? "bg-subtle text-foreground" : "text-muted-foreground hover:text-foreground",
       )}
     >
       {label}
@@ -1982,9 +1941,7 @@ function Badge({
 }) {
   return (
     <span className="inline-flex h-6 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 text-[0.6875rem] text-foreground">
-      <span className="flex max-w-[160px] items-center gap-1 truncate">
-        {children}
-      </span>
+      <span className="flex max-w-[160px] items-center gap-1 truncate">{children}</span>
       <button
         type="button"
         aria-label={removeLabel}
@@ -2059,9 +2016,7 @@ function TokenBadges({
                 labelColorByName={labelColorByName}
               />
             </Badge>
-            {c.kind === "assign" && (
-              <AssignModePicker mode={c.mode} onChange={onSetAssignMode} />
-            )}
+            {c.kind === "assign" && <AssignModePicker mode={c.mode} onChange={onSetAssignMode} />}
           </span>
         );
       })}
@@ -2124,9 +2079,7 @@ function CommittedBadgeContent({
       const agent = agentByHandle.get(command.handle.toLowerCase()) ?? null;
       return (
         <>
-          {agent ? (
-            <AgentAvatar agent={agent} size="xs" title={null} />
-          ) : null}
+          {agent ? <AgentAvatar agent={agent} size="xs" title={null} /> : null}
           <span className="truncate">@{command.handle}</span>
         </>
       );
@@ -2285,9 +2238,7 @@ function SuggestionRow({
       return (
         <>
           <span className="font-mono text-foreground">{s.keyword}</span>
-          <span className="text-meta ml-auto truncate text-muted-foreground">
-            {s.example}
-          </span>
+          <span className="text-meta ml-auto truncate text-muted-foreground">{s.example}</span>
         </>
       );
     case "project":
@@ -2299,18 +2250,13 @@ function SuggestionRow({
         </>
       );
     case "agent": {
-      const agent =
-        (s.profileKey && agentByHandle.get(s.profileKey.toLowerCase())) || s;
+      const agent = (s.profileKey && agentByHandle.get(s.profileKey.toLowerCase())) || s;
       return (
         <>
           <AgentAvatar agent={agent} size="xs" title={null} />
-          <span className="flex-1 truncate text-foreground">
-            {s.name ?? s.profileKey}
-          </span>
+          <span className="flex-1 truncate text-foreground">{s.name ?? s.profileKey}</span>
           {s.profileKey && (
-            <span className="text-id font-mono text-muted-foreground">
-              @{s.profileKey}
-            </span>
+            <span className="text-id font-mono text-muted-foreground">@{s.profileKey}</span>
           )}
         </>
       );

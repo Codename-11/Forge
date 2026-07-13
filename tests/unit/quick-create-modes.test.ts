@@ -1,20 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { SWITCHABLE_MODES } from "@/components/quick-create";
+import { resolveQuickCreateMode, SWITCHABLE_MODES } from "@/components/quick-create";
 import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
 
 describe("CaptureSheet (QuickCreate) switchable modes", () => {
   it("exposes the seven agentic-OS destinations", () => {
     const kinds = SWITCHABLE_MODES.map((m) => m.kind).sort();
     expect(kinds).toEqual(
-      [
-        "action-request",
-        "artifact",
-        "cycle",
-        "initiative",
-        "issue",
-        "note",
-        "project",
-      ].sort(),
+      ["action-request", "artifact", "cycle", "initiative", "issue", "note", "project"].sort(),
     );
   });
 
@@ -27,6 +19,24 @@ describe("CaptureSheet (QuickCreate) switchable modes", () => {
       expect(mode.label).toMatch(/[A-Za-z]/);
       expect(mode.label.length).toBeLessThanOrEqual(20);
     }
+  });
+});
+
+describe("CaptureSheet route and caller intent", () => {
+  it("defaults issue-detail capture to a comment", () => {
+    expect(resolveQuickCreateMode("/w/forge/issues/cissue123")).toEqual({
+      kind: "issue-context",
+      issueId: "cissue123",
+      intent: "comment",
+    });
+  });
+
+  it("lets an explicit create-issue action bypass issue-detail comment context", () => {
+    expect(
+      resolveQuickCreateMode("/w/forge/issues/cissue123", {
+        mode: "issue",
+      }),
+    ).toEqual({ kind: "issue" });
   });
 });
 

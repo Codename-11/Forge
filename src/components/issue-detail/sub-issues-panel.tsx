@@ -70,14 +70,14 @@ export function SubIssuesPanel({
   if (!isLoading && total === 0 && !adding) {
     return (
       <section className="flex flex-wrap items-center gap-2">
-        <span className="flex items-center gap-1 text-meta uppercase tracking-wide text-muted-foreground">
+        <span className="text-meta flex items-center gap-1 uppercase tracking-wide text-muted-foreground">
           <WorkItemKindGlyph kind={childKind} size={12} />
           Sub-issues
         </span>
         <button
           type="button"
           onClick={() => setAdding(true)}
-          className="focus-ring inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+          className="focus-ring text-meta inline-flex items-center gap-1 rounded-md border border-dashed border-border px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
         >
           <Plus className="h-[9px] w-[9px]" /> Add {childNoun}
         </button>
@@ -94,10 +94,7 @@ export function SubIssuesPanel({
         {total > 0 && (
           <span className="flex items-center gap-1.5">
             <span className="h-1 w-16 overflow-hidden rounded-full bg-subtle">
-              <span
-                className="block h-full rounded-full bg-ember"
-                style={{ width: `${pct}%` }}
-              />
+              <span className="block h-full rounded-full bg-ember" style={{ width: `${pct}%` }} />
             </span>
             <span className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground">
               {done}/{total}
@@ -132,7 +129,12 @@ export function SubIssuesPanel({
               placeholder={`New ${childNoun} title…`}
               className="h-7 text-xs"
             />
-            <Button type="submit" size="sm" variant="ember" disabled={!title.trim() || create.isPending}>
+            <Button
+              type="submit"
+              size="sm"
+              variant="ember"
+              disabled={!title.trim() || create.isPending}
+            >
               {create.isPending ? "Adding…" : "Add"}
             </Button>
           </form>
@@ -140,9 +142,7 @@ export function SubIssuesPanel({
       )}
 
       <ul className="divide-y divide-border">
-        {isLoading && (
-          <li className="px-3 py-3 text-meta text-muted-foreground">Loading…</li>
-        )}
+        {isLoading && <li className="text-meta px-3 py-3 text-muted-foreground">Loading…</li>}
         {data?.items.map((c) => (
           <li key={c.id} className="group flex items-center gap-2 px-3 py-1.5">
             <StatusDot status={c.status} />
@@ -166,9 +166,7 @@ export function SubIssuesPanel({
                 {c.title}
               </span>
             </Link>
-            <span className="text-meta shrink-0 text-muted-foreground">
-              {c.status.name}
-            </span>
+            <span className="text-meta shrink-0 text-muted-foreground">{c.status.name}</span>
           </li>
         ))}
       </ul>
@@ -184,20 +182,30 @@ export function SubIssuesPanel({
 export function ParentIssueBacklink({
   parent,
 }: {
-  parent: { id: string; number: number; title: string } | null;
+  parent: {
+    id: string;
+    number: number;
+    title: string;
+    deletedAt: Date | string | null;
+  } | null;
 }) {
   const ws = useWorkspace();
   if (!parent) return null;
   return (
     <Link
-      href={`/w/${ws.slug}/issues/${parent.id}`}
-      className="inline-flex items-center gap-1.5 self-start rounded-md border border-border bg-card/40 px-2 py-1 text-meta text-muted-foreground transition hover:border-ember/40 hover:text-ember"
+      href={`/w/${ws.slug}/issues/${parent.id}${parent.deletedAt ? "?archived=1" : ""}`}
+      className="text-meta inline-flex items-center gap-1.5 self-start rounded-md border border-border bg-card/40 px-2 py-1 text-muted-foreground transition hover:border-ember/40 hover:text-ember"
       title={parent.title}
     >
       <span aria-hidden>↑</span>
       <span className="uppercase tracking-wide">part of</span>
       <span className="text-id">{formatIssueId(ws.key, parent.number)}</span>
       <span className="max-w-[18rem] truncate">{parent.title}</span>
+      {parent.deletedAt ? (
+        <span className="rounded border border-border px-1 text-[0.625rem] uppercase">
+          archived
+        </span>
+      ) : null}
     </Link>
   );
 }

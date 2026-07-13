@@ -5,6 +5,12 @@ import type { ExecutionStepStatus } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
 import { materializeStepAsIssueTx } from "@/server/services/execution-step-issue-service";
+import {
+  assertValidStepIndexDependencies,
+  validateStepAssignees,
+  validateStepDependencies,
+  validateStepSourceRun,
+} from "@/server/services/execution-step-integrity";
 
 /**
  * Materialize an ExecutionStep into a first-class Issue (AXI-56). Idempotent:
@@ -65,44 +71,36 @@ export interface CreateExecutionPlanInput {
 }
 
 /** Create an ExecutionPlan with optional seeded steps. */
-/**
- * Reject index-based step dependencies that form a cycle (Kahn's algorithm).
- * A dependency loop would leave the plan RUNNING forever with nothing ready.
- * Kept local (a pure ~20-line function) to avoid an import cycle with the
- * orchestration service. Out-of-range / self indexes are ignored.
- */
-function assertNoStepCycles(steps: { dependsOnStepIndexes?: number[] }[]): void {
-  const n = steps.length;
-  const indeg = new Array<number>(n).fill(0);
-  const adj: number[][] = Array.from({ length: n }, () => []);
-  for (let i = 0; i < n; i++) {
-    for (const d of steps[i].dependsOnStepIndexes ?? []) {
-      if (!Number.isInteger(d) || d < 0 || d >= n || d === i) continue;
-      adj[d].push(i);
-      indeg[i]++;
-    }
-  }
-  const queue: number[] = [];
-  for (let i = 0; i < n; i++) if (indeg[i] === 0) queue.push(i);
-  let seen = 0;
-  while (queue.length) {
-    const u = queue.shift()!;
-    seen++;
-    for (const v of adj[u]) if (--indeg[v] === 0) queue.push(v);
-  }
-  if (seen !== n) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "Plan steps contain a dependency cycle — steps can't depend on each other in a loop.",
-    });
-  }
-}
-
 export async function createExecutionPlan(
   db: PrismaClient,
   input: CreateExecutionPlanInput,
 ): Promise<{ id: string }> {
+  let goalCrewId: string | null = null;
+  if (
+    input.status !== undefined &&
+    input.status !== ExecutionPlanStatus.DRAFT &&
+    input.status !== ExecutionPlanStatus.APPROVED
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "New plans must start as DRAFT or APPROVED; use the activation lifecycle to run them.",
+    });
+  }
+  if (input.steps?.length) {
+    assertValidStepIndexDependencies(input.steps);
+    if (input.steps.some((step) => (step.dependsOnStepIds?.length ?? 0) > 0)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message:
+          "New plan steps must use dependsOnStepIndexes; dependency ids cannot belong to a plan that has not been created yet.",
+      });
+    }
+    await validateStepAssignees(db, {
+      workspaceId: input.workspaceId,
+      steps: input.steps,
+    });
+  }
   // Cross-tenant guards on optional refs.
   if (input.issueId) {
     const found = await db.issue.findFirst({
@@ -137,7 +135,7 @@ export async function createExecutionPlan(
   if (input.goalId) {
     const goal = await db.goal.findFirst({
       where: { id: input.goalId, workspaceId: input.workspaceId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, crewId: true },
     });
     if (!goal) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found in this workspace." });
@@ -148,6 +146,7 @@ export async function createExecutionPlan(
         message: `Cannot attach a plan to a ${goal.status.toLowerCase()} goal.`,
       });
     }
+    goalCrewId = goal.crewId;
   }
 
   const { id } = await db.$transaction(async (tx) => {
@@ -168,6 +167,7 @@ export async function createExecutionPlan(
         projectId: input.projectId ?? null,
         contextSetId: input.contextSetId ?? null,
         goalId: input.goalId ?? null,
+        crewId: input.goalId ? goalCrewId : undefined,
         isActiveAttempt: input.goalId ? true : undefined,
         status: input.status ?? ExecutionPlanStatus.DRAFT,
         createdById: input.actorId,
@@ -175,7 +175,6 @@ export async function createExecutionPlan(
       },
     });
     if (input.steps && input.steps.length) {
-      assertNoStepCycles(input.steps);
       // First pass: create steps without index-based deps so we have real ids.
       const createdIds: string[] = [];
       for (let i = 0; i < input.steps.length; i++) {
@@ -194,33 +193,25 @@ export async function createExecutionPlan(
               step.verification === undefined || step.verification === null
                 ? Prisma.JsonNull
                 : step.verification,
-            // Index-based deps resolved in pass 2; fall back to explicit ids.
-            dependsOnStepIds: step.dependsOnStepIndexes?.length
-              ? []
-              : (step.dependsOnStepIds ?? []),
+            // Index-based deps are resolved in pass 2.
+            dependsOnStepIds: [],
           },
           select: { id: true },
         });
         createdIds.push(created.id);
       }
       // Second pass: resolve index-based deps to real step ids. Indexes are
-      // scoped to this create call's steps array; invalid/self references are
-      // ignored defensively. Explicit dependsOnStepIds are preserved and
-      // de-duped with resolved ids.
+      // scoped to this create call's steps array and were validated before
+      // any records were created.
       for (let i = 0; i < input.steps.length; i++) {
         const step = input.steps[i];
         const idxs = step.dependsOnStepIndexes ?? [];
         if (!idxs.length) continue;
-        const resolvedIds = idxs
-          .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
-          .map((idx) => createdIds[idx]);
+        const resolvedIds = idxs.map((idx) => createdIds[idx]);
         if (resolvedIds.length === 0) continue;
-        const dependsOnStepIds = Array.from(
-          new Set([...(step.dependsOnStepIds ?? []), ...resolvedIds]),
-        );
         await tx.executionStep.update({
           where: { id: createdIds[i] },
-          data: { dependsOnStepIds },
+          data: { dependsOnStepIds: resolvedIds },
         });
       }
     }
@@ -268,6 +259,38 @@ export async function updateExecutionPlan(
   if (!existing) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
   }
+  if (params.contextSetId) {
+    const contextSet = await db.contextSet.findFirst({
+      where: {
+        id: params.contextSetId,
+        workspaceId: params.workspaceId,
+        archivedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!contextSet) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Context set not found in this workspace.",
+      });
+    }
+  }
+  if (
+    params.status &&
+    params.status !== existing.status &&
+    !(
+      (existing.status === ExecutionPlanStatus.DRAFT &&
+        params.status === ExecutionPlanStatus.APPROVED) ||
+      (existing.status === ExecutionPlanStatus.APPROVED &&
+        params.status === ExecutionPlanStatus.DRAFT)
+    )
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Use the plan activation or orchestration lifecycle for running and terminal states.",
+    });
+  }
   await db.$transaction(async (tx) => {
     await tx.executionPlan.update({
       where: { id: params.planId },
@@ -309,40 +332,60 @@ export async function addExecutionStep(
     dependsOnStepIds?: string[];
   },
 ): Promise<{ id: string }> {
-  const plan = await db.executionPlan.findFirst({
-    where: { id: params.planId, workspaceId: params.workspaceId, archivedAt: null },
-    select: { id: true },
-  });
-  if (!plan) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
-  }
-  const last = await db.executionStep.findFirst({
-    where: { planId: params.planId },
-    orderBy: { position: "desc" },
-    select: { position: true },
-  });
-  const step = await db.executionStep.create({
-    data: {
+  return db.$transaction(async (tx) => {
+    const [plan] = await tx.$queryRaw<
+      Array<{ id: string; status: ExecutionPlanStatus }>
+    >(Prisma.sql`
+      SELECT "id", "status"
+      FROM "ExecutionPlan"
+      WHERE "id" = ${params.planId}
+        AND "workspaceId" = ${params.workspaceId}
+        AND "archivedAt" IS NULL
+      FOR UPDATE
+    `);
+    if (!plan) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+    }
+    if (plan.status !== ExecutionPlanStatus.DRAFT) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "Steps can only be added while the execution plan is a draft.",
+      });
+    }
+    await validateStepAssignees(tx, { workspaceId: params.workspaceId, steps: [params] });
+    await validateStepDependencies(tx, {
       workspaceId: params.workspaceId,
       planId: params.planId,
-      title: params.title.trim(),
-      body: params.body ?? null,
-      position: (last?.position ?? -1) + 1,
-      assignedAgentId: params.assignedAgentId ?? null,
-      assignedUserId: params.assignedUserId ?? null,
-      expectedOutput: params.expectedOutput ?? null,
-      verification:
-        params.verification === undefined || params.verification === null
-          ? Prisma.JsonNull
-          : params.verification,
       dependsOnStepIds: params.dependsOnStepIds ?? [],
-    },
+    });
+    const last = await tx.executionStep.findFirst({
+      where: { planId: params.planId },
+      orderBy: { position: "desc" },
+      select: { position: true },
+    });
+    const step = await tx.executionStep.create({
+      data: {
+        workspaceId: params.workspaceId,
+        planId: params.planId,
+        title: params.title.trim(),
+        body: params.body ?? null,
+        position: (last?.position ?? -1) + 1,
+        assignedAgentId: params.assignedAgentId ?? null,
+        assignedUserId: params.assignedUserId ?? null,
+        expectedOutput: params.expectedOutput ?? null,
+        verification:
+          params.verification === undefined || params.verification === null
+            ? Prisma.JsonNull
+            : params.verification,
+        dependsOnStepIds: params.dependsOnStepIds ?? [],
+      },
+    });
+    await tx.executionPlan.update({
+      where: { id: params.planId },
+      data: { updatedAt: new Date() },
+    });
+    return { id: step.id };
   });
-  await db.executionPlan.update({
-    where: { id: params.planId },
-    data: { updatedAt: new Date() },
-  });
-  return { id: step.id };
 }
 
 /** Update a step's status / assignee / fields. */
@@ -365,10 +408,32 @@ export async function updateExecutionStep(
 ): Promise<void> {
   const step = await db.executionStep.findFirst({
     where: { id: params.stepId, workspaceId: params.workspaceId },
-    select: { id: true, planId: true, status: true },
+    select: {
+      id: true,
+      planId: true,
+      status: true,
+      plan: { select: { status: true, crewId: true } },
+    },
   });
   if (!step) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
+  }
+  if (
+    params.status !== undefined &&
+    params.status !== step.status &&
+    (params.status === "READY" || params.status === "RUNNING")
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "READY and RUNNING are orchestration-owned states; activate the plan or start the assigned run instead.",
+    });
+  }
+  if (params.dependsOnStepIds !== undefined && step.plan.status !== ExecutionPlanStatus.DRAFT) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Step dependencies can only be edited while the execution plan is a draft.",
+    });
   }
   const verificationData =
     params.verification === undefined
@@ -377,6 +442,43 @@ export async function updateExecutionStep(
         ? { verification: Prisma.JsonNull }
         : { verification: params.verification };
   await db.$transaction(async (tx) => {
+    if (params.status !== undefined && params.status !== step.status && step.plan.crewId) {
+      const { lockCrewForExecution } = await import("@/server/services/orchestration-service");
+      await lockCrewForExecution(tx, {
+        workspaceId: params.workspaceId,
+        crewId: step.plan.crewId,
+      });
+    }
+    // Serialize dependency edits on this plan so concurrent updates cannot
+    // each validate a half of a cycle and then both commit.
+    const [lockedPlan] = await tx.$queryRaw<Array<{ status: ExecutionPlanStatus }>>(Prisma.sql`
+      SELECT "status"
+      FROM "ExecutionPlan"
+      WHERE "id" = ${step.planId} AND "workspaceId" = ${params.workspaceId}
+      FOR UPDATE
+    `);
+    if (!lockedPlan) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+    }
+    if (params.dependsOnStepIds !== undefined && lockedPlan.status !== ExecutionPlanStatus.DRAFT) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "Step dependencies can only be edited while the execution plan is a draft.",
+      });
+    }
+    await validateStepAssignees(tx, { workspaceId: params.workspaceId, steps: [params] });
+    await validateStepSourceRun(tx, {
+      workspaceId: params.workspaceId,
+      sourceRunId: params.sourceRunId,
+    });
+    if (params.dependsOnStepIds !== undefined) {
+      await validateStepDependencies(tx, {
+        workspaceId: params.workspaceId,
+        planId: step.planId,
+        stepId: params.stepId,
+        dependsOnStepIds: params.dependsOnStepIds,
+      });
+    }
     await tx.executionStep.update({
       where: { id: params.stepId },
       data: {
@@ -409,17 +511,23 @@ export async function updateExecutionStep(
         subjectId: params.stepId,
         payload: { planId: step.planId, from: step.status, to: params.status },
       });
-      // Orchestration loop: when a step is marked DONE (manually or by an
-      // agent), re-evaluate downstream readiness so dependents that are
-      // now unblocked flip TODO → READY and dispatch. Done inside the
-      // same transaction so the cascade is atomic with the status flip.
-      if (params.status === "DONE") {
-        const { cascadeReadiness } = await import("@/server/services/orchestration-service");
-        await cascadeReadiness(tx, {
+      const releasedExecutionSlot =
+        (step.status === "READY" || step.status === "RUNNING") &&
+        params.status !== "READY" &&
+        params.status !== "RUNNING";
+      // DONE may unlock dependent steps; REVIEW/BLOCKED/CANCELED (and other
+      // exits from READY/RUNNING) release a crew slot. Refill across all plans
+      // sharing the crew so eligible work in another plan is not stranded.
+      if (params.status === "DONE" || releasedExecutionSlot) {
+        const { refillReadinessAfterSlotRelease } =
+          await import("@/server/services/orchestration-service");
+        await refillReadinessAfterSlotRelease(tx, {
           workspaceId: params.workspaceId,
           planId: step.planId,
           actorId: params.actorId,
         });
+      }
+      if (params.status === "DONE") {
         const { maybeCompleteGoal } = await import("@/server/services/orchestration-service");
         await maybeCompleteGoal(tx, {
           workspaceId: params.workspaceId,

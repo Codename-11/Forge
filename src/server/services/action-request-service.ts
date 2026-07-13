@@ -24,6 +24,7 @@ import { recordChange } from "@/server/audit";
 import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
 import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
+import { archiveIssue } from "@/server/services/issue-archive";
 import { agentIdSchema } from "@/server/validators";
 
 /**
@@ -54,10 +55,7 @@ const closeAsDuplicatePayload = z.object({
 const runtimeToolGrantPayload = z.object({
   agentId: agentIdSchema,
   mode: z.nativeEnum(EngagementMode).default(EngagementMode.REVIEW),
-  tools: z
-    .array(z.enum(RUNTIME_TOOL_CAPABILITIES))
-    .min(1)
-    .max(RUNTIME_TOOL_CAPABILITIES.length),
+  tools: z.array(z.enum(RUNTIME_TOOL_CAPABILITIES)).min(1).max(RUNTIME_TOOL_CAPABILITIES.length),
   accessLevel: z.enum(["READ_ONLY", "FULL"]).default("READ_ONLY"),
   scopePath: z.string().trim().min(1).max(500),
   reason: z.string().trim().max(2_000).optional(),
@@ -97,8 +95,7 @@ export function parseActionRequestPayload<K extends ActionRequestKind>(
     // accidental input so callers can pass through a single shape.
     return null as never;
   }
-  const schema =
-    actionRequestPayloadSchemas[kind as Exclude<K, "FREE_FORM">];
+  const schema = actionRequestPayloadSchemas[kind as Exclude<K, "FREE_FORM">];
   const parsed = schema.safeParse(raw ?? {});
   if (!parsed.success) {
     throw new TRPCError({
@@ -155,10 +152,9 @@ export const actionRequestPollOptionsSchema = z
   )
   .min(2)
   .max(8)
-  .refine(
-    (rows) => new Set(rows.map((r) => r.key)).size === rows.length,
-    { message: "ActionRequest.options keys must be unique." },
-  );
+  .refine((rows) => new Set(rows.map((r) => r.key)).size === rows.length, {
+    message: "ActionRequest.options keys must be unique.",
+  });
 
 /**
  * Read the `options` JSON off an ActionRequest row and return a
@@ -166,9 +162,7 @@ export const actionRequestPollOptionsSchema = z
  * row may have been created before this migration, in which case
  * `options` is null.
  */
-export function readPollOptions(
-  raw: Prisma.JsonValue | null,
-): ActionRequestPollOption[] | null {
+export function readPollOptions(raw: Prisma.JsonValue | null): ActionRequestPollOption[] | null {
   if (raw === null || raw === undefined) return null;
   const parsed = actionRequestPollOptionsSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;
@@ -240,8 +234,7 @@ async function validatePayloadWorkspaceScope(
     if (memberships.length !== p.userIds.length) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message:
-          "ASSIGN payload references users outside this workspace's members.",
+        message: "ASSIGN payload references users outside this workspace's members.",
       });
     }
     return;
@@ -288,8 +281,7 @@ async function validatePayloadWorkspaceScope(
     if (!runtimeSupportsRuntimeToolGrants(agent.runtime.adapterKey)) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message:
-          "Runtime tool grants are not supported for this runtime adapter.",
+        message: "Runtime tool grants are not supported for this runtime adapter.",
       });
     }
     if (agent.runtime.disabledAt) {
@@ -323,8 +315,7 @@ async function validatePayloadWorkspaceScope(
     if (!dup) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message:
-          "CLOSE_AS_DUPLICATE.duplicateOfIssueId does not belong to this workspace.",
+        message: "CLOSE_AS_DUPLICATE.duplicateOfIssueId does not belong to this workspace.",
       });
     }
     if (p.statusId) {
@@ -335,8 +326,7 @@ async function validatePayloadWorkspaceScope(
       if (!status) {
         throw new TRPCError({
           code: "BAD_REQUEST",
-          message:
-            "CLOSE_AS_DUPLICATE.statusId does not belong to this workspace.",
+          message: "CLOSE_AS_DUPLICATE.statusId does not belong to this workspace.",
         });
       }
     }
@@ -408,104 +398,103 @@ export async function createActionRequest(
   const requesterAgentId = input.actorAgentId ?? null;
   const dedupScopePath =
     parsedPayload && typeof parsedPayload === "object" && "scopePath" in parsedPayload
-      ? (String((parsedPayload as { scopePath?: unknown }).scopePath ?? "") || null)
+      ? String((parsedPayload as { scopePath?: unknown }).scopePath ?? "") || null
       : null;
   const dedupable = Boolean(input.issueId && requesterAgentId && dedupScopePath !== null);
 
-  const createOnce = () => db.$transaction(async (tx) => {
-    let supersededId: string | null = null;
-    if (dedupable) {
-      const opens = await tx.actionRequest.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          issueId: input.issueId!,
-          kind,
-          requestedByAgentId: requesterAgentId!,
-          status: ActionRequestStatus.OPEN,
-        },
-        select: { id: true, payload: true },
-      });
-      const match = opens.find((row) => {
-        const ps =
-          row.payload && typeof row.payload === "object" && "scopePath" in row.payload
-            ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
-            : "";
-        return ps === (dedupScopePath ?? "");
-      });
-      if (match) {
-        // Supersede FIRST: flip the prior row out of OPEN so it leaves the
-        // partial-unique index before the replacement is inserted.
-        // `supersededById` is backfilled once the new row id exists.
-        await tx.actionRequest.update({
-          where: { id: match.id },
-          data: {
-            status: ActionRequestStatus.SUPERSEDED,
-            resolvedAt: new Date(),
-            resolution: "Superseded by a newer request on the same issue.",
+  const createOnce = () =>
+    db.$transaction(async (tx) => {
+      let supersededId: string | null = null;
+      if (dedupable) {
+        const opens = await tx.actionRequest.findMany({
+          where: {
+            workspaceId: input.workspaceId,
+            issueId: input.issueId!,
+            kind,
+            requestedByAgentId: requesterAgentId!,
+            status: ActionRequestStatus.OPEN,
           },
+          select: { id: true, payload: true },
         });
-        supersededId = match.id;
+        const match = opens.find((row) => {
+          const ps =
+            row.payload && typeof row.payload === "object" && "scopePath" in row.payload
+              ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
+              : "";
+          return ps === (dedupScopePath ?? "");
+        });
+        if (match) {
+          // Supersede FIRST: flip the prior row out of OPEN so it leaves the
+          // partial-unique index before the replacement is inserted.
+          // `supersededById` is backfilled once the new row id exists.
+          await tx.actionRequest.update({
+            where: { id: match.id },
+            data: {
+              status: ActionRequestStatus.SUPERSEDED,
+              resolvedAt: new Date(),
+              resolution: "Superseded by a newer request on the same issue.",
+            },
+          });
+          supersededId = match.id;
+        }
       }
-    }
 
-    const row = await tx.actionRequest.create({
-      data: {
-        workspaceId: input.workspaceId,
-        title: input.title.trim(),
-        body: input.body ?? null,
-        severity: input.severity ?? NotificationSeverity.INFO,
-        kind,
-        payload:
-          parsedPayload === null
-            ? Prisma.JsonNull
-            : (parsedPayload as Prisma.InputJsonValue),
-        options:
-          parsedOptions === null
-            ? Prisma.JsonNull
-            : (parsedOptions as unknown as Prisma.InputJsonValue),
-        requestedByUserId: input.actorAgentId ? null : input.actorId,
-        requestedByAgentId: input.actorAgentId ?? null,
-        assignedUserId: input.assignedUserId ?? null,
-        assignedAgentId: input.assignedAgentId ?? null,
-        sourceType: input.sourceType ?? null,
-        sourceId: input.sourceId ?? null,
-        issueId: input.issueId ?? null,
-        dueAt: input.dueAt ?? null,
-      },
-    });
-
-    if (supersededId) {
-      await tx.actionRequest.update({
-        where: { id: supersededId },
-        data: { supersededById: row.id },
+      const row = await tx.actionRequest.create({
+        data: {
+          workspaceId: input.workspaceId,
+          title: input.title.trim(),
+          body: input.body ?? null,
+          severity: input.severity ?? NotificationSeverity.INFO,
+          kind,
+          payload:
+            parsedPayload === null ? Prisma.JsonNull : (parsedPayload as Prisma.InputJsonValue),
+          options:
+            parsedOptions === null
+              ? Prisma.JsonNull
+              : (parsedOptions as unknown as Prisma.InputJsonValue),
+          requestedByUserId: input.actorAgentId ? null : input.actorId,
+          requestedByAgentId: input.actorAgentId ?? null,
+          assignedUserId: input.assignedUserId ?? null,
+          assignedAgentId: input.assignedAgentId ?? null,
+          sourceType: input.sourceType ?? null,
+          sourceId: input.sourceId ?? null,
+          issueId: input.issueId ?? null,
+          dueAt: input.dueAt ?? null,
+        },
       });
-    }
 
-    await recordChange(tx, {
-      workspaceId: input.workspaceId,
-      actorId: input.actorId,
-      actorAgentId: input.actorAgentId ?? null,
-      entity: "action-request",
-      entityId: row.id,
-      action: "created",
-      after: { title: row.title, severity: row.severity, kind: row.kind },
-      eventKind: EventKind.ISSUE_UPDATED,
-      subjectType: "action-request",
-      subjectId: row.id,
-      payload: {
-        title: row.title,
-        severity: row.severity,
-        kind: row.kind,
-        assignedUserId: row.assignedUserId,
-        assignedAgentId: row.assignedAgentId,
-        sourceType: row.sourceType,
-        sourceId: row.sourceId,
-        issueId: row.issueId,
-        supersededId,
-      } as Prisma.InputJsonValue,
+      if (supersededId) {
+        await tx.actionRequest.update({
+          where: { id: supersededId },
+          data: { supersededById: row.id },
+        });
+      }
+
+      await recordChange(tx, {
+        workspaceId: input.workspaceId,
+        actorId: input.actorId,
+        actorAgentId: input.actorAgentId ?? null,
+        entity: "action-request",
+        entityId: row.id,
+        action: "created",
+        after: { title: row.title, severity: row.severity, kind: row.kind },
+        eventKind: EventKind.ISSUE_UPDATED,
+        subjectType: "action-request",
+        subjectId: row.id,
+        payload: {
+          title: row.title,
+          severity: row.severity,
+          kind: row.kind,
+          assignedUserId: row.assignedUserId,
+          assignedAgentId: row.assignedAgentId,
+          sourceType: row.sourceType,
+          sourceId: row.sourceId,
+          issueId: row.issueId,
+          supersededId,
+        } as Prisma.InputJsonValue,
+      });
+      return { id: row.id };
     });
-    return { id: row.id };
-  });
 
   try {
     return await createOnce();
@@ -543,8 +532,7 @@ export async function transitionActionRequest(
         data: {
           status: params.status,
           resolvedAt: params.status === ActionRequestStatus.OPEN ? null : new Date(),
-          resolvedByUserId:
-            params.status === ActionRequestStatus.OPEN ? null : params.actorId,
+          resolvedByUserId: params.status === ActionRequestStatus.OPEN ? null : params.actorId,
           resolution: params.resolution ?? undefined,
         },
       });
@@ -845,8 +833,7 @@ async function dispatchActionRequestKind(
     if (!runtimeSupportsRuntimeToolGrants(agent.runtime.adapterKey)) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message:
-          "Runtime tool grants are not supported for this runtime adapter.",
+        message: "Runtime tool grants are not supported for this runtime adapter.",
       });
     }
     const surface = runtimeToolSurface(agent.runtime.adapterKey, agent.runtime.config);
@@ -968,33 +955,19 @@ async function dispatchActionRequestKind(
   }
 
   if (kind === ActionRequestKind.ARCHIVE) {
-    await tx.issue.update({
-      where: { id: issueId },
-      data: { deletedAt: new Date() },
-    });
-    await recordChange(tx, {
+    await archiveIssue(tx, {
       workspaceId,
       actorId,
-      entity: "Issue",
-      entityId: issueId,
+      issueId,
       action: "archive",
-      after: { deletedAt: new Date().toISOString() },
-      eventKind: EventKind.ISSUE_DELETED,
-      subjectType: "issue",
-      subjectId: issueId,
-      payload: {
-        via: "action-request",
-        actionRequestId: request.id,
-      },
+      via: "action-request",
+      metadata: { actionRequestId: request.id },
     });
     return;
   }
 
   if (kind === ActionRequestKind.CLOSE_AS_DUPLICATE) {
-    const p = parseActionRequestPayload(
-      ActionRequestKind.CLOSE_AS_DUPLICATE,
-      payload,
-    );
+    const p = parseActionRequestPayload(ActionRequestKind.CLOSE_AS_DUPLICATE, payload);
     // 1. Persist the DUPLICATES relation (idempotent upsert).
     await tx.issueRelation.upsert({
       where: {
@@ -1133,9 +1106,7 @@ export async function acceptActionRequest(
       request.sourceType === "execution-plan" &&
       request.sourceId
     ) {
-      const { activatePlan } = await import(
-        "@/server/services/orchestration-service"
-      );
+      const { activatePlan } = await import("@/server/services/orchestration-service");
       await activatePlan(tx, {
         workspaceId: params.workspaceId,
         actorId: params.actorId,
@@ -1268,9 +1239,7 @@ export async function declineActionRequest(
   });
   const tag = actor?.handle ? `@${actor.handle}` : (actor?.name ?? "operator");
   const reason = params.reason?.trim();
-  const note = reason
-    ? `Declined by ${tag}: ${reason}`
-    : `Declined by ${tag}`;
+  const note = reason ? `Declined by ${tag}: ${reason}` : `Declined by ${tag}`;
   await db.$transaction(async (tx) => {
     await tx.actionRequest.update({
       where: { id: request.id },
@@ -1569,11 +1538,9 @@ export async function closeActionRequestVoting(
   // agent-requested poll, the actor must be the agent that owns
   // the request (matched via the calling key's linkedAgentId).
   const isHumanOwner =
-    request.requestedByUserId !== null &&
-    request.requestedByUserId === params.actorId;
+    request.requestedByUserId !== null && request.requestedByUserId === params.actorId;
   const isAgentOwner =
-    request.requestedByAgentId !== null &&
-    request.requestedByAgentId === params.actorAgentId;
+    request.requestedByAgentId !== null && request.requestedByAgentId === params.actorAgentId;
   if (!isHumanOwner && !isAgentOwner) {
     throw new TRPCError({
       code: "FORBIDDEN",
