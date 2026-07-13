@@ -1471,7 +1471,8 @@ export const mcpTools = {
           where: {
             workspaceId: ctx.workspaceId,
             issueId: input.id,
-            status: { notIn: ["COMPLETED", "ABANDONED"] },
+            status: { in: ["ACTIVE", "WAITING"] },
+            ...(ctx.apiKey?.linkedAgentId ? { agentId: ctx.apiKey.linkedAgentId } : {}),
           },
           orderBy: { startedAt: "desc" },
         });
@@ -7807,7 +7808,8 @@ export const mcpTools = {
               where: {
                 workspaceId: ctx.workspaceId,
                 issueId,
-                status: { notIn: ["COMPLETED", "ABANDONED"] },
+                status: { in: ["ACTIVE", "WAITING"] },
+                ...(ctx.apiKey?.linkedAgentId ? { agentId: ctx.apiKey.linkedAgentId } : {}),
               },
               orderBy: { startedAt: "desc" },
             }),
@@ -7849,6 +7851,13 @@ export const mcpTools = {
           verificationChecklist: issue.verificationChecklist,
           artifactRequired: issue.artifactRequired,
         };
+        const { loadIssueOrchestrationContext } =
+          await import("@/server/services/orchestration-context");
+        const orchestrationContext = await loadIssueOrchestrationContext(db, {
+          workspaceId: ctx.workspaceId,
+          issueId,
+          executionStepId: currentRun?.executionStepId,
+        });
         const comments = sortCommentsChronologically(rawComments);
         const currentMode = (currentRun?.engagementMode ?? "EXECUTE") as EngagementMode;
         const runProtocol = {
@@ -7874,6 +7883,7 @@ export const mcpTools = {
           currentRun,
           artifacts,
           externalResources,
+          orchestrationContext,
           completionContract,
           runProtocol,
         };
@@ -8548,13 +8558,24 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
-      const { updateExecutionPlan } = await import("@/server/services/execution-plan-service");
-      await updateExecutionPlan(db, {
-        workspaceId: ctx.workspaceId,
-        actorId: ctx.userId ?? null,
-        planId: input.id,
-        status: input.status as never,
-      });
+      if (input.status === "RUNNING") {
+        const { activatePlan } = await import("@/server/services/orchestration-service");
+        await db.$transaction((tx) =>
+          activatePlan(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.userId ?? null,
+            planId: input.id,
+          }),
+        );
+      } else {
+        const { updateExecutionPlan } = await import("@/server/services/execution-plan-service");
+        await updateExecutionPlan(db, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.userId ?? null,
+          planId: input.id,
+          status: input.status as never,
+        });
+      }
       return { ok: true };
     },
   },

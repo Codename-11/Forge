@@ -60,12 +60,13 @@ export async function authenticateApiKey(
     throw new ApiKeyError("Plugin not approved.", 403);
 
   for (const s of required) {
-    if (!key.scopes.includes(s))
-      throw new ApiKeyError(`Missing required scope: ${s}`, 403);
+    if (!key.scopes.includes(s)) throw new ApiKeyError(`Missing required scope: ${s}`, 403);
   }
 
   // Non-blocking last-used update. Batch in production via a queue.
-  void db.apiKey.update({ where: { id: key.id }, data: { lastUsedAt: new Date() } }).catch(() => {});
+  void db.apiKey
+    .update({ where: { id: key.id }, data: { lastUsedAt: new Date() } })
+    .catch(() => {});
 
   return {
     keyId: key.id,
@@ -85,10 +86,11 @@ export async function authenticateApiKey(
  * resource id. No-op when the call was session-authed (no apiKey on ctx)
  * or when the key hasn't narrowed that entity type.
  *
- * For `issue` narrowing, we check both project + label lists — an issue
- * qualifies if its `projectId` is in `projectIds` OR any of its labels is
- * in `labelIds`. This matches the "agent only sees their lane" intuition
- * without forcing label *and* project narrowing together.
+ * For `issue` narrowing, we check project + label + initiative lists — an
+ * issue qualifies if its project is directly allowed, its project belongs to
+ * an allowed initiative, OR any label is allowed. This matches the "agent
+ * only sees their lane" intuition without forcing every narrowing dimension
+ * to match together.
  */
 export async function assertKeyScope(
   ctx: { apiKey?: ApiKeyContext | null; db: typeof db },
@@ -120,11 +122,13 @@ export async function assertKeyScope(
     case "issue": {
       const hasProject = key.projectIds.length > 0;
       const hasLabel = key.labelIds.length > 0;
-      if (!hasProject && !hasLabel) return;
+      const hasInitiative = key.initiativeIds.length > 0;
+      if (!hasProject && !hasLabel && !hasInitiative) return;
       const issue = await ctx.db.issue.findUnique({
         where: { id: opts.id },
         select: {
           projectId: true,
+          project: { select: { initiativeId: true } },
           labels: { select: { labelId: true } },
         },
       });
@@ -132,12 +136,13 @@ export async function assertKeyScope(
         throw new TRPCError({ code: "NOT_FOUND" });
       }
       const projectOk =
-        hasProject && issue.projectId
-          ? key.projectIds.includes(issue.projectId)
+        hasProject && issue.projectId ? key.projectIds.includes(issue.projectId) : false;
+      const labelOk = hasLabel && issue.labels.some((l) => key.labelIds.includes(l.labelId));
+      const initiativeOk =
+        hasInitiative && issue.project?.initiativeId
+          ? key.initiativeIds.includes(issue.project.initiativeId)
           : false;
-      const labelOk =
-        hasLabel && issue.labels.some((l) => key.labelIds.includes(l.labelId));
-      if (!projectOk && !labelOk) {
+      if (!projectOk && !labelOk && !initiativeOk) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "API key scope does not include this resource.",
@@ -175,6 +180,9 @@ export function buildKeyScopeWhere(
       }
       if (key.labelIds.length) {
         clauses.push({ labels: { some: { labelId: { in: key.labelIds } } } });
+      }
+      if (key.initiativeIds.length) {
+        clauses.push({ project: { initiativeId: { in: key.initiativeIds } } });
       }
       if (!clauses.length) return {};
       return clauses.length === 1 ? clauses[0] : { OR: clauses };

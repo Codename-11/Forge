@@ -1112,6 +1112,7 @@ export async function decomposeGoal(
       id: true,
       title: true,
       description: true,
+      successCriteria: true,
       status: true,
       crewId: true,
       issueId: true,
@@ -1171,6 +1172,20 @@ export async function decomposeGoal(
     runEngine: RunEngine | null;
     hasWebhook: boolean;
   } | null = null;
+  let plannerDispatchAgent:
+    | ({
+        id: string;
+        name: string;
+        profileKey: string;
+        status: AgentStatus;
+      } & {
+        webhookUrl: string | null;
+        runtimeId: string | null;
+        provider: AgentProvider;
+        runEngine: RunEngine | null;
+        runtime: AgentRuntimeRef;
+      })
+    | null = null;
   let dispatchable = false;
   if (plannerAgentId) {
     const agent = await db.agent.findFirst({
@@ -1180,12 +1195,11 @@ export async function decomposeGoal(
         name: true,
         profileKey: true,
         status: true,
-        runEngine: true,
-        webhookUrl: true,
-        runtimeId: true,
+        ...ORCH_WORKER_SELECT,
       },
     });
     if (agent) {
+      plannerDispatchAgent = agent;
       const hasWebhook = !!agent.webhookUrl;
       planner = {
         id: agent.id,
@@ -1195,9 +1209,13 @@ export async function decomposeGoal(
         runEngine: agent.runEngine,
         hasWebhook,
       };
-      // RUNS agents are reached via a Runtime (their dispatch webhook is
-      // suppressed); everyone else needs a webhookUrl.
-      dispatchable = agent.runEngine === RunEngine.RUNS ? !!agent.runtimeId : hasWebhook;
+      // A RUNS planner needs both a Runtime and an Issue-backed Goal because
+      // AgentRun.issueId is required. Without the anchor issue, claiming the
+      // planner is dispatchable only queues an agent:dispatch webhook that is
+      // guaranteed to dead-letter for a runtime-only agent and strands the
+      // goal in PLANNING. Webhook planners do not need an issue anchor.
+      dispatchable =
+        agent.runEngine === RunEngine.RUNS ? Boolean(agent.runtimeId && goal.issueId) : hasWebhook;
     }
   }
 
@@ -1256,6 +1274,7 @@ export async function decomposeGoal(
           goalId: goal.id,
           goalTitle: goal.title,
           goalDescription: goal.description,
+          goalSuccessCriteria: goal.successCriteria,
           plannerAgentId,
           prompt:
             `You are the PLANNER for goal "${goal.title}". Decompose it into ` +
@@ -1277,12 +1296,31 @@ export async function decomposeGoal(
         after: { goalId: goal.id, plannerAgentId },
       },
     });
-    if (plannerAgentId) {
-      await queueAgentDispatch(tx, {
-        workspaceId: params.workspaceId,
-        agentId: plannerAgentId,
-        eventId: event.id,
-      });
+    if (plannerAgentId && plannerDispatchAgent && dispatchable) {
+      if (plannerDispatchAgent.runEngine === RunEngine.RUNS && goal.issueId) {
+        // Runtime-backed planners participate in the same durable AgentRun /
+        // inbox path as workers and reviewers. DISCUSS avoids treating plan
+        // creation as execution of the linked issue while the trigger prompt
+        // above supplies the concrete plans.addSteps contract.
+        await openOrTouchRun(tx, {
+          workspaceId: params.workspaceId,
+          issueId: goal.issueId,
+          agentId: plannerAgentId,
+          actorId: params.actorId,
+          actorAgentId: params.actorAgentId ?? null,
+          assignmentEventId: event.id,
+          triggerEventId: event.id,
+          triggerKind: EventKind.ISSUE_UPDATED,
+          currentStep: `Planning: ${goal.title}`,
+          ...orchestrationRunStamp(plannerDispatchAgent, EngagementMode.DISCUSS),
+        });
+      } else {
+        await queueAgentDispatch(tx, {
+          workspaceId: params.workspaceId,
+          agentId: plannerAgentId,
+          eventId: event.id,
+        });
+      }
     }
     return { planId: plan.id };
   });
@@ -2309,27 +2347,54 @@ export async function recordVerdictTx(
       status: true,
       retryCount: true,
       title: true,
-      plan: { select: { id: true, maxStepRetries: true, crewId: true, goalId: true } },
+      plan: {
+        select: {
+          id: true,
+          status: true,
+          isActiveAttempt: true,
+          maxStepRetries: true,
+          crewId: true,
+          goalId: true,
+        },
+      },
     },
   });
   if (!step) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
   }
-  // A verdict may only land on an in-flight step (READY / RUNNING / REVIEW).
-  // Reject it on an already-settled step (DONE / BLOCKED / CANCELED): a stale
-  // or duplicated reviewer webhook posting FAIL on a DONE step would otherwise
-  // move it back to TODO, bump retryCount, and re-dispatch a worker —
-  // un-completing finished work and desyncing downstream steps. Also stops an
-  // auto-judge double-fire from double-recording.
-  if (
-    step.status === ExecutionStepStatus.DONE ||
-    step.status === ExecutionStepStatus.BLOCKED ||
-    step.status === ExecutionStepStatus.CANCELED
-  ) {
+  // A verdict is a review decision, not a generic step transition. Accepting
+  // PASS on TODO/READY/RUNNING lets any writer bypass dependencies and claim
+  // goal success without worker evidence. Settled states must not be reopened
+  // by a duplicate verdict either, so REVIEW is the only valid source state.
+  if (step.status !== ExecutionStepStatus.REVIEW) {
     throw new TRPCError({
       code: "CONFLICT",
-      message: `Step is ${step.status} — a verdict can't be recorded on a settled step.`,
+      message: `Step is ${step.status} — verdicts can only be recorded while it is in review.`,
     });
+  }
+  if (step.plan.status !== ExecutionPlanStatus.RUNNING || !step.plan.isActiveAttempt) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "Verdicts can only be recorded on the active running plan attempt.",
+    });
+  }
+  if (params.actorAgentId) {
+    const authorizedReviewRun = await tx.agentRun.findFirst({
+      where: {
+        workspaceId: params.workspaceId,
+        executionStepId: step.id,
+        agentId: params.actorAgentId,
+        engagementMode: EngagementMode.REVIEW,
+        status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      },
+      select: { id: true },
+    });
+    if (!authorizedReviewRun) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "Only the active reviewer assigned to this step can record its verdict.",
+      });
+    }
   }
 
   const verdictJson: JudgeVerdictJson = {
@@ -2679,7 +2744,10 @@ export async function maybeCompleteGoal(
   const remaining = await tx.executionStep.count({
     where: {
       planId: params.planId,
-      status: { notIn: [ExecutionStepStatus.DONE, ExecutionStepStatus.CANCELED] },
+      // CANCELED is not success. Without optional-step semantics, allowing a
+      // canceled deliverable to satisfy completion can mark the Goal ACHIEVED
+      // even though required work was explicitly skipped.
+      status: { not: ExecutionStepStatus.DONE },
     },
   });
   if (remaining > 0) return;

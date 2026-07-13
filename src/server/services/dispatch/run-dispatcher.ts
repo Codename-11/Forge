@@ -18,6 +18,11 @@ import {
   enforceRunBudget,
   RUN_BUDGET_WORKSPACE_SELECT,
 } from "@/server/services/run-budget";
+import {
+  formatOrchestrationContextForPrompt,
+  loadIssueOrchestrationContext,
+} from "@/server/services/orchestration-context";
+import { markExecutionStepRunning } from "@/server/services/execution-step-runtime";
 
 /**
  * Dispatch-via-runs ingestion (worker-hosted, poll-based).
@@ -100,6 +105,31 @@ function issueMessage(
   );
 }
 
+/** Additional event-specific instructions that are not part of the issue row. */
+export function dispatchTriggerContext(
+  kind: string | null | undefined,
+  payload: Record<string, unknown> | null | undefined,
+): string {
+  if (kind === "COMMENT_CREATED" && typeof payload?.body === "string") {
+    return `\n\nOperator comment${typeof payload.executionStepId === "string" ? " on this plan step" : ""}:\n${payload.body}`;
+  }
+  if (
+    kind === "EXECUTION_STEP_READY" &&
+    payload?.phase === "judge" &&
+    typeof payload.prompt === "string"
+  ) {
+    return `\n\nReview assignment:\n${payload.prompt}`;
+  }
+  if (
+    kind === "ISSUE_UPDATED" &&
+    payload?.action === "decompose" &&
+    typeof payload.prompt === "string"
+  ) {
+    return `\n\nPlanning assignment:\n${payload.prompt}`;
+  }
+  return "";
+}
+
 /** Issue keys are derived (`<workspace.key>-<number>`), not a column. */
 function issueKey(workspaceKey: string, number: number): string {
   return `${workspaceKey}-${number}`;
@@ -178,13 +208,29 @@ async function startNewRuns(): Promise<number> {
   for (const evt of events) {
     if (started >= START_BATCH) break;
     if (!evt.subjectId) continue;
+    const evtPayload =
+      evt.payload && typeof evt.payload === "object" && !Array.isArray(evt.payload)
+        ? (evt.payload as Record<string, unknown>)
+        : {};
+    // Assignment can schedule the intended worker before a plan step becomes
+    // READY. audit.recordChange marks those events deferred and deliberately
+    // skips canonical inbox/webhook dispatch. Respect the same gate here: this
+    // scanner reads ActivityEvent directly, so otherwise it would bypass the
+    // readiness boundary and start the provider from the raw assignment row.
+    if (evtPayload.orchestrationDeferred === true) continue;
     // Dedup: one provider run per assignment event. The durable inbox creates
     // a canonical AgentRun in the same transaction as AGENT_ASSIGNED, before
     // this worker dials the provider; that precreated row must be reused, not
     // treated as already-dispatched.
     const already = await db.agentRun.findFirst({
       where: { assignmentEventId: evt.id },
-      select: { id: true, status: true, externalRunId: true, runtimePolicy: true },
+      select: {
+        id: true,
+        status: true,
+        externalRunId: true,
+        runtimePolicy: true,
+        executionStepId: true,
+      },
     });
     if (already?.externalRunId || (already && TERMINAL_RUN_STATUSES.has(already.status))) {
       continue;
@@ -244,10 +290,6 @@ async function startNewRuns(): Promise<number> {
     // Engagement mode (AXI-53): the assignment payload carries the resolved
     // mode; inject its instruction block so the agent knows whether to execute,
     // research, review, or just discuss. Default EXECUTE when absent (legacy).
-    const evtPayload =
-      evt.payload && typeof evt.payload === "object" && !Array.isArray(evt.payload)
-        ? (evt.payload as Record<string, unknown>)
-        : {};
     const engagementMode =
       (evtPayload.engagementMode as "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS" | undefined) ??
       "EXECUTE";
@@ -267,6 +309,11 @@ async function startNewRuns(): Promise<number> {
       });
 
     try {
+      const orchestrationContext = await loadIssueOrchestrationContext(db, {
+        workspaceId: evt.workspaceId,
+        issueId: issue.id,
+        executionStepId: already?.executionStepId,
+      });
       const { externalRunId } = await connector.startRun({
         message:
           issueMessage(
@@ -281,7 +328,9 @@ async function startNewRuns(): Promise<number> {
             },
             instruction,
             already?.id ?? null,
-          ) + runtimePolicyGrantContext(runtimePolicy),
+          ) +
+          formatOrchestrationContextForPrompt(orchestrationContext) +
+          runtimePolicyGrantContext(runtimePolicy),
         instructions: instruction,
         engagementMode,
         contractVersion: FORGE_RUN_CONTRACT_VERSION,
@@ -294,6 +343,7 @@ async function startNewRuns(): Promise<number> {
           agentId: agent.id,
           assignmentEventId: evt.id,
           currentStep: "starting run",
+          executionStepId: orchestrationContext?.step?.id ?? already?.executionStepId ?? null,
           engagementMode,
         });
         await tx.agentRun.update({
@@ -302,7 +352,16 @@ async function startNewRuns(): Promise<number> {
             externalRunId,
             acknowledgedAt: new Date(),
             runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+            ...(orchestrationContext?.step?.id
+              ? { executionStepId: orchestrationContext.step.id }
+              : {}),
           },
+        });
+        await markExecutionStepRunning(tx, {
+          workspaceId: evt.workspaceId,
+          executionStepId: orchestrationContext?.step?.id ?? already?.executionStepId,
+          runId: run.id,
+          actorAgentId: agent.id,
         });
         await appendRunEvent(tx, {
           runId: run.id,
@@ -369,6 +428,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       triggerKind: true,
       triggerEventId: true,
       runtimePolicy: true,
+      executionStepId: true,
     },
   });
 
@@ -440,14 +500,12 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
 
     try {
       const triggerPayload = triggerEvent?.payload as Record<string, unknown> | null;
-      const operatorContext =
-        triggerEvent?.kind === "COMMENT_CREATED" && typeof triggerPayload?.body === "string"
-          ? `\n\nOperator comment${typeof triggerPayload.executionStepId === "string" ? " on this plan step" : ""}:\n${triggerPayload.body}`
-          : triggerEvent?.kind === "EXECUTION_STEP_READY" &&
-              triggerPayload?.phase === "judge" &&
-              typeof triggerPayload.prompt === "string"
-            ? `\n\nReview assignment:\n${triggerPayload.prompt}`
-            : "";
+      const orchestrationContext = await loadIssueOrchestrationContext(db, {
+        workspaceId: run.workspaceId,
+        issueId: issue.id,
+        executionStepId: run.executionStepId,
+      });
+      const operatorContext = dispatchTriggerContext(triggerEvent?.kind, triggerPayload);
       const { externalRunId } = await connector.startRun({
         message:
           issueMessage(
@@ -460,6 +518,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
             instruction,
             run.id,
           ) +
+          formatOrchestrationContextForPrompt(orchestrationContext) +
           operatorContext +
           runtimePolicyGrantContext(runtimePolicy),
         instructions: instruction,
@@ -475,7 +534,16 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
             acknowledgedAt: new Date(),
             currentStep: "starting run",
             runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+            ...(orchestrationContext?.step?.id
+              ? { executionStepId: orchestrationContext.step.id }
+              : {}),
           },
+        });
+        await markExecutionStepRunning(tx, {
+          workspaceId: run.workspaceId,
+          executionStepId: orchestrationContext?.step?.id ?? run.executionStepId,
+          runId: run.id,
+          actorAgentId: run.agentId,
         });
         await appendRunEvent(tx, {
           runId: run.id,
@@ -552,6 +620,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       lastEventAt: true,
       runtimePolicy: true,
       completionMeta: true,
+      executionStepId: true,
       issue: {
         select: {
           id: true,
@@ -637,6 +706,11 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
     const replyBlock = replies
       .map((r) => `${r.authoringAgent?.name ?? r.author?.name ?? "Operator"}: ${r.body}`)
       .join("\n\n");
+    const orchestrationContext = await loadIssueOrchestrationContext(db, {
+      workspaceId: run.workspaceId,
+      issueId: run.issueId,
+      executionStepId: run.executionStepId,
+    });
     const message =
       issueMessage(
         {
@@ -648,6 +722,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
         instruction,
         run.id,
       ) +
+      formatOrchestrationContextForPrompt(orchestrationContext) +
       `\n\nYou paused this run earlier` +
       (waitingReason ? ` because: ${waitingReason}` : "") +
       `.\nThe operator has replied:\n\n${replyBlock}\n\n` +
@@ -673,6 +748,9 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
             status: AgentRunStatus.ACTIVE,
             externalRunId,
             currentStep: "resuming after reply",
+            ...(orchestrationContext?.step?.id
+              ? { executionStepId: orchestrationContext.step.id }
+              : {}),
             lastEventAt: new Date(),
             awaitingApprovalAt: null,
             controlState: "NONE",

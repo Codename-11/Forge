@@ -12194,3 +12194,47 @@ reconciliation mutation occurred: PostgreSQL's descending sort places null
 the newer COMPLETED run. v0.8.2 orders attempts by `lastEventAt` instead (set on
 every run state) and adds the exact stalled-then-completed history to the
 watchdog regression fixture.
+
+## 2026-07-13 — Plan-linked issue context and orchestration integrity
+
+Inspected the current `forge` and `forge-worker` production services, the live
+Rich Rendering goal/plan, current source, and orchestration references. Live
+data confirmed that materialized plan-step issues retained only a small plan
+backlink: four DONE steps still had BACKLOG issues, dependency edges were not
+visible on issue Relations, runtime prompts omitted Goal/Plan/DAG context, and
+terminal STALLED runs could be selected as an agent's current run.
+
+- Added a bounded shared orchestration-context builder used by provider runtime
+  starts/resumes, `agent.inbox.list`, and `agent.context.bundle`. It includes
+  Goal/Plan/Step contracts, retry feedback, dependency/dependent issue links,
+  completed worker evidence, and non-excluded ContextSet refs without guessing
+  a step for multi-step plan-anchor issues.
+- Materialized issue detail now renders a primary Goal → Plan → Step context
+  card with success criteria, instructions, completion/verification contract,
+  feedback, sibling progress, and navigable dependencies. The Relations graph
+  derives plan dependency edges from `dependsOnStepIds` without persisting
+  duplicate `IssueRelation` rows.
+- Runtime-only planners with a linked Goal issue now open durable DISCUSS runs
+  and receive the decompose prompt; unanchored runtime planners are reported as
+  non-dispatchable instead of queueing a webhook guaranteed to dead-letter.
+  Worker/reviewer evidence and the planner trigger survive runtime handoff.
+- Ordinary assignment of a materialized issue synchronizes its intended step
+  worker, but TODO/BLOCKED/REVIEW or non-running-plan steps are scheduled rather
+  than dispatched. Only readiness can open the step-bound execution run.
+  Both inbox delivery and the background runtime scanner honor that gate;
+  provider/output start now audits READY → RUNNING.
+- Current-run resolution is limited to ACTIVE/WAITING and the linked agent.
+  Verdicts require a REVIEW step on the active RUNNING attempt; agent verdicts
+  additionally require that agent's active REVIEW run. CANCELED steps no longer
+  count toward Goal achievement.
+- Added safety guards around live-plan archive/delete and step removal, routed
+  RUNNING transitions through activation, validated updated ContextSet scope,
+  and fixed initiative-only API-key narrowing for issue reads/list filters.
+- Updated orchestration, engagement-mode, primitive, and MCP reference docs to
+  match the delivered behavior and to state honestly that crew `maxParallel`
+  remains informational rather than enforced.
+
+Verification: lint and typecheck passed; 1,126 unit/integration tests passed
+(one live-only test skipped); and a forced fresh production build plus all 37
+Playwright tests passed. This change is local only; production was inspected
+read-only and was not deployed or mutated.

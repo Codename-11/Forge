@@ -1809,6 +1809,52 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(Array.isArray(full.labels)).toBe(true);
   });
 
+  it("issues.get currentRun ignores terminal runs and scopes to the linked agent", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BCR" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const issue = await createIssue(f, { title: "current run semantics" });
+    const linked = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "bcr-linked", name: "Linked" },
+    });
+    const other = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "bcr-other", name: "Other" },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: linked.id,
+        status: AgentRunStatus.STALLED,
+        finishedAt: new Date(),
+      },
+    });
+    const otherRun = await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: other.id,
+        status: AgentRunStatus.WAITING,
+      },
+    });
+
+    const { ctx: linkedCtx } = buildMcpCtx(f, { linkedAgentId: linked.id });
+    const linkedView = (await call(
+      "issues.get",
+      { id: issue.id, include: { currentRun: true } },
+      linkedCtx,
+    )) as { currentRun: { id: string } | null };
+    expect(linkedView.currentRun).toBeNull();
+
+    const { ctx: operatorCtx } = buildMcpCtx(f);
+    const operatorView = (await call(
+      "issues.get",
+      { id: issue.id, include: { currentRun: true } },
+      operatorCtx,
+    )) as { currentRun: { id: string } | null };
+    expect(operatorView.currentRun?.id).toBe(otherRun.id);
+  });
+
   it("runtimes.list returns workspace runtimes; ADMIN required", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAR" });
     fixtures.push(f);
@@ -2186,6 +2232,98 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(bundle.runProtocol.modeInstruction).toContain("REVIEW");
     expect(bundle.runProtocol.protocolInstruction).toContain("agent.inbox.outputStarted");
     expect(bundle.runProtocol.mayMutateIssue).toBe(false);
+  });
+
+  it("agent.context.bundle ignores stalled and other-agent runs for the linked agent", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAC" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const linkedAgent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "bac-linked", name: "Linked" },
+    });
+    const otherAgent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "bac-other", name: "Other" },
+    });
+    const issue = await createIssue(f, { title: "canonical current run" });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: linkedAgent.id,
+        status: AgentRunStatus.STALLED,
+        finishedAt: new Date(),
+      },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: otherAgent.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: linkedAgent.id });
+
+    const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
+      currentRun: { id: string } | null;
+      runProtocol: { runId: string | null };
+    };
+    expect(bundle.currentRun).toBeNull();
+    expect(bundle.runProtocol.runId).toBeNull();
+  });
+
+  it("agent.context.bundle includes the run's goal and plan-step context", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAO" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "bao-agent", name: "Plan worker" },
+    });
+    const issue = await createIssue(f, { title: "materialized plan step" });
+    const goal = await prisma.goal.create({
+      data: { workspaceId: f.workspace.id, title: "Deliver renderer", status: "ACTIVE" },
+    });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: f.workspace.id,
+        goalId: goal.id,
+        title: "Renderer plan",
+        status: "RUNNING",
+      },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: f.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Implement renderer",
+        position: 0,
+        status: "RUNNING",
+      },
+    });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        executionStepId: step.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+
+    const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
+      orchestrationContext: {
+        goal: { id: string } | null;
+        plan: { id: string };
+        step: { id: string };
+      } | null;
+    };
+    expect(bundle.orchestrationContext).toMatchObject({
+      goal: { id: goal.id },
+      plan: { id: plan.id },
+      step: { id: step.id },
+    });
   });
 
   it("agent.context.bundle threadId branch enforces addressee", async () => {

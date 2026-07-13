@@ -4,12 +4,14 @@ import {
   AgentRunStatus,
   AgentProvider,
   EngagementMode,
+  EventKind,
   ExecutionPlanStatus,
   ExecutionStepStatus,
   GoalStatus,
   ReviewGateStatus,
   RuntimeKind,
 } from "@prisma/client";
+import { recordChange } from "@/server/audit";
 import {
   abandonGoal,
   activatePlan,
@@ -20,6 +22,7 @@ import {
   decomposeGoal,
   dispatchJudge,
   getGoal,
+  maybeCompleteGoal,
   recordVerdict,
   requestPlanApproval,
   sweepOrchestrationBudget,
@@ -285,6 +288,119 @@ describe("orchestration: decompose + addSteps", () => {
     expect(fresh.isActiveAttempt).toBe(true);
   });
 
+  it("opens a durable run for a runtime planner when the goal has an issue anchor", async () => {
+    const { fixture, prisma } = await setup();
+    const issue = await createIssue(fixture, { title: "Goal planning anchor" });
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        ownerId: fixture.user.id,
+        name: "Codex planner runtime",
+        kind: RuntimeKind.LOCAL_DAEMON,
+        adapterKey: "mock-runs",
+        providersAvailable: [AgentProvider.HERMES],
+      },
+    });
+    const planner = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: "runtime-planner",
+        name: "Runtime Planner",
+        provider: AgentProvider.HERMES,
+        runEngine: "RUNS",
+        runtimeId: runtime.id,
+      },
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Plan through Codex",
+      description: "Build a safe rollout plan.",
+      successCriteria: "Every rollout stage has a rollback check.",
+      issueId: issue.id,
+    });
+
+    const result = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+      plannerAgentId: planner.id,
+    });
+
+    expect(result.dispatchable).toBe(true);
+    const run = await prisma.agentRun.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, agentId: planner.id },
+    });
+    expect(run).toMatchObject({
+      issueId: issue.id,
+      executionStepId: null,
+      engagementMode: "DISCUSS",
+      triggerKind: EventKind.ISSUE_UPDATED,
+      status: AgentRunStatus.ACTIVE,
+    });
+    const event = await prisma.activityEvent.findUniqueOrThrow({
+      where: { id: run.triggerEventId! },
+    });
+    expect(event.subjectId).toBe(result.planId);
+    expect(event.payload).toMatchObject({
+      goalId: goal.id,
+      goalSuccessCriteria: "Every rollout stage has a rollback check.",
+    });
+    expect(
+      await prisma.webhookDelivery.count({
+        where: { eventId: event.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("does not claim or queue runtime planner dispatch without a goal issue anchor", async () => {
+    const { fixture, prisma } = await setup();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        ownerId: fixture.user.id,
+        name: "Unanchored planner runtime",
+        kind: RuntimeKind.LOCAL_DAEMON,
+        adapterKey: "mock-runs",
+        providersAvailable: [AgentProvider.HERMES],
+      },
+    });
+    const planner = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: "unanchored-planner",
+        name: "Unanchored Planner",
+        provider: AgentProvider.HERMES,
+        runEngine: "RUNS",
+        runtimeId: runtime.id,
+      },
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "No issue anchor",
+    });
+
+    const result = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+      plannerAgentId: planner.id,
+    });
+
+    expect(result.dispatchable).toBe(false);
+    expect(
+      await prisma.agentRun.count({
+        where: { workspaceId: fixture.workspace.id, agentId: planner.id },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.webhookDelivery.count({
+        where: { event: { subjectId: result.planId } },
+      }),
+    ).toBe(0);
+  });
+
   it("addSteps resolves index-based deps to real ids", async () => {
     const { fixture, prisma } = await setup();
     const goal = await createGoal(prisma, {
@@ -417,6 +533,10 @@ describe("orchestration: judge loop", () => {
         planId,
       }),
     );
+    await prisma.executionStep.update({
+      where: { id: stepIds[0] },
+      data: { status: ExecutionStepStatus.REVIEW },
+    });
     return {
       fixture,
       prisma,
@@ -523,6 +643,58 @@ describe("orchestration: judge loop", () => {
     const goal = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
     expect(goal.status).toBe(GoalStatus.ACHIEVED);
     expect(goal.achievedAt).not.toBeNull();
+  });
+
+  it("rejects a verdict before the step reaches review", async () => {
+    const { fixture, prisma, stepId } = await buildRunningPlanWithStep();
+    await prisma.executionStep.update({
+      where: { id: stepId },
+      data: { status: ExecutionStepStatus.TODO },
+    });
+
+    await expect(
+      recordVerdict(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        stepId,
+        verdict: "PASS",
+        feedback: "Skip straight to done",
+      }),
+    ).rejects.toThrow(/only be recorded while it is in review/);
+
+    const step = await prisma.executionStep.findUniqueOrThrow({ where: { id: stepId } });
+    expect(step.status).toBe(ExecutionStepStatus.TODO);
+  });
+
+  it("does not achieve a goal when any step was canceled", async () => {
+    const { fixture, prisma, planId, goalId, stepId } = await buildRunningPlanWithStep();
+    await prisma.executionStep.update({
+      where: { id: stepId },
+      data: { status: ExecutionStepStatus.DONE },
+    });
+    await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId,
+        title: "Canceled deliverable",
+        position: 1,
+        status: ExecutionStepStatus.CANCELED,
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      maybeCompleteGoal(tx, {
+        workspaceId: fixture.workspace.id,
+        planId,
+        actorId: fixture.user.id,
+      }),
+    );
+
+    const plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    const goal = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
+    expect(plan.status).toBe(ExecutionPlanStatus.RUNNING);
+    expect(goal.status).toBe(GoalStatus.ACTIVE);
+    expect(goal.achievedAt).toBeNull();
   });
 
   it("judge FAIL with retries left re-readies the step and bumps retryCount", async () => {
@@ -786,6 +958,131 @@ describe("orchestration: materialize step as issue (AXI-56)", () => {
       stepId: step.id,
     });
     expect(again).toEqual({ issueId: res.issueId, created: false });
+  });
+
+  it("carries an unambiguous step through ordinary issue assignment", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "reassigned-worker");
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Assignment-linked plan",
+      steps: [{ title: "Assigned through issue" }],
+    });
+    const step = await prisma.executionStep.findFirstOrThrow({ where: { planId } });
+    const { issueId } = await materializeStepAsIssue(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: step.id,
+    });
+    await prisma.executionPlan.update({
+      where: { id: planId },
+      data: { status: ExecutionPlanStatus.RUNNING, startedAt: new Date() },
+    });
+    await prisma.executionStep.update({
+      where: { id: step.id },
+      data: { status: ExecutionStepStatus.READY },
+    });
+    await prisma.issue.update({
+      where: { id: issueId },
+      data: { assignedAgentId: worker.id },
+    });
+
+    await prisma.$transaction((tx) =>
+      recordChange(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Issue",
+        entityId: issueId,
+        action: "assign-agent",
+        eventKind: EventKind.AGENT_ASSIGNED,
+        subjectType: "issue",
+        subjectId: issueId,
+        payload: { agentId: worker.id },
+      }),
+    );
+
+    const linked = await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } });
+    expect(linked.assignedAgentId).toBe(worker.id);
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_ASSIGNED,
+        subjectId: issueId,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event.payload).toMatchObject({
+      agentId: worker.id,
+      executionStepId: step.id,
+    });
+  });
+
+  it("schedules a blocked child assignee without dispatching work early", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "scheduled-worker");
+    const { id: planId } = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Dependency-gated assignment",
+      steps: [{ title: "Root" }, { title: "Blocked child", dependsOnStepIndexes: [0] }],
+    });
+    const steps = await prisma.executionStep.findMany({
+      where: { planId },
+      orderBy: { position: "asc" },
+    });
+    const child = steps[1];
+    const { issueId } = await materializeStepAsIssue(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: child.id,
+    });
+    await prisma.issue.update({
+      where: { id: issueId },
+      data: { assignedAgentId: worker.id },
+    });
+
+    await prisma.$transaction((tx) =>
+      recordChange(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Issue",
+        entityId: issueId,
+        action: "assign-agent",
+        eventKind: EventKind.AGENT_ASSIGNED,
+        subjectType: "issue",
+        subjectId: issueId,
+        payload: { agentId: worker.id },
+      }),
+    );
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_ASSIGNED,
+        subjectId: issueId,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event.payload).toMatchObject({
+      planId,
+      planStepId: child.id,
+      orchestrationDeferred: true,
+    });
+    expect((event.payload as { executionStepId?: string }).executionStepId).toBeUndefined();
+    expect(
+      await prisma.agentRun.count({
+        where: { workspaceId: fixture.workspace.id, issueId },
+      }),
+    ).toBe(0);
+    expect(
+      await prisma.webhookDelivery.count({
+        where: { eventId: event.id },
+      }),
+    ).toBe(0);
+    const linked = await prisma.executionStep.findUniqueOrThrow({ where: { id: child.id } });
+    expect(linked.status).toBe(ExecutionStepStatus.TODO);
+    expect(linked.assignedAgentId).toBe(worker.id);
   });
 });
 
@@ -1165,28 +1462,35 @@ describe("orchestration: audit phase-1 safety guards", () => {
 
   it("P1.1 — a CANCELED plan does not re-open work via a late retry verdict", async () => {
     const { fixture, prisma, planId, rootId } = await build2StepRunning();
+    await prisma.executionStep.update({
+      where: { id: rootId },
+      data: { status: ExecutionStepStatus.REVIEW },
+    });
     // Cancel the plan (as abandonGoal would), while root is still in flight.
     await prisma.executionPlan.update({
       where: { id: planId },
       data: { status: ExecutionPlanStatus.CANCELED },
     });
-    // A late FAIL verdict arrives on the still-READY root. It should record
-    // (root is not settled) but the RETRY re-dispatch must be a no-op on a
-    // CANCELED plan — the step lands TODO and is NOT re-readied.
-    const res = await recordVerdict(prisma, {
-      workspaceId: fixture.workspace.id,
-      actorId: fixture.user.id,
-      stepId: rootId,
-      verdict: "FAIL",
-      feedback: "late",
-    });
-    expect(res.outcome).toBe("RETRY");
+    // A late reviewer verdict cannot mutate a plan after cancellation.
+    await expect(
+      recordVerdict(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        stepId: rootId,
+        verdict: "FAIL",
+        feedback: "late",
+      }),
+    ).rejects.toThrow(/active running plan attempt/);
     const root = await prisma.executionStep.findUniqueOrThrow({ where: { id: rootId } });
-    expect(root.status).toBe(ExecutionStepStatus.TODO); // not re-READY
+    expect(root.status).toBe(ExecutionStepStatus.REVIEW);
   });
 
   it("P1.2 — a stale verdict on a settled (DONE) step is rejected, keeping it DONE", async () => {
     const { fixture, prisma, rootId } = await build2StepRunning();
+    await prisma.executionStep.update({
+      where: { id: rootId },
+      data: { status: ExecutionStepStatus.REVIEW },
+    });
     // First verdict completes the step.
     const first = await recordVerdict(prisma, {
       workspaceId: fixture.workspace.id,
@@ -1205,7 +1509,7 @@ describe("orchestration: audit phase-1 safety guards", () => {
         verdict: "FAIL",
         feedback: "stale",
       }),
-    ).rejects.toThrow(/settled/);
+    ).rejects.toThrow(/only be recorded while it is in review/);
     const step = await prisma.executionStep.findUniqueOrThrow({ where: { id: rootId } });
     expect(step.status).toBe(ExecutionStepStatus.DONE);
     expect(step.retryCount).toBe(0);

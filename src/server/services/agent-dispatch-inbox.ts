@@ -12,6 +12,12 @@ import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry"
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
+import {
+  loadIssueOrchestrationContexts,
+  toInboxOrchestrationContext,
+  type InboxOrchestrationContext,
+} from "@/server/services/orchestration-context";
+import { markExecutionStepRunning } from "@/server/services/execution-step-runtime";
 
 /**
  * Durable agent dispatch inbox.
@@ -268,6 +274,55 @@ async function ensureIssueRuns(
   const issueAssignmentMode =
     (await latestAssignmentModeForIssue(tx, params, issue?.assignedAgentId ?? null)) ??
     dispatchReasonEngagementMode(issue?.dispatchReason ?? null);
+  const payloadExecutionStepId =
+    typeof asRecord(params.payload)?.executionStepId === "string"
+      ? (asRecord(params.payload)?.executionStepId as string)
+      : null;
+  // Ordinary issue assignment events omit executionStepId. Recover it only
+  // for an unambiguous, nonterminal materialized step; plan-anchor issues may
+  // own many steps and must never be guessed.
+  const linkedSteps = await tx.executionStep.findMany({
+    where: payloadExecutionStepId
+      ? {
+          id: payloadExecutionStepId,
+          workspaceId: params.workspaceId,
+          OR: [{ issueId: params.subjectId }, { plan: { issueId: params.subjectId } }],
+        }
+      : {
+          workspaceId: params.workspaceId,
+          issueId: params.subjectId,
+          status: { in: ["TODO", "READY", "RUNNING", "BLOCKED", "REVIEW"] },
+        },
+    orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+    take: 2,
+    select: { id: true, status: true, plan: { select: { status: true } } },
+  });
+  const inferredStep = !payloadExecutionStepId && linkedSteps.length === 1 ? linkedSteps[0]! : null;
+  const executionStepId =
+    payloadExecutionStepId && linkedSteps[0]?.id === payloadExecutionStepId
+      ? payloadExecutionStepId
+      : inferredStep &&
+          inferredStep.plan.status === "RUNNING" &&
+          (inferredStep.status === "READY" || inferredStep.status === "RUNNING")
+        ? inferredStep.id
+        : null;
+  if (isAssigned && !payloadExecutionStepId && issue?.assignedAgentId && linkedSteps.length > 0) {
+    // Assigning a materialized issue schedules its plan step, even before the
+    // dependency cascade makes it runnable.
+    await tx.executionStep.updateMany({
+      where: {
+        workspaceId: params.workspaceId,
+        issueId: params.subjectId,
+        status: { in: ["TODO", "READY", "RUNNING", "BLOCKED", "REVIEW"] },
+      },
+      data: { assignedAgentId: issue.assignedAgentId },
+    });
+  }
+  if (isAssigned && !payloadExecutionStepId && linkedSteps.length > 0 && !executionStepId) {
+    // A blocked/TODO/review step is scheduled, not dispatched. Its canonical
+    // run opens later when cascadeReadiness emits EXECUTION_STEP_READY.
+    return EMPTY_ENSURE;
+  }
   const runIds: string[] = [];
   const agents = await tx.agent.findMany({
     where: { workspaceId: params.workspaceId, id: { in: [...agentIds] } },
@@ -372,10 +427,7 @@ async function ensureIssueRuns(
       runEngine: engine?.engine ?? null,
       runEngineSource: engine?.source ?? null,
       runtimePolicy: runtimePolicy as Prisma.InputJsonValue | null,
-      executionStepId:
-        typeof asRecord(params.payload)?.executionStepId === "string"
-          ? (asRecord(params.payload)?.executionStepId as string)
-          : null,
+      executionStepId,
     });
     // Stamp the latest trigger on the run so the inbox can distinguish
     // "Victor was just re-mentioned in AXI-31" from "Victor is the
@@ -388,6 +440,7 @@ async function ensureIssueRuns(
         triggerEventId: params.eventId,
         triggerKind: params.eventKind,
         ...(isAssigned ? { assignmentEventId: params.eventId } : {}),
+        ...(executionStepId ? { executionStepId } : {}),
       },
     });
     runIds.push(run.id);
@@ -688,7 +741,7 @@ export async function markOutputStarted(
   if ("runId" in params.target) {
     const run = await tx.agentRun.findFirst({
       where: { id: params.target.runId, workspaceId: params.workspaceId },
-      select: { id: true, agentId: true, outputStartedAt: true },
+      select: { id: true, agentId: true, outputStartedAt: true, executionStepId: true },
     });
     if (!run) throw new InboxNotFoundError("run not found");
     if (run.agentId !== params.agentId) {
@@ -701,6 +754,12 @@ export async function markOutputStarted(
     await tx.agentRun.update({
       where: { id: run.id },
       data: { outputStartedAt: now, lastEventAt: now },
+    });
+    await markExecutionStepRunning(tx, {
+      workspaceId: params.workspaceId,
+      executionStepId: run.executionStepId,
+      runId: run.id,
+      actorAgentId: params.agentId,
     });
     return { outputStartedAt: now, alreadyStarted: false };
   }
@@ -747,6 +806,7 @@ export interface InboxRunItem {
   workspaceId: string;
   agentId: string;
   issueId: string;
+  executionStepId: string | null;
   status: AgentRunStatus;
   triggerEventId: string | null;
   triggerKind: string | null;
@@ -766,6 +826,7 @@ export interface InboxRunItem {
     statusId: string;
     projectId: string | null;
   };
+  orchestrationContext: InboxOrchestrationContext | null;
   recommendedAction: RecommendedAction;
 }
 
@@ -855,6 +916,7 @@ export async function listInbox(
         workspaceId: true,
         agentId: true,
         issueId: true,
+        executionStepId: true,
         status: true,
         triggerEventId: true,
         triggerKind: true,
@@ -880,7 +942,15 @@ export async function listInbox(
     listChatInbox(client, params, limit, staleMs),
   ]);
 
-  const runItems: InboxRunItem[] = runs.map((r) => {
+  const orchestrationContexts = await loadIssueOrchestrationContexts(client, {
+    workspaceId: params.workspaceId,
+    targets: runs.map((run) => ({
+      issueId: run.issueId,
+      executionStepId: run.executionStepId,
+    })),
+  });
+
+  const runItems: InboxRunItem[] = runs.map((r, index) => {
     const state = deriveRunDispatchState({
       acknowledgedAt: r.acknowledgedAt,
       outputStartedAt: r.outputStartedAt,
@@ -896,6 +966,7 @@ export async function listInbox(
       workspaceId: r.workspaceId,
       agentId: r.agentId,
       issueId: r.issueId,
+      executionStepId: r.executionStepId,
       status: r.status,
       triggerEventId: r.triggerEventId,
       triggerKind: r.triggerKind,
@@ -915,6 +986,7 @@ export async function listInbox(
         statusId: r.issue.statusId,
         projectId: r.issue.projectId,
       },
+      orchestrationContext: toInboxOrchestrationContext(orchestrationContexts[index] ?? null),
       recommendedAction: recommendedActionFor(state),
     };
   });

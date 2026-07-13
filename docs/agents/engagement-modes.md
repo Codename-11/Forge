@@ -1,16 +1,16 @@
 # Engagement Modes
 
-> Set a mode when you assign or mention an agent to say *how far* you want the
+> Set a mode when you assign or mention an agent to say _how far_ you want the
 > work taken. Configure the defaults in **Settings → Dispatch Rules**. The
 > resolved mode rides on the `AgentRun` and shows as a chip on the run strip and
 > in Mission Control.
 
 ## Why modes exist
 
-When you hand an agent some work, the agent knows *what* you wrote — never *how
-far* you want it taken. Without a mode, every dispatch surface tells the agent
-essentially the same thing: *"You're assigned this issue. Work it, then
-summarise."* So the agent picks the safest-for-it reading: **do the whole
+When you hand an agent some work, the agent knows _what_ you wrote — never _how
+far_ you want it taken. Without a mode, every dispatch surface tells the agent
+essentially the same thing: _"You're assigned this issue. Work it, then
+summarise."_ So the agent picks the safest-for-it reading: **do the whole
 thing, to its own interpretation, right now.**
 
 That guess is wrong as often as it's right. Sometimes you want a full build.
@@ -27,12 +27,12 @@ run the completion gates.
 
 ## The four modes
 
-| Mode | Intent | What the agent may do | "Done" means |
-|------|--------|------------------------|--------------|
-| **Execute** | Do the work to completion | Edit code, transition status, open PRs/artifacts | Issue moved to review/done; `runs.complete` with artifacts; honors `artifactRequired` + `verificationChecklist` |
-| **Research** | Investigate & report | Read, search, run read-only tools | A findings comment **with a confidence flag**; issue status untouched |
-| **Review** | Critique existing work | Inspect a PR/diff/issue, judge it | A verdict (approve / request changes) |
-| **Discuss** | Answer / weigh in | Reply in-thread, ask questions | A reply comment; no work product |
+| Mode         | Intent                    | What the agent may do                            | "Done" means                                                                                                    |
+| ------------ | ------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
+| **Execute**  | Do the work to completion | Edit code, transition status, open PRs/artifacts | Issue moved to review/done; `runs.complete` with artifacts; honors `artifactRequired` + `verificationChecklist` |
+| **Research** | Investigate & report      | Read, search, run read-only tools                | A findings comment **with a confidence flag**; issue status untouched                                           |
+| **Review**   | Critique existing work    | Inspect a PR/diff/issue, judge it                | A verdict (approve / request changes)                                                                           |
+| **Discuss**  | Answer / weigh in         | Reply in-thread, ask questions                   | A reply comment; no work product                                                                                |
 
 These map onto primitives Forge already has — they don't add a parallel
 universe. **Research** leans on the existing confidence flag; **Review** leans
@@ -43,7 +43,7 @@ on review gates / action requests; **Execute** leans on `expectedOutput` /
 "Do the work but stop before the irreversible step" is **Execute + an
 approval/review gate**, not a fifth mode. Set `requireApprovalBeforeStart` or
 open a review gate on the deploy step. Deploy-safety stays orthogonal to mode,
-so it composes with *all* modes.
+so it composes with _all_ modes.
 :::
 
 ## Where the mode lives
@@ -55,22 +55,22 @@ prompt, and read by the watchdog, the auto-transition logic, and Mission
 Control.
 
 This is distinct from `Workspace.autoDispatchMode` (ROUND_ROBIN /
-CAPABILITY_MATCH / … — which decides *which agent gets picked*). Engagement mode
-is *what the picked agent is asked to do*. Different axis.
+CAPABILITY_MATCH / … — which decides _which agent gets picked_). Engagement mode
+is _what the picked agent is asked to do_. Different axis.
 
 ## Defaults by surface
 
-Defaults depend on *how* the work was dispatched — "mentions talk, assignments
+Defaults depend on _how_ the work was dispatched — "mentions talk, assignments
 act":
 
-| Surface | Entry point | Default mode | Why |
-|---------|-------------|--------------|-----|
-| **Assignment** | assign an agent → `AGENT_ASSIGNED` | **Execute** | Assigning *is* handing over the work |
-| **Queue / auto-dispatch** | queued issue + auto-dispatch | **Execute** | Queued = ready to be worked |
-| **@-mention in a comment** | mention in a comment | **policy-driven** (below) | A mention is a tap on the shoulder, not a work order |
-| **Chat** | Mission Control chat | **Discuss** | Chat is conversational by nature |
-| **Goal / plan step / crew** | plan or crew dispatch | **the step's mode**, else **Execute** | A plan declares its own intent per step |
-| **Watcher fan-out** | stalled / priority change / … | **awareness only** | Watchers observe; they don't get a work order |
+| Surface                     | Entry point                        | Default mode                                   | Why                                                                                           |
+| --------------------------- | ---------------------------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| **Assignment**              | assign an agent → `AGENT_ASSIGNED` | **Execute**                                    | Assigning _is_ handing over the work                                                          |
+| **Queue / auto-dispatch**   | queued issue + auto-dispatch       | **Execute**                                    | Queued = ready to be worked                                                                   |
+| **@-mention in a comment**  | mention in a comment               | **policy-driven** (below)                      | A mention is a tap on the shoulder, not a work order                                          |
+| **Chat**                    | Mission Control chat               | **Discuss**                                    | Chat is conversational by nature                                                              |
+| **Goal / plan step / crew** | plan or crew dispatch              | **Execute** for workers; **Review** for judges | Worker and judge roles define the run intent; `ExecutionStep` does not store a separate mode. |
+| **Watcher fan-out**         | stalled / priority change / …      | **awareness only**                             | Watchers observe; they don't get a work order                                                 |
 
 Every default is overridable per dispatch, and the assignment + mention defaults
 are configurable per workspace.
@@ -80,7 +80,7 @@ are configurable per workspace.
 A mention is the one surface where teams genuinely disagree, so it's a workspace
 policy — `Workspace.mentionEngagementPolicy`:
 
-- **Infer** *(default)* — no explicit marker → the agent infers intent from the
+- **Infer** _(default)_ — no explicit marker → the agent infers intent from the
   comment, **and if it's ambiguous, asks before doing anything irreversible.**
   Maximum fluidity; the "ask first" clause is the safety net. This is the direct
   antidote to "it assumed I wanted it fully built."
@@ -109,11 +109,11 @@ Each mode has a canonical instruction block injected into the agent's turn (via
 `RunInput.instructions`, prepended in the dispatcher) and surfaced in
 `agent.context.bundle` so pull-based agents see it too. For example:
 
-- **Research:** *"This is a research pass. Investigate and report your findings
+- **Research:** _"This is a research pass. Investigate and report your findings
   as a comment with a confidence flag. Do not modify code, move the issue, or
-  open a PR. If you believe execution is warranted, say so and stop."*
-- **Execute:** *"Take this to completion. The definition of done is in
-  `expectedOutput`; verify against `verificationChecklist`."* (+ artifact /
+  open a PR. If you believe execution is warranted, say so and stop."_
+- **Execute:** _"Take this to completion. The definition of done is in
+  `expectedOutput`; verify against `verificationChecklist`."_ (+ artifact /
   approval clauses when set.)
 
 Forge also injects the shared run protocol, including a contract version:
@@ -196,7 +196,7 @@ is reused everywhere, with the warm-earthy tokens:
 - [Agents overview](/agents/overview.html) — the two ways to run agent work
   (direct dispatch vs. Goal orchestration), both riding on `AgentRun`.
 - [Auto-dispatch](/agents/auto-dispatch.html) — queued issues default to
-  Execute; how an agent gets *picked* (a different axis from mode).
+  Execute; how an agent gets _picked_ (a different axis from mode).
 - [Dispatch Rules](/agents/dispatch-rules.html) — where the mode defaults and
   mention policy are configured.
 - [SLAs & Watchdogs](/agents/slas-and-watchdogs.html) — why a Research run isn't

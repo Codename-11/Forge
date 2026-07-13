@@ -200,6 +200,68 @@ describe("apiKey (access) router — narrowing", () => {
     ).rejects.toThrow(/scope/i);
   });
 
+  it("enforces initiative-only narrowing for issue reads and list filters", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const allowedInitiative = await prisma.initiative.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Allowed initiative",
+        slug: `allowed-${Date.now().toString(36)}`,
+        createdById: fixture.user.id,
+      },
+    });
+    const otherInitiative = await prisma.initiative.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Other initiative",
+        slug: `other-${Date.now().toString(36)}`,
+        createdById: fixture.user.id,
+      },
+    });
+    const allowedProject = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: `A${Date.now().toString(36)}`.slice(0, 10),
+        name: "Allowed project",
+        initiativeId: allowedInitiative.id,
+        createdById: fixture.user.id,
+      },
+    });
+    const otherProject = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: `B${Date.now().toString(36)}`.slice(0, 10),
+        name: "Other project",
+        initiativeId: otherInitiative.id,
+        createdById: fixture.user.id,
+      },
+    });
+    const allowedIssue = await createIssue(fixture, { projectId: allowedProject.id });
+    const otherIssue = await createIssue(fixture, { projectId: otherProject.id });
+    const apiKey: ApiKeyContext = {
+      keyId: "initiative-key",
+      workspaceId: fixture.workspace.id,
+      userId: null,
+      pluginId: null,
+      scopes: ["READ_ISSUES"],
+      projectIds: [],
+      labelIds: [],
+      initiativeIds: [allowedInitiative.id],
+      linkedAgentId: null,
+    };
+
+    await expect(
+      assertKeyScope({ apiKey, db: ctx.db }, { entity: "issue", id: allowedIssue.id }),
+    ).resolves.toBeUndefined();
+    await expect(
+      assertKeyScope({ apiKey, db: ctx.db }, { entity: "issue", id: otherIssue.id }),
+    ).rejects.toThrow(/scope/i);
+    expect(buildKeyScopeWhere({ apiKey }, "issue")).toEqual({
+      project: { initiativeId: { in: [allowedInitiative.id] } },
+    });
+  });
+
   it("issue.list honors narrowing when apiKey is on ctx", async () => {
     const { fixture, ctx } = await setup();
     const prisma = getPrisma();

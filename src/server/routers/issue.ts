@@ -1,14 +1,20 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentRunStatus, EngagementMode, EventKind, Prisma, Priority, RelationKind, StatusCategory, WorkItemKind } from "@prisma/client";
+import {
+  AgentRunStatus,
+  EngagementMode,
+  EventKind,
+  Prisma,
+  Priority,
+  RelationKind,
+  StatusCategory,
+  WorkItemKind,
+} from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { assertKeyScope, buildKeyScopeWhere } from "@/server/services/api-key-auth";
-import {
-  maybeAutoDispatch,
-  recordManualDispatchReason,
-} from "@/server/services/dispatcher";
+import { maybeAutoDispatch, recordManualDispatchReason } from "@/server/services/dispatcher";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
@@ -117,9 +123,7 @@ async function applySlashCommandsToIssue(opts: {
             // auto-transition gate (maybeAutoTransitionOnAssign) sees the real
             // mode — otherwise a slash /assign to a non-EXECUTE agent silently
             // auto-starts the issue.
-            const { resolveEngagementMode } = await import(
-              "@/server/services/engagement-mode"
-            );
+            const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
             const ws = await tx.workspace.findUniqueOrThrow({
               where: { id: opts.workspaceId },
               select: {
@@ -335,9 +339,7 @@ const filterSchema = z.object({
     .refine((s) => {
       const [y, m, d] = s.split("-").map(Number);
       const dt = new Date(Date.UTC(y, m - 1, d));
-      return (
-        dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d
-      );
+      return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
     }, "dueOn must be a real calendar date")
     .optional(),
 
@@ -487,9 +489,7 @@ async function buildIssueListWhere(
     ...(input.assigneeIds?.length
       ? { assignees: { some: { userId: { in: input.assigneeIds } } } }
       : {}),
-    ...(input.labelIds?.length
-      ? { labels: { some: { labelId: { in: input.labelIds } } } }
-      : {}),
+    ...(input.labelIds?.length ? { labels: { some: { labelId: { in: input.labelIds } } } } : {}),
     ...(input.priority ? { priority: input.priority } : {}),
     ...(input.priorities?.length ? { priority: { in: input.priorities } } : {}),
     ...(input.kinds?.length ? { kind: { in: input.kinds } } : {}),
@@ -506,9 +506,7 @@ async function buildIssueListWhere(
       : input.assignedAgentId
         ? { assignedAgentId: input.assignedAgentId }
         : {}),
-    ...(input.updatedSince
-      ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } }
-      : {}),
+    ...(input.updatedSince ? { updatedAt: { gte: updatedSinceToDate(input.updatedSince) } } : {}),
     ...(input.excludeSnoozed
       ? { OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: new Date() } }] }
       : {}),
@@ -704,15 +702,57 @@ export const issueRouter = router({
             orderBy: { number: "asc" },
           },
           parent: { select: { id: true, number: true, title: true } },
-          // Plan-step provenance (AXI-56): when this issue was materialized
-          // from an ExecutionStep, surface the originating step + plan so the
-          // issue can deep-link back to its plan.
+          // Plan-step provenance and execution context (AXI-56). A
+          // materialized step is still a standalone Issue, but its detail
+          // view must retain the goal, completion contract, and neighboring
+          // DAG so a human or agent never has to infer why the issue exists.
           executionSteps: {
             select: {
               id: true,
               title: true,
+              body: true,
               position: true,
-              plan: { select: { id: true, title: true } },
+              status: true,
+              expectedOutput: true,
+              verification: true,
+              dependsOnStepIds: true,
+              retryCount: true,
+              lastFeedback: true,
+              plan: {
+                select: {
+                  id: true,
+                  title: true,
+                  description: true,
+                  status: true,
+                  goal: {
+                    select: {
+                      id: true,
+                      title: true,
+                      description: true,
+                      successCriteria: true,
+                      status: true,
+                    },
+                  },
+                  steps: {
+                    orderBy: { position: "asc" },
+                    select: {
+                      id: true,
+                      title: true,
+                      position: true,
+                      status: true,
+                      dependsOnStepIds: true,
+                      issue: {
+                        select: {
+                          id: true,
+                          number: true,
+                          title: true,
+                          status: { select: { name: true, category: true, color: true } },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
             },
           },
         },
@@ -843,9 +883,7 @@ export const issueRouter = router({
           workspaceId: ctx.workspaceId,
           OR: [
             { subjectType: "issue", subjectId: input.issueId },
-            ...(runIds.length
-              ? [{ subjectType: "agent-run", subjectId: { in: runIds } }]
-              : []),
+            ...(runIds.length ? [{ subjectType: "agent-run", subjectId: { in: runIds } }] : []),
             ...(actionRequestIds.length
               ? [{ subjectType: "action-request", subjectId: { in: actionRequestIds } }]
               : []),
@@ -1228,8 +1266,7 @@ export const issueRouter = router({
           // Manual assignment / unassignment — stamp a `dispatchReason`
           // when an agent is being set, clear it on unassign.
           let manualReason: Record<string, unknown> | null = null;
-          let agentRow: { profileKey: string; engagementMode: EngagementMode | null } | null =
-            null;
+          let agentRow: { profileKey: string; engagementMode: EngagementMode | null } | null = null;
           if (nextAgentId) {
             agentRow = await tx.agent.findFirstOrThrow({
               where: { id: nextAgentId, workspaceId: ctx.workspaceId },
@@ -1256,9 +1293,7 @@ export const issueRouter = router({
           let engagementMode: EngagementMode | undefined;
           let engagementSource: string | undefined;
           if (nextAgentId && agentRow) {
-            const { resolveEngagementMode } = await import(
-              "@/server/services/engagement-mode"
-            );
+            const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
             const ws = await tx.workspace.findUniqueOrThrow({
               where: { id: ctx.workspaceId },
               select: {
@@ -1821,8 +1856,7 @@ export const issueRouter = router({
 
         // Resolve the bulk-set agent once for dispatchReason + engagement
         // mode stamping (only when assigning, not on clear).
-        let bulkAgent: { profileKey: string; engagementMode: EngagementMode | null } | null =
-          null;
+        let bulkAgent: { profileKey: string; engagementMode: EngagementMode | null } | null = null;
         if (input.assignedAgentId) {
           const a = await tx.agent.findUnique({
             where: { id: input.assignedAgentId },
@@ -1856,9 +1890,7 @@ export const issueRouter = router({
         let engagementMode: EngagementMode | undefined;
         let engagementSource: string | undefined;
         if (input.assignedAgentId && bulkAgent) {
-          const { resolveEngagementMode } = await import(
-            "@/server/services/engagement-mode"
-          );
+          const { resolveEngagementMode } = await import("@/server/services/engagement-mode");
           const ws = await tx.workspace.findUniqueOrThrow({
             where: { id: ctx.workspaceId },
             select: {
@@ -1883,7 +1915,8 @@ export const issueRouter = router({
         for (let i = 0; i < validIds.length; i += CHUNK) {
           const chunk = issues.slice(i, i + CHUNK);
           for (const row of chunk) {
-            const assignmentChanged = (row.assignedAgentId ?? null) !== (input.assignedAgentId ?? null);
+            const assignmentChanged =
+              (row.assignedAgentId ?? null) !== (input.assignedAgentId ?? null);
             await setIssueAgentWakeTarget(tx, {
               workspaceId: ctx.workspaceId,
               issueId: row.id,
@@ -2336,9 +2369,7 @@ export const issueRouter = router({
             action: input.until ? "snooze" : "unsnooze",
             before: { snoozedUntil: row.snoozedUntil },
             after: { snoozedUntil: input.until },
-            eventKind: input.until
-              ? EventKind.ISSUE_SNOOZED
-              : EventKind.ISSUE_UNSNOOZED,
+            eventKind: input.until ? EventKind.ISSUE_SNOOZED : EventKind.ISSUE_UNSNOOZED,
             subjectType: "issue",
             subjectId: row.id,
             payload: input.until
@@ -2388,13 +2419,9 @@ export const issueRouter = router({
         });
         const daysSince = Math.max(
           1,
-          Math.round(
-            (Date.now() - issue.updatedAt.getTime()) / (24 * 60 * 60 * 1000),
-          ),
+          Math.round((Date.now() - issue.updatedAt.getTime()) / (24 * 60 * 60 * 1000)),
         );
-        const mention = issue.assignedAgent
-          ? `@${issue.assignedAgent.profileKey} `
-          : "";
+        const mention = issue.assignedAgent ? `@${issue.assignedAgent.profileKey} ` : "";
         const body =
           input.body ??
           `${mention}Gentle nudge — this issue has been quiet for ${daysSince} day${daysSince === 1 ? "" : "s"}.`;
@@ -2937,9 +2964,7 @@ export const issueRouter = router({
           issue: r.issue!,
         }));
       items.sort(
-        (a, b) =>
-          new Date(b.issue.updatedAt).getTime() -
-          new Date(a.issue.updatedAt).getTime(),
+        (a, b) => new Date(b.issue.updatedAt).getTime() - new Date(a.issue.updatedAt).getTime(),
       );
       return { items };
     }),
@@ -2967,56 +2992,54 @@ export const issueRouter = router({
    * construction on the client. Empty array when the user watches
    * nothing.
    */
-  unreadIds: workspaceProcedure
-    .input(z.object({}).optional())
-    .query(async ({ ctx }) => {
-      const watches = await ctx.db.issueWatcher.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          userId: ctx.session.user.id,
-        },
-        select: {
-          issueId: true,
-          issue: { select: { id: true, updatedAt: true, deletedAt: true } },
-        },
-      });
-      if (watches.length === 0) return { ids: [] as string[] };
+  unreadIds: workspaceProcedure.input(z.object({}).optional()).query(async ({ ctx }) => {
+    const watches = await ctx.db.issueWatcher.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        userId: ctx.session.user.id,
+      },
+      select: {
+        issueId: true,
+        issue: { select: { id: true, updatedAt: true, deletedAt: true } },
+      },
+    });
+    if (watches.length === 0) return { ids: [] as string[] };
 
-      const watchedIds = watches
-        .filter((w) => w.issue && w.issue.deletedAt === null)
-        .map((w) => w.issueId);
-      if (watchedIds.length === 0) return { ids: [] as string[] };
+    const watchedIds = watches
+      .filter((w) => w.issue && w.issue.deletedAt === null)
+      .map((w) => w.issueId);
+    if (watchedIds.length === 0) return { ids: [] as string[] };
 
-      // Pull the user's `RecentItem.visitedAt` for each watched issue
-      // in one query. Missing rows = never-viewed = always unread.
-      const recents = await ctx.db.recentItem.findMany({
-        where: {
-          userId: ctx.session.user.id,
-          workspaceId: ctx.workspaceId,
-          targetType: "ISSUE",
-          targetId: { in: watchedIds },
-        },
-        select: { targetId: true, visitedAt: true },
-      });
-      const visitedAtByIssue = new Map<string, Date>();
-      for (const r of recents) {
-        visitedAtByIssue.set(r.targetId, r.visitedAt);
+    // Pull the user's `RecentItem.visitedAt` for each watched issue
+    // in one query. Missing rows = never-viewed = always unread.
+    const recents = await ctx.db.recentItem.findMany({
+      where: {
+        userId: ctx.session.user.id,
+        workspaceId: ctx.workspaceId,
+        targetType: "ISSUE",
+        targetId: { in: watchedIds },
+      },
+      select: { targetId: true, visitedAt: true },
+    });
+    const visitedAtByIssue = new Map<string, Date>();
+    for (const r of recents) {
+      visitedAtByIssue.set(r.targetId, r.visitedAt);
+    }
+
+    const ids: string[] = [];
+    for (const w of watches) {
+      if (!w.issue || w.issue.deletedAt !== null) continue;
+      const visitedAt = visitedAtByIssue.get(w.issueId);
+      if (!visitedAt) {
+        ids.push(w.issueId);
+        continue;
       }
-
-      const ids: string[] = [];
-      for (const w of watches) {
-        if (!w.issue || w.issue.deletedAt !== null) continue;
-        const visitedAt = visitedAtByIssue.get(w.issueId);
-        if (!visitedAt) {
-          ids.push(w.issueId);
-          continue;
-        }
-        if (w.issue.updatedAt.getTime() > visitedAt.getTime()) {
-          ids.push(w.issueId);
-        }
+      if (w.issue.updatedAt.getTime() > visitedAt.getTime()) {
+        ids.push(w.issueId);
       }
-      return { ids };
-    }),
+    }
+    return { ids };
+  }),
 });
 
 // -- Helpers ----------------------------------------------------------------

@@ -257,9 +257,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         const top = Math.max(16, el.getBoundingClientRect().top);
         const available = Math.floor(window.innerHeight - top - 16);
         const next = Math.max(240, available);
-        setRailCardHeight((prev) =>
-          prev !== null && Math.abs(prev - next) < 2 ? prev : next,
-        );
+        setRailCardHeight((prev) => (prev !== null && Math.abs(prev - next) < 2 ? prev : next));
       });
     };
 
@@ -543,6 +541,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               kind={issue.kind}
               projectId={issue.projectId ?? null}
               parent={issue.parent ?? null}
+              executionSteps={issue.executionSteps}
               onDescriptionSave={(next) => update.mutate({ id: issue.id, description: next })}
               canResolveActions={(() => {
                 if (!me?.id) return false;
@@ -640,9 +639,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                     <SidebarField label="SLA target">
                       <SlaPickerField
                         value={issue.slaMinutes ?? null}
-                        onChange={(slaMinutes) =>
-                          update.mutate({ id: issue.id, slaMinutes })
-                        }
+                        onChange={(slaMinutes) => update.mutate({ id: issue.id, slaMinutes })}
                       />
                     </SidebarField>
                     <SidebarField label="Agent queue">
@@ -900,7 +897,11 @@ function ClaimHolderCard({
   const primary = claimedByAgent?.name ?? userName ?? claimedById?.slice(0, 8) ?? "Unknown";
   // Agent → its handle; otherwise the short id, unless that's already primary.
   const shortId = claimedById ? claimedById.slice(0, 8) : null;
-  const sub = claimedByAgent ? `@${claimedByAgent.profileKey}` : shortId && shortId !== primary ? shortId : null;
+  const sub = claimedByAgent
+    ? `@${claimedByAgent.profileKey}`
+    : shortId && shortId !== primary
+      ? shortId
+      : null;
   return (
     <div className="rounded-md border border-border bg-card/60 p-2">
       <div className="flex items-center gap-2">

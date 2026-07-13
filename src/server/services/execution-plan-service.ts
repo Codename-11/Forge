@@ -103,6 +103,17 @@ export async function createExecutionPlan(
   db: PrismaClient,
   input: CreateExecutionPlanInput,
 ): Promise<{ id: string }> {
+  if (
+    input.status !== undefined &&
+    input.status !== ExecutionPlanStatus.DRAFT &&
+    input.status !== ExecutionPlanStatus.APPROVED
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "New plans must start as DRAFT or APPROVED; use the activation lifecycle to run them.",
+    });
+  }
   // Cross-tenant guards on optional refs.
   if (input.issueId) {
     const found = await db.issue.findFirst({
@@ -267,6 +278,38 @@ export async function updateExecutionPlan(
   });
   if (!existing) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+  }
+  if (params.contextSetId) {
+    const contextSet = await db.contextSet.findFirst({
+      where: {
+        id: params.contextSetId,
+        workspaceId: params.workspaceId,
+        archivedAt: null,
+      },
+      select: { id: true },
+    });
+    if (!contextSet) {
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Context set not found in this workspace.",
+      });
+    }
+  }
+  if (
+    params.status &&
+    params.status !== existing.status &&
+    !(
+      (existing.status === ExecutionPlanStatus.DRAFT &&
+        params.status === ExecutionPlanStatus.APPROVED) ||
+      (existing.status === ExecutionPlanStatus.APPROVED &&
+        params.status === ExecutionPlanStatus.DRAFT)
+    )
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Use the plan activation or orchestration lifecycle for running and terminal states.",
+    });
   }
   await db.$transaction(async (tx) => {
     await tx.executionPlan.update({

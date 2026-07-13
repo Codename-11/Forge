@@ -7,7 +7,8 @@ import { useWorkspace } from "@/hooks/use-workspace";
 
 /**
  * Dependency DAG for the issue Relations tab — the focus issue's place in
- * its blocks/blocked-by chain and parent/child sub-issue tree.
+ * its blocks/blocked-by chain, parent/child sub-issue tree, and the
+ * materialized edges of its execution-plan DAG.
  *
  * Layout is the same layered / longest-path topological sort the plan
  * `DagView` uses: a node's column = the longest directed path of
@@ -15,7 +16,8 @@ import { useWorkspace } from "@/hooks/use-workspace";
  * to the left, the focus issue sits mid-graph, and blocked work / children
  * flow right. Within a column, order by issue number for stability. Edges
  * are SVG cubic-beziers (source right → target left); `child` edges render
- * dashed to read distinctly from solid `blocks` edges. Any edge touching
+ * dashed to read distinctly from solid `blocks` edges; plan dependencies
+ * use a longer dash. Any edge touching
  * the focus node gets the marching `.dag-edge-flow` ember treatment so
  * "you are here" and the live dependency path read at a glance.
  *
@@ -38,7 +40,12 @@ type GraphNode = {
   statusColor: string;
   isCurrent: boolean;
 };
-type GraphEdge = { id: string; from: string; to: string; kind: "blocks" | "child" };
+type GraphEdge = {
+  id: string;
+  from: string;
+  to: string;
+  kind: "blocks" | "child" | "plan-dependency";
+};
 
 type Positioned = GraphNode & { x: number; y: number };
 
@@ -87,7 +94,12 @@ export function IssueRelationsGraph({ issueId }: { issueId: string }) {
     const nodes = (data?.nodes ?? []) as GraphNode[];
     const edges = (data?.edges ?? []) as GraphEdge[];
     if (nodes.length === 0) {
-      return { positioned: [] as Positioned[], width: 0, height: 0, drawn: [] as Array<GraphEdge & { d: string; active: boolean }> };
+      return {
+        positioned: [] as Positioned[],
+        width: 0,
+        height: 0,
+        drawn: [] as Array<GraphEdge & { d: string; active: boolean }>,
+      };
     }
     const layerOf = computeLayers(nodes, edges);
     const byLayer = new Map<number, GraphNode[]>();
@@ -137,13 +149,15 @@ export function IssueRelationsGraph({ issueId }: { issueId: string }) {
   }, [data]);
 
   if (isLoading) {
-    return <div className="px-3 py-6 text-center text-meta text-muted-foreground">Loading graph…</div>;
+    return (
+      <div className="text-meta px-3 py-6 text-center text-muted-foreground">Loading graph…</div>
+    );
   }
   if (!data || data.nodes.length <= 1) {
     return (
-      <div className="px-3 py-6 text-center text-meta text-muted-foreground">
-        No linked issues to map yet. Add a blocker, sub-issue, or related link to
-        see this issue&rsquo;s place in the dependency path.
+      <div className="text-meta px-3 py-6 text-center text-muted-foreground">
+        No linked issues to map yet. Add a blocker, sub-issue, or plan dependency to see this
+        issue&rsquo;s place in the dependency path.
       </div>
     );
   }
@@ -151,8 +165,16 @@ export function IssueRelationsGraph({ issueId }: { issueId: string }) {
   return (
     <div className="space-y-2">
       <div className="overflow-auto rounded-md border border-border bg-background/40">
-        <div className="relative" style={{ width: layout.width, height: layout.height, minWidth: "100%" }}>
-          <svg className="pointer-events-none absolute inset-0" width={layout.width} height={layout.height} aria-hidden>
+        <div
+          className="relative"
+          style={{ width: layout.width, height: layout.height, minWidth: "100%" }}
+        >
+          <svg
+            className="pointer-events-none absolute inset-0"
+            width={layout.width}
+            height={layout.height}
+            aria-hidden
+          >
             {layout.drawn.map((e) => (
               <path
                 key={e.id}
@@ -160,7 +182,9 @@ export function IssueRelationsGraph({ issueId }: { issueId: string }) {
                 fill="none"
                 strokeWidth={1.5}
                 strokeLinecap="round"
-                strokeDasharray={e.kind === "child" ? "3 3" : undefined}
+                strokeDasharray={
+                  e.kind === "child" ? "3 3" : e.kind === "plan-dependency" ? "7 3" : undefined
+                }
                 className={cn(e.active ? "dag-edge-flow stroke-ember" : "stroke-border")}
               />
             ))}
@@ -205,7 +229,12 @@ function GraphIssueNode({
         />
         <span className="text-id text-muted-foreground">{issueKey}</span>
         {node.priority !== "NONE" && PRIORITY_TONE[node.priority] && (
-          <span className={cn("ml-auto text-[0.5625rem] font-medium uppercase", PRIORITY_TONE[node.priority])}>
+          <span
+            className={cn(
+              "ml-auto text-[0.5625rem] font-medium uppercase",
+              PRIORITY_TONE[node.priority],
+            )}
+          >
             {node.priority.toLowerCase()}
           </span>
         )}
@@ -221,7 +250,7 @@ function GraphIssueNode({
 
   if (node.isCurrent) return body;
   return (
-    <Link href={`/w/${slug}/issues/${node.id}`} className="block focus-ring rounded-md">
+    <Link href={`/w/${slug}/issues/${node.id}`} className="focus-ring block rounded-md">
       {body}
     </Link>
   );
@@ -238,9 +267,31 @@ function GraphLegend({ truncated }: { truncated: boolean }) {
       </span>
       <span className="inline-flex items-center gap-1">
         <svg width="18" height="6" aria-hidden>
-          <line x1="0" y1="3" x2="18" y2="3" className="stroke-border" strokeWidth="1.5" strokeDasharray="3 3" />
+          <line
+            x1="0"
+            y1="3"
+            x2="18"
+            y2="3"
+            className="stroke-border"
+            strokeWidth="1.5"
+            strokeDasharray="3 3"
+          />
         </svg>
         sub-issue →
+      </span>
+      <span className="inline-flex items-center gap-1">
+        <svg width="18" height="6" aria-hidden>
+          <line
+            x1="0"
+            y1="3"
+            x2="18"
+            y2="3"
+            className="stroke-border"
+            strokeWidth="1.5"
+            strokeDasharray="7 3"
+          />
+        </svg>
+        plan dependency →
       </span>
       <span className="inline-flex items-center gap-1">
         <span className="inline-block h-2 w-2 rounded-full bg-ember" /> this issue

@@ -79,13 +79,24 @@ describe("issueRouter — list filtering", () => {
         createdById: fixture.user.id,
       },
     });
-    const projectIssue = await createIssue(fixture, { title: "project issue", projectId: project.id });
+    const projectIssue = await createIssue(fixture, {
+      title: "project issue",
+      projectId: project.id,
+    });
     const unfiledIssue = await createIssue(fixture, { title: "unfiled issue" });
 
-    const projectRows = await caller.list({ projectIds: [project.id], includeDone: false, limit: 50 });
+    const projectRows = await caller.list({
+      projectIds: [project.id],
+      includeDone: false,
+      limit: 50,
+    });
     expect(projectRows.items.map((row) => row.id)).toEqual([projectIssue.id]);
 
-    const noProjectRows = await caller.list({ withoutProject: true, includeDone: false, limit: 50 });
+    const noProjectRows = await caller.list({
+      withoutProject: true,
+      includeDone: false,
+      limit: 50,
+    });
     expect(noProjectRows.items.map((row) => row.id)).toContain(unfiledIssue.id);
     expect(noProjectRows.items.map((row) => row.id)).not.toContain(projectIssue.id);
   });
@@ -143,6 +154,71 @@ describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () 
     const superseded = await caller.byId({ id: issue.id });
     expect(superseded.agentRuns).toHaveLength(1);
     expect(superseded.agentRuns[0].status).toBe(AgentRunStatus.COMPLETED);
+  });
+
+  it("byId keeps goal, plan, contract, and DAG context on a materialized step issue", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const dependencyIssue = await createIssue(fixture, { title: "Dependency issue" });
+    const issue = await createIssue(fixture, { title: "Materialized issue" });
+    const goal = await prisma.goal.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Ship a coherent workflow",
+        description: "Make isolated work understandable.",
+        successCriteria: "Every issue retains its orchestration context.",
+        createdById: fixture.user.id,
+      },
+    });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        goalId: goal.id,
+        title: "Context propagation",
+        description: "Carry context through every handoff.",
+        status: "RUNNING",
+        createdById: fixture.user.id,
+      },
+    });
+    const dependency = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: dependencyIssue.id,
+        title: "Define the context",
+        position: 0,
+        status: "DONE",
+      },
+    });
+    await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Render the context",
+        body: "Show the user why this issue exists.",
+        position: 1,
+        status: "READY",
+        expectedOutput: "A visible context card.",
+        verification: [{ id: "visible", label: "Goal and plan are visible", kind: "manual" }],
+        dependsOnStepIds: [dependency.id],
+      },
+    });
+
+    const detail = await caller.byId({ id: issue.id });
+    expect(detail.executionSteps).toHaveLength(1);
+    const context = detail.executionSteps[0];
+    expect(context.body).toContain("why this issue exists");
+    expect(context.expectedOutput).toBe("A visible context card.");
+    expect(context.dependsOnStepIds).toEqual([dependency.id]);
+    expect(context.plan.goal).toMatchObject({
+      id: goal.id,
+      title: "Ship a coherent workflow",
+      successCriteria: "Every issue retains its orchestration context.",
+    });
+    expect(context.plan.steps).toHaveLength(2);
+    expect(context.plan.steps[0].issue?.id).toBe(dependencyIssue.id);
+    expect(context.plan.steps[1].issue?.id).toBe(issue.id);
   });
 
   it("queue exposes `unblocked` (true when nothing blocks the issue)", async () => {
@@ -254,9 +330,7 @@ describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () 
     expect("claimedAt" in claimed).toBe(true);
 
     // Specific id, out of scope: FORBIDDEN.
-    await expect(caller.claim({ issueId: outScope.id })).rejects.toThrow(
-      /scope/i,
-    );
+    await expect(caller.claim({ issueId: outScope.id })).rejects.toThrow(/scope/i);
   });
 });
 
@@ -298,9 +372,7 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
     const redRows = rows.filter((r) => r.labelId === red.id);
     const blueRows = rows.filter((r) => r.labelId === blue.id);
     expect(redRows).toHaveLength(0);
-    expect(blueRows.map((r) => r.issueId).sort()).toEqual(
-      [a.id, b.id, c.id].sort(),
-    );
+    expect(blueRows.map((r) => r.issueId).sort()).toEqual([a.id, b.id, c.id].sort());
 
     // Audit + activity events per issue — invariant from CLAUDE.md.
     const audits = await prisma.auditLog.findMany({
@@ -411,9 +483,9 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
       data: { email: `outsider-${Date.now()}@example.com` },
     });
     const a = await createIssue(fixture);
-    await expect(
-      caller.bulkAssign({ issueIds: [a.id], claimedById: outsider.id }),
-    ).rejects.toThrow(/member/i);
+    await expect(caller.bulkAssign({ issueIds: [a.id], claimedById: outsider.id })).rejects.toThrow(
+      /member/i,
+    );
     await prisma.user.delete({ where: { id: outsider.id } }).catch(() => {});
   });
 

@@ -23,14 +23,14 @@ tracking toggle. Bailey's standing rule is that workspace-level values
 should be columns here, not constants in handlers. See
 [Settings → Workspace](/guide/settings.html) for the full set.
 
-| Field of note | Meaning |
-| --- | --- |
-| `key` | Immutable issue prefix. |
-| `cycleLengthDays` | Default sprint length (default 7). |
-| `cycleCooldownDays` | Gap between sprints (default 0). |
-| `attachmentQuotaMb` | Per-workspace attachment cap (default 1024). |
-| `timeTrackingEnabled` | Master toggle for `TimeEntry`. |
-| `autoDispatch`, `autoDispatchMode` | Dispatcher config. |
+| Field of note                      | Meaning                                      |
+| ---------------------------------- | -------------------------------------------- |
+| `key`                              | Immutable issue prefix.                      |
+| `cycleLengthDays`                  | Default sprint length (default 7).           |
+| `cycleCooldownDays`                | Gap between sprints (default 0).             |
+| `attachmentQuotaMb`                | Per-workspace attachment cap (default 1024). |
+| `timeTrackingEnabled`              | Master toggle for `TimeEntry`.               |
+| `autoDispatch`, `autoDispatchMode` | Dispatcher config.                           |
 
 ## Project
 
@@ -56,16 +56,16 @@ they reach them through their project.
 
 The unit of work.
 
-| Field of note | Meaning |
-| --- | --- |
-| `key` | Display id (e.g. `WRK-42`). Workspace key + auto-incremented number. |
-| `priority` | `NONE`, `LOW`, `MEDIUM`, `HIGH`, `URGENT`. |
-| `status` | One of the workspace's `Status` rows; default categories `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`, `CANCELED`. |
-| `claimedById` | Human user owning the issue (nullable). |
-| `assignedAgentId` | Agent doing the work (nullable). |
-| `projectId` | Optional project membership. |
-| `cycleId` | Optional sprint membership. |
-| `slaMinutes` | Per-issue SLA for the breach watchdog. |
+| Field of note     | Meaning                                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| `key`             | Display id (e.g. `WRK-42`). Workspace key + auto-incremented number.                                                        |
+| `priority`        | `NONE`, `LOW`, `MEDIUM`, `HIGH`, `URGENT`.                                                                                  |
+| `status`          | One of the workspace's `Status` rows; default categories `BACKLOG`, `TODO`, `IN_PROGRESS`, `IN_REVIEW`, `DONE`, `CANCELED`. |
+| `claimedById`     | Human user owning the issue (nullable).                                                                                     |
+| `assignedAgentId` | Agent doing the work (nullable).                                                                                            |
+| `projectId`       | Optional project membership.                                                                                                |
+| `cycleId`         | Optional sprint membership.                                                                                                 |
+| `slaMinutes`      | Per-issue SLA for the breach watchdog.                                                                                      |
 
 The two assignment slots — `claimedById` and `assignedAgentId` — coexist
 intentionally. See [Agents → Overview](/agents/overview.html).
@@ -121,11 +121,11 @@ deliberate.
 
 Directed, typed link between two issues.
 
-| Field | Meaning |
-| --- | --- |
-| `fromIssueId` | The source issue. |
-| `toIssueId` | The target issue. |
-| `kind` | One of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `DUPLICATED_BY`, `RELATED`, `PARENT_OF`, `CHILD_OF`. |
+| Field         | Meaning                                                                                           |
+| ------------- | ------------------------------------------------------------------------------------------------- |
+| `fromIssueId` | The source issue.                                                                                 |
+| `toIssueId`   | The target issue.                                                                                 |
+| `kind`        | One of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `DUPLICATED_BY`, `RELATED`, `PARENT_OF`, `CHILD_OF`. |
 
 Relations are cascade-deleted from either end — when you delete an
 issue, all relations involving it disappear. Pairs of inverse kinds
@@ -146,12 +146,12 @@ namespace.
 
 Polymorphic via `targetType` + `targetId`.
 
-| Field | Meaning |
-| --- | --- |
-| `targetType` | `issue`, `comment`, `project`, `initiative`, ... |
-| `targetId` | The id of the target row. |
-| `objectKey` | MinIO object key. |
-| `mimeType`, `sizeBytes`, `name` | Standard file metadata. |
+| Field                           | Meaning                                          |
+| ------------------------------- | ------------------------------------------------ |
+| `targetType`                    | `issue`, `comment`, `project`, `initiative`, ... |
+| `targetId`                      | The id of the target row.                        |
+| `objectKey`                     | MinIO object key.                                |
+| `mimeType`, `sizeBytes`, `name` | Standard file metadata.                          |
 
 Attachments live in MinIO behind presigned URLs. The init/finalize/
 download/delete pattern is in the `attachments.*` MCP namespace and the
@@ -215,7 +215,7 @@ ordering. See [Saved Views](/guide/saved-views.html).
 Per-(workspace, user) markdown scratchpad. Surfaced via the dashboard
 `<QuickNotesWidget />` and the `notes.*` MCP namespace. Pinned notes
 float to the top; `archivedAt` is the soft-delete path. Notes are
-**personal** — agents leave notes for *themselves*, not for the
+**personal** — agents leave notes for _themselves_, not for the
 operator. The `note.convertToIssue` mutation spawns a real Issue from
 a note's body without auto-archiving the source. See
 [Quick Notes](/guide/quick-notes.html).
@@ -299,8 +299,10 @@ other side, AgentRun gains `producedArtifactIds`,
 `verificationResult`, and `followUps` so the final response is
 structured.
 
-MCP `agent.context.bundle` for issues now exposes a
-`completionContract` block; MCP `runs.complete` is the structured
+MCP `agent.context.bundle` for issues exposes both a `completionContract`
+block and, for plan-linked issues, an `orchestrationContext` block with the
+Goal, Plan, current Step, dependencies, retry feedback, source-run evidence,
+and non-excluded ContextSet references. MCP `runs.complete` is the structured
 submission tool.
 
 ### ExecutionPlan + ExecutionStep

@@ -231,7 +231,13 @@ export const relationRouter = router({
       Array<{
         relationId: string;
         kind: RelationKind;
-        target: { id: string; number: number; title: string; statusId: string; statusCategory: string };
+        target: {
+          id: string;
+          number: number;
+          title: string;
+          statusId: string;
+          statusCategory: string;
+        };
       }>
     > = {
       [RelationKind.BLOCKS]: [],
@@ -267,114 +273,164 @@ export const relationRouter = router({
    *     direction, regardless of which side we started from.
    *   - **child** — directed `parent → child` via `Issue.parentId`,
    *     surfacing the sub-issue hierarchy alongside dependencies.
+   *   - **plan-dependency** — derived from
+   *     `ExecutionStep.dependsOnStepIds` when both steps have materialized
+   *     issues. These edges are intentionally not copied into
+   *     `IssueRelation`; the plan DAG remains the single source of truth.
    *
    * Returns flat `nodes` (with `isCurrent` flagging the focus issue) and
    * directed `edges`; the client lays them out. Node count is capped at
    * `GRAPH_MAX_NODES` — once hit, expansion stops and any dangling edges
    * to undiscovered nodes are dropped so the graph stays consistent.
    */
-  graphForIssue: workspaceProcedure
-    .input(graphForIssueInput)
-    .query(async ({ ctx, input }) => {
-      const root = await ctx.db.issue.findFirst({
-        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-        select: { id: true },
-      });
-      if (!root) throw new TRPCError({ code: "NOT_FOUND" });
+  graphForIssue: workspaceProcedure.input(graphForIssueInput).query(async ({ ctx, input }) => {
+    const root = await ctx.db.issue.findFirst({
+      where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+      select: { id: true },
+    });
+    if (!root) throw new TRPCError({ code: "NOT_FOUND" });
 
-      type Edge = { id: string; from: string; to: string; kind: "blocks" | "child" };
-      const nodeIds = new Set<string>([root.id]);
-      const edges = new Map<string, Edge>();
-      const addEdge = (from: string, to: string, kind: Edge["kind"]) => {
-        const id = `${from}->${to}:${kind}`;
-        if (!edges.has(id)) edges.set(id, { id, from, to, kind });
+    type Edge = {
+      id: string;
+      from: string;
+      to: string;
+      kind: "blocks" | "child" | "plan-dependency";
+    };
+    const nodeIds = new Set<string>([root.id]);
+    const edges = new Map<string, Edge>();
+    const addEdge = (from: string, to: string, kind: Edge["kind"]) => {
+      const id = `${from}->${to}:${kind}`;
+      if (!edges.has(id)) edges.set(id, { id, from, to, kind });
+    };
+
+    let frontier = [root.id];
+    for (let hop = 0; hop < input.depth && frontier.length > 0; hop++) {
+      if (nodeIds.size >= GRAPH_MAX_NODES) break;
+      const discovered = new Set<string>();
+      const note = (id: string) => {
+        if (!nodeIds.has(id)) discovered.add(id);
       };
 
-      let frontier = [root.id];
-      for (let hop = 0; hop < input.depth && frontier.length > 0; hop++) {
-        if (nodeIds.size >= GRAPH_MAX_NODES) break;
-        const discovered = new Set<string>();
-        const note = (id: string) => {
-          if (!nodeIds.has(id)) discovered.add(id);
-        };
+      const [blocks, frontierIssues, children, frontierSteps] = await Promise.all([
+        // Blocking edges touching the frontier, in either direction.
+        ctx.db.issueRelation.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            kind: RelationKind.BLOCKS,
+            OR: [{ fromIssueId: { in: frontier } }, { toIssueId: { in: frontier } }],
+          },
+          select: { fromIssueId: true, toIssueId: true },
+        }),
+        // The frontier issues' own parents (child → up to parent).
+        ctx.db.issue.findMany({
+          where: { id: { in: frontier }, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true, parentId: true },
+        }),
+        // The frontier issues' children (parent → down to child).
+        ctx.db.issue.findMany({
+          where: { parentId: { in: frontier }, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true, parentId: true },
+        }),
+        // A frontier issue can be the materialized form of a plan step.
+        // Fetch the step identity first; its plan scopes the derived DAG
+        // lookup below and prevents cross-workspace/cross-plan edges.
+        ctx.db.executionStep.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            issueId: { in: frontier },
+          },
+          select: { id: true, issueId: true, planId: true },
+        }),
+      ]);
 
-        const [blocks, frontierIssues, children] = await Promise.all([
-          // Blocking edges touching the frontier, in either direction.
-          ctx.db.issueRelation.findMany({
-            where: {
-              workspaceId: ctx.workspaceId,
-              kind: RelationKind.BLOCKS,
-              OR: [{ fromIssueId: { in: frontier } }, { toIssueId: { in: frontier } }],
-            },
-            select: { fromIssueId: true, toIssueId: true },
-          }),
-          // The frontier issues' own parents (child → up to parent).
-          ctx.db.issue.findMany({
-            where: { id: { in: frontier }, workspaceId: ctx.workspaceId, deletedAt: null },
-            select: { id: true, parentId: true },
-          }),
-          // The frontier issues' children (parent → down to child).
-          ctx.db.issue.findMany({
-            where: { parentId: { in: frontier }, workspaceId: ctx.workspaceId, deletedAt: null },
-            select: { id: true, parentId: true },
-          }),
-        ]);
-
-        for (const r of blocks) {
-          addEdge(r.fromIssueId, r.toIssueId, "blocks");
-          note(r.fromIssueId);
-          note(r.toIssueId);
+      for (const r of blocks) {
+        addEdge(r.fromIssueId, r.toIssueId, "blocks");
+        note(r.fromIssueId);
+        note(r.toIssueId);
+      }
+      for (const i of frontierIssues) {
+        if (i.parentId) {
+          addEdge(i.parentId, i.id, "child");
+          note(i.parentId);
         }
-        for (const i of frontierIssues) {
-          if (i.parentId) {
-            addEdge(i.parentId, i.id, "child");
-            note(i.parentId);
-          }
+      }
+      for (const c of children) {
+        if (c.parentId) {
+          addEdge(c.parentId, c.id, "child");
+          note(c.id);
         }
-        for (const c of children) {
-          if (c.parentId) {
-            addEdge(c.parentId, c.id, "child");
-            note(c.id);
-          }
-        }
-
-        // Admit newly discovered nodes up to the cap; they seed next hop.
-        const next: string[] = [];
-        for (const id of discovered) {
-          if (nodeIds.size >= GRAPH_MAX_NODES) break;
-          nodeIds.add(id);
-          next.push(id);
-        }
-        frontier = next;
       }
 
-      const issues = await ctx.db.issue.findMany({
-        where: { id: { in: [...nodeIds] }, workspaceId: ctx.workspaceId },
-        select: {
-          id: true,
-          number: true,
-          title: true,
-          priority: true,
-          status: { select: { category: true, color: true } },
-        },
-      });
+      const planIds = [...new Set(frontierSteps.map((step) => step.planId))];
+      if (planIds.length > 0) {
+        const planSteps = await ctx.db.executionStep.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            planId: { in: planIds },
+            issueId: { not: null },
+            issue: { is: { deletedAt: null } },
+          },
+          select: { id: true, issueId: true, dependsOnStepIds: true },
+        });
+        const byStepId = new Map(planSteps.map((step) => [step.id, step]));
+        const frontierIssueIds = new Set(frontier);
 
-      const nodes = issues.map((i) => ({
-        id: i.id,
-        number: i.number,
-        title: i.title,
-        priority: i.priority,
-        statusCategory: i.status.category,
-        statusColor: i.status.color,
-        isCurrent: i.id === root.id,
-      }));
+        for (const dependent of planSteps) {
+          if (!dependent.issueId) continue;
+          for (const dependencyStepId of dependent.dependsOnStepIds) {
+            const dependency = byStepId.get(dependencyStepId);
+            if (!dependency?.issueId || dependency.issueId === dependent.issueId) continue;
+            // At this hop, only add edges that touch the frontier. Other
+            // edges will be discovered when their node enters the next
+            // frontier, preserving the requested depth semantics.
+            if (
+              !frontierIssueIds.has(dependency.issueId) &&
+              !frontierIssueIds.has(dependent.issueId)
+            ) {
+              continue;
+            }
+            addEdge(dependency.issueId, dependent.issueId, "plan-dependency");
+            note(dependency.issueId);
+            note(dependent.issueId);
+          }
+        }
+      }
 
-      // Drop edges to nodes we never materialized (cap-truncated frontier).
-      const present = new Set(nodes.map((n) => n.id));
-      const edgeList = [...edges.values()].filter(
-        (e) => present.has(e.from) && present.has(e.to),
-      );
+      // Admit newly discovered nodes up to the cap; they seed next hop.
+      const next: string[] = [];
+      for (const id of discovered) {
+        if (nodeIds.size >= GRAPH_MAX_NODES) break;
+        nodeIds.add(id);
+        next.push(id);
+      }
+      frontier = next;
+    }
 
-      return { nodes, edges: edgeList, truncated: nodeIds.size >= GRAPH_MAX_NODES };
-    }),
+    const issues = await ctx.db.issue.findMany({
+      where: { id: { in: [...nodeIds] }, workspaceId: ctx.workspaceId, deletedAt: null },
+      select: {
+        id: true,
+        number: true,
+        title: true,
+        priority: true,
+        status: { select: { category: true, color: true } },
+      },
+    });
+
+    const nodes = issues.map((i) => ({
+      id: i.id,
+      number: i.number,
+      title: i.title,
+      priority: i.priority,
+      statusCategory: i.status.category,
+      statusColor: i.status.color,
+      isCurrent: i.id === root.id,
+    }));
+
+    // Drop edges to nodes we never materialized (cap-truncated frontier).
+    const present = new Set(nodes.map((n) => n.id));
+    const edgeList = [...edges.values()].filter((e) => present.has(e.from) && present.has(e.to));
+
+    return { nodes, edges: edgeList, truncated: nodeIds.size >= GRAPH_MAX_NODES };
+  }),
 });

@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { AgentRunStatus, ExecutionPlanStatus, ExecutionStepStatus } from "@prisma/client";
+import {
+  AgentRunStatus,
+  EventKind,
+  ExecutionPlanStatus,
+  ExecutionStepStatus,
+} from "@prisma/client";
 import { executionPlanRouter } from "@/server/routers/execution-plan";
 import {
   buildContext,
@@ -237,6 +242,71 @@ describe("executionPlanRouter", () => {
     });
     const got = await caller.get({ id: plan.id });
     expect(got.contextSet?.id).toBe(set.id);
+  });
+
+  it("refuses to archive, delete, or remove steps from a live plan", async () => {
+    const { caller } = await setup();
+    const plan = await caller.create({
+      title: "Live guarded plan",
+      steps: [{ title: "Live root" }],
+    });
+    const draft = await caller.get({ id: plan.id });
+    await caller.activate({ id: plan.id });
+
+    await expect(caller.archive({ id: plan.id })).rejects.toThrow(
+      /Cancel or complete this plan before archiving/,
+    );
+    await expect(caller.delete({ id: plan.id, confirm: "Live guarded plan" })).rejects.toThrow(
+      /Cancel or complete this plan before deleting/,
+    );
+    await expect(caller.removeStep({ id: draft.steps[0].id })).rejects.toThrow(
+      /only be removed while the plan is a draft/,
+    );
+
+    const after = await caller.get({ id: plan.id });
+    expect(after.archivedAt).toBeNull();
+    expect(after.steps).toHaveLength(1);
+  });
+
+  it("preserves draft dependency integrity when removing steps", async () => {
+    const { caller } = await setup();
+    const plan = await caller.create({
+      title: "Dependency guarded plan",
+      steps: [
+        { title: "Root" },
+        { title: "Child", dependsOnStepIndexes: [0] },
+        { title: "Independent leaf" },
+      ],
+    });
+    const draft = await caller.get({ id: plan.id });
+
+    await expect(caller.removeStep({ id: draft.steps[0].id })).rejects.toThrow(
+      /Remove the dependency from "Child"/,
+    );
+    await caller.removeStep({ id: draft.steps[2].id });
+
+    const after = await caller.get({ id: plan.id });
+    expect(after.steps.map((step) => step.title)).toEqual(["Root", "Child"]);
+  });
+
+  it("archives a settled plan with an observable change", async () => {
+    const { fixture, caller } = await setup();
+    const plan = await caller.create({ title: "Archivable draft" });
+
+    await caller.archive({ id: plan.id });
+
+    const row = await getPrisma().executionPlan.findUniqueOrThrow({ where: { id: plan.id } });
+    expect(row.archivedAt).not.toBeNull();
+    const event = await getPrisma().activityEvent.findFirst({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectType: "execution-plan",
+        subjectId: plan.id,
+        kind: EventKind.ISSUE_UPDATED,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(event?.payload).toMatchObject({ action: "archived" });
   });
 });
 

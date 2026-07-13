@@ -63,7 +63,7 @@ and time caps you set.
 
 A Goal is one of [**two ways to run agent work**](/agents/overview.html) — the
 autonomous one. The other is direct dispatch (assign an agent to an issue). The
-two are different ways to *start* work, but they share the same observable
+two are different ways to _start_ work, but they share the same observable
 substrate, so orchestrated work isn't a black box:
 
 - **Each step that starts running opens a real `AgentRun`.** When a step
@@ -84,8 +84,13 @@ substrate, so orchestrated work isn't a black box:
   one issue.
 
 So planning, issues, and runs are one connected graph: a Goal owns a plan, a
-plan's steps can become issues, and running a step opens a run — all linked, all
-visible in the same surfaces.
+plan's steps can become issues, and running a step opens a run. A materialized
+issue renders its Goal → Plan → Step contract and sibling progress in the main
+issue column; its Relations graph derives dependency edges from
+`dependsOnStepIds` without duplicating `IssueRelation` rows. Agent runtime
+prompts, `agent.inbox.list`, and `agent.context.bundle` use the same structured
+orchestration context, including retry feedback and completed dependency
+evidence.
 
 ## The loop
 
@@ -98,7 +103,7 @@ visible in the same surfaces.
             └────┬────┘
                  │ plans.decompose  (picks PLANNER; creates DRAFT plan)
                  ▼
-            ┌──────────┐   PLANNER dispatched via webhook + event
+            ┌──────────┐   PLANNER dispatched via webhook or runtime run
             │ PLANNING │──────────────────────────────────────────┐
             └────┬─────┘                                           │
                  │ plans.addSteps  (PLANNER fills the DRAFT plan)  │
@@ -163,9 +168,12 @@ transactional with the status change.
 
 ### Worker dispatch payload
 
-A step entering `READY` emits `EXECUTION_STEP_READY` and queues a webhook
-delivery to the resolved worker (explicit `assignedAgentId`, else the
-crew's `WORKER`). The event payload carries:
+A step entering `READY` emits `EXECUTION_STEP_READY` and dispatches the
+resolved worker (explicit `assignedAgentId`, else the crew's `WORKER`). A
+webhook worker receives the event payload below. A provider-backed runtime
+receives the same step fields plus a hydrated Goal/Plan/DAG context block in
+its prompt; pull-based agents see the structured form in `agent.inbox.list`
+and `agent.context.bundle`.
 
 ```jsonc
 {
@@ -174,11 +182,13 @@ crew's `WORKER`). The event payload carries:
   "title": "...",
   "body": "...",
   "expectedOutput": "...",
-  "verification": [ /* completion-contract checklist */ ],
-  "contextSetId": "...",      // the plan's shared ContextSet
+  "verification": [
+    /* completion-contract checklist */
+  ],
+  "contextSetId": "...", // the plan's shared ContextSet
   "assignedAgentId": "...",
-  "lastFeedback": "...",       // populated on a retry dispatch
-  "retryCount": 1
+  "lastFeedback": "...", // populated on a retry dispatch
+  "retryCount": 1,
 }
 ```
 
@@ -260,12 +270,14 @@ agentCrews.archive({ id })
 
 ## Crews
 
-A **crew** is a reusable, standing team — distinct from a *plan run*,
+A **crew** is a reusable, standing team — distinct from a _plan run_,
 which is a single decompose-and-execute pass against one goal. The crew
 is the roster (who can plan / work / review); the plan run is the work.
 One crew runs many goals over its lifetime; each goal/plan points back at
-its crew via `Goal.crewId` / `ExecutionPlan.crewId`. `maxParallel` caps
-how many of the crew's steps run simultaneously.
+its crew via `Goal.crewId` / `ExecutionPlan.crewId`. `maxParallel` is stored
+and displayed as the crew's intended concurrency ceiling; readiness dispatch
+does not enforce that ceiling yet, so operators should not treat it as a hard
+runtime limit.
 
 The loop resolves roles from crew membership: the PLANNER decomposes, a
 WORKER executes each READY step, a REVIEWER judges steps that enter
