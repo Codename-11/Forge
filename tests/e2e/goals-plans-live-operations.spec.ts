@@ -23,6 +23,15 @@ test("Goals and Plans expose live operations without horizontal overflow", async
   await expect(page.getByRole("button", { name: "Edit plan", exact: true })).toBeVisible();
   await expect(page.getByText("Queued", { exact: true }).first()).toBeVisible();
 
+  // Plan work has an issue-like conversation path. The operator can open a
+  // step composer and @mention an agent without first changing plan state.
+  const askAgent = page.getByRole("button", { name: "Ask an agent", exact: true }).first();
+  await expect(askAgent).toBeVisible();
+  await askAgent.click();
+  await expect(
+    page.getByRole("textbox", { name: "Plan step comment composer" }).first(),
+  ).toBeVisible();
+
   // Execution is read-first. Editing controls appear only after opting in.
   await expect(page.getByText("+ Add body…", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "Edit plan", exact: true }).click();

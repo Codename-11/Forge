@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — Rich-rendering recovery + human delivery acceptance
+
+Recovered the six AXI-95–99 rich-rendering commits from the stale Codex bridge
+clone onto current production `main`, resolving conflicts against the newer
+issue context and URL-safety work. Issue descriptions, comments, and Focus now
+share the rich renderer; direct media and allowlisted provider links get
+bounded, accessible preview controls with inert fallbacks for unsafe schemes.
+
+Closed the lifecycle defect that let successful agent reviews certify their
+own delivery. All-DONE steps now complete the Plan while the Goal remains
+ACTIVE with `OUTCOME_REVIEW` health. A signed-in operator must explicitly
+accept a non-empty outcome summary plus durable delivery evidence; premature
+Goals can be reopened with an audited reason. Added migration 0099 for the
+structured evidence record. Agents intentionally cannot accept/reopen Goals
+over MCP.
+
+Made Plan collaboration visible instead of burying a generic composer under
+each step. Step rows now expose **Ask @agent**, prefill the assigned agent,
+focus the shared mention-aware composer, and retain ordinary comments for
+context that should not dispatch work. Goal outcome review links directly to
+the final step discussion.
+
+Verification for the v0.10.0 release: `pnpm lint` (existing repository
+warnings only), `pnpm typecheck`, the full Vitest suite (**1,159 passed; 1
+skipped**), `git diff --check`, a fresh Next.js production build, and the full
+Playwright suite (**37 passed**).
+
 ## 2026-07-12 — AXI-97 rich issue rendering integration
 
 Integrated the shared rich body renderer into the remaining issue-adjacent

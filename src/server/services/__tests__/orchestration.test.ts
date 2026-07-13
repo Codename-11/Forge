@@ -13,6 +13,7 @@ import {
 } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import {
+  acceptGoalOutcome,
   abandonGoal,
   activatePlan,
   addStepsToPlan,
@@ -26,6 +27,7 @@ import {
   maybeCompleteGoal,
   recordVerdict,
   requestPlanApproval,
+  reopenGoal,
   sweepOrchestrationBudget,
   updateGoal,
 } from "@/server/services/orchestration-service";
@@ -876,8 +878,8 @@ describe("orchestration: judge loop", () => {
     expect(gate?.prompt).toContain("did not start");
   });
 
-  it("judge PASS marks the step DONE and achieves the goal", async () => {
-    const { fixture, prisma, stepId, goalId } = await buildRunningPlanWithStep();
+  it("judge PASS completes execution but requires human outcome acceptance", async () => {
+    const { fixture, prisma, stepId, goalId, planId } = await buildRunningPlanWithStep();
     const res = await recordVerdict(prisma, {
       workspaceId: fixture.workspace.id,
       actorId: fixture.user.id,
@@ -892,10 +894,75 @@ describe("orchestration: judge loop", () => {
     const verdict = step.judgeVerdict as { verdict: string; score: number };
     expect(verdict.verdict).toBe("PASS");
     expect(verdict.score).toBe(0.9);
-    // Single step done → goal ACHIEVED.
-    const goal = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
+    // Agent execution completion is not delivery acceptance.
+    const plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
+    let goal = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
+    expect(plan.status).toBe(ExecutionPlanStatus.COMPLETED);
+    expect(goal.status).toBe(GoalStatus.ACTIVE);
+    expect(goal.achievedAt).toBeNull();
+    const awaitingAcceptance = await getGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      id: goalId,
+    });
+    expect(awaitingAcceptance.operating.health).toBe("OUTCOME_REVIEW");
+    expect(awaitingAcceptance.operating.nextAction).toMatch(/accept the outcome/i);
+
+    await expect(
+      acceptGoalOutcome(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        id: goalId,
+        outcomeSummary: "Shipped",
+        evidence: [],
+      }),
+    ).rejects.toThrow(/delivery proof/i);
+
+    await expect(
+      acceptGoalOutcome(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        id: goalId,
+        outcomeSummary: "Shipped",
+        evidence: [{ kind: "OTHER", label: "unsafe", url: "javascript:alert(1)" }],
+      }),
+    ).rejects.toThrow(/http or https/i);
+
+    await acceptGoalOutcome(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      id: goalId,
+      outcomeSummary: "Merged and deployed the requested behavior.",
+      evidence: [
+        {
+          kind: "PULL_REQUEST",
+          label: "PR #19",
+          url: "https://github.com/example/forge/pull/19",
+        },
+      ],
+    });
+    goal = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
     expect(goal.status).toBe(GoalStatus.ACHIEVED);
     expect(goal.achievedAt).not.toBeNull();
+    expect(goal.outcomeSummary).toContain("deployed");
+    expect(goal.outcomeEvidence).toEqual([
+      {
+        kind: "PULL_REQUEST",
+        label: "PR #19",
+        url: "https://github.com/example/forge/pull/19",
+      },
+    ]);
+
+    await reopenGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      id: goalId,
+      reason: "Deployment evidence was incorrect.",
+    });
+    goal = await prisma.goal.findUniqueOrThrow({ where: { id: goalId } });
+    expect(goal.status).toBe(GoalStatus.ACTIVE);
+    expect(goal.achievedAt).toBeNull();
+    expect(goal.outcomeSummary).toBeNull();
+    expect(goal.outcomeEvidence).toBeNull();
   });
 
   it("rejects a verdict before the step reaches review", async () => {

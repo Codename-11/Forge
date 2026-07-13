@@ -30,10 +30,11 @@ DAG, AgentCrew, ContextSet, ReviewGate, ActionRequest). It adds the
 
 ## How a goal runs
 
-A **goal** is an automated loop that runs to completion — not a static
-checklist you tick off by hand. You state the objective, approve the plan,
-and the crew drives it through to "achieved" on its own, within the budget
-and time caps you set.
+A **goal** is an automated execution loop with a human delivery boundary — not
+a static checklist you tick off by hand. You state the objective, approve the
+plan, and the crew drives every step through review within the budget and time
+caps you set. Forge completes the Plan automatically; an operator accepts the
+delivered outcome before the Goal becomes achieved.
 
 1. **Objective** — You state a high-level goal and (optionally) assign a
    crew to run it.
@@ -45,8 +46,11 @@ and time caps you set.
    them in parallel.
 5. **Review** — A reviewer judges each finished step. A pass advances the
    plan; a fail sends it back with feedback to retry.
-6. **Achieved** — When every step passes, the goal completes. Budget and
-   time caps stop runaway loops automatically.
+6. **Accept outcome** — When every step passes, the Plan completes and the Goal
+   remains active in `OUTCOME_REVIEW`. An operator records what shipped plus at
+   least one durable proof (PR, commit, deployment, test, artifact, or other
+   reference). Only that explicit acceptance marks the Goal achieved. Budget
+   and time caps stop runaway loops automatically.
 
 ### Use cases
 
@@ -103,6 +107,12 @@ evidence. An operator's explicit `DONE` or `CANCELED` Issue transition is
 authoritative in the other direction: Forge updates the one unambiguous linked
 step, cascading dependents on Done or blocking the plan on Cancel.
 
+Every Plan step also has an issue-like discussion thread. Use **Ask @agent**
+or type `@profileKey` in the step composer to add context, ask a question, or
+request follow-up without changing the step status. The mention materializes
+issue-backed work when needed and wakes the named agent with the Goal, Plan,
+Step, dependency, and operator-comment context attached.
+
 ## The loop
 
 ```
@@ -148,10 +158,15 @@ step, cascading dependents on Done or blocking the plan on Cancel.
       │                                                    │
       └────────────────────────────────────────────────────┘
                  │
-                 │ (every step DONE)
+                 │ (every step DONE: execution complete)
                  ▼
+        ┌────────────────┐   plan → COMPLETED; goal stays ACTIVE
+        │ OUTCOME_REVIEW │   operator records summary + delivery evidence
+        └───────┬────────┘
+                │ goal.acceptOutcome (UI-only human acceptance)
+                ▼
             ┌──────────┐
-            │ ACHIEVED │   plan → COMPLETED, goal → ACHIEVED, achievedAt
+            │ ACHIEVED │   goal → ACHIEVED, achievedAt
             └──────────┘
 ```
 
@@ -272,7 +287,8 @@ plans.recordVerdict({ stepId, verdict: "PASS", feedback: "meets contract", score
 #    PASS → step DONE → cascade → dependents become READY → dispatch.
 #    FAIL → retry (READY + retryCount++ + lastFeedback) or BLOCKED + gate.
 
-# When every step is DONE, the plan COMPLETEs and the goal is ACHIEVED.
+# When every step is DONE, the plan completes and the goal waits for human
+# outcome acceptance with a summary and delivery evidence.
 ```
 
 Crew management (admin-scoped):

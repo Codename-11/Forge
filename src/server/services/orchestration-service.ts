@@ -292,6 +292,21 @@ export interface UpdateGoalInput {
   maxWallTimeMinutes?: number | null;
 }
 
+export type GoalOutcomeEvidenceKind =
+  | "PULL_REQUEST"
+  | "COMMIT"
+  | "DEPLOYMENT"
+  | "TEST"
+  | "ARTIFACT"
+  | "OTHER";
+
+export type GoalOutcomeEvidence = {
+  kind: GoalOutcomeEvidenceKind;
+  label: string;
+  url?: string;
+  ref?: string;
+};
+
 export async function updateGoal(
   db: PrismaClient,
   input: UpdateGoalInput,
@@ -444,6 +459,165 @@ export async function updateGoal(
   });
 
   return { id: goal.id };
+}
+
+/**
+ * Human acceptance is the boundary between execution completion and outcome
+ * achievement. Agents may finish every plan step, but the Goal stays ACTIVE
+ * until an operator records what shipped and at least one durable proof.
+ */
+export async function acceptGoalOutcome(
+  db: PrismaClient,
+  input: {
+    workspaceId: string;
+    actorId: string;
+    id: string;
+    outcomeSummary: string;
+    evidence: GoalOutcomeEvidence[];
+  },
+): Promise<{ id: string }> {
+  const summary = input.outcomeSummary.trim();
+  if (!summary) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Describe the delivered outcome." });
+  }
+  const evidence = input.evidence.map((item) => ({
+    kind: item.kind,
+    label: item.label.trim(),
+    ...(item.url?.trim() ? { url: item.url.trim() } : {}),
+    ...(item.ref?.trim() ? { ref: item.ref.trim() } : {}),
+  }));
+  if (
+    evidence.length === 0 ||
+    evidence.some((item) => !item.label || (!("url" in item) && !("ref" in item)))
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Add at least one delivery proof with a URL or reference.",
+    });
+  }
+  for (const item of evidence) {
+    if (!("url" in item) || !item.url) continue;
+    let parsed: URL;
+    try {
+      parsed = new URL(item.url);
+    } catch {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Evidence URLs must be valid." });
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Evidence URLs must use http or https.",
+      });
+    }
+  }
+
+  await db.$transaction(async (tx) => {
+    const goal = await tx.goal.findFirst({
+      where: { id: input.id, workspaceId: input.workspaceId },
+      select: { id: true, title: true, status: true },
+    });
+    if (!goal) throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found." });
+    if (goal.status === GoalStatus.ABANDONED) {
+      throw new TRPCError({ code: "CONFLICT", message: "An abandoned goal cannot be accepted." });
+    }
+    if (goal.status === GoalStatus.ACHIEVED) return;
+
+    const plan = await tx.executionPlan.findFirst({
+      where: { goalId: goal.id, workspaceId: input.workspaceId, isActiveAttempt: true },
+      select: { id: true, status: true },
+    });
+    if (!plan || plan.status !== ExecutionPlanStatus.COMPLETED) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "Finish the active plan before accepting the goal outcome.",
+      });
+    }
+    const incompleteSteps = await tx.executionStep.count({
+      where: { planId: plan.id, status: { not: ExecutionStepStatus.DONE } },
+    });
+    if (incompleteSteps > 0) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "Every required plan step must be done before accepting the outcome.",
+      });
+    }
+
+    const achievedAt = new Date();
+    await tx.goal.update({
+      where: { id: goal.id },
+      data: {
+        status: GoalStatus.ACHIEVED,
+        achievedAt,
+        outcomeSummary: summary,
+        outcomeEvidence: evidence as Prisma.InputJsonValue,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      entity: "goal",
+      entityId: goal.id,
+      action: "outcome-accepted",
+      before: { status: goal.status },
+      after: { status: GoalStatus.ACHIEVED, outcomeSummary: summary, evidence },
+      eventKind: EventKind.GOAL_STATUS_CHANGED,
+      subjectType: "goal",
+      subjectId: goal.id,
+      payload: {
+        from: goal.status,
+        to: GoalStatus.ACHIEVED,
+        planId: plan.id,
+        evidenceCount: evidence.length,
+      } as Prisma.InputJsonValue,
+    });
+  });
+  return { id: input.id };
+}
+
+/** Reopen an incorrectly or prematurely accepted goal for a fresh closeout. */
+export async function reopenGoal(
+  db: PrismaClient,
+  input: { workspaceId: string; actorId: string; id: string; reason: string },
+): Promise<{ id: string }> {
+  const reason = input.reason.trim();
+  if (!reason) throw new TRPCError({ code: "BAD_REQUEST", message: "A reason is required." });
+  await db.$transaction(async (tx) => {
+    const goal = await tx.goal.findFirst({
+      where: { id: input.id, workspaceId: input.workspaceId },
+      select: { id: true, status: true, outcomeSummary: true, outcomeEvidence: true },
+    });
+    if (!goal) throw new TRPCError({ code: "NOT_FOUND", message: "Goal not found." });
+    if (goal.status !== GoalStatus.ACHIEVED) {
+      throw new TRPCError({ code: "CONFLICT", message: "Only an achieved goal can be reopened." });
+    }
+    await tx.goal.update({
+      where: { id: goal.id },
+      data: {
+        status: GoalStatus.ACTIVE,
+        achievedAt: null,
+        outcomeSummary: null,
+        outcomeEvidence: Prisma.DbNull,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      entity: "goal",
+      entityId: goal.id,
+      action: "reopened",
+      before: {
+        status: goal.status,
+        outcomeSummary: goal.outcomeSummary,
+        outcomeEvidence: goal.outcomeEvidence,
+      },
+      after: { status: GoalStatus.ACTIVE, reason },
+      eventKind: EventKind.GOAL_STATUS_CHANGED,
+      subjectType: "goal",
+      subjectId: goal.id,
+      payload: { from: goal.status, to: GoalStatus.ACTIVE, reason } as Prisma.InputJsonValue,
+    });
+  });
+  return { id: input.id };
 }
 
 export async function getGoal(db: PrismaClient, params: { workspaceId: string; id: string }) {
@@ -667,6 +841,8 @@ export async function getGoal(db: PrismaClient, params: { workspaceId: string; i
   const reviewStep = activeSteps.find((step) => step.status === ExecutionStepStatus.REVIEW);
   const runningStep = activeSteps.find((step) => step.status === ExecutionStepStatus.RUNNING);
   const readyStep = activeSteps.find((step) => step.status === ExecutionStepStatus.READY);
+  const awaitingOutcomeAcceptance =
+    goal.status !== GoalStatus.ACHIEVED && activePlan?.status === ExecutionPlanStatus.COMPLETED;
   const health =
     goal.status === GoalStatus.ACHIEVED
       ? "ACHIEVED"
@@ -682,9 +858,11 @@ export async function getGoal(db: PrismaClient, params: { workspaceId: string; i
                 ? "WAITING_REVIEW"
                 : readyStep
                   ? "READY"
-                  : activePlan
-                    ? "PLANNING"
-                    : "NEEDS_PLAN";
+                  : awaitingOutcomeAcceptance
+                    ? "OUTCOME_REVIEW"
+                    : activePlan
+                      ? "PLANNING"
+                      : "NEEDS_PLAN";
   const focusStep = blockedStep ?? reviewStep ?? runningStep ?? readyStep ?? null;
   const nextAction = pendingGates.length
     ? "Review completed work"
@@ -696,9 +874,11 @@ export async function getGoal(db: PrismaClient, params: { workspaceId: string; i
           ? `In progress: ${runningStep.title}`
           : readyStep
             ? `Ready to run: ${readyStep.title}`
-            : activePlan
-              ? "Finish or approve the active plan"
-              : "Create an execution plan";
+            : awaitingOutcomeAcceptance
+              ? "Review delivery evidence and accept the outcome"
+              : activePlan
+                ? "Finish or approve the active plan"
+                : "Create an execution plan";
   return {
     ...goal,
     aggregate,
@@ -851,6 +1031,8 @@ export async function listGoals(
     const running = steps.find((step) => step.status === ExecutionStepStatus.RUNNING);
     const review = steps.find((step) => step.status === ExecutionStepStatus.REVIEW);
     const ready = steps.find((step) => step.status === ExecutionStepStatus.READY);
+    const awaitingOutcomeAcceptance =
+      goal.status !== GoalStatus.ACHIEVED && plan?.status === ExecutionPlanStatus.COMPLETED;
     const focus = gated ?? blocked ?? review ?? running ?? ready ?? null;
     const health = gated
       ? "NEEDS_REVIEW"
@@ -862,9 +1044,11 @@ export async function listGoals(
             ? "WAITING_REVIEW"
             : ready
               ? "READY"
-              : plan
-                ? "PLANNING"
-                : goal.status;
+              : awaitingOutcomeAcceptance
+                ? "OUTCOME_REVIEW"
+                : plan
+                  ? "PLANNING"
+                  : goal.status;
     return {
       ...goal,
       activePlan: plan,
@@ -873,7 +1057,9 @@ export async function listGoals(
         nextAction: focus
           ? `${focus.status === "REVIEW" ? "Review" : focus.status === "BLOCKED" ? "Unblock" : focus.status === "RUNNING" ? "Running" : "Next"}: ${focus.title}`
           : plan
-            ? "Finish or approve the active plan"
+            ? awaitingOutcomeAcceptance
+              ? "Review delivery evidence and accept the outcome"
+              : "Finish or approve the active plan"
             : "Create an execution plan",
         pendingGateCount: steps.filter((step) => gatedStepIds.has(step.id)).length,
       },
@@ -2942,8 +3128,9 @@ export async function handoffCompletedRunToStep(
 }
 
 /**
- * When every step in the active plan is DONE, flip the goal → ACHIEVED and
- * the plan → COMPLETED. No-op if any step is non-DONE.
+ * When every step in the active plan is DONE, mark execution COMPLETED. The
+ * parent Goal deliberately stays ACTIVE until a human accepts the delivered
+ * outcome with a summary and evidence through `acceptGoalOutcome`.
  */
 export async function maybeCompleteGoal(
   tx: Tx,
@@ -2970,28 +3157,37 @@ export async function maybeCompleteGoal(
     where: { id: params.planId },
     data: { status: ExecutionPlanStatus.COMPLETED },
   });
+  await recordChange(tx, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    entity: "execution-plan",
+    entityId: plan.id,
+    action: "completed",
+    before: { status: plan.status },
+    after: { status: ExecutionPlanStatus.COMPLETED },
+    eventKind: EventKind.ISSUE_UPDATED,
+    subjectType: "execution-plan",
+    subjectId: plan.id,
+    payload: { goalId: plan.goalId, outcomeAcceptanceRequired: Boolean(plan.goalId) },
+  });
   if (plan.goalId) {
     const goal = await tx.goal.findUnique({
       where: { id: plan.goalId },
       select: { id: true, status: true },
     });
     if (goal && goal.status !== GoalStatus.ACHIEVED && goal.status !== GoalStatus.ABANDONED) {
-      await tx.goal.update({
-        where: { id: goal.id },
-        data: { status: GoalStatus.ACHIEVED, achievedAt: new Date() },
-      });
       await recordChange(tx, {
         workspaceId: params.workspaceId,
         actorId: params.actorId,
         entity: "goal",
         entityId: goal.id,
-        action: "achieved",
+        action: "outcome-requested",
         before: { status: goal.status },
-        after: { status: GoalStatus.ACHIEVED },
-        eventKind: EventKind.GOAL_STATUS_CHANGED,
+        after: { status: goal.status, planStatus: ExecutionPlanStatus.COMPLETED },
+        eventKind: EventKind.ISSUE_UPDATED,
         subjectType: "goal",
         subjectId: goal.id,
-        payload: { from: goal.status, to: GoalStatus.ACHIEVED, planId: params.planId },
+        payload: { planId: params.planId, outcomeAcceptanceRequired: true },
       });
     }
   }

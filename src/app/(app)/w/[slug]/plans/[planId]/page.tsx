@@ -1748,7 +1748,10 @@ function StepCard({
             </button>
           ) : null}
           <div className="mt-2">
-            <StepComments stepId={step.id} />
+            <StepComments
+              stepId={step.id}
+              assignedAgent={agent ? { name: agent.name, profileKey: agent.profileKey } : null}
+            />
           </div>
         </div>
         <Combobox

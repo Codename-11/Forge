@@ -3078,6 +3078,11 @@ model Goal {
   successCriteria    String?    @db.Text
   /// Operator-facing closeout summary populated during or after delivery.
   outcomeSummary     String?    @db.Text
+  /// Operator-accepted proof that the outcome was actually delivered. Shape:
+  /// array of `{ kind, label, url?, ref? }` entries (PR, commit, deployment,
+  /// test, artifact, or other). A completed plan remains ACTIVE until a human
+  /// accepts a non-empty summary and at least one evidence entry.
+  outcomeEvidence    Json?
   /// Optional outcome horizon; plans retain their own execution budgets.
   targetDate         DateTime?
   status             GoalStatus @default(OPEN)

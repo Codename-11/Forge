@@ -11,6 +11,21 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-13] — v0.10.0 · Rich issue rendering & delivery-safe goals
+
+### Added
+
+- **Issue descriptions, comments, and Focus now render rich content consistently.** Direct images and browser-playable videos get bounded previews; supported YouTube, GitHub, Loom, and Figma links get controlled provider cards; every preview can be collapsed, hidden, restored, or opened directly with accessible controls and safe fallbacks.
+- **Plan steps now have an obvious issue-like conversation path.** Each step exposes Comment and Ask @agent actions, with the same mention autocomplete used in issue threads. Mentioning an agent wakes canonical issue-backed work with the Goal, Plan, Step, dependency, and operator-comment context.
+
+### Changed
+
+- **Finished execution no longer certifies its own delivery.** When every required step passes, the Plan becomes Completed but the Goal remains Active in outcome review. A signed-in operator must record a delivered-outcome summary and at least one PR, commit, deployment, test, artifact, or other reference before accepting the Goal as Achieved.
+
+### Fixed
+
+- **Rich-rendering work stranded in an isolated runtime clone is now part of the real release history.** The six reviewed commits were recovered onto current `main`, preserving Forge's newer URL-safety policy, and the delivery lane now has an explicit reopen path for prematurely accepted Goals.
+
 ## [2026-07-13] — v0.9.0 · Context-aware plans & issue archive
 
 ### Added

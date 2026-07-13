@@ -99,7 +99,10 @@ describe("RichContentRenderer rich link and media behavior", () => {
     );
 
     expect(html).toContain('href="https://example.com"');
-    expect(html).toContain('href="mailto:team@example.com"');
+    // Preserve Forge's shared URL policy: only http(s) and internal app
+    // paths become links. Mailto stays inert alongside scriptable schemes.
+    expect(html).toContain("mail");
+    expect(html).not.toContain('href="mailto:team@example.com"');
     expect(html).toContain("bad)");
     expect(html).not.toContain("javascript:");
   });
@@ -125,9 +128,7 @@ describe("RichContentRenderer rich link and media behavior", () => {
     );
 
     expect(html).toContain('aria-label="GitHub preview actions"');
-    expect(html).toContain(
-      'aria-label="Open anthropic/forge pull request #123 on GitHub"',
-    );
+    expect(html).toContain('aria-label="Open anthropic/forge pull request #123 on GitHub"');
     expect(source).toContain("flex min-w-0 flex-wrap");
     expect(source).toContain("sm:flex-row");
   });
