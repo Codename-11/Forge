@@ -100,6 +100,7 @@ export type RunEvent =
       choice?: string;
     }
   | { type: "usage"; tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number }
+  | { type: "stopped"; reason?: string }
   | { type: "completed"; finalText?: string }
   | { type: "error"; message: string };
 

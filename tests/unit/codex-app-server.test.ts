@@ -62,6 +62,9 @@ describe("mapCodexNotification", () => {
       mapCodexNotification("turn/completed", { turn: { status: "completed" } }),
     ).toEqual({ type: "completed" });
     expect(
+      mapCodexNotification("turn/completed", { turn: { status: "interrupted" } }),
+    ).toEqual({ type: "stopped", reason: "Codex turn was interrupted." });
+    expect(
       mapCodexNotification("turn/completed", {
         turn: { status: "failed", error: { message: "boom" } },
       }),

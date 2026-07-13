@@ -389,9 +389,14 @@ export function makeHermesRunsConnector(opts?: {
         try {
           const status = await fetchRunStatus(externalRunId);
           if (status.usage) onEvent({ type: "usage", ...status.usage });
-          if (status.state === "completed" || status.state === "cancelled") {
+          if (status.state === "completed") {
             terminal = true;
             onEvent({ type: "completed", finalText: status.output });
+            break;
+          }
+          if (status.state === "cancelled") {
+            terminal = true;
+            onEvent({ type: "stopped", reason: status.error || "Runtime run was cancelled." });
             break;
           }
           if (status.state === "failed") {

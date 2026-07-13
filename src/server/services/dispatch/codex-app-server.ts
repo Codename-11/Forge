@@ -53,6 +53,7 @@ interface PendingRun {
   buffer: RunEvent[];
   onEvent: ((e: RunEvent) => void) | null;
   terminal: boolean;
+  terminalStopped?: boolean;
   terminalError?: string;
   usage?: RunStatus["usage"];
   finalText: string;
@@ -218,8 +219,9 @@ export function mapCodexNotification(
       if (status === "failed") {
         return { type: "error", message: codexFailureMessage(turn ?? params) };
       }
-      // interrupted + completed both terminate cleanly; final text is
-      // assembled from deltas by the caller.
+      if (status === "interrupted" || status === "cancelled" || status === "canceled") {
+        return { type: "stopped", reason: "Codex turn was interrupted." };
+      }
       return { type: "completed" };
     }
     case "model/rerouted":
@@ -497,6 +499,9 @@ export function makeCodexAppServerConnector(opts: {
         if (status === "failed") {
           run.terminalError = codexFailureMessage(turn ?? params);
         }
+        if (status === "interrupted" || status === "cancelled" || status === "canceled") {
+          run.terminalStopped = true;
+        }
         run.usage = mapCodexUsage(params.usage as Record<string, unknown> | undefined);
         if (run.usage) emit(run, { type: "usage", ...run.usage });
         run.terminal = true;
@@ -700,6 +705,9 @@ export function makeCodexAppServerConnector(opts: {
         scheduleRunCleanup(externalRunId);
         if (run.terminalError) {
           return { state: "failed", output: run.terminalError, usage: run.usage };
+        }
+        if (run.terminalStopped) {
+          return { state: "cancelled", output: run.finalText || undefined, usage: run.usage };
         }
         return { state: "completed", output: run.finalText || undefined, usage: run.usage };
       }

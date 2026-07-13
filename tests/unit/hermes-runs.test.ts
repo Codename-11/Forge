@@ -185,4 +185,25 @@ describe("makeHermesRunsConnector", () => {
     );
     expect(events).toContainEqual({ type: "completed", finalText: "done" });
   });
+
+  it("reports a remotely cancelled run as stopped after the event stream closes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/events")) {
+          return new Response(new ReadableStream({ start: (controller) => controller.close() }), {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return Response.json({ status: "cancelled", error: "Stopped by operator" });
+      }),
+    );
+
+    const events: Array<Record<string, unknown>> = [];
+    const connector = makeHermesRunsConnector({ baseUrl: "http://hermes.local/v1" });
+    await connector.subscribe("run_cancelled", (event) => events.push(event));
+
+    expect(events).toEqual([{ type: "stopped", reason: "Stopped by operator" }]);
+  });
 });
