@@ -1,5 +1,12 @@
-import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AgentProvider, EngagementMode, EventKind, RuntimeKind, RunEngine } from "@prisma/client";
+import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
+import {
+  AgentProvider,
+  AgentRunStatus,
+  EngagementMode,
+  EventKind,
+  RuntimeKind,
+  RunEngine,
+} from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import {
   dispatchTriggerContext,
@@ -16,6 +23,7 @@ import {
 const fixtures: TestFixture[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (fixtures.length) {
     const f = fixtures.pop()!;
     await f.cleanup();
@@ -34,6 +42,63 @@ describe("runs dispatcher", () => {
     });
     expect(context).toContain("Planning assignment");
     expect(context).toContain("plans.addSteps");
+  });
+
+  it("retires a WAITING approval after the provider swept its run", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RDE" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        ownerId: fixture.user.id,
+        name: "Hermes TTL test",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://hermes.invalid/v1",
+        providersAvailable: [AgentProvider.HERMES],
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "expired runner",
+        profileKey: "expired-runner",
+        provider: AgentProvider.HERMES,
+        runEngine: RunEngine.RUNS,
+        runtimeId: runtime.id,
+        status: "ONLINE",
+      },
+    });
+    const issue = await createIssue(fixture, { title: "expired approval" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        externalRunId: "run_expired_poll",
+        awaitingApprovalAt: new Date(),
+        pendingApproval: { command: "git clone example", choices: ["session", "deny"] },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: { message: "Run not found: run_expired_poll", code: "run_not_found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const tick = await ingestRunsDispatch();
+    expect(tick.polled).toBeGreaterThanOrEqual(1);
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe(AgentRunStatus.STALLED);
+    expect(after.awaitingApprovalAt).toBeNull();
+    expect(after.pendingApproval).toBeNull();
+    expect(after.summary).toMatch(/provider no longer recognizes this run/i);
   });
 
   it("starts the provider run when the durable inbox already precreated AgentRun", async () => {

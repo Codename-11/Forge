@@ -11,6 +11,16 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-13] — v0.10.2 · Expired approval recovery
+
+### Changed
+
+- **Approving an expired runtime session now recovers the work.** If a provider has swept or lost the run behind a permission card, Forge truthfully marks the orphan stalled and immediately starts a fresh run with the same agent and engagement mode. The operator is told that the old approval was not applied and may be requested again.
+
+### Fixed
+
+- **Runtime approval cards can no longer become immortal.** The run worker now continues polling provider-backed WAITING runs, distinguishes a missing provider run from successful completion, clears expired approval state, and surfaces the failed attempt on the issue and Command Center recovery queue.
+
 ## [2026-07-13] — v0.10.1 · Human-action visibility
 
 ### Changed

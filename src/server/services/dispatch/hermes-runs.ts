@@ -7,6 +7,7 @@ import type {
   RunStatus,
   StartedRun,
 } from "./types";
+import { RunNotFoundError } from "./types";
 
 function mapStatus(raw: string): RunStatus["state"] {
   const s = raw.toLowerCase();
@@ -122,6 +123,7 @@ export function makeHermesRunsConnector(opts?: {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
       logger.warn({ externalRunId, status: res.status }, "hermes-runs: approval rejected");
+      if (res.status === 404) throw new RunNotFoundError(externalRunId, text || undefined);
       throw new Error(text || `Hermes approval failed (${res.status})`);
     }
   };
@@ -340,8 +342,9 @@ export function makeHermesRunsConnector(opts?: {
         headers: { accept: "application/json", ...authHeaders() },
       });
       if (!res.ok) {
-        // 404 = run swept (TTL) — treat as completed so the poller stops.
-        if (res.status === 404) return { state: "completed" };
+        // A swept provider run is not a successful completion. Preserve the
+        // distinction so Forge can retire an orphaned approval truthfully.
+        if (res.status === 404) return { state: "not_found" };
         throw new Error(`Run status failed (${res.status})`);
       }
       const json = (await res.json()) as Record<string, unknown>;
@@ -383,6 +386,7 @@ export function makeHermesRunsConnector(opts?: {
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         logger.warn({ externalRunId, status: res.status }, "hermes-runs: stop rejected");
+        if (res.status === 404) throw new RunNotFoundError(externalRunId, text || undefined);
         throw new Error(text || `Hermes stop failed (${res.status})`);
       }
     },

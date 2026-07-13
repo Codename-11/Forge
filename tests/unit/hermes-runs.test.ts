@@ -120,4 +120,30 @@ describe("makeHermesRunsConnector", () => {
       body: { choice: "once" },
     });
   });
+
+  it("distinguishes an expired provider run from successful completion", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          {
+            error: {
+              message: "Run not found: run_expired",
+              code: "run_not_found",
+            },
+          },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const connector = makeHermesRunsConnector({ baseUrl: "http://hermes.local/v1" });
+    await expect(connector.getStatus?.("run_expired")).resolves.toMatchObject({
+      state: "not_found",
+    });
+    await expect(connector.approve?.("run_expired", "session")).rejects.toMatchObject({
+      code: "RUN_NOT_FOUND",
+      externalRunId: "run_expired",
+    });
+  });
 });

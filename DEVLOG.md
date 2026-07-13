@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — AXI-102 expired runtime approval recovery
+
+Diagnosed AXI-102's failed approval against Hermes: Forge retained WAITING run
+`cmrjhkjbf037mo1089vzolecc`, but the gateway had already swept provider run
+`run_10446861a003426f88b2c692d30a2542` and returned `run_not_found`. The
+approval visibility release had intentionally excluded live approvals from
+generic stale recovery, while the worker still polled only ACTIVE runs, so the
+orphan could not self-reconcile.
+
+Hermes now reports provider 404s as explicit missing-run state rather than a
+successful completion. The worker polls ACTIVE and WAITING provider runs,
+retires swept approvals as STALLED, clears their pending decision data, and
+posts the existing failure evidence back to issue surfaces. If an operator's
+approval discovers the expiry first, Forge retires the orphan and emits a
+fresh same-agent/same-mode assignment atomically; the UI explicitly says the
+old approval was not applied and may be requested again.
+
+Verification for v0.10.2: `pnpm ci:local` passed — lint (existing repository
+warnings only), typecheck, the full Vitest suite (**1,167 passed; 1 skipped**),
+a fresh Next.js production build, and the full Playwright suite (**37 passed**).
+
 ## 2026-07-13 — AXI-102 human-action visibility
 
 Traced AXI-102 from production: its intentionally unassigned Backlog issue had

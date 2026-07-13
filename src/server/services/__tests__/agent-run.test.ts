@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, afterEach } from "vitest";
+import { describe, it, expect, afterAll, afterEach, vi } from "vitest";
 import { AgentRunStatus, EngagementMode, EventKind, RuntimeKind } from "@prisma/client";
 import {
   abandonRunsForAgentReassignment,
@@ -21,6 +21,7 @@ import { captureRunApproval, resolveRunApproval } from "@/server/services/run-ap
 const fixtures: TestFixture[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (fixtures.length) {
     const f = fixtures.pop()!;
     await f.cleanup();
@@ -426,6 +427,90 @@ describe("agent-run lifecycle", () => {
     expect(runs[1]?.status).toBe(AgentRunStatus.ACTIVE);
     expect(runs[1]?.engagementMode).toBe(EngagementMode.EXECUTE);
     expect(runs[1]?.assignmentEventId).not.toBeNull();
+  });
+
+  it("retires and restarts an approval whose provider run expired", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARE" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Hermes expired run",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://hermes.invalid/v1",
+      },
+    });
+    const agent = await createAgent(fixture.workspace.id, "are-a1");
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { provider: "HERMES", runtimeId: runtime.id },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        engagementMode: EngagementMode.RESEARCH,
+        externalRunId: "run_expired",
+        awaitingApprovalAt: new Date(),
+        pendingApproval: { command: "git clone example", choices: ["session", "deny"] },
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: { message: "Run not found: run_expired", code: "run_not_found" } },
+          { status: 404 },
+        ),
+      ),
+    );
+
+    const caller = agentRunRouter.createCaller(await buildContext(fixture));
+    const result = await caller.respondApproval({
+      runId: run.id,
+      decision: "approve",
+      scope: "session",
+    });
+    expect(result).toMatchObject({ decision: "expired", restarted: true });
+
+    const expired = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(expired.status).toBe(AgentRunStatus.STALLED);
+    expect(expired.awaitingApprovalAt).toBeNull();
+    expect(expired.pendingApproval).toBeNull();
+    expect(expired.summary).toMatch(/started a fresh run/i);
+
+    const updatedIssue = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(updatedIssue.assignedAgentId).toBe(agent.id);
+    expect(updatedIssue.dispatchReason).toMatchObject({
+      mode: "APPROVAL_EXPIRED_RESTART",
+      restartedFromRunId: run.id,
+    });
+    const restart = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.AGENT_ASSIGNED,
+        subjectId: issue.id,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(restart.payload).toMatchObject({
+      agentId: agent.id,
+      restartedFromRunId: run.id,
+      engagementMode: EngagementMode.RESEARCH,
+    });
+    const fresh = await prisma.agentRun.findMany({
+      where: { issueId: issue.id, agentId: agent.id },
+      orderBy: { startedAt: "asc" },
+    });
+    expect(fresh).toHaveLength(2);
+    expect(fresh[1]?.status).toBe(AgentRunStatus.ACTIVE);
+    expect(fresh[1]?.engagementMode).toBe(EngagementMode.RESEARCH);
+    expect(fresh[1]?.assignmentEventId).toBe(restart.id);
   });
 
   it("marks output started on the first substantive run event", async () => {

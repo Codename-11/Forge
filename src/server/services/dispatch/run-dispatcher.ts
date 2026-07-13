@@ -604,8 +604,8 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
  * When an agent calls `runs.setWaiting({ blocking: true })` its provider turn
  * ends and the AgentRun goes WAITING with a stashed `externalRunId`. Nothing
  * else re-invokes it: `startUnbackedAgentRuns` only catches ACTIVE/unbacked
- * runs and `pollActiveRuns` only polls ACTIVE — so an operator reply (the
- * Nudge button or an `@agent` comment) had no effect for RUNS agents, even
+ * runs, while polling only mirrors the existing provider turn — so an
+ * operator reply (the Nudge button or an `@agent` comment) had no effect for RUNS agents, even
  * though the issue panel invited one. Here we pick up a WAITING run once a
  * comment lands *after* it paused, fold the waiting reason + the reply(s) into
  * a fresh turn, and flip it back to ACTIVE (the provider connector opens a new
@@ -836,11 +836,17 @@ async function applyPolledCostDelta(
 
 async function pollActiveRuns(): Promise<number> {
   const runs = await db.agentRun.findMany({
-    where: { status: AgentRunStatus.ACTIVE, externalRunId: { not: null } },
+    // A WAITING approval remains provider-owned work. Keep polling it so a
+    // gateway restart/TTL sweep cannot leave an immortal approval in Forge.
+    where: {
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      externalRunId: { not: null },
+    },
     orderBy: { lastEventAt: "asc" },
     take: POLL_BATCH,
     select: {
       id: true,
+      status: true,
       workspaceId: true,
       issueId: true,
       agentId: true,
@@ -1002,7 +1008,11 @@ async function pollActiveRuns(): Promise<number> {
             if (clearApproval) {
               await tx.agentRun.update({
                 where: { id: run.id },
-                data: { awaitingApprovalAt: null },
+                data: {
+                  status: AgentRunStatus.ACTIVE,
+                  awaitingApprovalAt: null,
+                  pendingApproval: Prisma.DbNull,
+                },
               });
             }
             return;
@@ -1013,9 +1023,14 @@ async function pollActiveRuns(): Promise<number> {
           await tx.agentRun.update({
             where: { id: run.id },
             data: {
+              ...(run.status === AgentRunStatus.WAITING
+                ? { status: AgentRunStatus.ACTIVE }
+                : {}),
               lastEventAt: new Date(),
               ...(stepChanged ? { currentStep: step } : {}),
-              ...(clearApproval ? { awaitingApprovalAt: null } : {}),
+              ...(clearApproval
+                ? { awaitingApprovalAt: null, pendingApproval: Prisma.DbNull }
+                : {}),
             },
           });
         })
@@ -1042,6 +1057,11 @@ async function pollActiveRuns(): Promise<number> {
           ? "ABANDONED"
           : "STALLED";
     let summary = status.output ?? run.summary ?? null;
+    if (status.state === "not_found") {
+      summary =
+        "The provider no longer recognizes this run. Its runtime session expired or was " +
+        "discarded before the pending approval could be resolved; start a fresh run.";
+    }
     if (terminal === "COMPLETED" && !hasForgeCompletionMeta(run.completionMeta)) {
       terminal = "STALLED";
       summary =
