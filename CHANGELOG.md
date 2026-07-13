@@ -11,6 +11,19 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-13] — v0.10.3 · Durable chat runtime lifecycle
+
+### Changed
+
+- **Chat now communicates the whole agent lifecycle instead of collapsing everything into a spinner.** Accepted, thinking, tool work, approval, responding, finalizing, stopped, failed, and stalled phases remain truthful across streaming, reloads, reconnects, and deferred runtime replies. Streaming is batched for smoother rendering, scrolling stays under operator control, and token/cost usage is visible when the runtime reports it.
+- **Victor and Mizu now use profile-specific Hermes runtimes.** Each agent is bound to its own authenticated gateway and profile contract, preventing a shared endpoint from accepting work for the wrong agent.
+
+### Fixed
+
+- **Replies no longer attach to the wrong user turn.** Direct streams, deferred dispatch, and MCP drafts persist exact reply correlation, durable partial output, tool approvals, and terminal checkpoints so concurrent messages and reconnects converge on the right conversation state.
+- **Stopping, retrying, clearing, and attachment-only sends are reliable.** Stops and draft finalization are idempotent, intentional cancellation is not presented as failure, failed preparation can be retried safely, attachment retries do not orphan files, and `/clear` removes the completed local stream state immediately.
+- **Hermes run data is ingested without losing lifecycle detail.** CRLF-framed events, stable tool-call IDs, usage records, profile identity, provider cancellation, expired runs, and approval races now map into Forge's canonical runtime state accurately.
+
 ## [2026-07-13] — v0.10.2 · Expired approval recovery
 
 ### Changed

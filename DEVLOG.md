@@ -12485,3 +12485,14 @@ named Victor (`:8642`) and Mizu (`:8646`) services. Forge now binds each agent
 to its profile-specific runtime and secret. Both stored runtime credentials
 return HTTP 200 from `/v1/models`, and each gateway rejects the opposite
 profile with the expected HTTP 409 `profile_mismatch` response.
+
+---
+
+## 2026-07-13 — v0.10.3 release verification
+
+Prepared the durable chat runtime lifecycle work for release as v0.10.3.
+Release validation passed lint, typecheck, a serial full Vitest run (1,184
+passed, 1 skipped), and a fresh production-build Playwright run (37 passed).
+The standard parallel Vitest run exposed the known cross-file stale-work
+database race; that suite passed both independently (9 tests) and within the
+serial full run.
