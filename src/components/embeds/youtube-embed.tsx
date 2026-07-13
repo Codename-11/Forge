@@ -87,6 +87,7 @@ export function YouTubeEmbed({
           target="_blank"
           rel="noopener noreferrer"
           className="focus-ring inline-flex items-center gap-1 rounded border border-border bg-background/80 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground hover:bg-background hover:text-foreground"
+          aria-label="Open YouTube video in a new tab"
           title="Open on YouTube"
         >
           <ExternalLink className="h-3 w-3" /> Open

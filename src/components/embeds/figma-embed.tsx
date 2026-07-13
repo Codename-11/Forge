@@ -46,6 +46,7 @@ export function FigmaEmbed({
           target="_blank"
           rel="noopener noreferrer"
           className="focus-ring inline-flex items-center gap-1 rounded border border-border bg-background/80 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground hover:bg-background hover:text-foreground"
+          aria-label="Open Figma file in a new tab"
           title="Open in Figma"
         >
           <ExternalLink className="h-3 w-3" /> Open

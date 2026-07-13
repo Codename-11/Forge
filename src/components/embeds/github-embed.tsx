@@ -48,7 +48,7 @@ export function GithubEmbed({
 
   return (
     <div className="my-2 overflow-hidden rounded-md border border-border bg-card/40">
-      <div className="flex items-center gap-2 px-2.5 py-1.5">
+      <div className="flex min-w-0 items-start gap-2 px-2.5 py-1.5 sm:items-center">
         <span
           className={`inline-flex h-5 w-5 shrink-0 items-center justify-center rounded ${stateClass}`}
           title={stateLabel}
@@ -56,8 +56,8 @@ export function GithubEmbed({
           <Icon className="h-3.5 w-3.5" />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1.5">
-            <span className="font-mono text-[0.6875rem] text-muted-foreground">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="min-w-0 truncate font-mono text-[0.6875rem] text-muted-foreground">
               {owner}/{repo}
             </span>
             <span className="font-mono text-[0.6875rem] text-muted-foreground/60">
@@ -77,7 +77,7 @@ export function GithubEmbed({
             )}
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 flex-col items-end gap-1 sm:flex-row sm:items-center sm:gap-2">
           {data?.commentsCount != null ? (
             <span
               className="inline-flex items-center gap-1 text-[0.6875rem] text-muted-foreground"
@@ -92,6 +92,7 @@ export function GithubEmbed({
             target="_blank"
             rel="noopener noreferrer"
             className="focus-ring inline-flex items-center gap-1 rounded border border-border bg-background/80 px-1.5 py-0.5 font-mono text-[0.6875rem] text-muted-foreground hover:bg-background hover:text-foreground"
+            aria-label={`Open ${owner}/${repo} ${type === "pull" ? "pull request" : "issue"} #${number} on GitHub`}
             title="Open on GitHub"
           >
             <ExternalLink className="h-3 w-3" /> Open

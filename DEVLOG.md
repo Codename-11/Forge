@@ -12364,3 +12364,13 @@ action labels alongside the existing rich-rendering behavior tests.
 
 Verification: `pnpm test tests/unit/rich-rendering.test.ts` pass (9);
 `pnpm lint` clean; `pnpm typecheck` pass; `git diff --check` clean.
+
+Follow-up review pass: tightened provider preview polish by adding explicit
+screen-reader labels to YouTube, GitHub, Loom, and Figma open controls, and
+made the compact GitHub preview metadata wrap cleanly on narrow layouts.
+
+Added regression coverage for provider preview action labels and GitHub card
+responsive constraints.
+
+Verification: `pnpm test tests/unit/rich-rendering.test.ts` pass (10);
+`pnpm lint` clean; `pnpm typecheck` pass; `git diff --check` clean.

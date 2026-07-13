@@ -116,6 +116,21 @@ describe("RichContentRenderer rich link and media behavior", () => {
     expect(source).toContain("aria-label={`Open ${host} in a new tab`}");
     expect(source).toContain('aria-label="Hide preview"');
   });
+
+  it("labels provider preview open controls and constrains dense GitHub metadata", () => {
+    const html = render("https://github.com/anthropic/forge/pull/123");
+    const source = readFileSync(
+      resolve(process.cwd(), "src/components/embeds/github-embed.tsx"),
+      "utf8",
+    );
+
+    expect(html).toContain('aria-label="GitHub preview actions"');
+    expect(html).toContain(
+      'aria-label="Open anthropic/forge pull request #123 on GitHub"',
+    );
+    expect(source).toContain("flex min-w-0 flex-wrap");
+    expect(source).toContain("sm:flex-row");
+  });
 });
 
 describe("rich preview control state", () => {
