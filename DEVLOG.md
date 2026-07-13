@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — Mission Control operator hierarchy
+
+Audited the cross-workspace Mission Control overview and workspace quick-access
+dock against seeded local data at desktop and mobile viewports, then implemented
+the selected Operations Shelf direction across both surfaces. Expanded workspace
+Mission Control now reflows content above a summary / triage queue / agent
+presence shelf on desktop and becomes a near-full-height, single-scroll sheet on
+mobile. The persistent pill and glance clear the mobile bottom navigation.
+
+The global overview now leads with runtime and dispatch posture, then separates
+workspace queue, assigned attention, agent presence, runtime coverage, and
+recent activity into a coherent operator scan. Its summary is derived from real
+global query data, retains read-only navigation to durable surfaces, and renders
+independent loading, empty, and retry states without inventing mutation paths.
+
+Corrected queue truth while restructuring the surface: tab and pill badges now
+show the total queue, summary copy keeps total and unassigned counts distinct,
+and issue references use the workspace's canonical `FRG-*` key. Added explicit
+queue/agent loading and error states, real tab semantics, one Collapse action,
+platform-correct shortcut copy, 44 px mobile controls, and focused model tests.
+
+Verification: `pnpm lint` passed with existing repository warnings only,
+`pnpm typecheck` passed, focused Vitest passed (**5/5**), `git diff --check`
+passed, desktop/mobile interaction and responsive checks passed in the in-app
+browser for both surfaces, browser logs contained no attributable warnings or
+errors, and `design-qa.md` finished with `final result: passed`.
+
 ## 2026-07-13 — Issue Workstream + durable realtime progress
 
 Consolidated the issue's repeated agent-status surfaces into one first-class
