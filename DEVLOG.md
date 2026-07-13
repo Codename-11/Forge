@@ -18,7 +18,10 @@ Next.js production build completed; the two corrected browser contract files
 passed **8/8** together; and the complete single-worker Playwright run reached
 **36/37** before the Chromium headless-shell process itself segfaulted while
 creating the last test context. That unaffected connection-affordance test then
-passed **3/3** in repeated isolated runs. `git diff --check` passed.
+passed **3/3** in repeated isolated runs. CI also exposed a pre-existing
+Command Center layout assertion that depended on mutable stalled-run seed data;
+the contract now accepts both its valid empty and populated attention states
+and passed **3/3** repeated local runs. `git diff --check` passed.
 
 ## 2026-07-13 — Mission Control operator hierarchy
 
