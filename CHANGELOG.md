@@ -11,6 +11,22 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-13] — v0.9.0 · Context-aware plans & issue archive
+
+### Added
+
+- **Plan-created issues now explain the work around them.** Issue detail shows the source Goal, Plan, step instructions, completion contract, dependencies, dependents, and sibling progress. Agents receive the same bounded context as an immutable run snapshot, so later plan edits cannot rewrite what an in-flight or historical run was told.
+- **Issues can be archived and restored cleanly.** The Issues page has an archived-only view with individual and bulk restore. Archive removes work from active views, clears queue and claim state, closes live agent work, and safely synchronizes an unambiguous materialized plan step while preserving history and relationships.
+
+### Changed
+
+- **Plan execution now enforces its declared constraints.** Crew concurrency is capped across all of a crew's active plans; dependencies and cross-workspace references are validated; role assignment never guesses between ambiguous crew members; and materialized Issue/ExecutionStep terminal state stays synchronized in both directions.
+- **Issue capture and bulk handling are more predictable.** Board and status-group quick-create preserve their originating status, command-palette creation stays in issue mode, MCP creation accepts status and labels within narrowed-key lanes, counts refresh with mutations, and bulk selection accurately says “Select loaded.”
+
+### Fixed
+
+- **Archived work can no longer leak back into agent or editing surfaces.** MCP issue/context tools, agent inboxes, comments, labels, relations, assignment, queueing, slash commands, and bulk status changes now respect the archive boundary. Comment deletion is tenant-scoped and label assignment rejects foreign-workspace labels.
+
 ## [2026-07-11] — v0.8.2 · Plan recovery ordering
 
 ### Fixed

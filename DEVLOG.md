@@ -40,9 +40,10 @@ handling, and archive/restore.
   substituted without an explicit browser choice.
 
 Verification: Prisma validate/format, `pnpm lint` (existing repository warnings
-only), `pnpm typecheck`, the full Vitest suite plus focused archive/MCP tests,
-`git diff --check`, and a fresh docs + Next.js production build. Playwright was
-not run for the browser-audit reason above. Not deployed.
+only), `pnpm typecheck`, the full Vitest suite (**1,149 passed; 1 skipped**),
+`git diff --check`, a fresh Next.js production build, and the full Playwright
+suite (**37 passed**). Prepared as the v0.9.0 production release; rollout and
+live smoke verification follow the merge to `main`.
 
 ## 2026-07-11 — Recoverable agent review handoff
 
