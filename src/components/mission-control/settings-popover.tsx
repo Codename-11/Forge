@@ -22,12 +22,7 @@ const TAB_OPTIONS: Array<{ id: DefaultTabPref; label: string }> = [
   { id: "chat", label: "Chat" },
 ];
 
-const DEFAULT_TAB_VALUES = new Set<DefaultTabPref>([
-  "live",
-  "queue",
-  "agents",
-  "chat",
-]);
+const DEFAULT_TAB_VALUES = new Set<DefaultTabPref>(["live", "queue", "agents", "chat"]);
 
 function normalizeDefaultTab(value: string | null | undefined): DefaultTabPref {
   if (value && DEFAULT_TAB_VALUES.has(value as DefaultTabPref)) {
@@ -74,16 +69,16 @@ export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopover
         onClick={() => setOpen((v) => !v)}
         title="Settings"
         className={cn(
-          "flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground",
+          "focus-ring flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:h-8 md:w-8",
         )}
       >
-        <SettingsIcon className="h-3 w-3" />
+        <SettingsIcon className="h-3.5 w-3.5" />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div
-            className="absolute right-0 top-7 z-40 w-64 rounded-md border border-border bg-card p-2 shadow-md"
+            className="absolute right-0 top-12 z-40 w-64 rounded-md border border-border bg-card p-2 shadow-md md:top-9"
             onClick={(e) => e.stopPropagation()}
           >
             <label className="flex cursor-pointer items-center justify-between gap-2 rounded px-2 py-1.5 text-[0.75rem] hover:bg-subtle">

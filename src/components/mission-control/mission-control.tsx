@@ -2,19 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import {
-  Activity,
-  ChevronUp,
-  ChevronDown,
-  GripHorizontal,
-  MessageSquare,
-  Pin,
-  PinOff,
-  X as XIcon,
-  AlertTriangle,
-  ExternalLink,
-  Hourglass,
-} from "lucide-react";
+import { Activity, ChevronUp, ChevronDown, MessageSquare, AlertTriangle } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useHotkey, useChord } from "@/lib/keyboard";
@@ -33,7 +21,6 @@ import {
   useMissionControl,
   type MissionControlTab,
 } from "@/hooks/use-mission-control";
-import { useResizeHandle } from "@/hooks/use-resize-handle";
 import { playRunCompletedSound, playRunStalledSound } from "@/lib/mission-control-sound";
 import { LiveTab } from "./live-tab";
 import { QueueTab } from "./queue-tab";
@@ -43,6 +30,7 @@ import { SettingsPopover } from "./settings-popover";
 import { PillSparkline } from "./pill-sparkline";
 import { ChatPreviewTab } from "./chat-preview-tab";
 import { Kbd } from "@/components/ui/kbd";
+import { useModKeyLabel } from "@/lib/platform";
 
 /**
  * Mission Control — the global agent ops widget.
@@ -89,14 +77,13 @@ export function MissionControl() {
     setSize,
     setTab,
     setCorner,
-    setDimensions,
-    togglePin,
     toggleSound,
     toggleCollapse,
     pinRun,
     unpinRun,
     isPinned,
   } = useMissionControl(slug);
+  const modKey = useModKeyLabel();
   const utils = trpc.useUtils();
 
   // Live data for the pill (always fetched even when collapsed so the
@@ -134,7 +121,8 @@ export function MissionControl() {
   // Runs blocked on a human approve/reject — surfaced as an amber badge on
   // the Live tab so it's actionable from any tab, not just inside Live.
   const approvalCount = activeRuns?.filter((r) => r.awaitingApprovalAt != null).length ?? 0;
-  const queueCount = (queue ?? []).filter((q) => !q.assignedAgent).length;
+  const queueCount = queue?.length ?? 0;
+  const nextQueueIssue = (queue ?? []).find((issue) => !issue.assignedAgent) ?? null;
   const stalledRuns = useMemo(() => {
     // Detect runs that haven't ticked in >5min — even if the watchdog
     // hasn't flipped them yet, the pill should warn.
@@ -281,25 +269,12 @@ export function MissionControl() {
     },
   });
 
-  // ---------- Resize handle ----------
-  const { onPointerDown: onResizePointerDown, isResizing } = useResizeHandle({
-    containerRef,
-    onResizeEnd: setDimensions,
-    minWidth: 380,
-    minHeight: 420,
-    maxWidth: 720,
-    maxHeight: 800,
-    anchor: state.corner,
-  });
-
   // ---------- Click-outside auto-collapse ----------
-  // When the panel is open and not pinned, clicking anywhere outside
-  // the widget collapses it back to pill. Respects `state.pinned` so a
-  // pinned widget stays open while the user clicks around the app.
-  // Uses pointerdown instead of click so the collapse fires before the
-  // outside element handles its own click — feels more responsive.
+  // Glance remains a transient popover. The full operations shelf stays
+  // open while the operator works elsewhere in the workspace and only
+  // collapses through its explicit control or Escape.
   useEffect(() => {
-    if (state.size === "pill") return;
+    if (state.size !== "glance") return;
     if (state.pinned) return;
     const handler = (ev: PointerEvent) => {
       const node = containerRef.current;
@@ -461,10 +436,12 @@ export function MissionControl() {
   // mode on drop.
   const cornerClass = cornerToClass(state.corner);
   const isFullChatRoute = Boolean(slug && pathname?.startsWith(`/w/${slug}/chat`));
+  const usesBottomCorner = state.corner === "br" || state.corner === "bl";
   const pillCornerClass =
-    isFullChatRoute && (state.corner === "br" || state.corner === "bl")
+    isFullChatRoute && usesBottomCorner
       ? cn(cornerClass, "bottom-24")
-      : cornerClass;
+      : cn(cornerClass, usesBottomCorner && "max-md:bottom-24");
+  const glanceCornerClass = cn(cornerClass, usesBottomCorner && "max-md:bottom-24");
 
   // Pill summary: agent presence dots (up to 3) + count + first row's
   // current step if there is one.
@@ -509,8 +486,8 @@ export function MissionControl() {
           }}
           title={
             hasStalled
-              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Activity`
-              : "Activity (⌘')"
+              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Mission Control`
+              : `Mission Control (${modKey}')`
           }
           className={cn(
             "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[0.75rem] shadow-sm backdrop-blur",
@@ -615,7 +592,7 @@ export function MissionControl() {
         data-mission-control-root
         className={cn(
           "fixed z-40 flex flex-col rounded-lg border border-border bg-card shadow-md backdrop-blur",
-          cornerClass,
+          glanceCornerClass,
           isDragging && "opacity-90",
         )}
         style={{
@@ -636,144 +613,111 @@ export function MissionControl() {
     );
   }
 
-  // Resize handle position tracks the panel's anchor corner.
-  // For a bottom-right anchor the handle sits at the top-left.
-  // For other corners the handle moves to the opposite corner.
-  const resizeHandleClass =
-    state.corner === "br"
-      ? "top-0 left-0 cursor-nwse-resize"
-      : state.corner === "bl"
-        ? "top-0 right-0 cursor-nesw-resize"
-        : state.corner === "tr"
-          ? "bottom-0 left-0 cursor-nesw-resize"
-          : "bottom-0 right-0 cursor-nwse-resize";
-
-  // ---------- Panel mode ----------
+  // ---------- Operations shelf ----------
   return (
     <div
       ref={containerRef}
       data-mission-control-root
-      className={cn(
-        "fixed z-40 flex flex-col rounded-lg border border-border bg-card shadow-md backdrop-blur",
-        cornerClass,
-        (isDragging || isResizing) && "opacity-90",
-      )}
-      style={{
-        width: `min(${state.width}px, calc(100vw - 1rem))`,
-        height: `min(${state.height}px, calc(100svh - 1rem))`,
-      }}
+      role="region"
+      aria-label="Mission Control"
+      className="fixed inset-x-2 bottom-20 z-40 flex h-[calc(100svh-6rem)] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl md:relative md:inset-auto md:z-30 md:mx-3 md:mb-3 md:h-[21rem] md:w-auto md:shrink-0 md:shadow-md"
     >
-      {/* Resize handle — invisible 12×12 hit area at the appropriate corner */}
-      <div
-        onPointerDown={onResizePointerDown}
-        className={cn("absolute hidden h-3 w-3 sm:block", resizeHandleClass)}
-        style={{ zIndex: 41 }}
-        data-no-drag
-        title="Resize"
-      />
-
-      <header
-        onPointerDown={onPointerDown}
-        className={cn(
-          "flex min-w-0 flex-wrap items-center gap-2 rounded-t-lg border-b border-border/70 bg-card/80 px-3 py-2",
-          isDragging ? "cursor-grabbing" : "cursor-grab",
-        )}
-      >
-        <GripHorizontal className="h-3.5 w-3.5 text-muted-foreground" />
-        <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          Quick Access
-        </span>
+      <header className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border/70 bg-card/80 px-3 py-2">
+        <Activity className="h-4 w-4 shrink-0 text-ember" />
+        <span className="text-[0.75rem] font-semibold text-foreground">Mission Control</span>
         {hasStalled && (
-          <span className="flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0 text-[0.625rem] text-warning">
-            <Hourglass className="h-2.5 w-2.5" /> {stalledRuns.length} stalled
+          <span className="rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[0.625rem] text-warning">
+            {stalledRuns.length} stalled
           </span>
         )}
-        <span className="ml-auto flex items-center gap-1" data-no-drag>
-          <Link
-            href={`/w/${slug}/command-center`}
-            title="Open Command Center"
-            className="hidden h-6 items-center gap-1 rounded border border-border px-2 text-[0.625rem] uppercase tracking-wider text-muted-foreground hover:border-ember/40 hover:text-foreground sm:inline-flex"
-          >
-            Command
-            <ExternalLink className="h-2.5 w-2.5" />
-          </Link>
+
+        <nav
+          role="tablist"
+          aria-label="Mission Control views"
+          className="order-3 flex w-full items-center gap-0.5 overflow-x-auto md:order-none md:ml-3 md:w-auto"
+        >
+          {TABS.map((t) => {
+            const isActive = state.tab === t.id;
+            const count =
+              t.id === "live"
+                ? activeCount
+                : t.id === "queue"
+                  ? queueCount
+                  : t.id === "chat"
+                    ? unreadCount
+                    : null;
+            return (
+              <button
+                key={t.id}
+                id={`mission-control-tab-${t.id}`}
+                type="button"
+                role="tab"
+                aria-selected={isActive}
+                aria-controls={`mission-control-panel-${t.id}`}
+                tabIndex={isActive ? 0 : -1}
+                onClick={() => setTab(t.id)}
+                title={`${t.label} (${t.chord})`}
+                className={cn(
+                  "focus-ring flex min-h-11 shrink-0 items-center gap-1 rounded-md border px-3 py-1 text-[0.75rem] md:min-h-8 md:px-2.5 md:text-[0.6875rem]",
+                  isActive
+                    ? "border-ember/50 bg-ember/10 text-foreground"
+                    : "border-transparent text-muted-foreground hover:bg-subtle/50 hover:text-foreground",
+                )}
+              >
+                {t.label}
+                {count != null && count > 0 && (
+                  <span
+                    className={cn(
+                      "rounded-md px-1 font-mono text-[0.625rem]",
+                      isActive ? "bg-ember/15 text-ember" : "bg-subtle text-muted-foreground",
+                    )}
+                  >
+                    {count}
+                  </span>
+                )}
+                {t.id === "live" && approvalCount > 0 && (
+                  <span
+                    title={`${approvalCount} run${approvalCount === 1 ? "" : "s"} awaiting approval`}
+                    className="rounded-md bg-warning/20 px-1 font-mono text-[0.625rem] text-warning"
+                  >
+                    {approvalCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <span className="ml-auto flex items-center gap-1">
+          {state.tab === "queue" && nextQueueIssue && (
+            <Link
+              href={`/w/${slug}/issues/${nextQueueIssue.id}`}
+              title="Open the next unassigned issue"
+              className="focus-ring inline-flex min-h-9 items-center rounded-md bg-ember px-3 text-[0.6875rem] font-semibold text-ember-foreground hover:bg-ember/90"
+            >
+              Assign next
+            </Link>
+          )}
           <SettingsPopover soundEnabled={state.soundEnabled} onToggleSound={toggleSound} />
           <button
             type="button"
-            onClick={togglePin}
-            title={state.pinned ? "Unpin (auto-collapse on outside click)" : "Pin (stay open)"}
-            className={cn(
-              "flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-6 sm:w-6",
-              state.pinned && "text-ember hover:text-ember",
-            )}
-          >
-            {state.pinned ? <Pin className="h-3 w-3" /> : <PinOff className="h-3 w-3" />}
-          </button>
-          <button
-            type="button"
             onClick={() => setSize("pill")}
+            aria-label="Collapse Mission Control"
             title="Collapse (Esc)"
-            className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-6 sm:w-6"
+            className="focus-ring flex h-11 min-w-11 items-center justify-center gap-1 rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:h-8 md:min-w-8"
           >
             <ChevronDown className="h-3 w-3" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setSize("pill")}
-            title="Close"
-            className="flex h-8 w-8 items-center justify-center rounded text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-6 sm:w-6"
-          >
-            <XIcon className="h-3 w-3" />
+            <span className="hidden text-[0.6875rem] md:inline">Collapse</span>
           </button>
         </span>
       </header>
 
-      <nav
-        className="flex items-center gap-0.5 overflow-x-auto border-b border-border/70 bg-card/40 px-2 py-1"
-        data-no-drag
+      <div
+        id={`mission-control-panel-${state.tab}`}
+        role="tabpanel"
+        aria-labelledby={`mission-control-tab-${state.tab}`}
+        className="min-h-0 flex-1"
       >
-        {TABS.map((t) => {
-          const isActive = state.tab === t.id;
-          const count =
-            t.id === "live" ? activeCount : t.id === "queue" ? queueCount : t.id === "chat" ? unreadCount : null;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => setTab(t.id)}
-              title={`${t.label} (${t.chord})`}
-              className={cn(
-                "flex min-h-8 shrink-0 items-center gap-1 rounded-md px-2 py-0.5 text-[0.6875rem] sm:min-h-0",
-                isActive
-                  ? "bg-subtle text-foreground"
-                  : "text-muted-foreground hover:bg-subtle/50 hover:text-foreground",
-              )}
-            >
-              {t.label}
-              {count != null && count > 0 && (
-                <span
-                  className={cn(
-                    "rounded-md px-1 font-mono text-[0.625rem]",
-                    isActive ? "bg-ember/15 text-ember" : "bg-card text-muted-foreground",
-                  )}
-                >
-                  {count}
-                </span>
-              )}
-              {t.id === "live" && approvalCount > 0 && (
-                <span
-                  title={`${approvalCount} run${approvalCount === 1 ? "" : "s"} awaiting approval`}
-                  className="rounded-md bg-warning/20 px-1 font-mono text-[0.625rem] text-warning"
-                >
-                  {approvalCount}✋
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="min-h-0 flex-1" data-no-drag>
         {state.tab === "live" && (
           <LiveTab
             pinnedIds={state.pinnedRunIds}
@@ -783,7 +727,9 @@ export function MissionControl() {
             commandCenterHref={`/w/${slug}/command-center`}
           />
         )}
-        {state.tab === "queue" && <QueueTab slug={slug} />}
+        {state.tab === "queue" && (
+          <QueueTab slug={slug} workspaceKey={workspace.key} variant="shelf" />
+        )}
         {state.tab === "agents" && <AgentsTab slug={slug} />}
         {state.tab === "chat" && <ChatPreviewTab slug={slug} />}
       </div>
