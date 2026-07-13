@@ -24,6 +24,11 @@ import {
   loadRunOrchestrationContext,
 } from "@/server/services/orchestration-context";
 import { markExecutionStepRunning } from "@/server/services/execution-step-runtime";
+import {
+  captureRunApproval,
+  resolveRunApproval,
+  type PendingRunApproval,
+} from "@/server/services/run-approval-lifecycle";
 
 /**
  * Dispatch-via-runs ingestion (worker-hosted, poll-based).
@@ -923,24 +928,21 @@ async function pollActiveRuns(): Promise<number> {
 
     if (status.state === "waiting_for_approval") {
       // Transition into a blocked state (set the flag + a BLOCKED event)
-      // only once, so we don't spam the timeline while it waits.
+      // only once, so we don't spam the timeline while it waits. The
+      // conditional claim also arbitrates a race with the live subscription.
       if (!run.awaitingApprovalAt) {
         await db
-          .$transaction(async (tx) => {
-            await tx.agentRun.update({
-              where: { id: run.id },
-              data: { awaitingApprovalAt: new Date() },
-            });
-            await appendRunEvent(tx, {
+          .$transaction((tx) =>
+            captureRunApproval(tx, {
               runId: run.id,
               workspaceId: run.workspaceId,
               issueId: run.issueId,
               agentId: run.agentId,
-              kind: "BLOCKED",
-              currentStep: "waiting for approval",
-              payload: { lastEvent: status.lastEvent ?? null },
-            });
-          })
+              approval: null,
+              source: "poll",
+              lastEvent: status.lastEvent ?? null,
+            }),
+          )
           .catch((err) =>
             logger.warn({ err, runId: run.id }, "runs-dispatch: block update failed"),
           );
@@ -1177,31 +1179,38 @@ async function subscribeRun(run: {
               "thinking step",
             );
             break;
-          case "approval_required":
-            // Capture the command + set the block (whichever of poll/sub
-            // is first wins via the awaitingApprovalAt guard).
+          // Capture the command + set the block (whichever of poll/sub is
+          // first wins via the conditional transaction claim). Persist detail
+          // and append BLOCKED together so all surfaces agree.
+          case "approval_required": {
+            const approval: PendingRunApproval = {
+              command: typeof e.raw.command === "string" ? e.raw.command : null,
+              description: typeof e.raw.description === "string" ? e.raw.description : null,
+              choices: e.choices,
+            };
             fireDb(
-              db.agentRun.updateMany({
-                where: { id: run.id, awaitingApprovalAt: null },
-                data: {
-                  awaitingApprovalAt: new Date(),
-                  pendingApproval: {
-                    command: typeof e.raw.command === "string" ? e.raw.command : null,
-                    description: typeof e.raw.description === "string" ? e.raw.description : null,
-                    choices: e.choices,
-                  },
-                },
-              }),
+              db.$transaction((tx) =>
+                captureRunApproval(tx, {
+                  ...base,
+                  approval,
+                  source: "subscription",
+                }),
+              ),
               run.id,
               "approval capture",
             );
             break;
+          }
           case "approval_resolved":
             fireDb(
-              db.agentRun.update({
-                where: { id: run.id },
-                data: { awaitingApprovalAt: null, pendingApproval: Prisma.DbNull },
-              }),
+              db.$transaction((tx) =>
+                resolveRunApproval(tx, {
+                  ...base,
+                  source: "subscription",
+                  decision: e.choice ?? null,
+                  currentStep: "approval resolved · resuming",
+                }),
+              ),
               run.id,
               "approval clear",
             );

@@ -232,4 +232,36 @@ describe("eventRouter", () => {
       expect.arrayContaining(["question", "blocked"]),
     );
   });
+
+  it("counts a runtime approval once instead of duplicating it as active work", async () => {
+    const { fixture, prisma, agent, caller } = await setup();
+    const issue = await createIssue(fixture, { title: "Approve temporary runtime access" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        currentStep: "needs permission to inspect deployment logs",
+        awaitingApprovalAt: new Date(),
+        pendingApproval: {
+          command: "docker compose logs forge",
+          description: "Temporary access requested.",
+        },
+      },
+    });
+
+    const result = await caller.agentAttention({ limit: 5, itemLimit: 5 });
+    const row = result.agents.find((item) => item.agent.id === agent.id);
+
+    expect(row?.counts).toMatchObject({ approvals: 1, activeRuns: 0, total: 1 });
+    expect(row?.items).toHaveLength(1);
+    expect(row?.items[0]).toMatchObject({
+      id: `approval:${run.id}`,
+      kind: "approval",
+      title: "Runtime approval needed",
+    });
+    expect(row?.items[0]?.detail).toContain(fixture.workspace.key);
+    expect(row?.items[0]?.detail).toContain("needs permission to inspect deployment logs");
+  });
 });

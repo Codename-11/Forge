@@ -117,9 +117,12 @@ export const commandCenterRouter = router({
         ctx.db.agentRun.findMany({
           where: {
             workspaceId: ctx.workspaceId,
-            status: AgentRunStatus.ACTIVE,
+            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
           },
-          orderBy: { lastEventAt: "desc" },
+          orderBy: [
+            { awaitingApprovalAt: { sort: "desc", nulls: "last" } },
+            { lastEventAt: "desc" },
+          ],
           take: input.limit,
           include: {
             agent: { select: { id: true, name: true, profileKey: true, avatar: true } },
@@ -229,6 +232,13 @@ export const commandCenterRouter = router({
         diagnostics: item.diagnostics,
       }));
 
+      // Runtime permission pauses are durable human decisions, not merely
+      // live-run metadata. Keep them out of the generic active-run module and
+      // return them as a first-class Command Center attention group so the
+      // command/reason and approval choices can be rendered inline.
+      const runtimeApprovals = activeRuns.filter((run) => run.awaitingApprovalAt != null);
+      const visibleActiveRuns = activeRuns.filter((run) => run.awaitingApprovalAt == null);
+
       // Collapse near-duplicate action-request cards to one per issue, then
       // slice to the requested limit (collapse runs over the full open set).
       const groupedActionRequests = collapsePerIssue(actionRequests).slice(0, input.limit);
@@ -236,7 +246,8 @@ export const commandCenterRouter = router({
       return {
         actionRequests: groupedActionRequests,
         reviewGates,
-        activeRuns,
+        activeRuns: visibleActiveRuns,
+        runtimeApprovals,
         stalledRuns,
         runRecoveryCounts: runRecovery.counts,
         recentArtifacts,
@@ -246,7 +257,8 @@ export const commandCenterRouter = router({
         counts: {
           actionRequests: groupedActionRequests.length,
           reviewGates: reviewGates.length,
-          activeRuns: activeRuns.length,
+          activeRuns: visibleActiveRuns.length,
+          runtimeApprovals: runtimeApprovals.length,
           stalledRuns: runRecovery.counts.total,
           recentArtifacts: recentArtifacts.length,
           dueIssues: dueIssues.length,
@@ -263,14 +275,26 @@ export const commandCenterRouter = router({
    */
   decisionsCount: workspaceProcedure.query(async ({ ctx }) => {
     const userId = ctx.session?.user?.id ?? null;
-    const [actionRequests, reviewGates] = await Promise.all([
+    const [actionRequests, reviewGates, runtimeApprovals] = await Promise.all([
       userId
         ? ctx.db.actionRequest.count({ where: decisionAskWhere(ctx.workspaceId, userId) })
         : Promise.resolve(0),
       ctx.db.reviewGate.count({
         where: { workspaceId: ctx.workspaceId, status: ReviewGateStatus.PENDING },
       }),
+      ctx.db.agentRun.count({
+        where: {
+          workspaceId: ctx.workspaceId,
+          status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+          awaitingApprovalAt: { not: null },
+        },
+      }),
     ]);
-    return { actionRequests, reviewGates, total: actionRequests + reviewGates };
+    return {
+      actionRequests,
+      reviewGates,
+      runtimeApprovals,
+      total: actionRequests + reviewGates + runtimeApprovals,
+    };
   }),
 });
