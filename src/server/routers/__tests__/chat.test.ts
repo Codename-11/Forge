@@ -746,6 +746,96 @@ describe("chatRouter deferred dispatch", () => {
     void fixture;
   });
 
+  it("keeps a durable streaming placeholder live until its terminal checkpoint", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "stream this" });
+    const startedAt = new Date();
+    await prisma.chatMessage.update({
+      where: { id: sent.messageId },
+      data: { acknowledgedAt: startedAt, outputStartedAt: startedAt },
+    });
+    const placeholder = await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: sent.threadId,
+        role: ChatRole.AGENT,
+        body: "partial answer",
+        contextSnapshot: {
+          streamed: true,
+          running: true,
+          status: "running",
+          startedAt: startedAt.toISOString(),
+          streamUpdatedAt: startedAt.toISOString(),
+          partial_text: "partial answer",
+        },
+      },
+    });
+
+    let diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics).toMatchObject({
+      waitingForReply: true,
+      dispatchState: "running",
+      turnStatus: { phase: "thinking" },
+    });
+
+    const thread = await caller.getThread({ threadId: sent.threadId });
+    expect(thread?.messages.find((message) => message.id === placeholder.id)).toMatchObject({
+      body: "partial answer",
+      contextSnapshot: { running: true, partial_text: "partial answer" },
+    });
+
+    await prisma.chatMessage.update({
+      where: { id: placeholder.id },
+      data: {
+        body: "complete answer",
+        contextSnapshot: {
+          streamed: true,
+          running: false,
+          status: "completed",
+          finishedAt: new Date().toISOString(),
+        },
+      },
+    });
+    diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics).toMatchObject({
+      waitingForReply: false,
+      dispatchState: "idle",
+      turnStatus: { phase: "completed" },
+    });
+  });
+
+  it("marks an abandoned running placeholder stalled instead of completed", async () => {
+    const { prisma, agent, caller, fixture } = await setup();
+    const sent = await caller.send({ agentId: agent.id, body: "long turn" });
+    const staleAt = new Date(Date.now() - 120_000);
+    await prisma.chatMessage.update({
+      where: { id: sent.messageId },
+      data: { acknowledgedAt: staleAt, outputStartedAt: staleAt },
+    });
+    await prisma.chatMessage.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        threadId: sent.threadId,
+        role: ChatRole.AGENT,
+        body: "unfinished",
+        contextSnapshot: {
+          streamed: true,
+          running: true,
+          status: "running",
+          startedAt: staleAt.toISOString(),
+          streamUpdatedAt: staleAt.toISOString(),
+        },
+      },
+    });
+
+    const diagnostics = await caller.threadDiagnostics({ threadId: sent.threadId });
+    expect(diagnostics).toMatchObject({
+      waitingForReply: true,
+      dispatchState: "stalled",
+      turnStatus: { phase: "stalled" },
+    });
+  });
+
   it("clears waiting diagnostics when an agent reply is newer than the user message", async () => {
     const { prisma, agent, caller, fixture } = await setup();
     const sent = await caller.send({ agentId: agent.id, body: "ping" });

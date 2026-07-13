@@ -1066,7 +1066,7 @@ async function listChatInbox(
             where: { role: "AGENT" },
             orderBy: { createdAt: "desc" },
             take: 1,
-            select: { createdAt: true },
+            select: { createdAt: true, contextSnapshot: true },
           },
         },
       },
@@ -1077,14 +1077,38 @@ async function listChatInbox(
     .filter((m) => m.dispatchedAt !== null)
     .filter((m) => {
       const latestAgentReply = m.thread.messages[0];
-      return !latestAgentReply || latestAgentReply.createdAt.getTime() <= m.createdAt.getTime();
+      if (!latestAgentReply || latestAgentReply.createdAt.getTime() <= m.createdAt.getTime()) {
+        return true;
+      }
+      const snapshot =
+        latestAgentReply.contextSnapshot &&
+        typeof latestAgentReply.contextSnapshot === "object" &&
+        !Array.isArray(latestAgentReply.contextSnapshot)
+          ? (latestAgentReply.contextSnapshot as Record<string, unknown>)
+          : null;
+      return snapshot?.running === true;
     })
     .map((m) => {
+      const latestAgentReply = m.thread.messages[0];
+      const snapshot =
+        latestAgentReply?.contextSnapshot &&
+        typeof latestAgentReply.contextSnapshot === "object" &&
+        !Array.isArray(latestAgentReply.contextSnapshot)
+          ? (latestAgentReply.contextSnapshot as Record<string, unknown>)
+          : null;
+      const streamUpdatedAt =
+        typeof snapshot?.streamUpdatedAt === "string"
+          ? new Date(snapshot.streamUpdatedAt)
+          : typeof snapshot?.draftUpdatedAt === "string"
+            ? new Date(snapshot.draftUpdatedAt)
+            : null;
       const state = deriveChatDispatchState({
         acknowledgedAt: m.acknowledgedAt,
         outputStartedAt: m.outputStartedAt,
         lastWakeAt: m.lastWakeAt,
         createdAt: m.createdAt,
+        outputUpdatedAt:
+          streamUpdatedAt && Number.isFinite(streamUpdatedAt.getTime()) ? streamUpdatedAt : null,
         now,
         staleMs,
       });
@@ -1153,12 +1177,18 @@ interface ChatStateInput {
   outputStartedAt: Date | null;
   lastWakeAt: Date | null;
   createdAt: Date;
+  /** Latest durable stream/draft checkpoint; falls back to first output. */
+  outputUpdatedAt?: Date | null;
   now: number;
   staleMs: number;
 }
 
 export function deriveChatDispatchState(input: ChatStateInput): DispatchState {
-  if (input.outputStartedAt) return "running";
+  if (input.outputStartedAt) {
+    const lastOutputAt = input.outputUpdatedAt ?? input.outputStartedAt;
+    if (input.now - lastOutputAt.getTime() > input.staleMs) return "stalled";
+    return "running";
+  }
   if (input.acknowledgedAt) {
     if (input.now - input.acknowledgedAt.getTime() > input.staleMs) return "stalled";
     return "acknowledged";

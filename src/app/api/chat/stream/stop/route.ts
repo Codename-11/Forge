@@ -1,10 +1,13 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { ChatRole } from "@prisma/client";
+import { randomUUID } from "node:crypto";
+import { ChatRole, EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import { requestChatStreamStop } from "@/server/services/chat-stream-state";
 import { logger } from "@/server/logger";
+import { publish } from "@/server/realtime";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -89,26 +92,47 @@ export async function POST(req: NextRequest) {
   }
 
   const runExternalId = readRunExternalId(message.contextSnapshot);
-  if (!runExternalId) {
-    return NextResponse.json({ error: "No live runtime run is linked yet" }, { status: 409 });
-  }
-
   const effectiveProvider = message.thread.providerOverride ?? message.thread.agent.provider;
   const connector = getRunsConnectorForAgent({
     provider: effectiveProvider,
     runtime: message.thread.agent.runtime,
   });
-  if (!connector?.stop) {
-    return NextResponse.json({ error: "Runtime does not support stop" }, { status: 409 });
-  }
-
+  let remoteHandled = false;
   try {
-    await connector.stop(runExternalId);
+    if (runExternalId && connector?.stop) {
+      await connector.stop(runExternalId);
+      remoteHandled = true;
+    }
+    await requestChatStreamStop(message.id, remoteHandled);
   } catch (err) {
     logger.warn({ err, threadId, messageId, runExternalId }, "chat-stream: stop failed");
+    const failedAt = new Date().toISOString();
+    await db.chatMessage.update({
+      where: { id: message.id },
+      data: {
+        contextSnapshot: mergeContext(message.contextSnapshot, {
+          stopFailedAt: failedAt,
+          stopError: "Runtime rejected the stop request.",
+          running: true,
+          status: "running",
+          streamUpdatedAt: failedAt,
+        }),
+      },
+    });
+    await publish({
+      id: randomUUID(),
+      workspaceId: message.workspaceId,
+      kind: EventKind.CHAT_MESSAGE_POSTED,
+      subjectType: "chat-thread-state",
+      subjectId: threadId,
+      payload: { phase: "stop-failed", threadId, messageId },
+      actorId: session.user.id,
+      createdAt: failedAt,
+    }).catch(() => undefined);
     return NextResponse.json({ error: "Failed to stop runtime run" }, { status: 502 });
   }
 
+  const stoppedAt = new Date().toISOString();
   await db.chatMessage.update({
     where: { id: message.id },
     data: {
@@ -116,9 +140,26 @@ export async function POST(req: NextRequest) {
       contextSnapshot: mergeContext(message.contextSnapshot, {
         stopRequestedAt: new Date().toISOString(),
         stopRequestedByUserId: session.user.id,
+        stoppedAt,
+        finishedAt: stoppedAt,
+        stopped: true,
+        running: false,
+        status: "stopped",
+        streamUpdatedAt: stoppedAt,
       }),
     },
   });
 
-  return NextResponse.json({ ok: true, runExternalId });
+  await publish({
+    id: randomUUID(),
+    workspaceId: message.workspaceId,
+    kind: EventKind.CHAT_MESSAGE_POSTED,
+    subjectType: "chat-thread-state",
+    subjectId: threadId,
+    payload: { phase: "stopped", threadId, messageId, runExternalId },
+    actorId: session.user.id,
+    createdAt: stoppedAt,
+  }).catch(() => undefined);
+
+  return NextResponse.json({ ok: true, runExternalId, remoteHandled });
 }
