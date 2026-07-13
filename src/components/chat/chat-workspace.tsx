@@ -32,6 +32,10 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
 import { presenceAvailability } from "@/lib/transport-display";
+import {
+  chatStatusMetaFromDiagnostics,
+  type ChatDiagnosticsLike,
+} from "@/components/mission-control/chat-ui-state";
 
 type AgentLite = {
   id: string;
@@ -75,16 +79,9 @@ function conversationTitle(thread: {
   return truncate(thread.latestMessage?.body, "Untitled conversation");
 }
 
-function statusMeta(input: {
-  agent: AgentLite;
-  latestMessage?: { role: string; createdAt: Date | string } | null;
-}) {
-  const latest = input.latestMessage;
-  if (latest?.role === "USER") {
-    const age = Date.now() - new Date(latest.createdAt).getTime();
-    if (age < 300_000) return { label: "thinking", tone: "ember" as const };
-    return { label: "no recent reply", tone: "muted" as const };
-  }
+function statusMeta(input: { agent: AgentLite; diagnostics?: ChatDiagnosticsLike }) {
+  const canonical = chatStatusMetaFromDiagnostics(input.diagnostics ?? null);
+  if (canonical && canonical.label !== "idle" && canonical.label !== "ready") return canonical;
   if (input.agent.status === "BUSY") return { label: "busy", tone: "ember" as const };
   if (input.agent.status === "ONLINE") return { label: "online", tone: "green" as const };
   // On-demand agents (managed app server / completions / dispatch) aren't
@@ -115,6 +112,7 @@ type CollapsedRailThread = {
     attachmentCount?: number | null;
     hasImageAttachment?: boolean | null;
   } | null;
+  diagnostics?: ChatDiagnosticsLike;
 };
 
 function latestMessageLabel(role: string | undefined): string {
@@ -133,8 +131,7 @@ function latestMessageLabel(role: string | undefined): string {
 }
 
 function collapsedThreadLabel(thread: CollapsedRailThread): string {
-  const latest = thread.latestMessage;
-  const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+  const meta = statusMeta({ agent: thread.agent, diagnostics: thread.diagnostics });
   return [
     conversationTitle(thread),
     `${thread.agent.name} · @${thread.agent.profileKey}`,
@@ -150,6 +147,8 @@ function collapsedStatusClass(tone: ReturnType<typeof statusMeta>["tone"]): stri
       return "bg-ember";
     case "sky":
       return "bg-sky-500";
+    case "red":
+      return "bg-danger";
     default:
       return "bg-muted-foreground/45";
   }
@@ -157,7 +156,7 @@ function collapsedStatusClass(tone: ReturnType<typeof statusMeta>["tone"]): stri
 
 function CollapsedThreadPreview({ thread }: { thread: CollapsedRailThread }) {
   const latest = thread.latestMessage;
-  const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+  const meta = statusMeta({ agent: thread.agent, diagnostics: thread.diagnostics });
   const attachmentCount = latest?.attachmentCount ?? 0;
   const attachmentLabel =
     attachmentCount > 0
@@ -187,7 +186,9 @@ function CollapsedThreadPreview({ thread }: { thread: CollapsedRailThread }) {
                 ? "bg-ember/15 text-ember"
                 : meta.tone === "sky"
                   ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
-                  : "bg-subtle text-muted-foreground",
+                  : meta.tone === "red"
+                    ? "bg-danger/10 text-danger"
+                    : "bg-subtle text-muted-foreground",
           )}
         >
           {meta.label}
@@ -254,7 +255,7 @@ function CollapsedConversationRail({
           visibleThreads.map((thread) => {
             const active = selectedThreadId === thread.id;
             const latest = thread.latestMessage;
-            const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+            const meta = statusMeta({ agent: thread.agent, diagnostics: thread.diagnostics });
             return (
               <HoverPreviewPortal
                 key={thread.id}
@@ -404,7 +405,8 @@ export function ChatWorkspaceSurface() {
     [archived, query, stateFilter],
   );
   const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(threadsInput, {
-    staleTime: 20_000,
+    staleTime: 10_000,
+    refetchInterval: 15_000,
   });
   const { data: agents, isLoading: agentsLoading } = trpc.agent.list.useQuery(
     { includeArchived: false },
@@ -456,7 +458,12 @@ export function ChatWorkspaceSurface() {
   });
 
   useRealtime((evt) => {
-    if (evt.subjectType === "chat-thread" || evt.subjectType === "chat-thread-stream") {
+    if (
+      evt.subjectType === "chat-thread" ||
+      evt.subjectType === "chat-thread-stream" ||
+      evt.subjectType === "chat-thread-ack" ||
+      evt.subjectType === "chat-thread-state"
+    ) {
       void utils.chat.threads.invalidate();
     }
   });
@@ -661,11 +668,7 @@ export function ChatWorkspaceSurface() {
                   Rename this thread and adjust its context policy.
                 </p>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConversationSettingsOpen(false)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => setConversationSettingsOpen(false)}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -732,16 +735,12 @@ export function ChatWorkspaceSurface() {
                   <option value="PINNED_CONTEXT">Pinned context</option>
                 </select>
               </label>
-              <div className="rounded-md border border-border bg-background/50 p-2 text-meta text-muted-foreground">
+              <div className="text-meta rounded-md border border-border bg-background/50 p-2 text-muted-foreground">
                 Provider, model, and YOLO overrides stay in the gear menu inside the chat header.
               </div>
             </div>
             <div className="mt-4 flex justify-end gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setConversationSettingsOpen(false)}
-              >
+              <Button variant="ghost" size="sm" onClick={() => setConversationSettingsOpen(false)}>
                 Cancel
               </Button>
               <Button
@@ -952,7 +951,10 @@ export function ChatWorkspaceSurface() {
               {(threadsLoading || agentsLoading) && !hasRows ? (
                 <div className="space-y-2 p-2">
                   {Array.from({ length: 4 }).map((_, idx) => (
-                    <div key={idx} className="h-16 animate-pulse rounded-lg bg-subtle/50" />
+                    <div
+                      key={idx}
+                      className="h-16 rounded-lg bg-subtle/50 motion-safe:animate-pulse"
+                    />
                   ))}
                 </div>
               ) : !hasRows ? (
@@ -976,7 +978,10 @@ export function ChatWorkspaceSurface() {
                       {(threads ?? []).map((thread) => {
                         const active = selectedThread?.id === thread.id;
                         const latest = thread.latestMessage;
-                        const meta = statusMeta({ agent: thread.agent, latestMessage: latest });
+                        const meta = statusMeta({
+                          agent: thread.agent,
+                          diagnostics: thread.diagnostics,
+                        });
                         return (
                           <button
                             key={thread.id}
@@ -1034,7 +1039,9 @@ export function ChatWorkspaceSurface() {
                                         ? "bg-ember/15 text-ember"
                                         : meta.tone === "sky"
                                           ? "bg-sky-500/10 text-sky-600 dark:text-sky-400"
-                                          : "bg-subtle text-muted-foreground",
+                                          : meta.tone === "red"
+                                            ? "bg-danger/10 text-danger"
+                                            : "bg-subtle text-muted-foreground",
                                   )}
                                 >
                                   {meta.label}

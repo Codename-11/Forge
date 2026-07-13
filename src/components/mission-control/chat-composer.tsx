@@ -1,5 +1,5 @@
 "use client";
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useId, useMemo } from "react";
 import {
   Bot,
   ChevronDown,
@@ -72,6 +72,10 @@ function mentionInsertKey(item: MentionItem): string {
 interface ChatComposerProps {
   onSend: (body: string, files: File[]) => Promise<void> | void;
   disabled?: boolean;
+  /** Disable only model sends while keeping the textarea/draft editable. */
+  sendDisabled?: boolean;
+  /** Explanation announced and shown while model sends are unavailable. */
+  sendDisabledReason?: string;
   /** True while the send mutation is in-flight — shows a "sending…" hint. */
   isPending?: boolean;
   placeholder?: string;
@@ -134,6 +138,8 @@ function detectMentionToken(body: string, caret: number): { token: string; start
 export function ChatComposer({
   onSend,
   disabled = false,
+  sendDisabled = false,
+  sendDisabledReason,
   isPending = false,
   placeholder = "Message agent…",
   banner,
@@ -148,11 +154,14 @@ export function ChatComposer({
   fillRequest,
 }: ChatComposerProps) {
   const [body, setBody] = useState("");
+  const bodyRef = useRef("");
+  bodyRef.current = body;
   const [attachments, setAttachments] = useState<ChatComposerAttachmentDraft[]>([]);
   const [isOver, setIsOver] = useState(false);
   const [contextOpen, setContextOpen] = useState(false);
   const taRef = useRef<HTMLTextAreaElement | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
+  const mentionListboxId = useId();
 
   // ---------- Slash-command popover state ----------
   const [popoverOpen, setPopoverOpen] = useState(false);
@@ -182,10 +191,15 @@ export function ChatComposer({
       setDraftReadyThreadId(threadId);
       return;
     }
+    const carryUnsavedInitialBody = hydratedThreadRef.current === null ? bodyRef.current : "";
     hydratedThreadRef.current = threadId;
     try {
       const raw = window.localStorage.getItem(draftStorageKey(threadId));
-      setBody(raw ?? "");
+      const nextBody = carryUnsavedInitialBody || raw || "";
+      setBody(nextBody);
+      if (carryUnsavedInitialBody) {
+        window.localStorage.setItem(draftStorageKey(threadId), carryUnsavedInitialBody);
+      }
     } catch {
       setBody("");
     } finally {
@@ -418,6 +432,11 @@ export function ChatComposer({
       }
     }
 
+    // Keep the typed body and attachment drafts intact. The surrounding
+    // readiness banner owns the configuration CTA; this guard prevents a
+    // known-unavailable transport from creating a doomed server turn.
+    if (sendDisabled) return;
+
     setAttachments((prev) =>
       prev.map((a) => ({ ...a, status: a.includeInContext ? "uploading" : "pending" })),
     );
@@ -438,7 +457,17 @@ export function ChatComposer({
       const message = err instanceof Error ? err.message : "Upload failed";
       setAttachments((prev) => prev.map((a) => ({ ...a, status: "error", error: message })));
     }
-  }, [body, attachments, disabled, slashContext, onSend, closePopover, closeMention, threadId]);
+  }, [
+    body,
+    attachments,
+    disabled,
+    sendDisabled,
+    slashContext,
+    onSend,
+    closePopover,
+    closeMention,
+    threadId,
+  ]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -563,8 +592,9 @@ export function ChatComposer({
     Math.ceil((body.length + includedContextRows.map((item) => item.label).join(" ").length) / 4) +
     includedAttachments.length * 120;
   const trimmedBody = body.trim();
-  const submitActionLabel =
-    commandPending
+  const submitActionLabel = sendDisabled
+    ? "Send unavailable"
+    : commandPending
       ? "Running command"
       : isPending
         ? "Sending"
@@ -617,7 +647,12 @@ export function ChatComposer({
       const hasAgents = mentionMatches[0]?.kind === "agent";
       return (
         <div className="relative mx-2 mb-1" data-testid="chat-mention-popover">
-          <div className="absolute bottom-0 left-0 right-0 z-50 overflow-hidden rounded-md border border-border bg-card/95 shadow-md backdrop-blur">
+          <div
+            id={mentionListboxId}
+            role="listbox"
+            aria-label="Mention suggestions"
+            className="absolute bottom-0 left-0 right-0 z-50 overflow-hidden rounded-md border border-border bg-card/95 shadow-md backdrop-blur"
+          >
             {hasAgents && (
               <div className="px-2.5 pb-0.5 pt-1 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
                 Agents
@@ -641,6 +676,7 @@ export function ChatComposer({
                   )}
                   <button
                     type="button"
+                    id={`${mentionListboxId}-option-${idx}`}
                     role="option"
                     aria-selected={selected}
                     onMouseDown={(e) => {
@@ -709,6 +745,7 @@ export function ChatComposer({
     mentionOpen,
     mentionMatches,
     mentionHighlight,
+    mentionListboxId,
     acceptMention,
   ]);
 
@@ -747,8 +784,8 @@ export function ChatComposer({
             Context to send
             <span className="text-muted-foreground/70">
               · {includedContextRows.length}/{contextRows.length} page item
-              {contextRows.length === 1 ? "" : "s"},{" "}
-              {includedAttachments.length}/{attachments.length} file
+              {contextRows.length === 1 ? "" : "s"}, {includedAttachments.length}/
+              {attachments.length} file
               {attachments.length === 1 ? "" : "s"}
             </span>
           </button>
@@ -827,7 +864,7 @@ export function ChatComposer({
                 title={draft.error ?? draft.file.name}
               >
                 {draft.status === "uploading" ? (
-                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                  <Loader2 className="h-3 w-3 text-muted-foreground motion-safe:animate-spin" />
                 ) : (
                   <Icon className="h-3 w-3 text-muted-foreground" />
                 )}
@@ -860,7 +897,7 @@ export function ChatComposer({
                   aria-label={`Remove ${draft.file.name || "attachment"}`}
                   onClick={() => setAttachments((prev) => prev.filter((a) => a.id !== draft.id))}
                   disabled={busy}
-                  className="rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded text-muted-foreground hover:text-foreground disabled:opacity-50"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -886,7 +923,7 @@ export function ChatComposer({
           onClick={() => fileRef.current?.click()}
           disabled={busy}
           aria-label="Attach files"
-          className="mb-0.5 rounded-md p-1.5 text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+          className="mb-0.5 inline-flex h-8 w-8 items-center justify-center rounded-md p-1.5 text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
         >
           <Paperclip className="h-3.5 w-3.5" />
         </button>
@@ -899,16 +936,28 @@ export function ChatComposer({
           onPaste={handlePaste}
           placeholder={placeholder}
           disabled={busy}
+          role="combobox"
+          aria-haspopup="listbox"
+          aria-autocomplete="list"
+          aria-expanded={mentionOpen}
+          aria-controls={mentionOpen ? mentionListboxId : undefined}
+          aria-activedescendant={
+            mentionOpen && mentionMatches.length > 0
+              ? `${mentionListboxId}-option-${mentionHighlight}`
+              : undefined
+          }
           rows={1}
           className="min-h-[2rem] flex-1 resize-none rounded-md border border-border bg-background px-2 py-1.5 text-[0.75rem] outline-none transition-colors placeholder:text-muted-foreground/60 focus:border-ember/50 disabled:opacity-60"
         />
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={busy || (!body.trim() && attachments.every((a) => !a.includeInContext))}
+          disabled={
+            busy || sendDisabled || (!body.trim() && attachments.every((a) => !a.includeInContext))
+          }
           aria-label={submitActionLabel}
           className={cn(
-            "mb-0.5 rounded-md p-1.5 transition-colors",
+            "mb-0.5 inline-flex h-8 w-8 items-center justify-center rounded-md p-1.5 transition-colors",
             body.trim() || attachments.some((a) => a.includeInContext)
               ? "bg-ember text-white hover:bg-ember/90"
               : "bg-subtle text-muted-foreground",
@@ -917,13 +966,21 @@ export function ChatComposer({
           title={submitActionLabel}
         >
           {isPending || commandPending ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 motion-safe:animate-spin" />
           ) : (
             <Send className="h-3.5 w-3.5" />
           )}
         </button>
       </div>
-      {isPending || commandPending ? (
+      {sendDisabled && sendDisabledReason ? (
+        <div
+          className="text-meta px-3 pb-1.5 text-amber-700 dark:text-amber-300"
+          role="status"
+          aria-live="polite"
+        >
+          {sendDisabledReason}
+        </div>
+      ) : isPending || commandPending ? (
         <div className="text-meta px-3 pb-1.5 text-muted-foreground">
           {commandPending ? "running command…" : "sending…"}
         </div>

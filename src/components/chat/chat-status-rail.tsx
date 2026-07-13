@@ -30,6 +30,7 @@ import { ProjectChip } from "@/components/project-chip";
 import { presenceAvailability } from "@/lib/transport-display";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { buildChatDiagnosticReport } from "@/lib/chat-diagnostic-report";
+import { useRealtime } from "@/hooks/use-realtime";
 
 /**
  * Right-hand status rail for a chat thread. Surfaces, top to bottom:
@@ -161,7 +162,7 @@ export function ChatStatusRail({
 
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
-    { enabled: Boolean(threadId), staleTime: 10_000 },
+    { enabled: Boolean(threadId), staleTime: 5_000, refetchInterval: 10_000 },
   );
   const { data: agent } = trpc.agent.byId.useQuery(
     { id: agentId ?? "" },
@@ -204,6 +205,19 @@ export function ChatStatusRail({
     await utils.chat.threads.invalidate();
     if (threadId) await utils.chat.threadDiagnostics.invalidate({ threadId });
   };
+
+  useRealtime((event) => {
+    if (!threadId || event.subjectId !== threadId) return;
+    if (
+      event.subjectType !== "chat-thread" &&
+      event.subjectType !== "chat-thread-stream" &&
+      event.subjectType !== "chat-thread-ack" &&
+      event.subjectType !== "chat-thread-state"
+    ) {
+      return;
+    }
+    void utils.chat.threadDiagnostics.invalidate({ threadId });
+  });
 
   const retry = trpc.chat.retryLastUserMessage.useMutation({
     onSuccess: async (result) => {
@@ -678,14 +692,23 @@ export function ChatStatusRail({
       <div
         className={cn(
           "text-meta rounded-lg border p-2",
-          rowTone(agent ? agent.status !== "OFFLINE" : null),
+          rowTone(
+            agent
+              ? presenceAvailability(agent) === "on-demand" || agent.status !== "OFFLINE"
+              : null,
+          ),
         )}
       >
         <div className="flex items-center gap-2 font-medium text-foreground">
           <Radio className="h-3.5 w-3.5" /> Agent
         </div>
         <div className="mt-1 text-muted-foreground">
-          {(agent?.status ?? "offline").toLowerCase()} ·{" "}
+          {agent
+            ? presenceAvailability(agent) === "on-demand"
+              ? "on-demand"
+              : agent.status.toLowerCase()
+            : "offline"}{" "}
+          ·{" "}
           {agent && (
             <Link
               className="underline decoration-dotted"

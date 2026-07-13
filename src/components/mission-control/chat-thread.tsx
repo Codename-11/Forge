@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
   Bot,
   Check,
   CheckCheck,
@@ -36,6 +37,14 @@ import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { Combobox } from "@/components/ui/combobox";
 import { TransportChip } from "@/components/agents/transport-chip";
 import { agentAvailabilityModel, presenceAvailability } from "@/lib/transport-display";
+import {
+  parsePersistedOutbox,
+  readStreamedSnapshot,
+  serializePersistedOutbox,
+  type ChatTurnPhase,
+  type ChatTurnStatusView,
+  type PersistedOutbound,
+} from "./chat-ui-state";
 
 /**
  * Active chat thread between the operator and one agent. Polls via
@@ -65,63 +74,98 @@ function normalizeChatBodyForMatch(body: string): string {
   return body.replace(/\s+/g, " ").trim();
 }
 
-type TurnPhase =
-  | "idle"
-  | "queued"
-  | "delivered"
-  | "read"
-  | "thinking"
-  | "running"
-  | "completed"
-  | "stalled"
-  | "failed";
-
-type TurnStatusView = {
-  phase: TurnPhase;
-  label: string;
-  detail: string;
-  tone: "muted" | "info" | "success" | "warning" | "danger";
-  waitingMs: number | null;
-} | null;
-
-function turnProgressIndex(phase: TurnPhase, hasToolActivity: boolean, hasReplyText: boolean) {
-  if (phase === "failed" || phase === "stalled") return 2;
-  if (phase === "completed") return 4;
-  if (hasReplyText) return 4;
-  if (hasToolActivity) return 3;
-  if (phase === "thinking" || phase === "running") return 2;
-  if (phase === "read") return 1;
-  if (phase === "delivered") return 0;
-  return 0;
+function effectiveTurnPhase(
+  status: ChatTurnStatusView,
+  isLive: boolean,
+  bubble: StreamBubble | null,
+  draft: DraftBubble | null,
+): ChatTurnPhase {
+  if (bubble?.error === STREAM_STOP_SENTINEL) return "stopped";
+  if (bubble?.error) return "failed";
+  if (bubble?.finishedAt) return "finalizing";
+  if (draft?.finalizedAt) return "finalizing";
+  if (draft?.body.trim()) return "responding";
+  if (isLive) {
+    if (bubble?.toolCalls.some((call) => call.requiresConfirm && call.status === "pending")) {
+      return "awaiting_approval";
+    }
+    if (bubble?.body.trim()) return "responding";
+    if (bubble?.toolCalls.length) return "working";
+    if (bubble?.thinking.trim()) return "thinking";
+    return "accepted";
+  }
+  return status?.phase ?? "idle";
 }
 
 function ChatTurnProgress({
   status,
   isLive,
   streamBubble,
+  draft,
   supportsTools,
+  showCompleted,
 }: {
-  status: TurnStatusView;
+  status: ChatTurnStatusView;
   isLive: boolean;
   streamBubble: StreamBubble | null;
+  draft: DraftBubble | null;
   supportsTools: boolean;
+  showCompleted: boolean;
 }) {
-  const visible = isLive || (status && status.phase !== "idle" && status.phase !== "completed");
+  const effectivePhase =
+    showCompleted && !streamBubble && !draft
+      ? "done"
+      : effectiveTurnPhase(status, isLive, streamBubble, draft);
+  const visible =
+    isLive ||
+    Boolean(streamBubble) ||
+    Boolean(draft) ||
+    showCompleted ||
+    (status && status.phase !== "idle" && status.phase !== "completed" && status.phase !== "done");
   if (!visible) return null;
   const hasToolActivity = Boolean(streamBubble?.toolCalls.length);
-  const hasReplyText = Boolean(streamBubble?.body.trim());
-  const activeIndex = turnProgressIndex(status?.phase ?? "thinking", hasToolActivity, hasReplyText);
-  const steps = [
-    { key: "delivered", label: "Delivered", icon: Check },
-    { key: "read", label: "Read", icon: CheckCheck },
-    { key: "thinking", label: status?.phase === "running" ? "Running" : "Thinking", icon: Bot },
-    { key: "tools", label: "Tools", icon: Wrench, optional: !supportsTools && !hasToolActivity },
-    { key: "reply", label: "Reply", icon: Bot },
+  const includeApproval = effectivePhase === "awaiting_approval";
+  const includeFinalizing = effectivePhase === "finalizing";
+  const steps: Array<{ key: ChatTurnPhase; label: string; icon: typeof Bot }> = [
+    { key: "queued", label: "Queued", icon: Check },
+    { key: "accepted", label: "Accepted", icon: CheckCheck },
+    { key: "thinking", label: "Thinking", icon: Bot },
+    {
+      key: "working",
+      label: supportsTools || hasToolActivity ? "Working" : "Generating",
+      icon: Wrench,
+    },
+    ...(includeApproval
+      ? ([{ key: "awaiting_approval", label: "Approval", icon: AlertCircle }] as const)
+      : []),
+    { key: "responding", label: "Responding", icon: Bot },
+    ...(includeFinalizing
+      ? ([{ key: "finalizing", label: "Finalizing", icon: Bot }] as const)
+      : []),
+    { key: "done", label: "Done", icon: CheckCheck },
   ];
+  const phaseAliases: Partial<Record<ChatTurnPhase, ChatTurnPhase>> = {
+    delivered: "accepted",
+    read: "accepted",
+    running: "working",
+    completed: "done",
+  };
+  const progressPhase = phaseAliases[effectivePhase] ?? effectivePhase;
+  const activeIndex = steps.findIndex((step) => step.key === progressPhase);
+  const isTerminalFailure = ["failed", "stalled", "stopped"].includes(effectivePhase);
+  const effectiveLabel =
+    effectivePhase === "failed"
+      ? "Failed"
+      : effectivePhase === "stalled"
+        ? "Stalled"
+        : effectivePhase === "stopped"
+          ? "Stopped"
+          : (steps.find((step) => step.key === progressPhase)?.label ?? "Working");
+  const preferEffectiveLabel = isLive || Boolean(streamBubble) || Boolean(draft) || showCompleted;
   const tone =
-    status?.tone === "danger"
+    effectivePhase === "failed" || status?.tone === "danger"
       ? "border-danger/30 bg-danger/10 text-danger"
-      : status?.tone === "warning"
+      : effectivePhase === "stalled" || status?.tone === "warning"
         ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
         : "border-border/60 bg-card/35 text-muted-foreground";
   return (
@@ -130,7 +174,7 @@ function ChatTurnProgress({
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 text-[0.6875rem] font-medium text-foreground">
             <Bot className="h-3 w-3 text-ember" />
-            <span>{status?.label ?? (isLive ? "Thinking" : "Working")}</span>
+            <span>{preferEffectiveLabel ? effectiveLabel : (status?.label ?? "Working")}</span>
             {streamBubble?.thinking && (
               <span className="rounded border border-border/60 bg-background/60 px-1 py-0 font-mono text-[0.5625rem] text-muted-foreground">
                 thinking
@@ -150,33 +194,51 @@ function ChatTurnProgress({
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          {steps
-            .filter((step) => !step.optional)
-            .map((step, idx) => {
-              const Icon = step.icon;
-              const done = idx < activeIndex || status?.phase === "completed";
-              const active = idx === activeIndex && status?.phase !== "completed";
-              return (
-                <span
-                  key={step.key}
-                  className={cn(
-                    "inline-flex h-6 items-center gap-1 rounded border px-1.5 text-[0.5625rem] uppercase tracking-wider",
-                    done
-                      ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
-                      : active
-                        ? "border-ember/35 bg-ember/10 text-ember"
-                        : "border-border/50 bg-background/40 text-muted-foreground/55",
-                  )}
-                  title={step.label}
-                >
-                  <Icon className={cn("h-3 w-3", active && isLive && "animate-pulse")} />
-                  <span className="hidden sm:inline">{step.label}</span>
-                </span>
-              );
-            })}
+          {steps.map((step, idx) => {
+            const Icon = step.icon;
+            const done = !isTerminalFailure && activeIndex >= 0 && idx < activeIndex;
+            const active = !isTerminalFailure && idx === activeIndex;
+            return (
+              <span
+                key={step.key}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded border px-1.5 text-[0.5625rem] uppercase tracking-wider",
+                  done
+                    ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
+                    : active
+                      ? "border-ember/35 bg-ember/10 text-ember"
+                      : "border-border/50 bg-background/40 text-muted-foreground/55",
+                )}
+                title={step.label}
+              >
+                <Icon className={cn("h-3 w-3", active && isLive && "motion-safe:animate-pulse")} />
+                <span className="hidden sm:inline">{step.label}</span>
+              </span>
+            );
+          })}
         </div>
       </div>
+      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {preferEffectiveLabel
+          ? `Agent ${effectiveLabel.toLowerCase()}`
+          : `${status?.label ?? "Ready"}. ${status?.detail ?? ""}`}
+      </span>
     </div>
+  );
+}
+
+function TypingDots({ label = "Agent is thinking" }: { label?: string }) {
+  return (
+    <span className="flex items-center gap-1" role="status" aria-label={label}>
+      {[0, 150, 300].map((delay) => (
+        <span
+          key={delay}
+          aria-hidden
+          className="h-1 w-1 rounded-full bg-muted-foreground motion-safe:animate-bounce"
+          style={{ animationDelay: `${delay}ms` }}
+        />
+      ))}
+    </span>
   );
 }
 
@@ -189,20 +251,7 @@ function AgentThinkingBubble({ stale, detail }: { stale: boolean; detail?: strin
           <Bot className="h-3 w-3" />
         </span>
         <div className="rounded-md border border-border bg-card/60 px-3 py-2">
-          <span className="flex gap-1">
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "0ms" }}
-            />
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "150ms" }}
-            />
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "300ms" }}
-            />
-          </span>
+          <TypingDots />
         </div>
       </div>
       {stale && (
@@ -267,7 +316,15 @@ function AgentWakeDiagnostic({
 }
 
 /** Streaming draft bubble — renders partial agent response with a blinking cursor. */
-function AgentDraftBubble({ body, agentName }: { body: string; agentName?: string }) {
+function AgentDraftBubble({
+  body,
+  agentName,
+  live = true,
+}: {
+  body: string;
+  agentName?: string;
+  live?: boolean;
+}) {
   return (
     <div className="flex items-start gap-2">
       <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-ember/15 text-ember">
@@ -283,24 +340,11 @@ function AgentDraftBubble({ body, agentName }: { body: string; agentName?: strin
           <div className="relative">
             <ChatMarkdown body={body} />
             {/* Pulsing cursor appended inline */}
-            <span className="inline-block animate-pulse text-muted-foreground">▍</span>
+            {live && <span className="forge-streaming-cursor" aria-hidden />}
           </div>
         ) : (
           // Empty draft — show three dots while waiting for first delta.
-          <span className="flex gap-1">
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "0ms" }}
-            />
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "150ms" }}
-            />
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "300ms" }}
-            />
-          </span>
+          <TypingDots label={live ? "Agent is drafting" : "Finalizing response"} />
         )}
       </div>
     </div>
@@ -312,6 +356,8 @@ type DraftBubble = {
   agentId: string;
   body: string;
   startedAt: number;
+  messageId: string | null;
+  finalizedAt: number | null;
 };
 
 /**
@@ -323,6 +369,7 @@ const STREAM_STOP_SENTINEL = "__forge_stream_stopped__";
 
 const ALWAYS_ALLOW_KEY = (threadId: string, toolName: string) =>
   `forge.chat.alwaysAllow.${threadId}.${toolName}`;
+const OUTBOX_STORAGE_KEY = (threadId: string) => `forge.chat.outbox.${threadId}`;
 
 function isAlwaysAllowed(threadId: string, toolName: string): boolean {
   if (typeof window === "undefined") return false;
@@ -360,6 +407,8 @@ type StreamBubble = {
   error: string | null;
   /** Original prompt — kept so the Retry button can re-fire it. */
   lastPrompt: string;
+  /** True when reconstructed from a persisted running placeholder after reload. */
+  recovered: boolean;
 };
 
 /**
@@ -407,7 +456,8 @@ function AgentStreamBubble({
                 type="button"
                 onClick={onStop}
                 title="Stop generating"
-                className="inline-flex h-4 w-4 items-center justify-center rounded border border-border bg-card/40 text-muted-foreground hover:text-foreground"
+                aria-label="Stop generating"
+                className="inline-flex h-7 w-7 items-center justify-center rounded border border-border bg-card/40 text-muted-foreground hover:text-foreground"
               >
                 <Square className="h-2.5 w-2.5" fill="currentColor" />
               </button>
@@ -440,20 +490,7 @@ function AgentStreamBubble({
             <ChatMarkdown body={bubble.body} />
           )
         ) : isLive ? (
-          <span className="flex gap-1">
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "0ms" }}
-            />
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "150ms" }}
-            />
-            <span
-              className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground"
-              style={{ animationDelay: "300ms" }}
-            />
-          </span>
+          <TypingDots label="Agent is preparing a response" />
         ) : null}
 
         {bubble.error && !wasStopped && (
@@ -681,9 +718,7 @@ function ProviderOverridePopover({
               YOLO mode
             </label>
             <Combobox
-              value={
-                yoloModeOverride === null ? "inherit" : yoloModeOverride ? "on" : "off"
-              }
+              value={yoloModeOverride === null ? "inherit" : yoloModeOverride ? "on" : "off"}
               onChange={(v) => onYoloChange(v ?? "inherit")}
               options={[
                 {
@@ -765,7 +800,13 @@ export function ChatThreadView({
     (data?.thread as { yoloModeOverride?: boolean | null } | undefined)?.yoloModeOverride ?? null;
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
-    { enabled: Boolean(threadId), staleTime: 10_000 },
+    {
+      enabled: Boolean(threadId),
+      staleTime: 5_000,
+      // Canonical diagnostics contain time-derived stalled transitions. Keep
+      // them moving even when no new realtime event is emitted.
+      refetchInterval: 10_000,
+    },
   );
   // Fetch full agent data (includes runtimeMode + lastHeartbeatAt) separately.
   const { data: agentFull } = trpc.agent.byId.useQuery(
@@ -814,6 +855,55 @@ export function ChatThreadView({
   const [isStreaming, setIsStreaming] = useState(false);
   const [localReadReceipts, setLocalReadReceipts] = useState<Record<string, string>>({});
   const streamAbortRef = useRef<AbortController | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const stickToBottomRef = useRef(true);
+  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const [showCompletedProgress, setShowCompletedProgress] = useState(false);
+  const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashCompletedProgress = useCallback(() => {
+    setShowCompletedProgress(true);
+    if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+    completionTimerRef.current = setTimeout(() => setShowCompletedProgress(false), 1_600);
+  }, []);
+  const draftDeltaBufferRef = useRef<{ draftId: string; delta: string } | null>(null);
+  const draftFlushRafRef = useRef<number | null>(null);
+
+  const flushDraftDeltas = useCallback(() => {
+    if (draftFlushRafRef.current !== null) {
+      cancelAnimationFrame(draftFlushRafRef.current);
+      draftFlushRafRef.current = null;
+    }
+    const buffered = draftDeltaBufferRef.current;
+    draftDeltaBufferRef.current = null;
+    if (!buffered?.delta) return;
+    setDraft((current) => {
+      if (!current || current.draftId !== buffered.draftId) {
+        return {
+          draftId: buffered.draftId,
+          agentId,
+          body: buffered.delta,
+          startedAt: Date.now(),
+          messageId: null,
+          finalizedAt: null,
+        };
+      }
+      return { ...current, body: current.body + buffered.delta };
+    });
+  }, [agentId]);
+
+  const queueDraftDelta = useCallback(
+    (draftId: string, delta: string) => {
+      const current = draftDeltaBufferRef.current;
+      draftDeltaBufferRef.current =
+        current?.draftId === draftId
+          ? { draftId, delta: current.delta + delta }
+          : { draftId, delta };
+      if (draftFlushRafRef.current === null) {
+        draftFlushRafRef.current = requestAnimationFrame(flushDraftDeltas);
+      }
+    },
+    [flushDraftDeltas],
+  );
 
   // Realtime — invalidate on chat events for this thread.
   useRealtime((evt) => {
@@ -828,32 +918,59 @@ export function ChatThreadView({
         messageId?: string;
       };
       if (p.phase === "started") {
+        flushDraftDeltas();
         setDraft({
           draftId: p.draftId,
           agentId,
           body: "",
           startedAt: Date.now(),
+          messageId: null,
+          finalizedAt: null,
         });
       } else if (p.phase === "delta" && p.delta) {
-        setDraft((d) => (d && d.draftId === p.draftId ? { ...d, body: d.body + p.delta } : d));
+        queueDraftDelta(p.draftId, p.delta);
       } else if (p.phase === "finalized") {
-        // Hold draft visible briefly while the persisted message lands.
-        setTimeout(() => {
-          setDraft((d) => (d && d.draftId === p.draftId ? null : d));
-        }, 800);
+        flushDraftDeltas();
+        // Keep the completed draft until the exact persisted row is visible.
+        // This avoids both the old 800ms blank gap and a duplicate bubble.
+        setDraft((current) =>
+          current && current.draftId === p.draftId
+            ? {
+                ...current,
+                messageId: p.messageId ?? current.messageId,
+                finalizedAt: Date.now(),
+              }
+            : current,
+        );
+        void utils.chat.getThread.invalidate({ threadId });
+        void utils.chat.threadDiagnostics.invalidate({ threadId });
+        void utils.chat.threads.invalidate();
       }
       return;
     }
 
-    // Regular chat message posted — refetch.
-    if (evt.subjectType !== "chat-thread") return;
+    const isThreadStateEvent =
+      evt.subjectType === "chat-thread" ||
+      evt.subjectType === "chat-thread-ack" ||
+      evt.subjectType === "chat-thread-state";
+    if (!isThreadStateEvent) return;
     if (evt.subjectId !== threadId) return;
+    void utils.chat.threadDiagnostics.invalidate({ threadId });
+    void utils.chat.threads.invalidate();
     if (selectedThreadId) {
       void utils.chat.getThread.invalidate({ threadId: selectedThreadId });
     } else {
       threadM.mutate({ agentId });
     }
   });
+
+  useEffect(
+    () => () => {
+      if (draftFlushRafRef.current !== null) cancelAnimationFrame(draftFlushRafRef.current);
+      if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+    },
+    [],
+  );
 
   const sendM = trpc.chat.send.useMutation({
     onSuccess: () => {
@@ -912,6 +1029,7 @@ export function ChatThreadView({
   // `rawFiles` is kept so retry / deferred sends can re-upload.
   type Outbound = {
     id: string;
+    clientTurnId: string;
     body: string;
     context: ChatSendContext;
     createdAt: number;
@@ -920,12 +1038,13 @@ export function ChatThreadView({
     status: "queued" | "sending" | "sent" | "read" | "failed";
     /** Persisted USER ChatMessage id once the stream route acknowledges it. */
     serverMessageId?: string;
+    error?: string;
   };
   const [outbox, setOutbox] = useState<Outbound[]>([]);
+  const [outboxReadyThreadId, setOutboxReadyThreadId] = useState<string | null>(null);
   const outboxRef = useRef<Outbound[]>([]);
   outboxRef.current = outbox;
   const sendingRef = useRef(false);
-  const queueIdRef = useRef(0);
   const markOutbox = useCallback(
     (id: string, status: Outbound["status"], serverMessageId?: string) => {
       setOutbox((q) =>
@@ -945,6 +1064,68 @@ export function ChatThreadView({
   const removeOutbox = useCallback((id: string) => {
     setOutbox((q) => q.filter((m) => m.id !== id));
   }, []);
+
+  // Text/context outbox rows survive navigation and reload. Browser File
+  // objects cannot be serialized; recovered attachment rows stay failed with
+  // a clear reattach instruction instead of silently sending without files.
+  useEffect(() => {
+    if (!threadId) {
+      setOutbox([]);
+      setOutboxReadyThreadId(null);
+      return;
+    }
+    try {
+      const recovered = parsePersistedOutbox(
+        window.localStorage.getItem(OUTBOX_STORAGE_KEY(threadId)),
+      );
+      setOutbox(
+        recovered.map((row) => ({
+          ...row,
+          context: row.context as ChatSendContext,
+          rawFiles: [],
+        })),
+      );
+    } catch {
+      setOutbox([]);
+    } finally {
+      setOutboxReadyThreadId(threadId);
+    }
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!threadId || outboxReadyThreadId !== threadId) return;
+    const persisted: PersistedOutbound[] = outbox.map((row) => {
+      const interrupted =
+        row.status === "sending" || row.status === "sent" || row.status === "read";
+      return {
+        id: row.id,
+        clientTurnId: row.clientTurnId,
+        body: row.body,
+        context: row.context as Record<string, unknown>,
+        createdAt: row.createdAt,
+        displayFiles: row.displayFiles,
+        status: row.status === "queued" ? "queued" : "failed",
+        ...(row.serverMessageId ? { serverMessageId: row.serverMessageId } : {}),
+        ...(row.error
+          ? { error: row.error }
+          : interrupted
+            ? { error: "Delivery was interrupted. Retry uses the same turn identity." }
+            : {}),
+      };
+    });
+    try {
+      if (persisted.length > 0) {
+        window.localStorage.setItem(
+          OUTBOX_STORAGE_KEY(threadId),
+          serializePersistedOutbox(persisted),
+        );
+      } else {
+        window.localStorage.removeItem(OUTBOX_STORAGE_KEY(threadId));
+      }
+    } catch {
+      /* localStorage may be unavailable or full; in-memory queue still works */
+    }
+  }, [outbox, outboxReadyThreadId, threadId]);
   const [fillRequest, setFillRequest] = useState<{ body: string; nonce: number } | null>(null);
 
   const ctx = useChatContext();
@@ -1137,6 +1318,7 @@ export function ChatThreadView({
         attachmentIds?: string[];
         pendingMessageId?: string;
         outboxId?: string;
+        clientTurnId?: string;
         context?: ChatSendContext;
       },
     ) => {
@@ -1156,6 +1338,7 @@ export function ChatThreadView({
         finishedAt: null,
         error: null,
         lastPrompt: body,
+        recovered: false,
       });
       setStreamBubble(null);
       setIsStreaming(true);
@@ -1199,6 +1382,9 @@ export function ChatThreadView({
             context: opts?.context ?? {},
             attachments: opts?.attachmentIds,
             pendingMessageId: opts?.pendingMessageId,
+            // Stable across reload/retry. The stream route uses this as the
+            // idempotency identity for the user turn.
+            clientTurnId: opts?.clientTurnId,
           }),
           signal: ctrl.signal,
         });
@@ -1236,6 +1422,36 @@ export function ChatThreadView({
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let pending = "";
+      let bufferedContent = "";
+      let bufferedThinking = "";
+      let streamFlushRaf: number | null = null;
+      const flushStreamDeltas = () => {
+        if (streamFlushRaf !== null) {
+          cancelAnimationFrame(streamFlushRaf);
+          streamFlushRaf = null;
+        }
+        if (!bufferedContent && !bufferedThinking) return;
+        const content = bufferedContent;
+        const thinking = bufferedThinking;
+        bufferedContent = "";
+        bufferedThinking = "";
+        setStreamBubble((current) => {
+          const base = current ?? initialStreamBubble();
+          return {
+            ...base,
+            body: base.body + content,
+            thinking: base.thinking + thinking,
+          };
+        });
+      };
+      const queueStreamDelta = (kind: "content" | "thinking", delta: string) => {
+        if (kind === "content") bufferedContent += delta;
+        else bufferedThinking += delta;
+        // Token-level events can be far faster than paint. Coalesce them into
+        // one React update per animation frame to keep typing and scrolling
+        // responsive on long responses.
+        if (streamFlushRaf === null) streamFlushRaf = requestAnimationFrame(flushStreamDeltas);
+      };
 
       const handleEvent = (event: string, data: string) => {
         let parsed: unknown = null;
@@ -1284,20 +1500,10 @@ export function ChatThreadView({
           // disappear as soon as the real row refetches.
         } else if (event === "content") {
           const { delta } = parsed as { delta?: string };
-          if (typeof delta === "string") {
-            setStreamBubble((b) => {
-              const base = b ?? initialStreamBubble();
-              return { ...base, body: base.body + delta };
-            });
-          }
+          if (typeof delta === "string") queueStreamDelta("content", delta);
         } else if (event === "thinking") {
           const { delta } = parsed as { delta?: string };
-          if (typeof delta === "string") {
-            setStreamBubble((b) => {
-              const base = b ?? initialStreamBubble();
-              return { ...base, thinking: base.thinking + delta };
-            });
-          }
+          if (typeof delta === "string") queueStreamDelta("thinking", delta);
         } else if (event === "tool_use") {
           // Legacy fallback — only fires when the loop never surfaced a
           // tool through the started→[confirm]→result canonical path.
@@ -1416,9 +1622,11 @@ export function ChatThreadView({
             });
           }
         } else if (event === "error") {
+          flushStreamDeltas();
           const { message } = parsed as { message?: string };
           failSend(message ?? "Stream error");
         } else if (event === "done") {
+          flushStreamDeltas();
           setStreamBubble((b) => (b ? { ...b, finishedAt: Date.now() } : b));
         }
       };
@@ -1452,6 +1660,7 @@ export function ChatThreadView({
           }
         }
       } catch (err) {
+        flushStreamDeltas();
         if (ctrl.signal.aborted) {
           aborted = true;
           setStreamBubble((b) =>
@@ -1468,6 +1677,7 @@ export function ChatThreadView({
           failSend(msg);
         }
       } finally {
+        flushStreamDeltas();
         setIsStreaming(false);
         if (streamAbortRef.current === ctrl) streamAbortRef.current = null;
       }
@@ -1485,41 +1695,47 @@ export function ChatThreadView({
       }
 
       // Trigger a refetch so the persisted AGENT row replaces the bubble.
-      // We hold the bubble visible briefly so the swap doesn't flicker.
+      // The bubble is cleared by the message-reconciliation effect only after
+      // that exact row is visible, avoiding timer-based gaps and duplicates.
       refreshThread();
-      setTimeout(() => {
-        // Clear the finished bubble so the persisted AGENT row takes over —
-        // BUT keep it when it carries a real error. An errored reply has no
-        // persisted row to swap in, so dropping it would make the amber
-        // "no chat model configured / stream failed" banner vanish a beat
-        // after it appears (the bug operators hit when messaging a provider
-        // with no chat backend). The banner must persist until the operator
-        // resolves it (Retry) or sends another message, which replaces the
-        // bubble at the top of runStreamingSend. A user-initiated Stop
-        // (STREAM_STOP_SENTINEL) is not an error and still clears.
-        setStreamBubble((b) =>
-          b && b.finishedAt && (!b.error || b.error === STREAM_STOP_SENTINEL) ? null : b,
-        );
-      }, 800);
     },
     // utils + threadM are stable refs from trpc; the linter doesn't know.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [agentId, selectedThreadId],
   );
 
-  const stopActiveStream = useCallback(() => {
+  const stopActiveStream = useCallback(async () => {
     const active = streamBubbleRef.current;
-    if (threadId && active?.messageId) {
-      void fetch("/api/chat/stream/stop", {
+    if (!threadId || !active?.messageId) {
+      toast.info("The run is still connecting; try Stop again in a moment.");
+      return;
+    }
+    try {
+      const response = await fetch("/api/chat/stream/stop", {
         method: "POST",
         credentials: "same-origin",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ threadId, messageId: active.messageId }),
-      }).catch(() => {
-        /* The local stream still detaches below; status rail/logs carry failures. */
       });
+      if (!response.ok) {
+        toast.error(`Could not stop the runtime (${response.status})`);
+        return;
+      }
+      streamAbortRef.current?.abort();
+      if (active.recovered) {
+        setStreamBubble((current) =>
+          current
+            ? {
+                ...current,
+                error: STREAM_STOP_SENTINEL,
+                finishedAt: current.finishedAt ?? Date.now(),
+              }
+            : current,
+        );
+      }
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not stop the runtime");
     }
-    streamAbortRef.current?.abort();
   }, [threadId]);
 
   // Abort any in-flight stream on unmount.
@@ -1574,7 +1790,7 @@ export function ChatThreadView({
   // item's lifecycle (sent / failed / removed) to `runStreamingSend` via
   // `outboxId`; the no-threadId fallback resolves it here.
   const sendOne = async (item: Outbound) => {
-    const { id, body, context, rawFiles: files } = item;
+    const { id, clientTurnId, body, context, rawFiles: files } = item;
     try {
       // Streaming path with optional attachments. Uploads target the
       // *pending* message id we create first; the streaming route then
@@ -1610,6 +1826,7 @@ export function ChatThreadView({
           attachmentIds,
           pendingMessageId,
           outboxId: id,
+          clientTurnId,
           context,
         });
         return;
@@ -1665,6 +1882,7 @@ export function ChatThreadView({
   // by `sendingRef`; the `outbox` effect below re-kicks on every change.
   const processQueue = async () => {
     if (sendingRef.current) return;
+    if (!threadId || outboxReadyThreadId !== threadId || !readiness?.ready) return;
     const next = outboxRef.current.find((m) => m.status === "queued" || m.status === "failed");
     if (!next || next.status === "failed") return;
     sendingRef.current = true;
@@ -1680,16 +1898,21 @@ export function ChatThreadView({
   processQueueRef.current = processQueue;
   useEffect(() => {
     void processQueueRef.current?.();
-  }, [outbox]);
+  }, [outbox, outboxReadyThreadId, readiness?.ready, threadId]);
 
   // Composer onSend: never blocks. The message leaves the input immediately
   // and joins the queue; the processor sends it when its turn comes.
   const handleSend = (body: string, files: File[] = []) => {
-    const id = `_q_${++queueIdRef.current}`;
+    const clientTurnId =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const id = `_q_${clientTurnId}`;
     setOutbox((q) => [
       ...q,
       {
         id,
+        clientTurnId,
         body,
         context: sendContext,
         createdAt: Date.now(),
@@ -1698,9 +1921,20 @@ export function ChatThreadView({
         status: "queued",
       },
     ]);
+    stickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+    requestAnimationFrame(() => {
+      const scroller = scrollerRef.current;
+      if (scroller) scroller.scrollTop = scroller.scrollHeight;
+    });
   };
 
   const retryOutbox = (item: Outbound) => {
+    if (item.displayFiles.length > 0 && item.rawFiles.length === 0) {
+      toast.info("Reattach the listed files before retrying this recovered message.");
+      fillComposer(item.body);
+      return;
+    }
     setStreamBubble(null);
     markOutbox(item.id, "queued");
   };
@@ -1726,6 +1960,7 @@ export function ChatThreadView({
         // Muted while queued/sending; un-mutes once the server confirms.
         isDraft: m.status === "queued" || m.status === "sending",
         sendState: m.status,
+        sendError: m.error,
       }}
       onRetry={m.status === "failed" ? () => retryOutbox(m) : undefined}
       onCancel={
@@ -1819,13 +2054,40 @@ export function ChatThreadView({
     workspace?.slug,
   ]);
 
-  // Auto-scroll to bottom on new messages.
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const scrollToLatest = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    stickToBottomRef.current = true;
+    setShowJumpToLatest(false);
+    scroller.scrollTo({ top: scroller.scrollHeight, behavior });
+  }, []);
+
+  const handleScrollerScroll = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const nearBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <= 96;
+    stickToBottomRef.current = nearBottom;
+    setShowJumpToLatest(!nearBottom);
+  }, []);
+
+  // Follow new output only while the operator is already at the bottom. If
+  // they scroll up to read history, preserve that position and offer an
+  // explicit jump affordance instead of fighting their scroll.
   useEffect(() => {
-    const el = scrollerRef.current;
-    if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages.length, localMessages.length, outbox.length, draft?.body, streamBubble?.body]);
+    if (!stickToBottomRef.current) {
+      setShowJumpToLatest(true);
+      return;
+    }
+    const frame = requestAnimationFrame(() => scrollToLatest("auto"));
+    return () => cancelAnimationFrame(frame);
+  }, [
+    messages.length,
+    localMessages.length,
+    outbox.length,
+    draft?.body,
+    streamBubble?.body,
+    scrollToLatest,
+  ]);
 
   const messageRows: ChatMessageRow[] = useMemo(
     () =>
@@ -1851,18 +2113,126 @@ export function ChatThreadView({
     [messages, localReadReceipts],
   );
   const persistedMessageIds = useMemo(() => new Set(messageRows.map((m) => m.id)), [messageRows]);
+  const finalizedAgentMessageIds = useMemo(
+    () =>
+      new Set(
+        messageRows
+          .filter((message) => {
+            if (message.role !== "AGENT") return false;
+            const snapshot = readStreamedSnapshot(message.contextSnapshot);
+            return (
+              !snapshot?.running &&
+              Boolean(message.body.trim() || snapshot?.error || snapshot?.stopped)
+            );
+          })
+          .map((message) => message.id),
+      ),
+    [messageRows],
+  );
+  const persistedRunningStream = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (!message || message.role !== "AGENT") continue;
+      const snapshot = readStreamedSnapshot(
+        (message as { contextSnapshot?: unknown }).contextSnapshot,
+      );
+      if (!snapshot?.running) continue;
+      let lastPrompt = "";
+      for (let promptIndex = index - 1; promptIndex >= 0; promptIndex -= 1) {
+        const candidate = messages[promptIndex];
+        if (candidate?.role === "USER") {
+          lastPrompt = candidate.body;
+          break;
+        }
+      }
+      return {
+        messageId: message.id,
+        runExternalId: snapshot.runExternalId,
+        body: snapshot.partialText || message.body,
+        thinking: snapshot.thinking,
+        toolCalls: snapshot.toolCalls.map((tool) => ({
+          ...tool,
+          requiresConfirm: tool.requiresConfirm === true,
+        })),
+        startedAt: snapshot.startedAt ?? new Date(message.createdAt).getTime(),
+        finishedAt: null,
+        error: null,
+        lastPrompt,
+        recovered: true,
+      } satisfies StreamBubble;
+    }
+    return null;
+  }, [messages]);
+
+  useEffect(() => {
+    if (isStreaming) return;
+    if (persistedRunningStream) {
+      setStreamBubble((current) => {
+        // Do not overwrite the originating tab's richer live state. Other
+        // tabs/reloads continuously refresh from the persisted snapshot.
+        if (current && !current.recovered) return current;
+        return persistedRunningStream;
+      });
+      return;
+    }
+    setStreamBubble((current) => (current?.recovered ? null : current));
+  }, [isStreaming, persistedRunningStream]);
+
+  useEffect(() => {
+    const streamLanded = Boolean(
+      streamBubble?.finishedAt &&
+      streamBubble.messageId &&
+      finalizedAgentMessageIds.has(streamBubble.messageId),
+    );
+    const draftLanded = Boolean(
+      draft?.finalizedAt &&
+      ((draft.messageId && persistedMessageIds.has(draft.messageId)) ||
+        messageRows.some(
+          (message) =>
+            message.role === "AGENT" &&
+            Boolean(message.body.trim()) &&
+            new Date(message.createdAt).getTime() >= draft.startedAt - 2_000,
+        )),
+    );
+    setStreamBubble((current) => {
+      if (!current?.finishedAt || !current.messageId) return current;
+      return finalizedAgentMessageIds.has(current.messageId) ? null : current;
+    });
+    setDraft((current) => {
+      if (!current?.finalizedAt) return current;
+      if (current.messageId && persistedMessageIds.has(current.messageId)) return null;
+      const landed = messageRows.some(
+        (message) =>
+          message.role === "AGENT" &&
+          Boolean(message.body.trim()) &&
+          new Date(message.createdAt).getTime() >= current.startedAt - 2_000,
+      );
+      return landed ? null : current;
+    });
+    if (streamLanded || draftLanded) flashCompletedProgress();
+  }, [
+    draft,
+    finalizedAgentMessageIds,
+    flashCompletedProgress,
+    messageRows,
+    persistedMessageIds,
+    streamBubble,
+  ]);
 
   // While a stream is in-flight (or held briefly after `done`), the
   // persisted AGENT row may also be in `messageRows`. Prefer the live
   // stream bubble over either the matched row or a fresh empty placeholder
   // so the reply does not render twice during the swap window.
   const suppressedMessageId = streamBubble?.messageId ?? null;
+  const suppressedDraftMessageId = draft?.messageId ?? null;
   const streamBubbleStartedAt = streamBubble?.startedAt ?? null;
   const streamBubbleIsLive = Boolean(streamBubble && !streamBubble.finishedAt);
   const visibleMessageRows = useMemo(
     () =>
       messageRows.filter((m) => {
         if (suppressedMessageId && m.id === suppressedMessageId) return false;
+        if (suppressedDraftMessageId && m.id === suppressedDraftMessageId) return false;
+        if (m.role === "AGENT" && readStreamedSnapshot(m.contextSnapshot)?.running) return false;
         if (
           !suppressedMessageId &&
           streamBubbleIsLive &&
@@ -1877,7 +2247,13 @@ export function ChatThreadView({
         }
         return true;
       }),
-    [messageRows, streamBubbleIsLive, streamBubbleStartedAt, suppressedMessageId],
+    [
+      messageRows,
+      streamBubbleIsLive,
+      streamBubbleStartedAt,
+      suppressedDraftMessageId,
+      suppressedMessageId,
+    ],
   );
 
   // Merged display rows: persisted + local SYSTEM messages interleaved.
@@ -1899,6 +2275,22 @@ export function ChatThreadView({
         .filter((m) => m.body && Number.isFinite(m.createdAt)),
     [messageRows],
   );
+  useEffect(() => {
+    setOutbox((current) => {
+      const next = current.filter((item) => {
+        if (item.serverMessageId && persistedMessageIds.has(item.serverMessageId)) return false;
+        const body = normalizeChatBodyForMatch(item.body);
+        return !(
+          body &&
+          persistedUserMessages.some(
+            (persisted) =>
+              persisted.body === body && Math.abs(persisted.createdAt - item.createdAt) <= 120_000,
+          )
+        );
+      });
+      return next.length === current.length ? current : next;
+    });
+  }, [outboxReadyThreadId, persistedMessageIds, persistedUserMessages]);
   // Hide optimistic sends once the persisted USER row is visible. `meta`
   // provides the exact row id, but realtime/refetch can beat that event, so
   // fall back to a narrow same-body/same-turn match during active sends.
@@ -1969,7 +2361,7 @@ export function ChatThreadView({
   const isPersistentOnline = !isEphemeral && !isOnDemand && status === "ONLINE";
   const isPersistentBusy = !isEphemeral && !isOnDemand && status === "BUSY";
   const isPersistentOffline = !isEphemeral && !isOnDemand && status === "OFFLINE";
-  const rawTurnStatus = (diagnostics?.turnStatus ?? null) as TurnStatusView;
+  const rawTurnStatus = (diagnostics?.turnStatus ?? null) as ChatTurnStatusView;
   const chatSupportsTools = Boolean(readiness?.capabilities.tools || readiness?.capabilities.runs);
 
   // Composer placeholder copy
@@ -1996,25 +2388,12 @@ export function ChatThreadView({
   }
 
   // ---------- Thinking indicator logic (canonical dispatch state) ----------
-  // Driven by `diagnostics.dispatchState` rather than a clock-only
-  // heuristic, so the chat panel transitions from "wake sent" →
-  // "acknowledged" → "running" the moment Hermes acks the inbox row
-  // (or starts streaming a draft). Falls back to the legacy
-  // "lastMessageIsUser + age" check only when diagnostics haven't
-  // hydrated yet so the first render isn't blank.
+  // Driven exclusively by `diagnostics.dispatchState`, so the chat panel
+  // never guesses that an arbitrary recent USER row means "thinking".
   const lastMessage = displayRows[displayRows.length - 1];
   const lastPersistedMessage = messageRows[messageRows.length - 1];
   const lastMessageIsUser = lastPersistedMessage?.role === "USER";
-  const turnStatus =
-    lastPersistedMessage?.role === "AGENT" &&
-    rawTurnStatus &&
-    rawTurnStatus.phase !== "completed" &&
-    rawTurnStatus.phase !== "idle"
-      ? null
-      : rawTurnStatus;
-  const lastMessageAge = lastPersistedMessage
-    ? Date.now() - new Date(lastPersistedMessage.createdAt).getTime()
-    : Infinity;
+  const turnStatus = rawTurnStatus;
   const composerBusy =
     sendM.isPending ||
     createPendingM.isPending ||
@@ -2026,20 +2405,12 @@ export function ChatThreadView({
   // Canonical: show the typing bubble only when canonical state says
   // the agent is acknowledged/running. Wake-sent/queued get a
   // diagnostic line instead of the misleading typing animation.
-  // When diagnostics haven't loaded yet, fall back to the old age
-  // heuristic so the first paint is sensible.
   const canonicalKnown = dispatchState !== null;
   const canonicalShowsThinking =
     canonicalKnown && (dispatchState === "acknowledged" || dispatchState === "running");
-  const fallbackShowsThinking = !canonicalKnown && lastMessageIsUser && lastMessageAge < 300_000;
   const showThinking =
-    !composerBusy &&
-    !draft &&
-    lastMessageIsUser &&
-    (canonicalShowsThinking || fallbackShowsThinking);
-  const thinkingIsStale = canonicalKnown
-    ? dispatchState === "stalled"
-    : showThinking && lastMessageAge >= 60_000;
+    !composerBusy && !draft && !streamBubble && lastMessageIsUser && canonicalShowsThinking;
+  const thinkingIsStale = dispatchState === "stalled";
   const thinkingDetail = canonicalKnown
     ? dispatchState === "wake-sent"
       ? `Wake delivered · waiting for ${agent?.name ?? "agent"} to ack.`
@@ -2070,6 +2441,17 @@ export function ChatThreadView({
     lastMessageIsUser &&
     canonicalKnown &&
     (dispatchState === "queued" || dispatchState === "wake-sent" || dispatchState === "stalled");
+  const progressIsLive = Boolean(
+    (streamBubble && !streamBubble.finishedAt && !streamBubble.error) ||
+    (draft && !draft.finalizedAt) ||
+    showThinking,
+  );
+  const sendUnavailable = !threadId || !readiness?.ready;
+  const sendUnavailableReason = !threadId
+    ? "Preparing this conversation… Your draft is saved."
+    : readiness && !readiness.ready
+      ? `${readiness.hint} Your draft is saved until chat is configured.`
+      : undefined;
 
   // Suppress unused var warning — lastMessage is used for list rendering logic.
   void lastMessage;
@@ -2166,7 +2548,10 @@ export function ChatThreadView({
             ) : isPersistentOnline ? (
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" title="online" />
             ) : isPersistentBusy ? (
-              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ember" title="busy" />
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-ember motion-safe:animate-pulse"
+                title="busy"
+              />
             ) : (
               <span className="flex items-center gap-1 text-[0.625rem] text-muted-foreground">
                 <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/40" />
@@ -2189,109 +2574,127 @@ export function ChatThreadView({
       )}
       <ChatTurnProgress
         status={turnStatus}
-        isLive={isStreaming}
+        isLive={progressIsLive}
         streamBubble={streamBubble}
+        draft={draft}
         supportsTools={chatSupportsTools}
+        showCompleted={showCompletedProgress}
       />
-      <div ref={scrollerRef} className="flex-1 space-y-2 overflow-y-auto px-2 py-2">
-        {showSuggestedPrompts && (
-          <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">
-            {agent ? (
-              <div className="space-y-3">
-                <p className="text-meta text-foreground/90">
-                  Talk to <span className="font-medium">{agent.name}</span>. They can read your
-                  current page, look up issues, and take actions on your behalf.
-                </p>
-                <div className="grid grid-cols-2 gap-1.5" data-testid="chat-suggested-prompts">
-                  {buildSuggestedPrompts(agent.name, ctx.route, ctx.issueId).map((p) => (
-                    <button
-                      key={p.label}
-                      type="button"
-                      onClick={() =>
-                        setFillRequest((prev) => ({
-                          body: p.body,
-                          nonce: (prev?.nonce ?? 0) + 1,
-                        }))
-                      }
-                      className="rounded-md border border-border/70 bg-card/40 px-2 py-1.5 text-left text-[0.6875rem] text-foreground/90 transition-colors hover:border-ember/40 hover:bg-ember/10"
-                    >
-                      {p.label}
-                    </button>
-                  ))}
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollerRef}
+          onScroll={handleScrollerScroll}
+          className="h-full space-y-2 overflow-y-auto px-2 py-2"
+        >
+          {showSuggestedPrompts && (
+            <div className="px-2 py-4 text-[0.6875rem] text-muted-foreground">
+              {agent ? (
+                <div className="space-y-3">
+                  <p className="text-meta text-foreground/90">
+                    Talk to <span className="font-medium">{agent.name}</span>. They can read your
+                    current page, look up issues, and take actions on your behalf.
+                  </p>
+                  <div className="grid grid-cols-2 gap-1.5" data-testid="chat-suggested-prompts">
+                    {buildSuggestedPrompts(agent.name, ctx.route, ctx.issueId).map((p) => (
+                      <button
+                        key={p.label}
+                        type="button"
+                        onClick={() =>
+                          setFillRequest((prev) => ({
+                            body: p.body,
+                            nonce: (prev?.nonce ?? 0) + 1,
+                          }))
+                        }
+                        className="rounded-md border border-border/70 bg-card/40 px-2 py-1.5 text-left text-[0.6875rem] text-foreground/90 transition-colors hover:border-ember/40 hover:bg-ember/10"
+                      >
+                        {p.label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-meta italic text-muted-foreground/60">
+                    Type <span className="font-mono">/</span> for commands ·{" "}
+                    <span className="font-mono">@</span> to mention another agent.
+                  </p>
                 </div>
-                <p className="text-meta italic text-muted-foreground/60">
-                  Type <span className="font-mono">/</span> for commands ·{" "}
-                  <span className="font-mono">@</span> to mention another agent.
-                </p>
-              </div>
-            ) : (
-              "Loading…"
-            )}
-          </div>
-        )}
-        {displayRows.map((m) => {
-          const persisted = !m.id.startsWith("_") && m.role !== "SYSTEM";
-          return (
-            <ChatMessageBubble
-              key={m.id}
-              msg={m}
-              agentName={agent?.name}
-              onEditMessage={persisted && m.role === "USER" ? fillComposer : undefined}
-              onResendMessage={
-                persisted && m.role === "USER" ? (body) => handleSend(body) : undefined
-              }
-              onRegenerateFromMessage={
-                persisted && m.role === "AGENT"
-                  ? () => {
-                      const prompt = findPreviousUserBody(m.id);
-                      if (prompt) handleSend(prompt);
-                      else toast.info("No previous user turn to regenerate");
-                    }
-                  : undefined
-              }
-              onForkFromMessage={persisted ? () => forkFromMessage(m.id) : undefined}
-            />
-          );
-        })}
-        {/* Active outbound messages (sending / sent / failed) sit above the
+              ) : (
+                "Loading…"
+              )}
+            </div>
+          )}
+          {displayRows.map((m) => {
+            const persisted = !m.id.startsWith("_") && m.role !== "SYSTEM";
+            return (
+              <ChatMessageBubble
+                key={m.id}
+                msg={m}
+                agentName={agent?.name}
+                onEditMessage={persisted && m.role === "USER" ? fillComposer : undefined}
+                onResendMessage={
+                  persisted && m.role === "USER" ? (body) => handleSend(body) : undefined
+                }
+                onRegenerateFromMessage={
+                  persisted && m.role === "AGENT"
+                    ? () => {
+                        const prompt = findPreviousUserBody(m.id);
+                        if (prompt) handleSend(prompt);
+                        else toast.info("No previous user turn to regenerate");
+                      }
+                    : undefined
+                }
+                onForkFromMessage={persisted ? () => forkFromMessage(m.id) : undefined}
+              />
+            );
+          })}
+          {/* Active outbound messages (sending / sent / failed) sit above the
             agent's reply. Queued messages render below it as "up next". */}
-        {visibleOutbox.filter((m) => m.status !== "queued").map(renderOutbound)}
-        {/* Streaming bubble (new /api/chat/stream path). Takes precedence
+          {visibleOutbox.filter((m) => m.status !== "queued").map(renderOutbound)}
+          {/* Streaming bubble (new /api/chat/stream path). Takes precedence
             over the legacy MCP draft + thinking/wake diagnostics so the
             direct streaming UI is what the operator sees while the model
             is actively responding. */}
-        {streamBubble ? (
-          <AgentStreamBubble
-            bubble={streamBubble}
-            agentName={agent?.name}
-            threadId={threadId ?? undefined}
-            onRetry={
-              streamBubble.error && streamBubble.error !== STREAM_STOP_SENTINEL && threadId
-                ? () => {
-                    const prompt = streamBubble.lastPrompt;
-                    setStreamBubble(null);
-                    void runStreamingSend(threadId, prompt, { context: sendContext });
-                  }
-                : undefined
-            }
-            onStop={stopActiveStream}
-            onApprove={(callId, alwaysAllow) => void respondToTool(callId, true, alwaysAllow)}
-            onDecline={(callId) => void respondToTool(callId, false)}
-          />
-        ) : draft ? (
-          <AgentDraftBubble body={draft.body} agentName={agent?.name} />
-        ) : showThinking ? (
-          <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
-        ) : showWakeDiagnostic ? (
-          <AgentWakeDiagnostic
-            state={dispatchState as "queued" | "wake-sent" | "stalled"}
-            agentName={agent?.name}
-            wakeAttempts={diagnostics?.latestUserMessage?.wakeAttempts ?? 0}
-            lastWakeAt={diagnostics?.latestUserMessage?.lastWakeAt ?? null}
-          />
-        ) : null}
-        {/* Queued messages waiting their turn ("up next"). */}
-        {visibleOutbox.filter((m) => m.status === "queued").map(renderOutbound)}
+          {streamBubble ? (
+            <AgentStreamBubble
+              bubble={streamBubble}
+              agentName={agent?.name}
+              threadId={threadId ?? undefined}
+              onRetry={
+                streamBubble.error && streamBubble.error !== STREAM_STOP_SENTINEL && threadId
+                  ? () => {
+                      const prompt = streamBubble.lastPrompt;
+                      setStreamBubble(null);
+                      void runStreamingSend(threadId, prompt, { context: sendContext });
+                    }
+                  : undefined
+              }
+              onStop={stopActiveStream}
+              onApprove={(callId, alwaysAllow) => void respondToTool(callId, true, alwaysAllow)}
+              onDecline={(callId) => void respondToTool(callId, false)}
+            />
+          ) : draft ? (
+            <AgentDraftBubble body={draft.body} agentName={agent?.name} live={!draft.finalizedAt} />
+          ) : showThinking ? (
+            <AgentThinkingBubble stale={thinkingIsStale} detail={thinkingDetail} />
+          ) : showWakeDiagnostic ? (
+            <AgentWakeDiagnostic
+              state={dispatchState as "queued" | "wake-sent" | "stalled"}
+              agentName={agent?.name}
+              wakeAttempts={diagnostics?.latestUserMessage?.wakeAttempts ?? 0}
+              lastWakeAt={diagnostics?.latestUserMessage?.lastWakeAt ?? null}
+            />
+          ) : null}
+          {/* Queued messages waiting their turn ("up next"). */}
+          {visibleOutbox.filter((m) => m.status === "queued").map(renderOutbound)}
+        </div>
+        {showJumpToLatest && (
+          <button
+            type="button"
+            onClick={() => scrollToLatest("smooth")}
+            className="absolute bottom-3 left-1/2 z-10 min-h-8 -translate-x-1/2 rounded-full border border-border bg-card/95 px-3 py-1 text-[0.6875rem] font-medium text-foreground shadow-md backdrop-blur transition-colors hover:border-ember/40 hover:bg-card"
+            aria-label="Jump to latest message"
+          >
+            Jump to latest ↓
+          </button>
+        )}
       </div>
       {boundCanvas && (
         <div className="px-2 pt-1">
@@ -2368,6 +2771,8 @@ export function ChatThreadView({
         // Never block the composer — messages queue while a send is in
         // flight. `isPending` drives only the "sending…" footer hint.
         disabled={false}
+        sendDisabled={sendUnavailable}
+        sendDisabledReason={sendUnavailableReason}
         isPending={composerBusy}
         placeholder={composerPlaceholder}
         banner={composerBanner}

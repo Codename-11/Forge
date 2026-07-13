@@ -107,7 +107,7 @@ export function ChatWorkTrace({
         className="flex w-full items-center gap-1.5 px-1.5 py-1 text-left text-muted-foreground transition-colors hover:bg-subtle/45 hover:text-foreground"
       >
         {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-        <ListTree className={cn("h-3 w-3 text-ember", live && "animate-pulse")} />
+        <ListTree className={cn("h-3 w-3 text-ember", live && "motion-safe:animate-pulse")} />
         <span className="font-medium text-foreground">Work trace</span>
         <span className="min-w-0 flex-1 truncate font-mono text-[0.625rem] text-muted-foreground">
           {[
@@ -158,7 +158,7 @@ export function ChatWorkTrace({
                 ) : (
                   <ChevronRight className="h-3 w-3" />
                 )}
-                <Brain className={cn("h-3 w-3 text-ember", live && "animate-pulse")} />
+                <Brain className={cn("h-3 w-3 text-ember", live && "motion-safe:animate-pulse")} />
                 <span className="font-mono">
                   {elapsedLabel ?? (live ? "Thinking" : "Thinking trace")}
                 </span>
@@ -452,7 +452,7 @@ function ToolStatusIcon({ calls }: { calls: ChatTraceToolCall[] }) {
     return <ShieldCheck className="h-3 w-3 text-amber-700 dark:text-amber-300" />;
   }
   if (counts.pending > 0 || counts.approved > 0) {
-    return <Clock3 className="h-3 w-3 animate-pulse text-ember" />;
+    return <Clock3 className="h-3 w-3 text-ember motion-safe:animate-pulse" />;
   }
   if (counts.executed > 0) {
     return <CheckCircle2 className="h-3 w-3 text-emerald-700 dark:text-emerald-300" />;
