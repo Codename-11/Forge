@@ -5439,8 +5439,22 @@ export const mcpTools = {
         .describe(
           "Optional AgentRun id to link the chat reply to a longer agent run for deep-linking.",
         ),
+      replyToMessageId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe("Exact inbound USER ChatMessage.id this reply satisfies."),
     }),
-    async run(input: { threadId: string; body: string; sourceRunId?: string }, ctx: McpContext) {
+    async run(
+      input: {
+        threadId: string;
+        body: string;
+        sourceRunId?: string;
+        replyToMessageId?: string;
+      },
+      ctx: McpContext,
+    ) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
         throw new Error("chat.appendMessage requires an API key with linkedAgentId set.");
@@ -5464,11 +5478,17 @@ export const mcpTools = {
             threadId: thread.id,
             workspaceId: ctx.workspaceId,
             role: "USER",
-            outputStartedAt: null,
+            dispatchedAt: { not: null },
+            ...(input.replyToMessageId
+              ? { id: input.replyToMessageId }
+              : { outputStartedAt: null }),
           },
           orderBy: { createdAt: "desc" },
           select: { id: true, acknowledgedAt: true },
         });
+        if (input.replyToMessageId && !pendingUserMessage) {
+          throw new Error("Reply target was not found in this chat thread.");
+        }
         if (pendingUserMessage) {
           const now = new Date();
           await tx.chatMessage.update({
@@ -5486,6 +5506,9 @@ export const mcpTools = {
             role: "AGENT",
             body: input.body,
             sourceRunId: input.sourceRunId ?? null,
+            contextSnapshot: pendingUserMessage
+              ? { replyToMessageId: pendingUserMessage.id }
+              : undefined,
           },
         });
         await tx.chatThread.update({
@@ -5517,8 +5540,9 @@ export const mcpTools = {
 
   // ---------------------------------------------------------------- Chat streaming
   // Three-step streaming draft: startDraft → N×appendDraftChunk → finalizeDraft.
-  // Drafts are ephemeral (Redis pub/sub only); only finalizeDraft persists a
-  // ChatMessage row.
+  // The draft is a durable AGENT placeholder from the first call onward.
+  // Redis remains the low-latency fan-out, while the row lets reloads, late
+  // subscribers, and other tabs recover the cumulative text and lease time.
 
   "chat.startDraft": {
     scopes: ["WRITE_COMMENTS"] as const,
@@ -5528,8 +5552,14 @@ export const mcpTools = {
         .min(1)
         .max(40)
         .describe("ChatThread.id from the inbound webhook payload."),
+      replyToMessageId: z
+        .string()
+        .min(1)
+        .max(40)
+        .optional()
+        .describe("Exact inbound USER ChatMessage.id this draft replies to."),
     }),
-    async run(input: { threadId: string }, ctx: McpContext) {
+    async run(input: { threadId: string; replyToMessageId?: string }, ctx: McpContext) {
       const linkedAgentId = ctx.apiKey?.linkedAgentId;
       if (!linkedAgentId) {
         throw new Error("chat.startDraft requires an API key with linkedAgentId set.");
@@ -5553,23 +5583,69 @@ export const mcpTools = {
           threadId: thread.id,
           workspaceId: ctx.workspaceId,
           role: "USER",
-          outputStartedAt: null,
+          dispatchedAt: { not: null },
+          ...(input.replyToMessageId ? { id: input.replyToMessageId } : {}),
         },
         orderBy: { createdAt: "desc" },
-        select: { id: true, acknowledgedAt: true },
+        select: { id: true, acknowledgedAt: true, outputStartedAt: true },
       });
-      if (pendingUserMessage) {
-        const now = new Date();
+      if (!pendingUserMessage)
+        throw new Error("No dispatched user turn is waiting in this thread.");
+
+      const existingDraft = await db.chatMessage.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          threadId: thread.id,
+          role: "AGENT",
+          contextSnapshot: { path: ["replyToMessageId"], equals: pendingUserMessage.id },
+        },
+        orderBy: { createdAt: "desc" },
+        select: { id: true, body: true, contextSnapshot: true },
+      });
+      const existingContext =
+        existingDraft?.contextSnapshot &&
+        typeof existingDraft.contextSnapshot === "object" &&
+        !Array.isArray(existingDraft.contextSnapshot)
+          ? (existingDraft.contextSnapshot as Record<string, Prisma.JsonValue>)
+          : null;
+      if (existingDraft && existingContext?.running === true) {
+        return { draftId: existingDraft.id, threadId: thread.id, recovered: true };
+      }
+      if (existingDraft) {
+        throw new Error("The latest user turn already has a finalized reply.");
+      }
+
+      const now = new Date();
+      if (!pendingUserMessage.outputStartedAt || !pendingUserMessage.acknowledgedAt) {
         await db.chatMessage.update({
           where: { id: pendingUserMessage.id },
           data: {
             acknowledgedAt: pendingUserMessage.acknowledgedAt ?? now,
-            outputStartedAt: now,
+            outputStartedAt: pendingUserMessage.outputStartedAt ?? now,
           },
         });
       }
       const draftId = nanoid();
-      // Lightweight SSE-only publish; nothing persisted.
+      await db.chatMessage.create({
+        data: {
+          id: draftId,
+          workspaceId: ctx.workspaceId,
+          threadId: thread.id,
+          role: "AGENT",
+          body: "",
+          contextSnapshot: {
+            draft: true,
+            draftId,
+            running: true,
+            status: "running",
+            replyToMessageId: pendingUserMessage.id,
+            startedAt: now.toISOString(),
+            draftUpdatedAt: now.toISOString(),
+            streamUpdatedAt: now.toISOString(),
+            lastSeq: -1,
+          },
+        },
+      });
       void publish({
         id: nanoid(),
         workspaceId: ctx.workspaceId,
@@ -5581,11 +5657,30 @@ export const mcpTools = {
           threadId: thread.id,
           agentId: thread.agentId,
           draftId,
+          messageId: draftId,
+          body: "",
+          updatedAt: now.toISOString(),
         },
         actorId: null,
-        createdAt: new Date().toISOString(),
+        createdAt: now.toISOString(),
       });
-      return { draftId, threadId: thread.id };
+      void publish({
+        id: nanoid(),
+        workspaceId: ctx.workspaceId,
+        kind: EventKind.CHAT_MESSAGE_POSTED,
+        subjectType: "chat-thread-state",
+        subjectId: thread.id,
+        payload: {
+          phase: "started",
+          threadId: thread.id,
+          messageId: draftId,
+          draftId,
+          updatedAt: now.toISOString(),
+        },
+        actorId: null,
+        createdAt: now.toISOString(),
+      });
+      return { draftId, threadId: thread.id, recovered: false };
     },
   },
 
@@ -5612,31 +5707,83 @@ export const mcpTools = {
       if (!linkedAgentId) {
         throw new Error("chat.appendDraftChunk requires an API key with linkedAgentId set.");
       }
-      // Lighter check — we trust draftId already proved permission via startDraft.
-      // But still verify the thread is in this workspace + this agent.
-      const thread = await db.chatThread.findFirst({
-        where: { id: input.threadId, workspaceId: ctx.workspaceId, agentId: linkedAgentId },
-        select: { id: true, agentId: true },
+      const result = await db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${input.draftId}))`;
+        const draft = await tx.chatMessage.findFirst({
+          where: {
+            id: input.draftId,
+            threadId: input.threadId,
+            workspaceId: ctx.workspaceId,
+            role: "AGENT",
+            thread: { agentId: linkedAgentId },
+          },
+          select: {
+            id: true,
+            body: true,
+            contextSnapshot: true,
+            thread: { select: { agentId: true } },
+          },
+        });
+        if (!draft) throw new Error("Chat draft not found.");
+        const snapshot =
+          draft.contextSnapshot &&
+          typeof draft.contextSnapshot === "object" &&
+          !Array.isArray(draft.contextSnapshot)
+            ? ({ ...draft.contextSnapshot } as Record<string, Prisma.JsonValue>)
+            : {};
+        if (snapshot.running !== true) throw new Error("Chat draft is no longer running.");
+        const previousSeq = typeof snapshot.lastSeq === "number" ? snapshot.lastSeq : -1;
+        if (input.seq !== undefined && input.seq <= previousSeq) {
+          return { draft, body: draft.body, seq: previousSeq, duplicate: true };
+        }
+        const body = `${draft.body}${input.delta}`;
+        if (body.length > 16_000) throw new Error("Chat draft exceeds 16000 chars.");
+        const now = new Date().toISOString();
+        await tx.chatMessage.update({
+          where: { id: draft.id },
+          data: {
+            body,
+            contextSnapshot: {
+              ...snapshot,
+              running: true,
+              status: "running",
+              partial_text: body,
+              lastSeq: input.seq ?? previousSeq + 1,
+              draftUpdatedAt: now,
+              streamUpdatedAt: now,
+            } as Prisma.InputJsonObject,
+          },
+        });
+        return {
+          draft,
+          body,
+          seq: input.seq ?? previousSeq + 1,
+          duplicate: false,
+        };
       });
-      if (!thread) throw new Error("Chat thread not found.");
+      if (result.duplicate) return { ok: true, duplicate: true, seq: result.seq };
+      const now = new Date().toISOString();
       void publish({
         id: nanoid(),
         workspaceId: ctx.workspaceId,
         kind: EventKind.CHAT_MESSAGE_POSTED,
         subjectType: "chat-thread-stream",
-        subjectId: thread.id,
+        subjectId: input.threadId,
         payload: {
           phase: "delta",
-          threadId: thread.id,
-          agentId: thread.agentId,
+          threadId: input.threadId,
+          agentId: result.draft.thread.agentId,
           draftId: input.draftId,
+          messageId: input.draftId,
           delta: input.delta,
-          seq: input.seq ?? null,
+          body: result.body,
+          seq: result.seq,
+          updatedAt: now,
         },
         actorId: null,
-        createdAt: new Date().toISOString(),
+        createdAt: now,
       });
-      return { ok: true };
+      return { ok: true, duplicate: false, seq: result.seq };
     },
   },
 
@@ -5665,18 +5812,51 @@ export const mcpTools = {
         throw new Error("Only the thread's agent may finalize a draft here.");
       }
       return db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${input.draftId}))`;
+        const durableDraft = await tx.chatMessage.findFirst({
+          where: {
+            id: input.draftId,
+            workspaceId: ctx.workspaceId,
+            threadId: thread.id,
+            role: "AGENT",
+          },
+          select: { id: true, body: true, contextSnapshot: true },
+        });
+        const durableSnapshot =
+          durableDraft?.contextSnapshot &&
+          typeof durableDraft.contextSnapshot === "object" &&
+          !Array.isArray(durableDraft.contextSnapshot)
+            ? (durableDraft.contextSnapshot as Record<string, Prisma.JsonValue>)
+            : {};
+        if (durableDraft && durableSnapshot.running === false) {
+          return {
+            messageId: durableDraft.id,
+            threadId: thread.id,
+            draftId: input.draftId,
+            duplicate: true,
+          };
+        }
+
         // Inbox lifecycle: finalizing a draft is a definitive
         // "user turn satisfied" — mirror the single-shot
-        // chat.appendMessage path so canonical state stays in sync.
+        // chat.appendMessage path so canonical state stays in sync. A newer
+        // user turn may arrive while this draft is streaming, so acknowledge
+        // the exact turn captured by startDraft rather than whichever USER row
+        // happens to be newest at finalize time.
+        const replyToMessageId =
+          typeof durableSnapshot.replyToMessageId === "string"
+            ? durableSnapshot.replyToMessageId
+            : null;
         const pendingUserMessage = await tx.chatMessage.findFirst({
           where: {
             threadId: thread.id,
             workspaceId: ctx.workspaceId,
             role: "USER",
-            outputStartedAt: null,
+            dispatchedAt: { not: null },
+            ...(replyToMessageId ? { id: replyToMessageId } : {}),
           },
           orderBy: { createdAt: "desc" },
-          select: { id: true, acknowledgedAt: true },
+          select: { id: true, acknowledgedAt: true, outputStartedAt: true },
         });
         if (pendingUserMessage) {
           const now = new Date();
@@ -5684,19 +5864,46 @@ export const mcpTools = {
             where: { id: pendingUserMessage.id },
             data: {
               acknowledgedAt: pendingUserMessage.acknowledgedAt ?? now,
-              outputStartedAt: now,
+              outputStartedAt: pendingUserMessage.outputStartedAt ?? now,
             },
           });
         }
-        const message = await tx.chatMessage.create({
-          data: {
-            workspaceId: ctx.workspaceId,
-            threadId: thread.id,
-            role: "AGENT",
-            body: input.body,
-            sourceRunId: input.sourceRunId ?? null,
-          },
-        });
+        const finishedAt = new Date().toISOString();
+        const message = durableDraft
+          ? await tx.chatMessage.update({
+              where: { id: durableDraft.id },
+              data: {
+                body: input.body,
+                sourceRunId: input.sourceRunId ?? null,
+                contextSnapshot: {
+                  ...durableSnapshot,
+                  draft: true,
+                  partial_text: input.body,
+                  running: false,
+                  status: "completed",
+                  replyToMessageId: pendingUserMessage?.id,
+                  finishedAt,
+                  draftUpdatedAt: finishedAt,
+                  streamUpdatedAt: finishedAt,
+                } as Prisma.InputJsonObject,
+              },
+            })
+          : await tx.chatMessage.create({
+              data: {
+                workspaceId: ctx.workspaceId,
+                threadId: thread.id,
+                role: "AGENT",
+                body: input.body,
+                sourceRunId: input.sourceRunId ?? null,
+                contextSnapshot: {
+                  draft: true,
+                  running: false,
+                  status: "completed",
+                  finishedAt,
+                  streamUpdatedAt: finishedAt,
+                },
+              },
+            });
         await tx.chatThread.update({
           where: { id: thread.id },
           data: { lastMessageAt: new Date() },
@@ -5736,11 +5943,33 @@ export const mcpTools = {
             agentId: thread.agentId,
             draftId: input.draftId,
             messageId: message.id,
+            body: input.body,
+            updatedAt: finishedAt,
           },
           actorId: null,
-          createdAt: new Date().toISOString(),
+          createdAt: finishedAt,
         });
-        return { messageId: message.id, threadId: thread.id, draftId: input.draftId };
+        void publish({
+          id: nanoid(),
+          workspaceId: ctx.workspaceId,
+          kind: EventKind.CHAT_MESSAGE_POSTED,
+          subjectType: "chat-thread-state",
+          subjectId: thread.id,
+          payload: {
+            phase: "completed",
+            threadId: thread.id,
+            messageId: message.id,
+            draftId: input.draftId,
+          },
+          actorId: null,
+          createdAt: finishedAt,
+        });
+        return {
+          messageId: message.id,
+          threadId: thread.id,
+          draftId: input.draftId,
+          duplicate: false,
+        };
       });
     },
   },

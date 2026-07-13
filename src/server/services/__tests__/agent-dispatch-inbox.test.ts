@@ -793,5 +793,26 @@ describe("agent-dispatch-inbox — state derivation", () => {
         staleMs,
       }),
     ).toBe("running");
+    expect(
+      deriveChatDispatchState({
+        acknowledgedAt: new Date(now - 120_000),
+        outputStartedAt: new Date(now - 120_000),
+        lastWakeAt: new Date(now - 120_000),
+        createdAt: new Date(now - 120_000),
+        now,
+        staleMs,
+      }),
+    ).toBe("stalled");
+    expect(
+      deriveChatDispatchState({
+        acknowledgedAt: new Date(now - 120_000),
+        outputStartedAt: new Date(now - 120_000),
+        outputUpdatedAt: new Date(now - 1000),
+        lastWakeAt: new Date(now - 120_000),
+        createdAt: new Date(now - 120_000),
+        now,
+        staleMs,
+      }),
+    ).toBe("running");
   });
 });

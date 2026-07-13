@@ -2204,6 +2204,161 @@ describe("mcp — awareness tools (Stream BA)", () => {
     );
   });
 
+  it("persists streaming chat drafts and finalizes the same placeholder idempotently", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "CDR" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "draft-agent", name: "Draft agent" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.user.id,
+        agentId: agent.id,
+        title: "Durable draft",
+      },
+    });
+    const userMessage = await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "stream a reply",
+        dispatchedAt: new Date(),
+      },
+    });
+    const newerUserMessage = await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "a newer turn",
+        dispatchedAt: new Date(),
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+
+    const started = (await call(
+      "chat.startDraft",
+      { threadId: thread.id, replyToMessageId: userMessage.id },
+      ctx,
+    )) as {
+      draftId: string;
+      recovered: boolean;
+    };
+    expect(started.recovered).toBe(false);
+    await call(
+      "chat.appendDraftChunk",
+      { threadId: thread.id, draftId: started.draftId, delta: "hel", seq: 0 },
+      ctx,
+    );
+    const duplicate = (await call(
+      "chat.appendDraftChunk",
+      { threadId: thread.id, draftId: started.draftId, delta: "ignored", seq: 0 },
+      ctx,
+    )) as { duplicate: boolean };
+    expect(duplicate.duplicate).toBe(true);
+    await call(
+      "chat.appendDraftChunk",
+      { threadId: thread.id, draftId: started.draftId, delta: "lo", seq: 1 },
+      ctx,
+    );
+
+    let draft = await prisma.chatMessage.findUniqueOrThrow({ where: { id: started.draftId } });
+    expect(draft.body).toBe("hello");
+    expect(draft.contextSnapshot).toMatchObject({
+      draft: true,
+      draftId: started.draftId,
+      running: true,
+      partial_text: "hello",
+      lastSeq: 1,
+      replyToMessageId: userMessage.id,
+    });
+
+    const finalized = (await call(
+      "chat.finalizeDraft",
+      { threadId: thread.id, draftId: started.draftId, body: "hello" },
+      ctx,
+    )) as { messageId: string };
+    expect(finalized.messageId).toBe(started.draftId);
+    const exactUserTurn = await prisma.chatMessage.findUniqueOrThrow({
+      where: { id: userMessage.id },
+    });
+    const stillPendingNewerTurn = await prisma.chatMessage.findUniqueOrThrow({
+      where: { id: newerUserMessage.id },
+    });
+    expect(exactUserTurn.outputStartedAt).not.toBeNull();
+    expect(stillPendingNewerTurn.outputStartedAt).toBeNull();
+    draft = await prisma.chatMessage.findUniqueOrThrow({ where: { id: started.draftId } });
+    expect(draft.contextSnapshot).toMatchObject({ running: false, status: "completed" });
+    expect(
+      await prisma.chatMessage.count({
+        where: { workspaceId: f.workspace.id, threadId: thread.id, role: "AGENT" },
+      }),
+    ).toBe(1);
+    const duplicateFinalize = (await call(
+      "chat.finalizeDraft",
+      { threadId: thread.id, draftId: started.draftId, body: "ignored retry body" },
+      ctx,
+    )) as { messageId: string; duplicate: boolean };
+    expect(duplicateFinalize).toMatchObject({
+      messageId: started.draftId,
+      duplicate: true,
+    });
+    expect(
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: started.draftId } })).body,
+    ).toBe("hello");
+  });
+
+  it("correlates a single-shot chat reply to the exact inbound user turn", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "CAR" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "reply-agent", name: "Reply agent" },
+    });
+    const thread = await prisma.chatThread.create({
+      data: { workspaceId: f.workspace.id, userId: f.user.id, agentId: agent.id },
+    });
+    const older = await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "first",
+        dispatchedAt: new Date(),
+      },
+    });
+    const newer = await prisma.chatMessage.create({
+      data: {
+        workspaceId: f.workspace.id,
+        threadId: thread.id,
+        role: "USER",
+        body: "second",
+        dispatchedAt: new Date(),
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+
+    const result = (await call(
+      "chat.appendMessage",
+      { threadId: thread.id, body: "reply to first", replyToMessageId: older.id },
+      ctx,
+    )) as { messageId: string };
+
+    expect(
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: older.id } })).outputStartedAt,
+    ).not.toBeNull();
+    expect(
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: newer.id } })).outputStartedAt,
+    ).toBeNull();
+    expect(
+      (await prisma.chatMessage.findUniqueOrThrow({ where: { id: result.messageId } }))
+        .contextSnapshot,
+    ).toMatchObject({ replyToMessageId: older.id });
+  });
+
   it("agent.context.bundle issueId branch returns workspace + issue + extras", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAB" });
     fixtures.push(f);

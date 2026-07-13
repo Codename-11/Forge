@@ -62,6 +62,9 @@ describe("mapCodexNotification", () => {
       mapCodexNotification("turn/completed", { turn: { status: "completed" } }),
     ).toEqual({ type: "completed" });
     expect(
+      mapCodexNotification("turn/completed", { turn: { status: "interrupted" } }),
+    ).toEqual({ type: "stopped", reason: "Codex turn was interrupted." });
+    expect(
       mapCodexNotification("turn/completed", {
         turn: { status: "failed", error: { message: "boom" } },
       }),
@@ -149,16 +152,23 @@ describe("makeCodexAppServerConnector", () => {
         state: "running",
       });
 
-      const subscribed = second!.subscribe(externalRunId, () => undefined);
+      const events: Array<{ type: string; tokensIn?: number; tokensOut?: number }> = [];
+      const subscribed = second!.subscribe(externalRunId, (event) => events.push(event));
       for (const ws of sockets) {
         ws.send(
           JSON.stringify({
             method: "turn/completed",
-            params: { turn: { status: "completed" } },
+            params: {
+              turn: { status: "completed" },
+              usage: { inputTokens: 12, outputTokens: 8 },
+            },
           }),
         );
       }
       await subscribed;
+      expect(events.filter((event) => event.type === "usage")).toEqual([
+        { type: "usage", tokensIn: 12, tokensOut: 8 },
+      ]);
     } finally {
       for (const ws of sockets) ws.close();
       server.close();

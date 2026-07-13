@@ -28,6 +28,7 @@ import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { agentAvailabilityModel } from "@/lib/transport-display";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { agentIdSchema } from "@/server/validators";
+import { getRuntimeAdapter } from "@/server/runtimes/adapters";
 
 /**
  * Agent registry. Agents are MCP-first actors — LLM profiles that hold
@@ -102,14 +103,32 @@ async function resolveRuntimeId(
   db: PrismaClient,
   workspaceId: string,
   raw: string | null | undefined,
+  excludeAgentId?: string,
 ): Promise<string | null> {
   const id = raw || null; // "" and null both clear the attachment
   if (!id) return null;
   const rt = await db.runtime.findFirst({
     where: { id, workspaceId },
-    select: { id: true },
+    select: { id: true, adapterKey: true },
   });
   if (!rt) throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime not found in this workspace." });
+  const adapter = getRuntimeAdapter(rt.adapterKey);
+  if (adapter && !adapter.multiAgent) {
+    const attached = await db.agent.count({
+      where: {
+        workspaceId,
+        runtimeId: rt.id,
+        archivedAt: null,
+        ...(excludeAgentId ? { id: { not: excludeAgentId } } : {}),
+      },
+    });
+    if (attached > 0) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: `${adapter.title} runtimes are profile-scoped and can host only one active agent. Create or select a separate runtime endpoint for this profile.`,
+      });
+    }
+  }
   return rt.id;
 }
 
@@ -672,7 +691,7 @@ export const agentRouter = router({
       const runtimePatch =
         runtimeId === undefined
           ? {}
-          : { runtimeId: await resolveRuntimeId(ctx.db, ctx.workspaceId, runtimeId) };
+          : { runtimeId: await resolveRuntimeId(ctx.db, ctx.workspaceId, runtimeId, id) };
       return ctx.db.$transaction(async (tx) => {
         const after = await tx.agent.update({ where: { id }, data: { ...patch, ...runtimePatch } });
         await recordChange(tx, {

@@ -44,6 +44,7 @@ describe("resolveChatReadiness", () => {
       stop: true,
       runs: true,
       dispatch: false,
+      vision: false,
       memory: true,
       diagnostics: true,
     });
@@ -160,7 +161,7 @@ describe("resolveChatReadiness", () => {
     expect(r.mode).toBe("dispatch");
     expect(r.reason).toBe("dispatch-path");
     expect(r.capabilities).toMatchObject({
-      streaming: false,
+      streaming: true,
       thinking: false,
       tools: false,
       approvals: false,
@@ -221,6 +222,20 @@ describe("resolveChatReadiness", () => {
     const r = resolveChatReadiness({ provider: "HERMES", runEngine: "RUNS", runtime: null });
     expect(r.mode).toBe("runs");
     expect(r.transportLabel.length).toBeGreaterThan(0);
+  });
+
+  it("uses the configured runtime name instead of only the adapter title", () => {
+    const r = resolveChatReadiness({
+      provider: "HERMES",
+      runEngine: "RUNS",
+      runtime: {
+        adapterKey: "hermes",
+        endpoint: "https://gw.example/v1",
+        secret: "tok",
+        name: "Hermes East",
+      },
+    });
+    expect(r.transportLabel).toBe("Hermes East");
   });
 
   it("a thread provider override is honoured", () => {

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { randomUUID } from "node:crypto";
 import { ChatRole, EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { auth } from "@/server/auth";
@@ -19,13 +20,21 @@ import {
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
 import { chatToolsAsOpenAITools, findChatTool } from "@/server/services/chat-tools-allowlist";
 import { executeChatTool } from "@/server/services/chat-tool-exec";
-import { pendingApprovals } from "@/server/services/chat-stream-state";
+import {
+  clearPendingChatApproval,
+  clearChatStreamStop,
+  getChatStreamStopRequest,
+  registerPendingChatApproval,
+  requestChatStreamStop,
+  waitForPendingChatApproval,
+} from "@/server/services/chat-stream-state";
 import { resolveRunEngine, getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import { loadCanvasContextSummary } from "@/server/services/chat-context-canvas";
 import { presignDownloadUrl } from "@/server/services/storage";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { logger } from "@/server/logger";
+import { publish } from "@/server/realtime";
 
 /**
  * Interactive chat streaming endpoint.
@@ -64,6 +73,8 @@ function streamErrorMessage(err: unknown, fallback: string): string {
 interface RequestBody {
   threadId: string;
   body: string;
+  /** Client-generated stable id used to deduplicate retries/reconnects. */
+  clientTurnId?: string;
   context?: unknown;
   attachments?: string[];
   /** Optional cuid — the canvas the operator is currently viewing.
@@ -74,6 +85,33 @@ interface RequestBody {
    * attachment uploads. Deleted server-side after we re-target the
    * uploads at the real USER row this route persists. */
   pendingMessageId?: string;
+}
+
+const STREAM_CHECKPOINT_MS = 500;
+const STREAM_HEARTBEAT_MS = 10_000;
+
+function jsonObject(value: Prisma.JsonValue | null | undefined): Record<string, Prisma.JsonValue> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, Prisma.JsonValue>;
+}
+
+function streamResponse(chunks: string[]): Response {
+  const encoder = new TextEncoder();
+  return new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        controller.close();
+      },
+    }),
+    {
+      headers: {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        "x-accel-buffering": "no",
+      },
+    },
+  );
 }
 
 function readContextSnapshot(value: unknown): Prisma.InputJsonObject {
@@ -96,16 +134,26 @@ export async function POST(req: NextRequest) {
   }
   const threadId = String(parsed.threadId ?? "").trim();
   const body = String(parsed.body ?? "");
-  if (!threadId || !body.trim()) {
+  const requestedAttachmentIds = Array.isArray(parsed.attachments)
+    ? parsed.attachments.filter((id): id is string => typeof id === "string" && id.length > 0)
+    : [];
+  if (!threadId || (!body.trim() && requestedAttachmentIds.length === 0)) {
     return NextResponse.json(
-      { error: "threadId and non-empty body are required" },
+      { error: "threadId and a message or attachment are required" },
       { status: 400 },
     );
   }
   if (body.length > 8000) {
     return NextResponse.json({ error: "body exceeds 8000 chars" }, { status: 400 });
   }
-  const contextSnapshot = readContextSnapshot(parsed.context);
+  const clientTurnId =
+    typeof parsed.clientTurnId === "string" && parsed.clientTurnId.trim().length > 0
+      ? parsed.clientTurnId.trim().slice(0, 100)
+      : randomUUID();
+  const contextSnapshot = {
+    ...readContextSnapshot(parsed.context),
+    clientTurnId,
+  } as Prisma.InputJsonObject;
   const canvasId =
     typeof parsed.canvasId === "string" && parsed.canvasId.length > 0 ? parsed.canvasId : null;
 
@@ -194,9 +242,6 @@ export async function POST(req: NextRequest) {
   // leave a half-written user message if one points outside the workspace.
   // Only image attachments are passed to the model as vision blocks today;
   // anything else is persisted on the message but skipped from the prompt.
-  const requestedAttachmentIds = Array.isArray(parsed.attachments)
-    ? parsed.attachments.filter((id): id is string => typeof id === "string" && id.length > 0)
-    : [];
   const attachmentRows = requestedAttachmentIds.length
     ? await db.attachment.findMany({
         where: {
@@ -206,6 +251,9 @@ export async function POST(req: NextRequest) {
         },
       })
     : [];
+  if (!body.trim() && attachmentRows.length === 0) {
+    return NextResponse.json({ error: "No accessible attachments were provided" }, { status: 400 });
+  }
   const imageBlocks: ChatStreamContentBlock[] = [];
   for (const a of attachmentRows) {
     const mime = (a.mimeType ?? "").toLowerCase();
@@ -239,6 +287,18 @@ export async function POST(req: NextRequest) {
       );
     }
   }
+  if (!body.trim() && imageBlocks.length === 0) {
+    return NextResponse.json(
+      { error: "A text message is required when no supported image is attached." },
+      { status: 400 },
+    );
+  }
+  if (imageBlocks.length > 0 && !transport.capabilities.vision) {
+    return NextResponse.json(
+      { error: `${transport.transportLabel} does not support image input.` },
+      { status: 400 },
+    );
+  }
 
   // Persist the USER row and the audit/event in one transaction. Mirrors
   // `chat.send` so the inbox lifecycle stays honest. Forge-owned streaming
@@ -250,7 +310,103 @@ export async function POST(req: NextRequest) {
   // `chat-message` placeholders by id, but streaming uploads at the composer
   // happen *before* the message row exists, so we point them at this row here.
   const attachmentIds = attachmentRows.map((a) => a.id);
-  const { userMessageId } = await db.$transaction(async (tx) => {
+  const agentStartedAt = new Date();
+  const persistedTurn = await db.$transaction(async (tx) => {
+    // A JSON field cannot carry a unique constraint without a migration, so
+    // serialize retries for this thread/client id with a transaction-scoped
+    // advisory lock before looking up or creating the turn.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${thread.id}:${clientTurnId}`}))`;
+    const existingUser = await tx.chatMessage.findFirst({
+      where: {
+        workspaceId,
+        threadId: thread.id,
+        role: ChatRole.USER,
+        contextSnapshot: { path: ["clientTurnId"], equals: clientTurnId },
+      },
+      orderBy: { createdAt: "desc" },
+      select: { id: true },
+    });
+    if (existingUser) {
+      const existingAgent = useDispatch
+        ? null
+        : await tx.chatMessage.findFirst({
+            where: {
+              workspaceId,
+              threadId: thread.id,
+              role: ChatRole.AGENT,
+              contextSnapshot: { path: ["turnId"], equals: clientTurnId },
+            },
+            orderBy: { createdAt: "desc" },
+            select: { id: true, body: true, contextSnapshot: true },
+          });
+      if (attachmentIds.length > 0) {
+        await tx.attachment.updateMany({
+          where: { id: { in: attachmentIds }, workspaceId },
+          data: { targetType: "chat-message", targetId: existingUser.id },
+        });
+      }
+      if (
+        typeof parsed.pendingMessageId === "string" &&
+        parsed.pendingMessageId.length > 0 &&
+        parsed.pendingMessageId !== existingUser.id
+      ) {
+        await tx.chatMessage.deleteMany({
+          where: {
+            id: parsed.pendingMessageId,
+            workspaceId,
+            threadId: thread.id,
+            role: ChatRole.USER,
+            dispatchedAt: null,
+          },
+        });
+      }
+      const existingSnapshot = jsonObject(existingAgent?.contextSnapshot);
+      if (
+        existingAgent &&
+        existingSnapshot.retryable === true &&
+        existingSnapshot.running !== true &&
+        typeof existingSnapshot.runExternalId !== "string"
+      ) {
+        const {
+          error: _error,
+          finishedAt: _finishedAt,
+          retryable: _retryable,
+          ...retainedSnapshot
+        } = existingSnapshot;
+        const revived = await tx.chatMessage.update({
+          where: { id: existingAgent.id },
+          data: {
+            body: "",
+            outputStartedAt: agentStartedAt,
+            contextSnapshot: {
+              ...retainedSnapshot,
+              running: true,
+              status: "running",
+              startedAt: agentStartedAt.toISOString(),
+              streamUpdatedAt: agentStartedAt.toISOString(),
+            } as Prisma.InputJsonObject,
+          },
+          select: { id: true, body: true, contextSnapshot: true },
+        });
+        await tx.chatMessage.update({
+          where: { id: existingUser.id },
+          data: { acknowledgedAt: agentStartedAt, outputStartedAt: agentStartedAt },
+        });
+        return {
+          userMessageId: existingUser.id,
+          agentMessageId: revived.id,
+          existingAgent: revived,
+          reused: false,
+        };
+      }
+      return {
+        userMessageId: existingUser.id,
+        agentMessageId: existingAgent?.id ?? null,
+        existingAgent,
+        reused: true,
+      };
+    }
+
     const now = new Date();
     await tx.chatThread.update({
       where: { id: thread.id },
@@ -266,6 +422,33 @@ export async function POST(req: NextRequest) {
         dispatchedAt: now,
       },
     });
+    const placeholder = useDispatch
+      ? null
+      : await tx.chatMessage.create({
+          data: {
+            workspaceId,
+            threadId: thread.id,
+            role: ChatRole.AGENT,
+            body: "",
+            outputStartedAt: agentStartedAt,
+            contextSnapshot: {
+              streamed: true,
+              turnId: clientTurnId,
+              replyToMessageId: message.id,
+              running: true,
+              status: "running",
+              startedAt: agentStartedAt.toISOString(),
+              streamUpdatedAt: agentStartedAt.toISOString(),
+            },
+          },
+          select: { id: true, body: true, contextSnapshot: true },
+        });
+    if (placeholder) {
+      await tx.chatMessage.update({
+        where: { id: message.id },
+        data: { acknowledgedAt: agentStartedAt, outputStartedAt: agentStartedAt },
+      });
+    }
     if (attachmentIds.length > 0) {
       await tx.attachment.updateMany({
         where: { id: { in: attachmentIds }, workspaceId },
@@ -315,143 +498,170 @@ export async function POST(req: NextRequest) {
         })) as unknown as Prisma.InputJsonArray,
       },
     });
-    return { userMessageId: message.id };
+    return {
+      userMessageId: message.id,
+      agentMessageId: placeholder?.id ?? null,
+      existingAgent: null,
+      reused: false,
+    };
   });
+  const { userMessageId } = persistedTurn;
 
-  // Load recent history *after* the USER row is persisted so it appears in
-  // the context array we send to the provider. Take last 20 chronological,
-  // including the just-inserted user message.
-  const recent = await db.chatMessage.findMany({
-    where: {
-      workspaceId,
-      threadId: thread.id,
-      OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
-    },
-    orderBy: { createdAt: "desc" },
-    take: 20,
-    select: { role: true, body: true },
-  });
-  const history = recent.reverse();
-
-  // Resolve the canvas binding once up-front so an invalid id fails fast
-  // (rather than silently dropping the binding mid-stream).
-  let boundCanvasId: string | null = null;
-  if (canvasId) {
-    const canvas = await db.workspaceCanvas.findFirst({
-      where: { id: canvasId, workspaceId, archivedAt: null },
-      select: { id: true },
-    });
-    if (canvas) boundCanvasId = canvas.id;
-  }
-
-  const baseSystemPrompt =
-    `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
-    `management workspace. Be concise and direct. ` +
-    (agent.capabilities && agent.capabilities.length > 0
-      ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
-      : "") +
-    (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
-
-  const buildSystemPrompt = async (): Promise<string> => {
-    if (!boundCanvasId) return baseSystemPrompt;
-    const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
-    const storyboardHint =
-      `When the operator asks you to lay out, storyboard, sketch, ` +
-      `organize, or "set up a canvas for" something, reach for the ` +
-      `compound MCP gestures:\n` +
-      `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
-      `the plan card + notes lane + sources column + next-steps lane.\n` +
-      `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
-      `with the issue card + related + comments + attachments.\n` +
-      `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
-      `with a scratchpad + sources column + next-steps lane.\n` +
-      `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
-      `hatch when the three presets don't fit. Provide a panels[] ` +
-      `array of \`{ label, body?, x, y, width, height }\`.\n` +
-      `One storyboard call is the grammar — don't scatter 25 floating ` +
-      `nodes by hand.`;
-    if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
-    return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
-  };
-  const systemPrompt = await buildSystemPrompt();
-
-  // Build the model-facing message array. History rows stay plain text —
-  // we only attach image blocks to the *latest* user turn, which is the
-  // one we just persisted. (Historical attachments aren't replayed; the
-  // model already saw them in their original turn.)
-  const messages: ChatStreamMessage[] = [{ role: "system", content: systemPrompt }];
-  for (let i = 0; i < history.length; i++) {
-    const m = history[i];
-    const isLatest = i === history.length - 1;
-    const role: "user" | "assistant" = m.role === ChatRole.USER ? "user" : "assistant";
-    if (isLatest && role === "user" && imageBlocks.length > 0) {
-      const blocks: ChatStreamContentBlock[] = [];
-      if (m.body) blocks.push({ type: "text", text: m.body });
-      blocks.push(...imageBlocks);
-      messages.push({ role, content: blocks });
-    } else {
-      messages.push({ role, content: m.body });
-    }
+  if (persistedTurn.reused) {
+    const existingSnapshot = jsonObject(persistedTurn.existingAgent?.contextSnapshot);
+    const running = existingSnapshot.running === true;
+    return streamResponse([
+      sse("meta", {
+        userMessageId,
+        agentMessageId: persistedTurn.agentMessageId,
+        messageId: persistedTurn.agentMessageId,
+        clientTurnId,
+        deduplicated: true,
+        running,
+        snapshot: existingSnapshot,
+      }),
+      ...(!running && persistedTurn.existingAgent?.body
+        ? [sse("content", { delta: persistedTurn.existingAgent.body, replay: true })]
+        : []),
+      ...(!running
+        ? [
+            sse("done", {
+              messageId: persistedTurn.agentMessageId,
+              deduplicated: true,
+              running: false,
+            }),
+          ]
+        : []),
+    ]);
   }
 
   if (useDispatch) {
-    const encoder = new TextEncoder();
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const enqueue = (chunk: string) => {
-          try {
-            controller.enqueue(encoder.encode(chunk));
-          } catch {
-            /* controller already closed */
-          }
-        };
-        enqueue(
-          sse("meta", {
-            userMessageId,
-            dispatch: true,
-            transport: transport.transportLabel,
-          }),
-        );
-        enqueue(sse("done", { userMessageId, dispatch: true }));
-        try {
-          controller.close();
-        } catch {
-          /* already closed */
-        }
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-cache, no-transform",
-        "x-accel-buffering": "no",
-      },
-    });
+    return streamResponse([
+      sse("meta", {
+        userMessageId,
+        dispatch: true,
+        transport: transport.transportLabel,
+      }),
+      sse("done", { userMessageId, dispatch: true }),
+    ]);
   }
 
-  // Create the placeholder AGENT row up front so the client gets a stable
-  // messageId in the `meta` event — we fill its `body` + `contextSnapshot`
-  // after the stream finishes (or aborts).
-  const agentStartedAt = new Date();
-  const placeholder = await db.chatMessage.create({
-    data: {
-      workspaceId,
-      threadId: thread.id,
-      role: ChatRole.AGENT,
-      body: "",
-      outputStartedAt: agentStartedAt,
-    },
-    select: { id: true },
-  });
-  const agentMessageId = placeholder.id;
+  // Non-dispatch turns create their durable placeholder in the same
+  // transaction as the USER row, so a process crash cannot strand an
+  // idempotency key between the user turn and its reply state.
+  const agentMessageId = persistedTurn.agentMessageId;
+  if (!agentMessageId) {
+    return NextResponse.json({ error: "Failed to initialize chat turn" }, { status: 500 });
+  }
 
-  // Acknowledged-flag bookkeeping so the chat panel's dispatch state UI
-  // transitions cleanly out of "wake-sent" when the streaming reply lands.
-  await db.chatMessage.update({
-    where: { id: userMessageId },
-    data: { acknowledgedAt: agentStartedAt, outputStartedAt: agentStartedAt },
+  const prepared = await (async () => {
+    // Load recent history *after* the USER row is persisted so it appears in
+    // the context array we send to the provider. Take last 20 chronological,
+    // including the just-inserted user message.
+    const recent = await db.chatMessage.findMany({
+      where: {
+        workspaceId,
+        threadId: thread.id,
+        ...(persistedTurn.agentMessageId ? { id: { not: persistedTurn.agentMessageId } } : {}),
+        OR: [{ role: { not: ChatRole.USER } }, { dispatchedAt: { not: null } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: 20,
+      select: { role: true, body: true },
+    });
+    const history = recent.reverse();
+
+    // Resolve the canvas binding once up-front so an invalid id fails fast
+    // (rather than silently dropping the binding mid-stream).
+    let boundCanvasId: string | null = null;
+    if (canvasId) {
+      const canvas = await db.workspaceCanvas.findFirst({
+        where: { id: canvasId, workspaceId, archivedAt: null },
+        select: { id: true },
+      });
+      if (canvas) boundCanvasId = canvas.id;
+    }
+
+    const baseSystemPrompt =
+      `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
+      `management workspace. Be concise and direct. ` +
+      (agent.capabilities && agent.capabilities.length > 0
+        ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
+        : "") +
+      (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
+
+    const buildSystemPrompt = async (): Promise<string> => {
+      if (!boundCanvasId) return baseSystemPrompt;
+      const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
+      const storyboardHint =
+        `When the operator asks you to lay out, storyboard, sketch, ` +
+        `organize, or "set up a canvas for" something, reach for the ` +
+        `compound MCP gestures:\n` +
+        `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
+        `the plan card + notes lane + sources column + next-steps lane.\n` +
+        `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
+        `with the issue card + related + comments + attachments.\n` +
+        `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
+        `with a scratchpad + sources column + next-steps lane.\n` +
+        `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
+        `hatch when the three presets don't fit. Provide a panels[] ` +
+        `array of \`{ label, body?, x, y, width, height }\`.\n` +
+        `One storyboard call is the grammar — don't scatter 25 floating ` +
+        `nodes by hand.`;
+      if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
+      return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
+    };
+    const systemPrompt = await buildSystemPrompt();
+
+    // Build the model-facing message array. History rows stay plain text —
+    // we only attach image blocks to the *latest* user turn, which is the
+    // one we just persisted. (Historical attachments aren't replayed; the
+    // model already saw them in their original turn.)
+    const messages: ChatStreamMessage[] = [{ role: "system", content: systemPrompt }];
+    for (let i = 0; i < history.length; i++) {
+      const m = history[i];
+      const isLatest = i === history.length - 1;
+      const role: "user" | "assistant" = m.role === ChatRole.USER ? "user" : "assistant";
+      if (isLatest && role === "user" && imageBlocks.length > 0) {
+        const blocks: ChatStreamContentBlock[] = [];
+        if (m.body) blocks.push({ type: "text", text: m.body });
+        blocks.push(...imageBlocks);
+        messages.push({ role, content: blocks });
+      } else {
+        messages.push({ role, content: m.body });
+      }
+    }
+    return { boundCanvasId, buildSystemPrompt, history, messages, systemPrompt };
+  })().catch(async (err) => {
+    const failedAt = new Date().toISOString();
+    const message = streamErrorMessage(err, "Failed to prepare the chat turn.");
+    await db.chatMessage
+      .update({
+        where: { id: agentMessageId },
+        data: {
+          body: "(The chat turn could not be prepared. Retry to try again.)",
+          contextSnapshot: {
+            streamed: true,
+            turnId: clientTurnId,
+            replyToMessageId: userMessageId,
+            running: false,
+            status: "failed",
+            error: message,
+            retryable: true,
+            startedAt: agentStartedAt.toISOString(),
+            finishedAt: failedAt,
+            streamUpdatedAt: failedAt,
+          },
+        },
+      })
+      .catch(() => undefined);
+    logger.warn({ err, threadId: thread.id, agentMessageId }, "chat-stream: preparation failed");
+    return null;
   });
+  if (!prepared) {
+    return NextResponse.json({ error: "Failed to prepare chat turn" }, { status: 500 });
+  }
+  const { boundCanvasId, buildSystemPrompt, history, messages, systemPrompt } = prepared;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
@@ -469,6 +679,7 @@ export async function POST(req: NextRequest) {
             messageId: agentMessageId,
             agentMessageId,
             userMessageId,
+            turnId: clientTurnId,
             acknowledgedAt: agentStartedAt.toISOString(),
             outputStartedAt: agentStartedAt.toISOString(),
           }),
@@ -481,13 +692,18 @@ export async function POST(req: NextRequest) {
           name: string;
           args: Record<string, unknown>;
           status: "pending" | "approved" | "declined" | "executed" | "error";
+          requiresConfirm: boolean;
           summary?: string;
           result?: unknown;
         };
         const toolCalls: ToolCallRecord[] = [];
         const startedAt = Date.now();
+        let usage:
+          | { tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number }
+          | undefined;
         let errored = false;
         let streamError: string | null = null;
+        let streamFinishing = false;
         // Track approval ids we registered so we can clean them up on abort.
         const registeredApprovalIds = new Set<string>();
 
@@ -496,6 +712,157 @@ export async function POST(req: NextRequest) {
         // Stop button interrupt the live Hermes run, not just the local read.
         let runExternalId: string | null = null;
         let clientDetached = false;
+        let stopObserved = false;
+        let stopPollBusy = false;
+        let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+        let lastCheckpointAt = 0;
+        let checkpointChain = Promise.resolve();
+
+        const writeCheckpoint = async () => {
+          const now = new Date();
+          lastCheckpointAt = now.getTime();
+          try {
+            await db.chatMessage.updateMany({
+              where: {
+                id: agentMessageId,
+                contextSnapshot: { path: ["running"], equals: true },
+              },
+              data: {
+                body: assembled.join(""),
+                contextSnapshot: {
+                  streamed: true,
+                  turnId: clientTurnId,
+                  replyToMessageId: userMessageId,
+                  provider: effectiveProvider,
+                  model: effectiveModel ?? undefined,
+                  yoloModeOverride,
+                  running: true,
+                  status: "running",
+                  startedAt: agentStartedAt.toISOString(),
+                  streamUpdatedAt: now.toISOString(),
+                  runExternalId: runExternalId ?? undefined,
+                  partial_text: assembled.join("") || undefined,
+                  thinking: thinkingChunks.join("") || undefined,
+                  tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
+                  usage,
+                  clientDetached: clientDetached || undefined,
+                } as never,
+              },
+            });
+            await publish({
+              id: randomUUID(),
+              workspaceId,
+              kind: EventKind.CHAT_MESSAGE_POSTED,
+              subjectType: "chat-thread-state",
+              subjectId: thread.id,
+              payload: {
+                phase: "progress",
+                threadId: thread.id,
+                messageId: agentMessageId,
+                turnId: clientTurnId,
+                updatedAt: now.toISOString(),
+              },
+              actorId: null,
+              createdAt: now.toISOString(),
+            });
+          } catch (err) {
+            logger.warn(
+              { err, threadId: thread.id, agentMessageId },
+              "chat-stream: checkpoint failed",
+            );
+          }
+        };
+        const queueCheckpoint = (force = false) => {
+          const waitMs = Math.max(0, STREAM_CHECKPOINT_MS - (Date.now() - lastCheckpointAt));
+          if (!force && checkpointTimer) return;
+          const queue = () => {
+            checkpointTimer = null;
+            checkpointChain = checkpointChain.then(writeCheckpoint);
+          };
+          if (force || waitMs === 0) queue();
+          else checkpointTimer = setTimeout(queue, waitMs);
+        };
+        const flushCheckpoint = async () => {
+          if (checkpointTimer) clearTimeout(checkpointTimer);
+          checkpointTimer = null;
+          checkpointChain = checkpointChain.then(writeCheckpoint);
+          await checkpointChain;
+        };
+        const heartbeat = setInterval(() => queueCheckpoint(true), STREAM_HEARTBEAT_MS);
+        const stopPoll = setInterval(() => {
+          if (stopPollBusy || stopObserved) return;
+          stopPollBusy = true;
+          void getChatStreamStopRequest(agentMessageId)
+            .then(async (request) => {
+              if (!request || stopObserved) return;
+              stopObserved = true;
+              if (!request.remoteHandled && runExternalId && runsConnector?.stop) {
+                try {
+                  await runsConnector.stop(runExternalId);
+                  await requestChatStreamStop(agentMessageId, true);
+                } catch (err) {
+                  stopObserved = false;
+                  const stopFailedAt = new Date().toISOString();
+                  const existing = await db.chatMessage.findUnique({
+                    where: { id: agentMessageId },
+                    select: { contextSnapshot: true },
+                  });
+                  const existingSnapshot = jsonObject(existing?.contextSnapshot);
+                  delete existingSnapshot.stoppedAt;
+                  delete existingSnapshot.finishedAt;
+                  await db.chatMessage.update({
+                    where: { id: agentMessageId },
+                    data: {
+                      contextSnapshot: {
+                        ...existingSnapshot,
+                        stopped: false,
+                        running: true,
+                        status: "running",
+                        stopFailedAt,
+                        stopError: "Runtime rejected the stop request.",
+                        streamUpdatedAt: stopFailedAt,
+                      } as never,
+                    },
+                  });
+                  await clearChatStreamStop(agentMessageId);
+                  await publish({
+                    id: randomUUID(),
+                    workspaceId,
+                    kind: EventKind.CHAT_MESSAGE_POSTED,
+                    subjectType: "chat-thread-state",
+                    subjectId: thread.id,
+                    payload: {
+                      phase: "stop-failed",
+                      threadId: thread.id,
+                      messageId: agentMessageId,
+                    },
+                    actorId: userId,
+                    createdAt: stopFailedAt,
+                  }).catch(() => undefined);
+                  enqueue(
+                    sse("error", {
+                      message: "The runtime rejected the stop request; the reply is still running.",
+                    }),
+                  );
+                  logger.warn(
+                    { err, threadId: thread.id, agentMessageId, runExternalId },
+                    "chat-stream: delayed runtime stop failed",
+                  );
+                  return;
+                }
+              }
+              abortController.abort();
+            })
+            .catch((err) => {
+              logger.warn(
+                { err, threadId: thread.id, agentMessageId },
+                "chat-stream: stop relay failed",
+              );
+            })
+            .finally(() => {
+              stopPollBusy = false;
+            });
+        }, 750);
         const onAbort = () => {
           // A browser/SSE disconnect is not the same as "stop the agent".
           // Navigation, React remounts, proxy hiccups, retries, and tab
@@ -504,6 +871,7 @@ export async function POST(req: NextRequest) {
           // and other tabs refresh through the durable CHAT_MESSAGE_POSTED
           // event. Explicit user stops go through /api/chat/stream/stop.
           clientDetached = true;
+          queueCheckpoint(true);
         };
         req.signal.addEventListener("abort", onAbort);
 
@@ -515,19 +883,33 @@ export async function POST(req: NextRequest) {
             name: call.name,
             args: call.args,
             status: "pending",
+            requiresConfirm: findChatTool(call.name)?.requiresConfirm ?? true,
           };
           toolCalls.push(fresh);
+          queueCheckpoint();
           return fresh;
         };
 
-        const waitForApproval = (callId: string) =>
-          new Promise<{ approved: boolean }>((resolve) => {
-            registeredApprovalIds.add(callId);
-            pendingApprovals.set(callId, (decision) => {
-              registeredApprovalIds.delete(callId);
-              resolve(decision);
-            });
+        const registerApproval = async (callId: string) => {
+          registeredApprovalIds.add(callId);
+          await registerPendingChatApproval({
+            callId,
+            workspaceId,
+            userId,
+            threadId: thread.id,
+            messageId: agentMessageId,
+            createdAt: new Date().toISOString(),
           });
+        };
+
+        const waitForApproval = async (callId: string) => {
+          try {
+            return await waitForPendingChatApproval(callId, abortController.signal);
+          } finally {
+            registeredApprovalIds.delete(callId);
+            await clearPendingChatApproval(callId).catch(() => undefined);
+          }
+        };
 
         const runOneTool = async (call: ChatToolCall): Promise<ChatToolExecResult> => {
           const record = recordCall(call);
@@ -539,6 +921,7 @@ export async function POST(req: NextRequest) {
             const summary = `Tool ${call.name} is not on the chat allowlist.`;
             record.status = "error";
             record.summary = summary;
+            queueCheckpoint();
             enqueue(sse("tool_result", { id: call.id, ok: false, summary }));
             return { ok: false, summary };
           }
@@ -553,6 +936,7 @@ export async function POST(req: NextRequest) {
           );
 
           if (requiresConfirm) {
+            await registerApproval(call.id);
             enqueue(
               sse("tool_confirm", {
                 id: call.id,
@@ -565,10 +949,12 @@ export async function POST(req: NextRequest) {
               const summary = "User declined this action.";
               record.status = "declined";
               record.summary = summary;
+              queueCheckpoint(true);
               enqueue(sse("tool_result", { id: call.id, ok: false, summary }));
               return { ok: false, summary };
             }
             record.status = "approved";
+            queueCheckpoint(true);
           }
 
           const exec = await executeChatTool({
@@ -580,6 +966,7 @@ export async function POST(req: NextRequest) {
           record.status = exec.ok ? "executed" : "error";
           record.summary = exec.summary;
           record.result = exec.result;
+          queueCheckpoint();
           enqueue(
             sse("tool_result", {
               id: call.id,
@@ -627,28 +1014,10 @@ export async function POST(req: NextRequest) {
               contractVersion: FORGE_RUN_CONTRACT_VERSION,
               toolPolicy: runtimePolicy,
               sessionKey: agent.profileKey,
+              runtimeProfile: agent.profileKey,
             });
             runExternalId = started.externalRunId;
-            await db.chatMessage
-              .update({
-                where: { id: agentMessageId },
-                data: {
-                  contextSnapshot: {
-                    streamed: true,
-                    provider: effectiveProvider,
-                    model: effectiveModel ?? undefined,
-                    yoloModeOverride,
-                    runExternalId,
-                    running: true,
-                  } as never,
-                },
-              })
-              .catch((err) =>
-                logger.warn(
-                  { err, threadId: thread.id, agentMessageId, runExternalId },
-                  "chat-stream: failed to persist running run id",
-                ),
-              );
+            await flushCheckpoint();
             enqueue(sse("meta", { messageId: agentMessageId, agentMessageId, runExternalId }));
           } catch (err) {
             errored = true;
@@ -665,7 +1034,7 @@ export async function POST(req: NextRequest) {
             return;
           }
           const externalRunId = runExternalId;
-          const toolIdByName = new Map<string, string>();
+          const toolIdsByName = new Map<string, string[]>();
           let toolSeq = 0;
           let approvalSeq = 0;
           // The gateway only emits `message.delta` events when the agent's
@@ -681,16 +1050,29 @@ export async function POST(req: NextRequest) {
               switch (e.type) {
                 case "content_delta":
                   assembled.push(e.delta);
+                  queueCheckpoint();
                   enqueue(sse("content", { delta: e.delta }));
                   break;
                 case "thinking":
                   thinkingChunks.push(e.text);
+                  queueCheckpoint();
                   enqueue(sse("thinking", { delta: e.text }));
                   break;
                 case "tool_started": {
-                  const id = `run_tool_${++toolSeq}`;
-                  toolIdByName.set(e.tool, id);
-                  toolCalls.push({ id, name: e.tool, args: {}, status: "pending" });
+                  const providerCallId =
+                    "callId" in e && typeof e.callId === "string" ? e.callId : null;
+                  const id = providerCallId ?? `run_tool_${++toolSeq}`;
+                  const queued = toolIdsByName.get(e.tool) ?? [];
+                  queued.push(id);
+                  toolIdsByName.set(e.tool, queued);
+                  toolCalls.push({
+                    id,
+                    name: e.tool,
+                    args: {},
+                    status: "pending",
+                    requiresConfirm: false,
+                  });
+                  queueCheckpoint();
                   enqueue(
                     sse("tool_call_started", {
                       id,
@@ -702,9 +1084,19 @@ export async function POST(req: NextRequest) {
                   break;
                 }
                 case "tool_completed": {
-                  const id = toolIdByName.get(e.tool);
+                  const providerCallId =
+                    "callId" in e && typeof e.callId === "string" ? e.callId : null;
+                  const queued = toolIdsByName.get(e.tool) ?? [];
+                  const id = providerCallId ?? queued.shift();
+                  if (providerCallId) {
+                    const index = queued.indexOf(providerCallId);
+                    if (index >= 0) queued.splice(index, 1);
+                  }
+                  if (queued.length > 0) toolIdsByName.set(e.tool, queued);
+                  else toolIdsByName.delete(e.tool);
                   const rec = toolCalls.find((c) => c.id === id);
                   if (rec) rec.status = e.isError ? "error" : "executed";
+                  queueCheckpoint();
                   if (id) {
                     enqueue(
                       sse("tool_result", {
@@ -717,27 +1109,53 @@ export async function POST(req: NextRequest) {
                   break;
                 }
                 case "approval_required": {
-                  const id = `run_approval_${++approvalSeq}`;
+                  const providerCallId =
+                    "callId" in e && typeof e.callId === "string" ? e.callId : null;
+                  const id = providerCallId ?? `run_approval_${++approvalSeq}`;
                   // Hermes approvals gate dangerous shell commands — the
                   // payload carries `command` + a risk `description`, not a
                   // tool name. Title the card with the command.
                   const cmd =
                     typeof e.raw.command === "string" ? e.raw.command : (e.tool ?? "approval");
                   const label = cmd.length > 64 ? `${cmd.slice(0, 61)}…` : cmd;
-                  enqueue(
-                    sse("tool_call_started", {
-                      id,
-                      name: label,
-                      args: e.raw,
-                      requiresConfirm: true,
-                    }),
-                  );
-                  enqueue(sse("tool_confirm", { id, name: label, args: e.raw }));
+                  const existingRecord = toolCalls.find((call) => call.id === id);
+                  const approvalRecord: ToolCallRecord = existingRecord ?? {
+                    id,
+                    name: label,
+                    args: e.raw,
+                    status: "pending",
+                    requiresConfirm: true,
+                  };
+                  Object.assign(approvalRecord, {
+                    name: label,
+                    args: e.raw,
+                    status: "pending" as const,
+                    requiresConfirm: true,
+                    summary: "Waiting for operator approval.",
+                  });
+                  if (!existingRecord) toolCalls.push(approvalRecord);
+                  queueCheckpoint(true);
                   // Resolve out-of-band — Hermes holds the run open until we
                   // respond. Approve → allow once; decline → STOP the run
                   // (a bare "deny" leaves the agent blocked indefinitely per
                   // the gateway's approval semantics, so we interrupt it).
-                  void waitForApproval(id).then((d) => {
+                  void (async () => {
+                    await registerApproval(id);
+                    enqueue(
+                      sse("tool_call_started", {
+                        id,
+                        name: label,
+                        args: e.raw,
+                        requiresConfirm: true,
+                      }),
+                    );
+                    enqueue(sse("tool_confirm", { id, name: label, args: e.raw }));
+                    const d = await waitForApproval(id);
+                    approvalRecord.status = d.approved ? "approved" : "declined";
+                    approvalRecord.summary = d.approved
+                      ? "Approved by operator."
+                      : "Declined by operator; run stopped.";
+                    queueCheckpoint(true);
                     enqueue(
                       sse("tool_result", {
                         id,
@@ -748,12 +1166,21 @@ export async function POST(req: NextRequest) {
                     return d.approved
                       ? runsConnector!.approve?.(externalRunId, "once")
                       : runsConnector!.stop?.(externalRunId);
+                  })().catch((err) => {
+                    if (streamFinishing) return;
+                    errored = true;
+                    streamError = streamErrorMessage(err, "Approval failed.");
+                    approvalRecord.status = "error";
+                    approvalRecord.summary = streamError;
+                    queueCheckpoint(true);
+                    enqueue(sse("error", { message: streamError }));
                   });
                   break;
                 }
                 case "error":
                   errored = true;
                   streamError = redactStreamDiagnostic(e.message);
+                  queueCheckpoint(true);
                   logger.warn(
                     { threadId: thread.id, agentId: agent.id, externalRunId, message: streamError },
                     "chat-stream: runtime run emitted error",
@@ -769,9 +1196,49 @@ export async function POST(req: NextRequest) {
                   if (typeof e.finalText === "string" && e.finalText.length > 0) {
                     completedFinalText = e.finalText;
                   }
+                  if (
+                    "usage" in e &&
+                    e.usage &&
+                    typeof e.usage === "object" &&
+                    !Array.isArray(e.usage)
+                  ) {
+                    const terminalUsage = e.usage as Record<string, unknown>;
+                    usage = {
+                      tokensIn:
+                        typeof terminalUsage.tokensIn === "number"
+                          ? terminalUsage.tokensIn
+                          : undefined,
+                      tokensOut:
+                        typeof terminalUsage.tokensOut === "number"
+                          ? terminalUsage.tokensOut
+                          : undefined,
+                      tokensCached:
+                        typeof terminalUsage.tokensCached === "number"
+                          ? terminalUsage.tokensCached
+                          : undefined,
+                      costUsd:
+                        typeof terminalUsage.costUsd === "number"
+                          ? terminalUsage.costUsd
+                          : undefined,
+                    };
+                    queueCheckpoint();
+                  }
                   break;
                 case "usage":
+                  usage = {
+                    tokensIn: e.tokensIn,
+                    tokensOut: e.tokensOut,
+                    tokensCached: e.tokensCached,
+                    costUsd: e.costUsd,
+                  };
+                  queueCheckpoint();
                   break;
+                case "stopped": {
+                  stopObserved = true;
+                  enqueue(sse("stopped", { reason: e.reason ?? "Runtime stopped." }));
+                  queueCheckpoint(true);
+                  break;
+                }
               }
             },
             abortController.signal,
@@ -834,10 +1301,12 @@ export async function POST(req: NextRequest) {
               rebuildSystemPrompt: boundCanvasId ? async () => buildSystemPrompt() : undefined,
               onContent: (delta) => {
                 assembled.push(delta);
+                queueCheckpoint();
                 enqueue(sse("content", { delta }));
               },
               onThinking: (delta) => {
                 thinkingChunks.push(delta);
+                queueCheckpoint();
                 enqueue(sse("thinking", { delta }));
               },
               onToolUseStart: (call) => {
@@ -846,20 +1315,51 @@ export async function POST(req: NextRequest) {
               onError: (message) => {
                 errored = true;
                 streamError = redactStreamDiagnostic(message);
+                queueCheckpoint(true);
                 enqueue(sse("error", { message: streamError }));
               },
               executeToolCall: runOneTool,
             });
           }
         } catch (err) {
-          errored = true;
-          const message = streamErrorMessage(err, "Stream failed.");
-          streamError = message;
-          enqueue(sse("error", { message }));
-          logger.warn({ err, threadId: thread.id }, "chat-stream: route bridge failed");
+          if (!stopObserved) {
+            errored = true;
+            const message = streamErrorMessage(err, "Stream failed.");
+            streamError = message;
+            queueCheckpoint(true);
+            enqueue(sse("error", { message }));
+            logger.warn({ err, threadId: thread.id }, "chat-stream: route bridge failed");
+          }
         } finally {
           req.signal.removeEventListener("abort", onAbort);
         }
+
+        streamFinishing = true;
+        clearInterval(heartbeat);
+        clearInterval(stopPoll);
+        if (checkpointTimer) clearTimeout(checkpointTimer);
+        checkpointTimer = null;
+        await checkpointChain;
+        const beforeFinal = await db.chatMessage.findUnique({
+          where: { id: agentMessageId },
+          select: { contextSnapshot: true },
+        });
+        const currentSnapshot = jsonObject(beforeFinal?.contextSnapshot);
+        const wasStopped =
+          stopObserved ||
+          currentSnapshot.stopped === true ||
+          currentSnapshot.status === "stopped" ||
+          typeof currentSnapshot.stoppedAt === "string";
+        if (registeredApprovalIds.size > 0) {
+          abortController.abort();
+          await Promise.all(
+            Array.from(registeredApprovalIds, (id) =>
+              clearPendingChatApproval(id).catch(() => undefined),
+            ),
+          );
+          registeredApprovalIds.clear();
+        }
+        await clearChatStreamStop(agentMessageId).catch(() => undefined);
 
         const finalBody = assembled.join("");
         const thinkingFull = thinkingChunks.join("");
@@ -876,7 +1376,9 @@ export async function POST(req: NextRequest) {
         // whenever we keep the row, give it an accurate, non-empty body.
         let persistedBody = finalBody;
         if (!persistedBody) {
-          if (errored) {
+          if (wasStopped) {
+            persistedBody = "_(Reply stopped.)_";
+          } else if (errored) {
             persistedBody = "(no response — provider stream errored; check logs)";
           } else if (abortController.signal.aborted) {
             if (thinkingFull || toolCalls.length > 0) {
@@ -893,7 +1395,7 @@ export async function POST(req: NextRequest) {
         }
 
         try {
-          if (!persistedBody && !thinkingFull && toolCalls.length === 0) {
+          if (!persistedBody && !thinkingFull && toolCalls.length === 0 && !wasStopped) {
             // Nothing to keep — clean up the empty placeholder.
             await db.chatMessage.delete({ where: { id: agentMessageId } });
           } else {
@@ -902,16 +1404,26 @@ export async function POST(req: NextRequest) {
               data: {
                 body: persistedBody,
                 contextSnapshot: {
+                  ...currentSnapshot,
                   streamed: true,
+                  turnId: clientTurnId,
+                  replyToMessageId: userMessageId,
                   provider: effectiveProvider,
                   model: effectiveModel ?? undefined,
                   yoloModeOverride,
                   thinking: thinkingFull || undefined,
                   tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
                   error: streamError ?? undefined,
-                  aborted: abortController.signal.aborted || undefined,
+                  aborted: abortController.signal.aborted || wasStopped || undefined,
+                  stopped: wasStopped || undefined,
                   clientDetached: clientDetached || undefined,
                   runExternalId: runExternalId ?? undefined,
+                  usage,
+                  running: false,
+                  status: wasStopped ? "stopped" : errored ? "failed" : "completed",
+                  startedAt: agentStartedAt.toISOString(),
+                  finishedAt: new Date().toISOString(),
+                  streamUpdatedAt: new Date().toISOString(),
                   elapsedMs,
                 } as never,
               },
@@ -939,6 +1451,22 @@ export async function POST(req: NextRequest) {
                 streamed: true,
                 attachments: [] as Prisma.InputJsonArray,
               },
+            });
+            const terminalAt = new Date().toISOString();
+            await publish({
+              id: randomUUID(),
+              workspaceId,
+              kind: EventKind.CHAT_MESSAGE_POSTED,
+              subjectType: "chat-thread-state",
+              subjectId: thread.id,
+              payload: {
+                phase: wasStopped ? "stopped" : errored ? "failed" : "completed",
+                threadId: thread.id,
+                messageId: agentMessageId,
+                turnId: clientTurnId,
+              },
+              actorId: null,
+              createdAt: terminalAt,
             });
           }
         } catch (err) {

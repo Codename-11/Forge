@@ -53,6 +53,7 @@ interface PendingRun {
   buffer: RunEvent[];
   onEvent: ((e: RunEvent) => void) | null;
   terminal: boolean;
+  terminalStopped?: boolean;
   terminalError?: string;
   usage?: RunStatus["usage"];
   finalText: string;
@@ -194,13 +195,22 @@ export function mapCodexNotification(
       // stream via the delta event above, so skip them here.
       const type = typeof params.type === "string" ? params.type : "";
       if (type === "agentMessage" || type === "userMessage" || !type) return null;
-      return { type: "tool_started", tool: codexItemLabel(type, params) };
+      return {
+        type: "tool_started",
+        tool: codexItemLabel(type, params),
+        callId: codexItemId(params),
+      };
     }
     case "item/completed": {
       const type = typeof params.type === "string" ? params.type : "";
       if (type === "agentMessage" || type === "userMessage" || !type) return null;
       const isError = codexItemIsError(params);
-      return { type: "tool_completed", tool: codexItemLabel(type, params), isError };
+      return {
+        type: "tool_completed",
+        tool: codexItemLabel(type, params),
+        callId: codexItemId(params),
+        isError,
+      };
     }
     case "turn/completed": {
       // Status lives at params.turn.status (verified against codex-cli 0.133).
@@ -209,8 +219,9 @@ export function mapCodexNotification(
       if (status === "failed") {
         return { type: "error", message: codexFailureMessage(turn ?? params) };
       }
-      // interrupted + completed both terminate cleanly; final text is
-      // assembled from deltas by the caller.
+      if (status === "interrupted" || status === "cancelled" || status === "canceled") {
+        return { type: "stopped", reason: "Codex turn was interrupted." };
+      }
       return { type: "completed" };
     }
     case "model/rerouted":
@@ -221,6 +232,15 @@ export function mapCodexNotification(
     default:
       return null;
   }
+}
+
+function codexItemId(params: Record<string, unknown>): string | undefined {
+  const item =
+    params.item && typeof params.item === "object" && !Array.isArray(params.item)
+      ? (params.item as Record<string, unknown>)
+      : null;
+  const raw = params.itemId ?? params.item_id ?? params.id ?? item?.id;
+  return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
 }
 
 function codexItemLabel(type: string, params: Record<string, unknown>): string {
@@ -450,6 +470,7 @@ export function makeCodexAppServerConnector(opts: {
           emit(run, {
             type: "approval_required",
             choices: ["once", "session", "deny"],
+            callId: String(id),
             tool: command,
             raw: { ...params, _codexRequestId: id },
           });
@@ -478,7 +499,11 @@ export function makeCodexAppServerConnector(opts: {
         if (status === "failed") {
           run.terminalError = codexFailureMessage(turn ?? params);
         }
+        if (status === "interrupted" || status === "cancelled" || status === "canceled") {
+          run.terminalStopped = true;
+        }
         run.usage = mapCodexUsage(params.usage as Record<string, unknown> | undefined);
+        if (run.usage) emit(run, { type: "usage", ...run.usage });
         run.terminal = true;
       }
       if (evt) {
@@ -633,8 +658,6 @@ export function makeCodexAppServerConnector(opts: {
       run.onEvent = onEvent;
       for (const e of run.buffer.splice(0)) onEvent(e);
 
-      if (run.usage) onEvent({ type: "usage", ...run.usage });
-
       await new Promise<void>((resolve) => {
         if (run.terminal) return resolve();
         const onAbort = () => {
@@ -682,6 +705,9 @@ export function makeCodexAppServerConnector(opts: {
         scheduleRunCleanup(externalRunId);
         if (run.terminalError) {
           return { state: "failed", output: run.terminalError, usage: run.usage };
+        }
+        if (run.terminalStopped) {
+          return { state: "cancelled", output: run.finalText || undefined, usage: run.usage };
         }
         return { state: "completed", output: run.finalText || undefined, usage: run.usage };
       }

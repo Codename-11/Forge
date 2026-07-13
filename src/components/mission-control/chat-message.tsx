@@ -19,7 +19,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
 import { ChatMarkdown } from "./chat-markdown";
-import { ChatWorkTrace, type ChatTraceToolCall } from "./chat-work-trace";
+import { ChatWorkTrace } from "./chat-work-trace";
+import { readStreamedSnapshot, type StreamedSnapshot } from "./chat-ui-state";
 import {
   AttachmentChip,
   AttachmentThumb,
@@ -54,59 +55,14 @@ export interface ChatMessageRow {
    * receipt from the timestamp columns.
    */
   sendState?: "queued" | "sending" | "sent" | "read" | "failed";
+  /** Optional detail for a recovered/failed optimistic row. */
+  sendError?: string;
   /**
    * Rehydration blob for messages produced by /api/chat/stream — the
    * server stashes `thinking` and `tool_use` here on `contextSnapshot`
    * so a page reload can re-render the same expandable sections.
    */
   contextSnapshot?: unknown;
-}
-
-type RehydratedToolCall = ChatTraceToolCall;
-
-interface StreamedSnapshot {
-  thinking?: string;
-  tool_calls?: RehydratedToolCall[];
-  elapsedMs?: number;
-}
-
-function readStreamedSnapshot(value: unknown): StreamedSnapshot | null {
-  if (!value || typeof value !== "object") return null;
-  const obj = value as Record<string, unknown>;
-  if (obj.streamed !== true) return null;
-  const out: StreamedSnapshot = {};
-  if (typeof obj.thinking === "string") out.thinking = obj.thinking;
-  // Canonical Phase 0 shape: contextSnapshot.tool_calls = [...].
-  // Older messages may carry `tool_use` instead; read both so rehydration
-  // doesn't regress for past chats.
-  const rawTools = Array.isArray(obj.tool_calls)
-    ? obj.tool_calls
-    : Array.isArray(obj.tool_use)
-      ? obj.tool_use
-      : null;
-  if (rawTools) {
-    out.tool_calls = rawTools
-      .filter((b): b is Record<string, unknown> =>
-        Boolean(b && typeof b === "object" && "id" in b && "name" in b),
-      )
-      .map((b) => {
-        const status =
-          typeof b.status === "string" &&
-          ["pending", "approved", "declined", "executed", "error"].includes(b.status)
-            ? (b.status as RehydratedToolCall["status"])
-            : "executed";
-        return {
-          id: String(b.id),
-          name: String(b.name),
-          args: (b.args ?? {}) as Record<string, unknown>,
-          status,
-          summary: typeof b.summary === "string" ? b.summary : undefined,
-          result: b.result,
-        };
-      });
-  }
-  if (typeof obj.elapsedMs === "number") out.elapsedMs = obj.elapsedMs;
-  return out;
 }
 
 /**
@@ -165,7 +121,7 @@ function MessageReceipt({
       return (
         <span className="text-destructive flex items-center gap-1">
           <AlertCircle className="h-3 w-3" />
-          Failed to send
+          <span title={msg.sendError ?? "Failed to send"}>{msg.sendError ?? "Failed to send"}</span>
           {onRetry && (
             <button
               type="button"
@@ -207,7 +163,7 @@ function MessageReceipt({
     }
     return (
       <span className="flex items-center gap-1 text-muted-foreground/60">
-        <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        <Loader2 className="h-2.5 w-2.5 motion-safe:animate-spin" />
         Sending…
         {cancelBtn}
       </span>
@@ -236,7 +192,7 @@ function MessageReceipt({
   // Persisted but no dispatch marker yet (rare race) — treat as in-flight.
   return (
     <span className="flex items-center gap-1 text-muted-foreground/60">
-      <Loader2 className="h-2.5 w-2.5 animate-spin" />
+      <Loader2 className="h-2.5 w-2.5 motion-safe:animate-spin" />
       Sending…
     </span>
   );
@@ -289,11 +245,13 @@ export function ChatMessageBubble({
       </div>
     );
   }
+  const snapshot = !isUser ? readStreamedSnapshot(msg.contextSnapshot) : null;
+  const renderedBody = !isUser && !msg.body.trim() ? (snapshot?.partialText ?? "") : msg.body;
   const persisted = !msg.isDraft && !msg.id.startsWith("_");
-  const hasCopyableBody = msg.body.trim().length > 0;
+  const hasCopyableBody = renderedBody.trim().length > 0;
   const copyBody = async () => {
     try {
-      await navigator.clipboard.writeText(msg.body);
+      await navigator.clipboard.writeText(renderedBody);
       toast.success("Message copied");
     } catch {
       toast.error("Could not copy message");
@@ -371,21 +329,28 @@ export function ChatMessageBubble({
         {isUser ? (
           <div className="whitespace-pre-wrap break-words">
             {msg.body}
-            {msg.isDraft && <span className="ml-1 inline-block animate-pulse">▍</span>}
+            {msg.isDraft && <span className="forge-breath ml-1 inline-block">▍</span>}
           </div>
-        ) : msg.isDraft ? (
+        ) : msg.isDraft || snapshot?.running ? (
           // M5 (design spec): while the agent draft streams, render the
           // partial text with the ember sweep + blinking caret. On
           // finalize the bubble re-renders down the branch below with
           // ChatMarkdown, so the persisted text is real `--foreground`
           // and stays selectable (the `.forge-streaming` clip is gone).
-          <div className="forge-streaming forge-streaming-cursor whitespace-pre-wrap break-words">
-            {msg.body}
-          </div>
+          <>
+            <StreamedRehydration snapshot={snapshot} live />
+            {renderedBody ? (
+              <div className="forge-streaming forge-streaming-cursor whitespace-pre-wrap break-words">
+                {renderedBody}
+              </div>
+            ) : (
+              <span className="text-meta text-muted-foreground">Preparing response…</span>
+            )}
+          </>
         ) : (
           <>
-            <StreamedRehydration snapshot={readStreamedSnapshot(msg.contextSnapshot)} />
-            <ChatMarkdown body={msg.body} />
+            <StreamedRehydration snapshot={snapshot} />
+            {renderedBody && <ChatMarkdown body={renderedBody} />}
           </>
         )}
         {!msg.isDraft && <ChatMessageAttachments messageId={msg.id} />}
@@ -397,7 +362,7 @@ export function ChatMessageBubble({
               <PromoteToArtifactButton
                 sourceType="chat-message"
                 sourceId={msg.id}
-                defaultTitle={msg.body.slice(0, 60)}
+                defaultTitle={renderedBody.slice(0, 60)}
                 size="icon"
               />
             ) : (
@@ -430,7 +395,7 @@ function MessageActionButton({
       aria-label={title}
       data-testid={testId}
       onClick={onClick}
-      className="inline-flex h-4 w-4 items-center justify-center rounded border border-border/50 bg-background/40 text-muted-foreground transition-colors hover:border-ember/40 hover:bg-ember/10 hover:text-foreground"
+      className="inline-flex h-7 w-7 items-center justify-center rounded border border-border/50 bg-background/40 text-muted-foreground transition-colors hover:border-ember/40 hover:bg-ember/10 hover:text-foreground"
     >
       {children}
     </button>
@@ -488,17 +453,45 @@ function ChatMessageAttachments({ messageId }: { messageId: string }) {
  * collapsible thinking section and the tool-use intent cards above the
  * markdown body, matching the in-flight `AgentStreamBubble` layout.
  */
-function StreamedRehydration({ snapshot }: { snapshot: StreamedSnapshot | null }) {
+function StreamedRehydration({
+  snapshot,
+  live = false,
+}: {
+  snapshot: StreamedSnapshot | null;
+  live?: boolean;
+}) {
   if (!snapshot) return null;
   const hasThinking = Boolean(snapshot.thinking);
-  const tools = snapshot.tool_calls ?? [];
-  if (!hasThinking && tools.length === 0) return null;
+  const tools = snapshot.toolCalls;
+  const stateNotice = snapshot.stopped
+    ? "Stopped by operator"
+    : snapshot.error
+      ? snapshot.error
+      : null;
+  if (!hasThinking && tools.length === 0 && !stateNotice) return null;
   return (
-    <ChatWorkTrace
-      thinking={snapshot.thinking}
-      tools={tools}
-      elapsedMs={snapshot.elapsedMs ?? null}
-      className="mb-1.5"
-    />
+    <div className="mb-1.5 space-y-1.5">
+      <ChatWorkTrace
+        thinking={snapshot.thinking}
+        tools={tools}
+        elapsedMs={snapshot.elapsedMs}
+        usage={snapshot.usage}
+        live={live}
+      />
+      {stateNotice && (
+        <div
+          className={cn(
+            "text-meta flex items-center gap-1 rounded border px-1.5 py-1",
+            snapshot.error
+              ? "border-danger/30 bg-danger/5 text-danger"
+              : "border-border/60 bg-subtle/30 text-muted-foreground",
+          )}
+          role={snapshot.error ? "alert" : "status"}
+        >
+          {snapshot.error ? <AlertCircle className="h-3 w-3" /> : <X className="h-3 w-3" />}
+          <span>{stateNotice}</span>
+        </div>
+      )}
+    </div>
   );
 }

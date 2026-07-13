@@ -76,12 +76,19 @@ export interface RunInput {
 export type RunEvent =
   | { type: "content_delta"; delta: string }
   | { type: "thinking"; text: string }
-  | { type: "tool_started"; tool: string; preview?: string }
-  | { type: "tool_completed"; tool: string; durationMs?: number; isError?: boolean }
+  | { type: "tool_started"; tool: string; callId?: string; preview?: string }
+  | {
+      type: "tool_completed";
+      tool: string;
+      callId?: string;
+      durationMs?: number;
+      isError?: boolean;
+    }
   | {
       type: "approval_required";
       /** Allowed responses, e.g. ["once","session","always","deny"]. */
       choices: string[];
+      callId?: string;
       tool?: string;
       raw: Record<string, unknown>;
     }
@@ -89,9 +96,11 @@ export type RunEvent =
       /** A pending approval was resolved (by us or another client). Lets a
        * consumer clear a lingering approval card. */
       type: "approval_resolved";
+      callId?: string;
       choice?: string;
     }
   | { type: "usage"; tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number }
+  | { type: "stopped"; reason?: string }
   | { type: "completed"; finalText?: string }
   | { type: "error"; message: string };
 
@@ -114,6 +123,8 @@ export interface RunStatus {
   lastEvent?: string;
   /** Final assistant text when terminal. */
   output?: string;
+  /** Sanitized provider error when the terminal state is failed. */
+  error?: string;
   usage?: { tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number };
 }
 

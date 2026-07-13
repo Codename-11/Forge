@@ -1,9 +1,11 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
+import { RuntimeKind } from "@prisma/client";
 import { agentRouter } from "@/server/routers/agent";
 import {
   createWorkspaceFixture,
   buildContext,
   disconnectPrisma,
+  getPrisma,
   type TestFixture,
 } from "./helpers";
 
@@ -19,7 +21,7 @@ async function setup() {
   const fixture = await createWorkspaceFixture({ keyPrefix: "AGT" });
   fixtures.push(fixture);
   const caller = agentRouter.createCaller(await buildContext(fixture));
-  return { caller };
+  return { caller, fixture };
 }
 
 describe("agent.previewTransport", () => {
@@ -82,5 +84,35 @@ describe("agent.byProfileKey transport + availability", () => {
     // CODEX, no runtime, no heartbeat → on-demand (or none if no path) — not a
     // heartbeat agent.
     expect(["on-demand", "heartbeat", "session"]).toContain(agent!.availability);
+  });
+});
+
+describe("agent runtime profile isolation", () => {
+  it("prevents two active agents from sharing a profile-scoped Hermes runtime", async () => {
+    const { caller, fixture } = await setup();
+    const runtime = await getPrisma().runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Hermes Victor",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://127.0.0.1:8649/v1",
+      },
+    });
+    await caller.create({
+      name: "Victor",
+      profileKey: "victor",
+      provider: "HERMES",
+      runtimeId: runtime.id,
+    });
+
+    await expect(
+      caller.create({
+        name: "Mizu",
+        profileKey: "mizu",
+        provider: "HERMES",
+        runtimeId: runtime.id,
+      }),
+    ).rejects.toThrow(/profile-scoped/);
   });
 });

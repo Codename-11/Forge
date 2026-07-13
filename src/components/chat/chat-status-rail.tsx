@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   AlertTriangle,
@@ -30,6 +30,7 @@ import { ProjectChip } from "@/components/project-chip";
 import { presenceAvailability } from "@/lib/transport-display";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { buildChatDiagnosticReport } from "@/lib/chat-diagnostic-report";
+import { useRealtime } from "@/hooks/use-realtime";
 
 /**
  * Right-hand status rail for a chat thread. Surfaces, top to bottom:
@@ -154,6 +155,7 @@ export function ChatStatusRail({
   variant?: "full" | "compact";
   onDeleted?: () => void;
 }) {
+  const lastProgressInvalidationRef = useRef(0);
   const utils = trpc.useUtils();
   const ws = useMaybeWorkspace();
   const issuePrefix = workspaceKey ?? ws?.key ?? "";
@@ -161,7 +163,7 @@ export function ChatStatusRail({
 
   const { data: diagnostics } = trpc.chat.threadDiagnostics.useQuery(
     { threadId: threadId ?? "" },
-    { enabled: Boolean(threadId), staleTime: 10_000 },
+    { enabled: Boolean(threadId), staleTime: 5_000, refetchInterval: 10_000 },
   );
   const { data: agent } = trpc.agent.byId.useQuery(
     { id: agentId ?? "" },
@@ -204,6 +206,33 @@ export function ChatStatusRail({
     await utils.chat.threads.invalidate();
     if (threadId) await utils.chat.threadDiagnostics.invalidate({ threadId });
   };
+
+  useRealtime((event) => {
+    if (!threadId || event.subjectId !== threadId) return;
+    if (
+      event.subjectType !== "chat-thread" &&
+      event.subjectType !== "chat-thread-stream" &&
+      event.subjectType !== "chat-thread-ack" &&
+      event.subjectType !== "chat-thread-state"
+    ) {
+      return;
+    }
+    if (
+      event.subjectType === "chat-thread-stream" &&
+      (event.payload as { phase?: unknown } | null)?.phase === "delta"
+    ) {
+      return;
+    }
+    if (
+      event.subjectType === "chat-thread-state" &&
+      (event.payload as { phase?: unknown } | null)?.phase === "progress"
+    ) {
+      const now = Date.now();
+      if (now - lastProgressInvalidationRef.current < 1_500) return;
+      lastProgressInvalidationRef.current = now;
+    }
+    void utils.chat.threadDiagnostics.invalidate({ threadId });
+  });
 
   const retry = trpc.chat.retryLastUserMessage.useMutation({
     onSuccess: async (result) => {
@@ -284,7 +313,8 @@ export function ChatStatusRail({
   const runBad = hasOpenTurn && (diagnostics?.lastRun?.status === "STALLED" || runStale);
   const deliveryBad = hasOpenTurn && diagnostics?.lastDelivery?.status === "FAILED";
   const streamBad = Boolean(
-    diagnostics?.lastAgentStreamError || diagnostics?.lastAgentStreamAborted,
+    diagnostics?.lastAgentStreamError ||
+    (diagnostics?.lastAgentStreamAborted && diagnostics.turnStatus?.phase !== "stopped"),
   );
   const canRetry = Boolean(diagnostics?.waitingForReply || deliveryBad || streamBad);
   const canKick = Boolean(hasOpenTurn && diagnostics?.lastRun?.id && runBad);
@@ -678,14 +708,23 @@ export function ChatStatusRail({
       <div
         className={cn(
           "text-meta rounded-lg border p-2",
-          rowTone(agent ? agent.status !== "OFFLINE" : null),
+          rowTone(
+            agent
+              ? presenceAvailability(agent) === "on-demand" || agent.status !== "OFFLINE"
+              : null,
+          ),
         )}
       >
         <div className="flex items-center gap-2 font-medium text-foreground">
           <Radio className="h-3.5 w-3.5" /> Agent
         </div>
         <div className="mt-1 text-muted-foreground">
-          {(agent?.status ?? "offline").toLowerCase()} ·{" "}
+          {agent
+            ? presenceAvailability(agent) === "on-demand"
+              ? "on-demand"
+              : agent.status.toLowerCase()
+            : "offline"}{" "}
+          ·{" "}
           {agent && (
             <Link
               className="underline decoration-dotted"
@@ -721,11 +760,13 @@ export function ChatStatusRail({
             {diagnostics.lastAgentStreamError}
           </div>
         )}
-        {!diagnostics?.lastAgentStreamError && diagnostics?.lastAgentStreamAborted && (
-          <div className="mt-1 line-clamp-2 text-[0.625rem] text-amber-600 dark:text-amber-400">
-            Last reply stream was interrupted before completion.
-          </div>
-        )}
+        {!diagnostics?.lastAgentStreamError &&
+          diagnostics?.lastAgentStreamAborted &&
+          diagnostics.turnStatus?.phase !== "stopped" && (
+            <div className="mt-1 line-clamp-2 text-[0.625rem] text-amber-600 dark:text-amber-400">
+              Last reply stream was interrupted before completion.
+            </div>
+          )}
       </div>
 
       <div
