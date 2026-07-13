@@ -625,6 +625,13 @@ Scope: `READ_ISSUES` for reads, `WRITE_ISSUES` for the loop mutations,
 | `goals.create`  | `{ title, description?, issueId?, crewId?, maxTotalCostUsd?, maxWallTimeMinutes? }` → `{ id }`. Emits `GOAL_CREATED`. |
 | `goals.abandon` | `{ id, reason? }` → terminal `ABANDONED`; cancels any active plan attempt.                                            |
 
+When every required step reaches `DONE`, Forge marks the active Plan
+`COMPLETED` but keeps the Goal `ACTIVE` with operating health
+`OUTCOME_REVIEW`. Agents can report results through comments, artifacts, and
+`goals.update`, but cannot accept their own delivery. A signed-in operator must
+record a non-empty outcome summary plus at least one durable evidence reference
+in the Goal UI before it becomes `ACHIEVED`.
+
 ```json
 // goals.create
 { "title": "Ship the importer", "crewId": "crew_…", "maxTotalCostUsd": 5 }
@@ -735,6 +742,9 @@ These surfaces are admin/UI only and not exposed to agents:
 - **Dispatch analytics** — `analytics.dispatch.summary`,
   `analytics.dispatch.timeseries`. Aggregate views over many agents'
   activity, intentionally not part of an agent's self-service surface.
+- **Goal outcome acceptance/reopen** — completing execution is not permission
+  to certify delivery. `goal.acceptOutcome` and `goal.reopen` are human UI/tRPC
+  actions and are intentionally absent from MCP.
 
 If you have a use case that wants one of these on MCP, open an issue — the
 gate is intentional but not absolute.

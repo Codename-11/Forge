@@ -9,7 +9,10 @@ import { Avatar } from "@/components/ui/avatar";
 import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
+import {
+  MarkdownWithAttachments,
+  RichContentRenderer,
+} from "@/components/markdown/attachment-renderer";
 import { DescriptionAiAssist } from "@/components/issue-detail/description-ai-assist";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import {
@@ -645,7 +648,7 @@ function DescriptionBlock({
           title="Click to edit"
         >
           {description ? (
-            <MarkdownWithAttachments body={description} />
+            <RichContentRenderer body={description} />
           ) : (
             <span className="text-muted-foreground">No description. Click to add.</span>
           )}
@@ -1232,7 +1235,7 @@ function TimelineCommentCard({
     return (
       <div className="text-meta flex items-center gap-2 px-1 py-1.5 italic text-muted-foreground">
         <span className="h-px flex-1 bg-border/60" />
-        <MarkdownWithAttachments
+        <RichContentRenderer
           body={comment.body}
           className="text-meta italic text-muted-foreground"
         />
@@ -1532,9 +1535,9 @@ function CommentBodyWithTools({
   className?: string;
 }) {
   // Fast path for the common case — a body with no tool directives —
-  // avoids wrapping a single MarkdownWithAttachments in an extra div.
+  // avoids wrapping a single RichContentRenderer in an extra div.
   if (segments.length === 1 && segments[0].kind === "md") {
-    return <MarkdownWithAttachments body={segments[0].text} className={className} />;
+    return <RichContentRenderer body={segments[0].text} className={className} />;
   }
   return (
     <div className={className}>
@@ -1543,7 +1546,7 @@ function CommentBodyWithTools({
           return <CommentToolCallCard key={`tool-${i}`} call={seg.call} />;
         }
         if (!seg.text.trim()) return null;
-        return <MarkdownWithAttachments key={`md-${i}`} body={seg.text} />;
+        return <RichContentRenderer key={`md-${i}`} body={seg.text} />;
       })}
     </div>
   );

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import {
   AlertTriangle,
   Ban,
+  CircleCheckBig,
   ChevronLeft,
   Clock3,
   ExternalLink,
@@ -173,6 +174,23 @@ export default function GoalDetailPage() {
 
   const [confirmAbandon, setConfirmAbandon] = useState(false);
   const [editingGoal, setEditingGoal] = useState(false);
+  const [closeoutOpen, setCloseoutOpen] = useState(false);
+  const [reopenOpen, setReopenOpen] = useState(false);
+
+  const acceptOutcomeM = goalRouter?.acceptOutcome?.useMutation({
+    onSuccess: () => {
+      toast.success("Goal outcome accepted");
+      invalidateGoal();
+      setCloseoutOpen(false);
+    },
+  });
+  const reopenM = goalRouter?.reopen?.useMutation({
+    onSuccess: () => {
+      toast.success("Goal reopened for delivery correction");
+      invalidateGoal();
+      setReopenOpen(false);
+    },
+  });
 
   if (!available) {
     return (
@@ -254,6 +272,9 @@ export default function GoalDetailPage() {
       )
     : null;
   const activePlanEmpty = !!activePlan && activePlan.status === "DRAFT" && activeStepCount === 0;
+  const awaitingOutcomeAcceptance =
+    goal.status !== "ACHIEVED" && activePlan?.status === "COMPLETED";
+  const discussionStep = activePlan?.steps?.at(-1) ?? null;
   // Offer the planner actions whenever there's nothing to run yet: no active
   // plan, or an active plan still sitting as an empty DRAFT (the bug the user
   // hit). A plan with steps hides the panel.
@@ -358,6 +379,36 @@ export default function GoalDetailPage() {
             activeAgents={activeByAgent.size}
             latestActivity={latestGoalActivity ?? null}
           />
+          {awaitingOutcomeAcceptance ? (
+            <section className="rounded-lg border border-ember/35 bg-ember/[0.06] p-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 text-sm font-medium">
+                    <CircleCheckBig className="h-4 w-4 text-ember" />
+                    Execution complete · delivery acceptance required
+                  </div>
+                  <p className="text-meta mt-1 max-w-2xl text-muted-foreground">
+                    The crew finished every plan step. The Goal remains active until you record what
+                    shipped and attach durable proof such as a PR, commit, deployment, test, or
+                    artifact.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {discussionStep ? (
+                    <Link
+                      href={`/w/${ws.slug}/plans/${activePlan.id}#step-${discussionStep.id}`}
+                      className="inline-flex h-8 items-center rounded-md border border-border bg-card/50 px-3 text-xs font-medium transition hover:border-ember/40 hover:text-ember"
+                    >
+                      Comment or ask agent
+                    </Link>
+                  ) : null}
+                  <Button size="sm" variant="ember" onClick={() => setCloseoutOpen(true)}>
+                    Review delivery
+                  </Button>
+                </div>
+              </div>
+            </section>
+          ) : null}
           <header className="rounded-lg border border-border bg-card/40 p-4">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-2">
@@ -407,6 +458,32 @@ export default function GoalDetailPage() {
                   Outcome
                 </div>
                 <p className="whitespace-pre-wrap text-sm">{goal.outcomeSummary}</p>
+                {Array.isArray(goal.outcomeEvidence) && goal.outcomeEvidence.length > 0 ? (
+                  <ul className="mt-2 space-y-1 border-t border-success/20 pt-2">
+                    {goal.outcomeEvidence.map((item, index) => (
+                      <li
+                        key={`${item.label}-${index}`}
+                        className="text-meta flex items-center gap-1.5"
+                      >
+                        <span className="rounded bg-success/10 px-1 py-0.5 uppercase text-success">
+                          {item.kind.toLowerCase().replaceAll("_", " ")}
+                        </span>
+                        {item.url ? (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="truncate text-ember hover:underline"
+                          >
+                            {item.label}
+                          </a>
+                        ) : (
+                          <span className="truncate font-mono">{item.ref ?? item.label}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             ) : null}
             <GoalLoopExplainerCollapsible className="mt-3" />
@@ -580,6 +657,16 @@ export default function GoalDetailPage() {
               <Ban className="h-3.5 w-3.5" /> Abandon goal
             </Button>
           ) : null}
+          {goal.status === "ACHIEVED" ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-warning"
+              onClick={() => setReopenOpen(true)}
+            >
+              Reopen delivery
+            </Button>
+          ) : null}
         </aside>
       </div>
 
@@ -610,6 +697,24 @@ export default function GoalDetailPage() {
               id: goal.id,
               ...payload,
             });
+          }}
+        />
+      ) : null}
+      {closeoutOpen ? (
+        <GoalCloseoutModal
+          busy={Boolean(acceptOutcomeM?.isPending)}
+          onClose={() => setCloseoutOpen(false)}
+          onAccept={async (payload) => {
+            await acceptOutcomeM?.mutateAsync({ id: goal.id, ...payload });
+          }}
+        />
+      ) : null}
+      {reopenOpen ? (
+        <GoalReopenModal
+          busy={Boolean(reopenM?.isPending)}
+          onClose={() => setReopenOpen(false)}
+          onReopen={async (reason) => {
+            await reopenM?.mutateAsync({ id: goal.id, reason });
           }}
         />
       ) : null}
@@ -809,6 +914,150 @@ type GoalCrewOption = {
   maxParallel?: number | null;
   members?: unknown[];
 };
+
+type CloseoutEvidenceKind =
+  | "PULL_REQUEST"
+  | "COMMIT"
+  | "DEPLOYMENT"
+  | "TEST"
+  | "ARTIFACT"
+  | "OTHER";
+
+function inferCloseoutEvidence(value: string): {
+  kind: CloseoutEvidenceKind;
+  label: string;
+  url?: string;
+  ref?: string;
+} {
+  const trimmed = value.trim();
+  const isUrl = /^https?:\/\//i.test(trimmed);
+  const lower = trimmed.toLowerCase();
+  const kind: CloseoutEvidenceKind = /github\.com\/[^/]+\/[^/]+\/pull\/\d+/i.test(trimmed)
+    ? "PULL_REQUEST"
+    : /^(?:commit\s+)?[0-9a-f]{7,40}$/i.test(trimmed)
+      ? "COMMIT"
+      : lower.startsWith("test:") || lower.includes(" passed")
+        ? "TEST"
+        : lower.startsWith("artifact:")
+          ? "ARTIFACT"
+          : isUrl
+            ? "DEPLOYMENT"
+            : "OTHER";
+  return {
+    kind,
+    label: trimmed,
+    ...(isUrl ? { url: trimmed } : { ref: trimmed.replace(/^(test|artifact|commit):\s*/i, "") }),
+  };
+}
+
+function GoalCloseoutModal({
+  busy,
+  onClose,
+  onAccept,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onAccept: (payload: {
+    outcomeSummary: string;
+    evidence: Array<ReturnType<typeof inferCloseoutEvidence>>;
+  }) => void | Promise<void>;
+}) {
+  const [summary, setSummary] = useState("");
+  const [evidenceText, setEvidenceText] = useState("");
+  return (
+    <QuickForm
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      title="Accept delivered outcome"
+      description="This is the human boundary between finished execution and an achieved Goal."
+      primaryLabel={busy ? "Accepting…" : "Accept outcome"}
+      loading={busy}
+      className="max-w-lg"
+      onSubmit={async () => {
+        const outcomeSummary = summary.trim();
+        const evidence = evidenceText
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean)
+          .map(inferCloseoutEvidence);
+        if (!outcomeSummary) return { error: "Describe what was actually delivered." };
+        if (evidence.length === 0) {
+          return { error: "Add at least one PR, commit, deployment, test, or artifact reference." };
+        }
+        await onAccept({ outcomeSummary, evidence });
+      }}
+    >
+      <QuickForm.Field label="Delivered outcome">
+        <textarea
+          autoFocus
+          name="outcomeSummary"
+          value={summary}
+          onChange={(event) => setSummary(event.target.value)}
+          rows={4}
+          placeholder="What shipped, for whom, and what changed?"
+          className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Delivery evidence · one per line">
+        <textarea
+          name="evidence"
+          value={evidenceText}
+          onChange={(event) => setEvidenceText(event.target.value)}
+          rows={5}
+          placeholder={
+            "https://github.com/org/repo/pull/123\n94b1ec2\nhttps://production.example.com\ntest: 37 Playwright checks passed"
+          }
+          className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 font-mono text-xs"
+        />
+      </QuickForm.Field>
+      <p className="text-meta text-muted-foreground">
+        Completing plan steps alone cannot mark this Goal achieved.
+      </p>
+    </QuickForm>
+  );
+}
+
+function GoalReopenModal({
+  busy,
+  onClose,
+  onReopen,
+}: {
+  busy: boolean;
+  onClose: () => void;
+  onReopen: (reason: string) => void | Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  return (
+    <QuickForm
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose();
+      }}
+      title="Reopen goal delivery"
+      description="Clears the accepted outcome so delivery can be corrected and reviewed again."
+      primaryLabel={busy ? "Reopening…" : "Reopen goal"}
+      loading={busy}
+      onSubmit={async () => {
+        if (!reason.trim()) return { error: "Explain why this Goal needs to be reopened." };
+        await onReopen(reason.trim());
+      }}
+    >
+      <QuickForm.Field label="Reason">
+        <textarea
+          autoFocus
+          name="reason"
+          value={reason}
+          onChange={(event) => setReason(event.target.value)}
+          rows={4}
+          placeholder="For example: the work was committed locally but never merged or deployed."
+          className="w-full resize-y rounded-md border border-border bg-card/40 px-3 py-2 text-sm"
+        />
+      </QuickForm.Field>
+    </QuickForm>
+  );
+}
 
 function GoalEditModal({
   goal,

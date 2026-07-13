@@ -2,6 +2,59 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — Rich-rendering recovery + human delivery acceptance
+
+Recovered the six AXI-95–99 rich-rendering commits from the stale Codex bridge
+clone onto current production `main`, resolving conflicts against the newer
+issue context and URL-safety work. Issue descriptions, comments, and Focus now
+share the rich renderer; direct media and allowlisted provider links get
+bounded, accessible preview controls with inert fallbacks for unsafe schemes.
+
+Closed the lifecycle defect that let successful agent reviews certify their
+own delivery. All-DONE steps now complete the Plan while the Goal remains
+ACTIVE with `OUTCOME_REVIEW` health. A signed-in operator must explicitly
+accept a non-empty outcome summary plus durable delivery evidence; premature
+Goals can be reopened with an audited reason. Added migration 0099 for the
+structured evidence record. Agents intentionally cannot accept/reopen Goals
+over MCP.
+
+Made Plan collaboration visible instead of burying a generic composer under
+each step. Step rows now expose **Ask @agent**, prefill the assigned agent,
+focus the shared mention-aware composer, and retain ordinary comments for
+context that should not dispatch work. Goal outcome review links directly to
+the final step discussion.
+
+Verification for the v0.10.0 release: `pnpm lint` (existing repository
+warnings only), `pnpm typecheck`, the full Vitest suite (**1,159 passed; 1
+skipped**), `git diff --check`, a fresh Next.js production build, and the full
+Playwright suite (**37 passed**).
+
+## 2026-07-12 — AXI-97 rich issue rendering integration
+
+Integrated the shared rich body renderer into the remaining issue-adjacent
+description surface. The main issue detail description and comment timeline
+already render through `RichContentRenderer`; the fullscreen focus issue view
+now uses the same renderer instead of raw `whitespace-pre-wrap` text, so image
+URLs, video URLs, normal links, provider embeds, and Forge attachment/link
+tokens preview consistently without changing stored issue description data or
+the existing edit/save flows.
+
+Verification: `corepack pnpm lint` passed and `corepack pnpm typecheck` passed.
+DB-backed tests were not run in this bridge container because it has no
+Postgres/Redis/MinIO/Docker services.
+
+## 2026-07-11 — AXI-95 rich preview rendering contract
+
+Defined the shared rich preview contract for chat/message markdown surfaces.
+`docs/agents/chat.md` now specifies inline image, video, file, LINK attachment,
+`forge-link`, normal URL, and allowlisted provider embed behavior; max preview
+sizing; collapsed/expanded/hidden states; per-preview actions; and safe
+fallback/error behavior. `docs/guide/time-and-attachments.md` now links
+attachment readers back to that shared contract.
+
+Verification: documentation diff reviewed. `corepack pnpm lint` and
+`corepack pnpm typecheck` were run in the bridge container.
+
 ## 2026-07-13 — Plan context integrity + reversible issue archive
 
 Closed the execution-context gaps that let materialized plan issues look like
@@ -12281,3 +12334,70 @@ Verification: lint and typecheck passed; 1,126 unit/integration tests passed
 (one live-only test skipped); and a forced fresh production build plus all 37
 Playwright tests passed. This change is local only; production was inspected
 read-only and was not deployed or mutated.
+Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass;
+`git diff --check` clean. DB-backed tests were not run because this
+codex-bridge container has no Postgres/Redis service stack.
+
+---
+
+## 2026-07-11 — AXI-96 rich issue content renderer
+
+Extended the shared safe markdown renderer used by issue descriptions and
+comments into an explicit `RichContentRenderer` export while keeping the
+existing attachment-aware renderer API compatible for other surfaces.
+
+The renderer now detects direct image and browser-playable video URLs in issue
+content, keeps the original URL clickable/readable, and renders bounded inline
+previews. Generated media/provider previews have a compact Slack-style action
+menu for collapse, open, and hide/show controls, using existing tokens and
+density-aware text utilities.
+
+Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass.
+DB-backed tests were not run because this codex-bridge container has no
+Postgres/Redis service stack.
+
+---
+
+## 2026-07-12 — AXI-98 rich rendering behavior tests
+
+Added focused rich-rendering regression coverage for plain text, multiple
+inline links, direct image/video previews, YouTube embed promotion, unsupported
+links, malformed URLs, preview hide/collapse state transitions, and issue-detail
+usage of `RichContentRenderer`.
+
+Extracted the preview action state into a tiny reducer used by the existing
+preview controls so hide/collapse/show behavior can be tested without adding a
+browser-only test dependency.
+
+Verification: `corepack pnpm lint` clean; `corepack pnpm typecheck` pass;
+`node_modules/.bin/vitest run tests/unit/rich-rendering.test.ts` pass (7).
+`corepack pnpm test` was attempted and reached the normal command, but this
+codex-bridge container has no `DATABASE_URL`/Postgres service, so Prisma-backed
+router/service tests failed during fixture setup.
+
+---
+
+## 2026-07-12 — AXI-99 rich rendering accessibility/security review
+
+Reviewed the rich issue content renderer for XSS safety, keyboard/screen-reader
+accessibility, mobile preview behavior, visual token usage, and many-preview
+performance. Fixed two review blockers before approval: markdown links with
+scriptable/non-approved schemes now render as plain text instead of anchors, and
+preview action dropdown controls now expose explicit screen-reader labels plus
+Escape handling.
+
+Added regression coverage for scriptable markdown link handling and preview
+action labels alongside the existing rich-rendering behavior tests.
+
+Verification: `pnpm test tests/unit/rich-rendering.test.ts` pass (9);
+`pnpm lint` clean; `pnpm typecheck` pass; `git diff --check` clean.
+
+Follow-up review pass: tightened provider preview polish by adding explicit
+screen-reader labels to YouTube, GitHub, Loom, and Figma open controls, and
+made the compact GitHub preview metadata wrap cleanly on narrow layouts.
+
+Added regression coverage for provider preview action labels and GitHub card
+responsive constraints.
+
+Verification: `pnpm test tests/unit/rich-rendering.test.ts` pass (10);
+`pnpm lint` clean; `pnpm typecheck` pass; `git diff --check` clean.

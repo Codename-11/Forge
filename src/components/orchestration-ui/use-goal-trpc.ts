@@ -24,6 +24,12 @@ type GoalRow = {
   description?: string | null;
   successCriteria?: string | null;
   outcomeSummary?: string | null;
+  outcomeEvidence?: Array<{
+    kind: string;
+    label: string;
+    url?: string;
+    ref?: string;
+  }> | null;
   targetDate?: string | Date | null;
   status: string;
   issueId?: string | null;
@@ -242,6 +248,20 @@ interface GoalRouter {
     },
     { id: string }
   >;
+  acceptOutcome?: MutationHook<
+    {
+      id: string;
+      outcomeSummary: string;
+      evidence: Array<{
+        kind: "PULL_REQUEST" | "COMMIT" | "DEPLOYMENT" | "TEST" | "ARTIFACT" | "OTHER";
+        label: string;
+        url?: string;
+        ref?: string;
+      }>;
+    },
+    { id: string }
+  >;
+  reopen?: MutationHook<{ id: string; reason: string }, { id: string }>;
   decompose?: MutationHook<
     { goalId: string; plannerAgentId?: string | null; contextSetId?: string | null },
     GoalDecomposeResult

@@ -3,6 +3,7 @@ import { GoalStatus } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { agentIdSchema } from "@/server/validators";
 import {
+  acceptGoalOutcome,
   abandonGoal,
   attachPlanToGoal,
   createGoal,
@@ -11,8 +12,20 @@ import {
   getGoal,
   listGoals,
   requestPlanApproval,
+  reopenGoal,
   updateGoal,
 } from "@/server/services/orchestration-service";
+
+const outcomeEvidenceSchema = z
+  .object({
+    kind: z.enum(["PULL_REQUEST", "COMMIT", "DEPLOYMENT", "TEST", "ARTIFACT", "OTHER"]),
+    label: z.string().trim().min(1).max(300),
+    url: z.string().url().max(2_000).optional(),
+    ref: z.string().trim().min(1).max(500).optional(),
+  })
+  .refine((item) => Boolean(item.url || item.ref), {
+    message: "Each evidence item needs a URL or reference.",
+  });
 
 /**
  * tRPC mirror of the goals.* MCP surface for the UI. The orchestration
@@ -112,6 +125,40 @@ export const goalRouter = router({
         maxTotalCostUsd: input.maxTotalCostUsd === undefined ? undefined : input.maxTotalCostUsd,
         maxWallTimeMinutes:
           input.maxWallTimeMinutes === undefined ? undefined : input.maxWallTimeMinutes,
+      });
+    }),
+
+  acceptOutcome: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        outcomeSummary: z.string().trim().min(1).max(50_000),
+        evidence: z.array(outcomeEvidenceSchema).min(1).max(50),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return acceptGoalOutcome(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        id: input.id,
+        outcomeSummary: input.outcomeSummary,
+        evidence: input.evidence,
+      });
+    }),
+
+  reopen: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        reason: z.string().trim().min(1).max(2_000),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      return reopenGoal(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: ctx.session.user.id,
+        id: input.id,
+        reason: input.reason,
       });
     }),
 

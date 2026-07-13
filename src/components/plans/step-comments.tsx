@@ -21,15 +21,17 @@
  * integration is a one-liner.)
  */
 
-import { useState } from "react";
-import { ChevronRight, MessageSquare, Send, Trash2 } from "lucide-react";
+import { useRef, useState } from "react";
+import { ChevronRight, MessageCircleQuestion, MessageSquare, Send, Trash2 } from "lucide-react";
 import { ChatMarkdown } from "@/components/mission-control/chat-markdown";
+import { MentionInput, type MentionInputHandle } from "@/components/inputs/mention-input";
 import { Avatar } from "@/components/ui/avatar";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 
 interface StepCommentsProps {
   stepId: string;
+  assignedAgent?: { name: string; profileKey: string } | null;
   /**
    * Optional override for the initial expand state. Useful when a
    * parent surface (Agent A's plan page) wants to remember
@@ -38,19 +40,17 @@ interface StepCommentsProps {
   initiallyOpen?: boolean;
 }
 
-function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
+function StepComments({ stepId, assignedAgent = null, initiallyOpen = false }: StepCommentsProps) {
   const [open, setOpen] = useState(initiallyOpen);
   const [draft, setDraft] = useState("");
+  const composerRef = useRef<MentionInputHandle | null>(null);
   const utils = trpc.useUtils();
 
   // Only load the thread once the user expands. The header count is
   // populated by the list query's `items.length` after the first
   // expansion; before that we show a neutral "Comments" trigger so we
   // don't fire a query per step on plan load.
-  const list = trpc.executionPlan.stepCommentList.useQuery(
-    { stepId },
-    { enabled: open },
-  );
+  const list = trpc.executionPlan.stepCommentList.useQuery({ stepId }, { enabled: open });
 
   const create = trpc.executionPlan.stepCommentCreate.useMutation({
     onSuccess: () => {
@@ -73,28 +73,47 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
         : `${items.length} comment${items.length === 1 ? "" : "s"}`
       : "Comments";
 
+  const submitDraft = () => {
+    const body = draft.trim();
+    if (!body || create.isPending) return;
+    create.mutate({ stepId, body });
+  };
+
+  const beginAgentQuestion = () => {
+    setOpen(true);
+    if (assignedAgent && !draft.trim()) setDraft(`@${assignedAgent.profileKey} `);
+    window.setTimeout(() => composerRef.current?.focus(), 0);
+  };
+
   return (
     <div className="mt-2 rounded-md border border-border/60 bg-card/30">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5",
-          "text-meta text-muted-foreground transition-colors hover:bg-subtle/50",
-          "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        )}
-        aria-expanded={open}
-        aria-controls={`step-comments-${stepId}`}
-      >
-        <ChevronRight
+      <div className="flex items-center gap-1 px-1 py-1">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
           className={cn(
-            "h-3 w-3 transition-transform duration-150",
-            open && "rotate-90",
+            "flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 py-1",
+            "text-meta text-muted-foreground transition-colors hover:bg-subtle/50",
+            "focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
           )}
-        />
-        <MessageSquare className="h-3 w-3" />
-        <span>{countLabel}</span>
-      </button>
+          aria-expanded={open}
+          aria-controls={`step-comments-${stepId}`}
+        >
+          <ChevronRight
+            className={cn("h-3 w-3 transition-transform duration-150", open && "rotate-90")}
+          />
+          <MessageSquare className="h-3 w-3" />
+          <span>{countLabel}</span>
+        </button>
+        <button
+          type="button"
+          onClick={beginAgentQuestion}
+          className="focus-ring text-meta inline-flex shrink-0 items-center gap-1 rounded-md border border-border/70 bg-background/40 px-2 py-1 text-muted-foreground transition hover:border-ember/40 hover:text-ember"
+        >
+          <MessageCircleQuestion className="h-3 w-3" />
+          {assignedAgent ? `Ask @${assignedAgent.profileKey}` : "Ask an agent"}
+        </button>
+      </div>
 
       <div
         id={`step-comments-${stepId}`}
@@ -105,9 +124,7 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
       >
         <div className="min-h-0">
           <div className="border-t border-border/60 px-2.5 py-2">
-            {list.isLoading && open && (
-              <p className="text-meta text-muted-foreground">Loading…</p>
-            )}
+            {list.isLoading && open && <p className="text-meta text-muted-foreground">Loading…</p>}
 
             {open && !list.isLoading && items.length === 0 && (
               <p className="text-meta text-muted-foreground">
@@ -119,8 +136,7 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
               <ul className="space-y-2.5">
                 {items.map((c) => {
                   const isAgent = Boolean(c.authoringAgent);
-                  const displayName =
-                    c.authoringAgent?.name ?? c.author?.name ?? "Unknown";
+                  const displayName = c.authoringAgent?.name ?? c.author?.name ?? "Unknown";
                   return (
                     <li key={c.id} className="flex gap-2">
                       <Avatar
@@ -129,26 +145,20 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
                         size={20}
                       />
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1.5 text-meta">
-                          <span className="font-medium text-foreground">
-                            {displayName}
-                          </span>
+                        <div className="text-meta flex items-center gap-1.5">
+                          <span className="font-medium text-foreground">{displayName}</span>
                           {isAgent && (
                             <span className="rounded-sm bg-subtle px-1 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                               agent
                             </span>
                           )}
-                          <span className="text-muted-foreground">
-                            {relativeTime(c.createdAt)}
-                          </span>
+                          <span className="text-muted-foreground">{relativeTime(c.createdAt)}</span>
                           <button
                             type="button"
-                            onClick={() =>
-                              del.mutate({ commentId: c.id })
-                            }
+                            onClick={() => del.mutate({ commentId: c.id })}
                             className={cn(
                               "ml-auto rounded p-0.5 text-muted-foreground/60",
-                              "transition-colors hover:bg-subtle hover:text-destructive",
+                              "hover:text-destructive transition-colors hover:bg-subtle",
                             )}
                             aria-label="Delete comment"
                             title="Delete (author or admin)"
@@ -171,39 +181,31 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
               className="mt-2.5 flex items-end gap-1.5"
               onSubmit={(e) => {
                 e.preventDefault();
-                const body = draft.trim();
-                if (!body || create.isPending) return;
-                create.mutate({ stepId, body });
+                submitDraft();
               }}
             >
-              <textarea
+              <MentionInput
+                ref={composerRef}
                 value={draft}
-                onChange={(e) => setDraft(e.target.value)}
-                placeholder="Add a comment…"
+                onChange={setDraft}
+                placeholder="Comment or type @ to ask an agent…"
                 rows={1}
+                highlightMentions
+                ariaLabel="Plan step comment composer"
                 className={cn(
                   "min-h-7 w-full resize-none rounded-md border border-border/60 bg-card",
                   "px-2 py-1 text-[0.75rem] leading-snug text-foreground",
                   "placeholder:text-muted-foreground/60",
                   "focus:border-ring focus:outline-none focus-visible:ring-1 focus-visible:ring-ring",
                 )}
-                onKeyDown={(e) => {
-                  if (
-                    (e.metaKey || e.ctrlKey) &&
-                    e.key === "Enter" &&
-                    draft.trim()
-                  ) {
-                    e.preventDefault();
-                    create.mutate({ stepId, body: draft.trim() });
-                  }
-                }}
+                onSubmit={submitDraft}
               />
               <button
                 type="submit"
                 disabled={!draft.trim() || create.isPending}
                 className={cn(
                   "inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-border/60",
-                  "bg-card px-2 text-meta text-foreground transition-colors",
+                  "text-meta bg-card px-2 text-foreground transition-colors",
                   "hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50",
                 )}
                 aria-label="Post comment"
@@ -213,15 +215,9 @@ function StepComments({ stepId, initiallyOpen = false }: StepCommentsProps) {
               </button>
             </form>
             {create.error && (
-              <p className="mt-1 text-meta text-destructive">
-                {create.error.message}
-              </p>
+              <p className="text-meta text-destructive mt-1">{create.error.message}</p>
             )}
-            {del.error && (
-              <p className="mt-1 text-meta text-destructive">
-                {del.error.message}
-              </p>
-            )}
+            {del.error && <p className="text-meta text-destructive mt-1">{del.error.message}</p>}
           </div>
         </div>
       </div>
