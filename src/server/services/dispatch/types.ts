@@ -108,12 +108,33 @@ export interface RunStatus {
     | "completed"
     | "failed"
     | "cancelled"
+    | "not_found"
     | "unknown";
   /** Last lifecycle event name, e.g. "tool.completed" — drives currentStep. */
   lastEvent?: string;
   /** Final assistant text when terminal. */
   output?: string;
   usage?: { tokensIn?: number; tokensOut?: number; tokensCached?: number; costUsd?: number };
+}
+
+/** A provider-side run id has expired or was discarded by the runtime. */
+export class RunNotFoundError extends Error {
+  readonly code = "RUN_NOT_FOUND";
+
+  constructor(
+    readonly externalRunId: string,
+    message?: string,
+  ) {
+    super(message || `Run not found: ${externalRunId}`);
+    this.name = "RunNotFoundError";
+  }
+}
+
+export function isRunNotFoundError(error: unknown): error is RunNotFoundError {
+  return (
+    error instanceof RunNotFoundError ||
+    (error instanceof Error && "code" in error && error.code === "RUN_NOT_FOUND")
+  );
 }
 
 /**

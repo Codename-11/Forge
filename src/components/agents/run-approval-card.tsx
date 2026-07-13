@@ -43,8 +43,14 @@ export function RunApprovalCard({
   const utils = trpc.useUtils();
   const approval = readPendingApproval(pendingApproval);
   const respond = trpc.agentRun.respondApproval.useMutation({
-    onSuccess: (_result, variables) => {
-      toast.success(variables.decision === "approve" ? "Permission granted" : "Run stopped");
+    onSuccess: (result, variables) => {
+      if (result.decision === "expired") {
+        toast.warning("Runtime session expired; started a fresh run", {
+          description: "The old approval was not applied. The agent may request permission again.",
+        });
+      } else {
+        toast.success(variables.decision === "approve" ? "Permission granted" : "Run stopped");
+      }
       onResolved?.();
     },
     onError: (error) => toast.error(error.message),

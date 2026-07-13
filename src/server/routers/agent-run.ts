@@ -10,6 +10,7 @@ import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { appendRunEvent, finishRun } from "@/server/services/agent-run";
 import { resolveRunApproval } from "@/server/services/run-approval-lifecycle";
 import { getRunsConnectorForAgent, resolveRunEngine } from "@/server/services/dispatch/registry";
+import { isRunNotFoundError } from "@/server/services/dispatch/types";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { runProtocolDiagnostics } from "@/server/services/run-protocol-diagnostics";
@@ -1224,11 +1225,13 @@ export const agentRunRouter = router({
           issueId: true,
           agentId: true,
           status: true,
+          engagementMode: true,
           externalRunId: true,
           awaitingApprovalAt: true,
           agent: {
             select: {
               provider: true,
+              profileKey: true,
               runtime: { select: { adapterKey: true, endpoint: true, secret: true, config: true, disabledAt: true, name: true } },
             },
           },
@@ -1259,6 +1262,74 @@ export const agentRunRouter = router({
         try {
           await connector.approve?.(run.externalRunId, input.scope);
         } catch (err) {
+          if (isRunNotFoundError(err)) {
+            const dispatchReason = {
+              mode: "APPROVAL_EXPIRED_RESTART",
+              picked: run.agent.profileKey,
+              engagementMode: run.engagementMode,
+              restartedFromRunId: run.id,
+              decidedAt: new Date().toISOString(),
+            };
+            await ctx.db.$transaction(async (tx) => {
+              await resolveRunApproval(tx, {
+                runId: run.id,
+                workspaceId: ctx.workspaceId,
+                issueId: run.issueId,
+                agentId: run.agentId,
+                source: "operator",
+                decision: "expired",
+                currentStep: "approval target expired · restarting",
+              });
+              await finishRun(tx, {
+                runId: run.id,
+                workspaceId: ctx.workspaceId,
+                issueId: run.issueId,
+                agentId: run.agentId,
+                status: "STALLED",
+                summary:
+                  "The provider no longer recognizes this run. Its runtime session expired " +
+                  "before the approval could be delivered; Forge started a fresh run.",
+                actorId: ctx.session.user.id,
+              });
+              const issue = await tx.issue.findUniqueOrThrow({
+                where: { id: run.issueId },
+                select: { assignedAgentId: true },
+              });
+              await tx.issue.update({
+                where: { id: run.issueId },
+                data: {
+                  assignedAgentId: run.agentId,
+                  queued: false,
+                  dispatchReason,
+                },
+              });
+              await recordChange(tx, {
+                workspaceId: ctx.workspaceId,
+                actorId: ctx.session.user.id,
+                actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+                entity: "Issue",
+                entityId: run.issueId,
+                action: "restart-expired-approval-run",
+                before: { assignedAgentId: issue.assignedAgentId },
+                after: { assignedAgentId: run.agentId, engagementMode: run.engagementMode },
+                eventKind: EventKind.AGENT_ASSIGNED,
+                subjectType: "issue",
+                subjectId: run.issueId,
+                payload: {
+                  agentId: run.agentId,
+                  previousAgentId: issue.assignedAgentId,
+                  engagementMode: run.engagementMode,
+                  restartedFromRunId: run.id,
+                  dispatchReason,
+                },
+              });
+            });
+            return {
+              ok: true as const,
+              decision: "expired" as const,
+              restarted: true as const,
+            };
+          }
           throw new TRPCError({
             code: "INTERNAL_SERVER_ERROR",
             message: `Approval didn't reach the runtime — the run is still blocked. ${
