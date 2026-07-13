@@ -14,6 +14,7 @@ import { publish } from "@/server/realtime";
 import { nanoid } from "nanoid";
 import {
   loadIssueOrchestrationContexts,
+  readOrchestrationContextSnapshot,
   toInboxOrchestrationContext,
   type InboxOrchestrationContext,
 } from "@/server/services/orchestration-context";
@@ -892,7 +893,9 @@ export async function listInbox(
   }
 
   const scope = params.scope ?? {};
-  const issueWhere: Prisma.IssueWhereInput = {};
+  // Defense in depth: archive closes active runs, but exclude archived
+  // issues here too so a legacy or racing run can never stay actionable.
+  const issueWhere: Prisma.IssueWhereInput = { deletedAt: null };
   if (scope.projectIds && scope.projectIds.length > 0) {
     issueWhere.projectId = { in: scope.projectIds };
   }
@@ -902,9 +905,7 @@ export async function listInbox(
   if (scope.initiativeIds && scope.initiativeIds.length > 0) {
     issueWhere.project = { initiativeId: { in: scope.initiativeIds } };
   }
-  if (Object.keys(issueWhere).length > 0) {
-    runWhere.issue = issueWhere;
-  }
+  runWhere.issue = issueWhere;
 
   const [runs, chatMessages] = await Promise.all([
     client.agentRun.findMany({
@@ -917,6 +918,7 @@ export async function listInbox(
         agentId: true,
         issueId: true,
         executionStepId: true,
+        orchestrationContextSnapshot: true,
         status: true,
         triggerEventId: true,
         triggerKind: true,
@@ -942,13 +944,20 @@ export async function listInbox(
     listChatInbox(client, params, limit, staleMs),
   ]);
 
-  const orchestrationContexts = await loadIssueOrchestrationContexts(client, {
+  const snapshotContexts = runs.map((run) =>
+    readOrchestrationContextSnapshot(run.orchestrationContextSnapshot),
+  );
+  const legacyIndexes = snapshotContexts.flatMap((context, index) => (context ? [] : [index]));
+  const legacyContexts = await loadIssueOrchestrationContexts(client, {
     workspaceId: params.workspaceId,
-    targets: runs.map((run) => ({
-      issueId: run.issueId,
-      executionStepId: run.executionStepId,
+    targets: legacyIndexes.map((index) => ({
+      issueId: runs[index]!.issueId,
+      executionStepId: runs[index]!.executionStepId,
     })),
   });
+  const liveContextByRunIndex = new Map(
+    legacyIndexes.map((runIndex, index) => [runIndex, legacyContexts[index] ?? null]),
+  );
 
   const runItems: InboxRunItem[] = runs.map((r, index) => {
     const state = deriveRunDispatchState({
@@ -986,7 +995,9 @@ export async function listInbox(
         statusId: r.issue.statusId,
         projectId: r.issue.projectId,
       },
-      orchestrationContext: toInboxOrchestrationContext(orchestrationContexts[index] ?? null),
+      orchestrationContext: toInboxOrchestrationContext(
+        snapshotContexts[index] ?? liveContextByRunIndex.get(index) ?? null,
+      ),
       recommendedAction: recommendedActionFor(state),
     };
   });

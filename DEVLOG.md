@@ -2,6 +2,48 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — Plan context integrity + reversible issue archive
+
+Closed the execution-context gaps that let materialized plan issues look like
+standalone tasks, then carried the same integrity pass through issue creation,
+handling, and archive/restore.
+
+- **Durable plan context.** Materialized issue detail now shows Goal → Plan →
+  Step provenance, instructions, output/verification contracts, dependencies,
+  dependents, and sibling progress. Agent runs capture a versioned immutable
+  orchestration-context snapshot at dispatch; inbox and MCP context prefer that
+  snapshot so later plan edits cannot rewrite a run's instructions.
+- **Orchestration invariants.** Step dependencies, assignees, roles, and source
+  runs are workspace/plan validated; structural edits are draft-only; role
+  resolution never guesses between multiple crew members. Crew `maxParallel`
+  is enforced across all of a crew's plans under row locks, with fair refill.
+  Materialized Issue and ExecutionStep terminal lifecycle now synchronizes in
+  both directions, including reaper/abandon paths.
+- **Reversible issue archive.** Added `issue.archive`, `restore`, and
+  `bulkRestore`, an archived-only Issues view, archived detail tombstones, and
+  single/bulk restore. Archive atomically clears queue/claim/snooze state,
+  abandons live runs, cancels one unambiguous active materialized step, and
+  records audit/activity; restore returns visibility without resurrecting old
+  work. MCP, agent inbox, relations, comments, labels, and active mutations now
+  respect the archive boundary. Added migrations `0097` (run context snapshot)
+  and `0098` (archive-list index).
+- **Issue-flow cleanup.** Board/status quick-add preserves its originating
+  status; command-palette create always opens issue mode; MCP create accepts
+  status/labels and enforces narrowed-key creation lanes; bulk copy says
+  “Select loaded”; list/count invalidation stays coherent. Reversible archive
+  confirmations no longer use destructive type-to-confirm friction. Comment
+  deletion is now tenant-scoped and label assignment validates workspace ids.
+- **Usability evidence.** The flow pass was grounded in the live deployment
+  behavior already inspected plus current UI/contracts and existing Forge
+  components/tokens. No screenshot-based browser audit was claimed because an
+  in-app browser surface was unavailable; Playwright CLI was intentionally not
+  substituted without an explicit browser choice.
+
+Verification: Prisma validate/format, `pnpm lint` (existing repository warnings
+only), `pnpm typecheck`, the full Vitest suite plus focused archive/MCP tests,
+`git diff --check`, and a fresh docs + Next.js production build. Playwright was
+not run for the browser-audit reason above. Not deployed.
+
 ## 2026-07-11 — Recoverable agent review handoff
 
 Closed the Plan state-machine gap where a step could say “Needs review” after

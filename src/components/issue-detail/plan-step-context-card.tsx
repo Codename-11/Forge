@@ -25,6 +25,7 @@ type PlanStepNeighbor = {
     id: string;
     number: number;
     title: string;
+    deletedAt: Date | string | null;
     status: { name: string; category: string; color: string };
   } | null;
 };
@@ -100,13 +101,21 @@ function StepLink({ step, planId }: { step: PlanStepNeighbor; planId: string }) 
         {step.issue ? formatIssueId(ws.key, step.issue.number) : `step ${step.position + 1}`}
       </span>
       <span className="min-w-0 flex-1 truncate">{step.issue?.title ?? step.title}</span>
+      {step.issue?.deletedAt ? (
+        <span className="rounded border border-border px-1 text-[0.625rem] uppercase text-muted-foreground">
+          archived
+        </span>
+      ) : null}
       <StepStatusPill status={step.status} />
     </>
   );
   const className =
     "flex min-w-0 items-center gap-2 rounded-md border border-border bg-background/40 px-2 py-1.5 text-meta transition hover:border-ember/40 hover:text-ember";
   return step.issue ? (
-    <Link href={`/w/${ws.slug}/issues/${step.issue.id}`} className={className}>
+    <Link
+      href={`/w/${ws.slug}/issues/${step.issue.id}${step.issue.deletedAt ? "?archived=1" : ""}`}
+      className={className}
+    >
       {content}
     </Link>
   ) : (

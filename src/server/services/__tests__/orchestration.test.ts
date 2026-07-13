@@ -22,6 +22,7 @@ import {
   decomposeGoal,
   dispatchJudge,
   getGoal,
+  handoffCompletedRunToStep,
   maybeCompleteGoal,
   recordVerdict,
   requestPlanApproval,
@@ -486,6 +487,258 @@ describe("orchestration: readiness cascade", () => {
     );
     child = await prisma.executionStep.findUniqueOrThrow({ where: { id: stepIds[1] } });
     expect(child.status).toBe(ExecutionStepStatus.READY);
+  });
+
+  it("enforces maxParallel across concurrent plans owned by the same crew", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "shared-worker");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Serial crew",
+      maxParallel: 1,
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const plans = await Promise.all(
+      ["Plan A", "Plan B"].map((title) =>
+        prisma.executionPlan.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            title,
+            crewId: crew.id,
+          },
+        }),
+      ),
+    );
+    await Promise.all(
+      plans.map((plan, position) =>
+        prisma.executionStep.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            planId: plan.id,
+            title: `Root ${position + 1}`,
+            position: 0,
+          },
+        }),
+      ),
+    );
+
+    await Promise.all(
+      plans.map((plan) =>
+        prisma.$transaction((tx) =>
+          activatePlan(tx, {
+            workspaceId: fixture.workspace.id,
+            actorId: fixture.user.id,
+            planId: plan.id,
+          }),
+        ),
+      ),
+    );
+
+    const steps = await prisma.executionStep.findMany({
+      where: { planId: { in: plans.map((plan) => plan.id) } },
+      select: { id: true, planId: true, status: true },
+    });
+    expect(steps.filter((step) => step.status === ExecutionStepStatus.READY)).toHaveLength(1);
+    expect(steps.filter((step) => step.status === ExecutionStepStatus.TODO)).toHaveLength(1);
+
+    const admitted = steps.find((step) => step.status === ExecutionStepStatus.READY)!;
+    const queued = steps.find((step) => step.status === ExecutionStepStatus.TODO)!;
+    expect(queued.planId).not.toBe(admitted.planId);
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: worker.id,
+        executionStepId: admitted.id,
+        status: AgentRunStatus.COMPLETED,
+        completedAt: new Date(),
+        finishedAt: new Date(),
+      },
+    });
+    await prisma.$transaction((tx) =>
+      handoffCompletedRunToStep(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        runId: run.id,
+        stepId: admitted.id,
+      }),
+    );
+    const afterRelease = await prisma.executionStep.findMany({
+      where: { id: { in: [admitted.id, queued.id] } },
+      select: { id: true, status: true },
+    });
+    expect(afterRelease.find((step) => step.id === admitted.id)?.status).toBe(
+      ExecutionStepStatus.REVIEW,
+    );
+    expect(afterRelease.find((step) => step.id === queued.id)?.status).toBe(
+      ExecutionStepStatus.READY,
+    );
+  });
+
+  it("releases a crew slot at REVIEW and admits the next ready sibling", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "serial-worker");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "One-at-a-time crew",
+      maxParallel: 1,
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Two independent roots",
+        crewId: crew.id,
+      },
+    });
+    await prisma.executionStep.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          title: "First root",
+          position: 0,
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          title: "Second root",
+          position: 1,
+        },
+      ],
+    });
+    await prisma.$transaction((tx) =>
+      activatePlan(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        planId: plan.id,
+      }),
+    );
+    const before = await prisma.executionStep.findMany({
+      where: { planId: plan.id },
+      orderBy: { position: "asc" },
+    });
+    const admitted = before.find((step) => step.status === ExecutionStepStatus.READY)!;
+    const queued = before.find((step) => step.status === ExecutionStepStatus.TODO)!;
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: worker.id,
+        executionStepId: admitted.id,
+        status: AgentRunStatus.COMPLETED,
+        completedAt: new Date(),
+        finishedAt: new Date(),
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      handoffCompletedRunToStep(tx, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        runId: run.id,
+        stepId: admitted.id,
+      }),
+    );
+
+    const after = await prisma.executionStep.findMany({
+      where: { id: { in: [admitted.id, queued.id] } },
+      select: { id: true, status: true },
+    });
+    expect(after.find((step) => step.id === admitted.id)?.status).toBe(ExecutionStepStatus.REVIEW);
+    expect(after.find((step) => step.id === queued.id)?.status).toBe(ExecutionStepStatus.READY);
+  });
+
+  it("serializes concurrent cross-plan releases before refilling crew slots", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "parallel-worker");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Two-slot crew",
+      maxParallel: 2,
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const plans = await Promise.all(
+      ["Concurrent A", "Concurrent B"].map((title) =>
+        prisma.executionPlan.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            title,
+            crewId: crew.id,
+            status: ExecutionPlanStatus.RUNNING,
+            startedAt: new Date(),
+          },
+        }),
+      ),
+    );
+    const pairs: Array<{ active: { id: string }; queued: { id: string }; run: { id: string } }> =
+      [];
+    // createIssue allocates the next workspace number, so keep fixture issue
+    // creation sequential even though the releases below intentionally race.
+    for (const plan of plans) {
+      const active = await prisma.executionStep.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          title: `${plan.title} active`,
+          position: 0,
+          status: ExecutionStepStatus.RUNNING,
+          assignedAgentId: worker.id,
+        },
+      });
+      const queued = await prisma.executionStep.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          title: `${plan.title} queued`,
+          position: 1,
+        },
+      });
+      const issue = await createIssue(fixture);
+      const run = await prisma.agentRun.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: worker.id,
+          executionStepId: active.id,
+          status: AgentRunStatus.COMPLETED,
+          completedAt: new Date(),
+          finishedAt: new Date(),
+        },
+      });
+      pairs.push({ active, queued, run });
+    }
+
+    await Promise.all(
+      pairs.map(({ active, run }) =>
+        prisma.$transaction((tx) =>
+          handoffCompletedRunToStep(tx, {
+            workspaceId: fixture.workspace.id,
+            actorId: fixture.user.id,
+            runId: run.id,
+            stepId: active.id,
+          }),
+        ),
+      ),
+    );
+
+    const settled = await prisma.executionStep.findMany({
+      where: { planId: { in: plans.map((plan) => plan.id) } },
+      select: { id: true, status: true },
+    });
+    for (const pair of pairs) {
+      expect(settled.find((step) => step.id === pair.active.id)?.status).toBe(
+        ExecutionStepStatus.REVIEW,
+      );
+      expect(settled.find((step) => step.id === pair.queued.id)?.status).toBe(
+        ExecutionStepStatus.READY,
+      );
+    }
   });
 });
 
@@ -1264,7 +1517,7 @@ describe("execution plans: author a DAG at create time (AXI-54 gap 2)", () => {
       steps: [
         { title: "root" },
         { title: "child", dependsOnStepIndexes: [0] },
-        { title: "self-ref-dropped", dependsOnStepIndexes: [2, 99] },
+        { title: "leaf", dependsOnStepIndexes: [1] },
       ],
     });
     const steps = await prisma.executionStep.findMany({
@@ -1273,7 +1526,16 @@ describe("execution plans: author a DAG at create time (AXI-54 gap 2)", () => {
     });
     expect(steps[0].dependsOnStepIds).toEqual([]);
     expect(steps[1].dependsOnStepIds).toEqual([steps[0].id]); // index 0 → root id
-    expect(steps[2].dependsOnStepIds).toEqual([]); // self + out-of-range dropped
+    expect(steps[2].dependsOnStepIds).toEqual([steps[1].id]);
+
+    await expect(
+      createExecutionPlan(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        title: "Invalid DAG",
+        steps: [{ title: "self", dependsOnStepIndexes: [0] }],
+      }),
+    ).rejects.toThrow(/cannot depend on itself/);
   });
 });
 
@@ -1544,6 +1806,103 @@ describe("orchestration: audit phase-1 safety guards", () => {
 });
 
 describe("orchestration: audit phase-2 lifecycle + integrity", () => {
+  it("resolves assignedRole only when the plan crew has one unambiguous member", async () => {
+    const { fixture, prisma } = await setup();
+    const worker = await makeAgent(fixture.workspace.id, "worker-role");
+    const crew = await createAgentCrew(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      name: "Role crew",
+      members: [{ agentId: worker.id, role: "WORKER" }],
+    });
+    const goal = await createGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Role resolution",
+      crewId: crew.id,
+    });
+    const { planId } = await decomposeGoal(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      goalId: goal.id,
+    });
+
+    const added = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [{ title: "Assigned by role", assignedRole: "worker" }],
+    });
+    const assigned = await prisma.executionStep.findUniqueOrThrow({
+      where: { id: added.stepIds[0] },
+      select: { assignedAgentId: true },
+    });
+    expect(assigned.assignedAgentId).toBe(worker.id);
+
+    const handAuthored = await createExecutionPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      title: "Hand-authored role plan",
+      goalId: goal.id,
+    });
+    expect(
+      (await prisma.executionPlan.findUniqueOrThrow({ where: { id: handAuthored.id } })).crewId,
+    ).toBe(crew.id);
+    const handAuthoredStep = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId: handAuthored.id,
+      steps: [{ title: "Inherited crew role", assignedRole: "WORKER" }],
+    });
+    expect(
+      (
+        await prisma.executionStep.findUniqueOrThrow({
+          where: { id: handAuthoredStep.stepIds[0] },
+          select: { assignedAgentId: true },
+        })
+      ).assignedAgentId,
+    ).toBe(worker.id);
+
+    const secondWorker = await makeAgent(fixture.workspace.id, "worker-role-two");
+    await addCrewMember(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      crewId: crew.id,
+      agentId: secondWorker.id,
+      role: "WORKER",
+    });
+    await expect(
+      addStepsToPlan(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        planId,
+        steps: [{ title: "Ambiguous", assignedRole: "WORKER" }],
+      }),
+    ).rejects.toThrow(/role is ambiguous/);
+    expect(await prisma.executionStep.count({ where: { planId } })).toBe(1);
+
+    const explicit = await addStepsToPlan(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      planId,
+      steps: [
+        {
+          title: "Explicitly disambiguated",
+          assignedRole: "WORKER",
+          assignedAgentId: secondWorker.id,
+        },
+      ],
+    });
+    expect(
+      (
+        await prisma.executionStep.findUniqueOrThrow({
+          where: { id: explicit.stepIds[0] },
+          select: { assignedAgentId: true },
+        })
+      ).assignedAgentId,
+    ).toBe(secondWorker.id);
+  });
+
   it("P2.3 — rejects a plan whose steps form a dependency cycle", async () => {
     const { fixture, prisma } = await setup();
     const goal = await createGoal(prisma, {
@@ -1599,6 +1958,11 @@ describe("orchestration: audit phase-2 lifecycle + integrity", () => {
     await prisma.$transaction((tx) =>
       activatePlan(tx, { workspaceId: fixture.workspace.id, actorId: fixture.user.id, planId }),
     );
+    const { issueId } = await materializeStepAsIssue(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      stepId: stepIds[0],
+    });
     // root READY, child TODO. Abandon → both CANCELED, plan CANCELED.
     await abandonGoal(prisma, {
       workspaceId: fixture.workspace.id,
@@ -1611,5 +1975,13 @@ describe("orchestration: audit phase-2 lifecycle + integrity", () => {
     expect(child.status).toBe(ExecutionStepStatus.CANCELED);
     const plan = await prisma.executionPlan.findUniqueOrThrow({ where: { id: planId } });
     expect(plan.status).toBe(ExecutionPlanStatus.CANCELED);
+    expect(
+      (
+        await prisma.issue.findUniqueOrThrow({
+          where: { id: issueId },
+          select: { status: { select: { category: true } } },
+        })
+      ).status.category,
+    ).toBe("CANCELED");
   });
 });

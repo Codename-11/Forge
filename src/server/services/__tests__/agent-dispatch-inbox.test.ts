@@ -139,8 +139,17 @@ describe("agent-dispatch-inbox — ensureCanonicalFromEvent", () => {
       where: { workspaceId: fixture.workspace.id, issueId: issue.id, agentId: agent.id },
     });
     expect(run.executionStepId).toBe(step.id);
+    expect(run.orchestrationContextSnapshot).not.toBeNull();
     expect(await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } })).toMatchObject({
       assignedAgentId: agent.id,
+    });
+    await prisma.executionPlan.update({
+      where: { id: plan.id },
+      data: { title: "Edited after dispatch" },
+    });
+    await prisma.executionStep.update({
+      where: { id: step.id },
+      data: { title: "Edited step after dispatch" },
     });
     const inbox = await listInbox(prisma, {
       workspaceId: fixture.workspace.id,
@@ -151,8 +160,8 @@ describe("agent-dispatch-inbox — ensureCanonicalFromEvent", () => {
     expect(inbox.find((item) => item.kind === "run")).toMatchObject({
       executionStepId: step.id,
       orchestrationContext: {
-        plan: { id: plan.id },
-        step: { id: step.id },
+        plan: { id: plan.id, title: "Materialized" },
+        step: { id: step.id, title: "Implement" },
       },
     });
   });
@@ -569,6 +578,32 @@ describe("agent-dispatch-inbox — listInbox", () => {
       .map((i) => (i as { runId: string }).runId);
     expect(runIds).toContain(r1.id);
     expect(runIds).not.toContain(r2.id);
+  });
+
+  it("never returns an active legacy run whose issue is archived", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "LAR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "lar-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+    // Simulate a legacy archive that predates the centralized cleanup path.
+    await prisma.issue.update({ where: { id: issue.id }, data: { deletedAt: new Date() } });
+
+    const inbox = await listInbox(prisma, {
+      workspaceId: fixture.workspace.id,
+      agentId: agent.id,
+      filter: "all",
+      limit: 50,
+    });
+    expect(inbox.some((item) => item.kind === "run" && item.runId === run.id)).toBe(false);
   });
 });
 

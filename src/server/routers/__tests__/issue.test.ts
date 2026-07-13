@@ -102,6 +102,210 @@ describe("issueRouter — list filtering", () => {
   });
 });
 
+describe("issueRouter — archive integrity", () => {
+  it("archives reversibly, closes live work, clears dispatch state, and audits both directions", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Archive safely" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Archive worker",
+        profileKey: "archive-worker",
+      },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: {
+        queued: true,
+        claimedAt: new Date(),
+        claimedById: fixture.user.id,
+        claimedByAgentId: agent.id,
+        claimExpiresAt: new Date(Date.now() + 60_000),
+        snoozedUntil: new Date(Date.now() + 120_000),
+        assignedAgentId: agent.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+      },
+    });
+
+    const archived = await caller.archive({ id: issue.id });
+    expect(archived.archived).toBe(true);
+    const row = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(row).toMatchObject({
+      queued: false,
+      claimedAt: null,
+      claimedById: null,
+      claimedByAgentId: null,
+      claimExpiresAt: null,
+      snoozedUntil: null,
+      assignedAgentId: agent.id,
+    });
+    expect(row.deletedAt).not.toBeNull();
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      "ABANDONED",
+    );
+    await expect(caller.byId({ id: issue.id })).rejects.toThrow();
+    expect((await caller.byId({ id: issue.id, includeArchived: true })).id).toBe(issue.id);
+
+    const active = await caller.list({ archived: false, includeDone: true, limit: 50 });
+    expect(active.items.map((item) => item.id)).not.toContain(issue.id);
+    const archive = await caller.list({ archived: true, includeDone: true, limit: 50 });
+    expect(archive.items.map((item) => item.id)).toContain(issue.id);
+
+    const restored = await caller.restore({ id: issue.id });
+    expect(restored.restored).toBe(true);
+    const visible = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(visible.deletedAt).toBeNull();
+    expect(visible.queued).toBe(false);
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      "ABANDONED",
+    );
+    const actions = await prisma.auditLog.findMany({
+      where: { workspaceId: fixture.workspace.id, entity: "Issue", entityId: issue.id },
+      orderBy: { createdAt: "asc" },
+      select: { action: true },
+    });
+    expect(actions.map((entry) => entry.action)).toEqual(
+      expect.arrayContaining(["archive", "restore"]),
+    );
+    expect(
+      await prisma.activityEvent.count({
+        where: { workspaceId: fixture.workspace.id, subjectId: issue.id, kind: "ISSUE_DELETED" },
+      }),
+    ).toBe(1);
+  });
+
+  it("cancels one active materialized step and rejects ambiguous active step links", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Plan-backed archive" });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Archive plan",
+        status: "RUNNING",
+        createdById: fixture.user.id,
+      },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Active work",
+        position: 0,
+        status: "RUNNING",
+      },
+    });
+
+    await caller.archive({ id: issue.id });
+    expect((await prisma.executionStep.findUniqueOrThrow({ where: { id: step.id } })).status).toBe(
+      "CANCELED",
+    );
+    expect((await prisma.executionPlan.findUniqueOrThrow({ where: { id: plan.id } })).status).toBe(
+      "BLOCKED",
+    );
+
+    const ambiguousIssue = await createIssue(fixture, { title: "Ambiguous links" });
+    await prisma.executionStep.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          issueId: ambiguousIssue.id,
+          title: "One",
+          position: 1,
+          status: "TODO",
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          issueId: ambiguousIssue.id,
+          title: "Two",
+          position: 2,
+          status: "TODO",
+        },
+      ],
+    });
+    await expect(caller.archive({ id: ambiguousIssue.id })).rejects.toThrow(/more than one/i);
+    expect(
+      (await prisma.issue.findUniqueOrThrow({ where: { id: ambiguousIssue.id } })).deletedAt,
+    ).toBeNull();
+  });
+
+  it("bulk archive and restore use the same lifecycle path", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const first = await createIssue(fixture, { title: "Bulk one" });
+    const second = await createIssue(fixture, { title: "Bulk two" });
+    await prisma.issue.updateMany({
+      where: { id: { in: [first.id, second.id] } },
+      data: { queued: true },
+    });
+
+    expect((await caller.bulkArchive({ ids: [first.id, second.id] })).updated).toBe(2);
+    expect(
+      await prisma.issue.count({
+        where: { id: { in: [first.id, second.id] }, deletedAt: { not: null }, queued: false },
+      }),
+    ).toBe(2);
+    expect((await caller.bulkRestore({ ids: [first.id, second.id] })).updated).toBe(2);
+    expect(
+      await prisma.issue.count({
+        where: { id: { in: [first.id, second.id] }, deletedAt: null, queued: false },
+      }),
+    ).toBe(2);
+  });
+
+  it("assign rejects archived issues and users outside the workspace", async () => {
+    const { caller, fixture } = await setup();
+    const other = await createWorkspaceFixture({ keyPrefix: "ASG" });
+    fixtures.push(other);
+    const issue = await createIssue(fixture, { title: "Scoped assignment" });
+
+    await expect(caller.assign({ id: issue.id, userIds: [other.user.id] })).rejects.toThrow(
+      /member of this workspace/i,
+    );
+    await caller.archive({ id: issue.id });
+    await expect(caller.assign({ id: issue.id, userIds: [fixture.user.id] })).rejects.toThrow(
+      /not found/i,
+    );
+  });
+
+  it("keeps archived issues read-only across active-work mutations", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Read-only archive" });
+    const nextStatus = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "IN_PROGRESS" },
+    });
+    await caller.archive({ id: issue.id });
+
+    await expect(caller.update({ id: issue.id, title: "Should not change" })).rejects.toThrow();
+    expect((await caller.bulkStatus({ ids: [issue.id], statusId: nextStatus.id })).count).toBe(0);
+    await expect(caller.setQueued({ id: issue.id, queued: true })).rejects.toThrow();
+    await expect(caller.release({ id: issue.id })).rejects.toThrow();
+    await expect(
+      caller.applyCommands({
+        issueId: issue.id,
+        commands: [{ kind: "priority", level: "high" }],
+      }),
+    ).rejects.toThrow(/not found/i);
+    await expect(caller.watch({ issueId: issue.id })).rejects.toThrow(/not found/i);
+
+    const unchanged = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
+    expect(unchanged.title).toBe("Read-only archive");
+    expect(unchanged.queued).toBe(false);
+  });
+});
+
 describe("issueRouter — blocker-aware claim + narrowing + unblocked flag", () => {
   it("byId returns only the latest agent run for the issue-detail failure banner", async () => {
     const { caller, fixture } = await setup();

@@ -131,6 +131,19 @@ export const commentRouter = router({
     .mutation(async ({ ctx, input }) => {
       const result = await ctx.db.$transaction(async (tx) => {
         const authoringAgentId = ctx.apiKey?.linkedAgentId ?? null;
+        const issue = await tx.issue.findFirst({
+          where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: {
+            id: true,
+            number: true,
+            title: true,
+            assignedAgentId: true,
+            workspace: { select: { key: true } },
+          },
+        });
+        if (!issue) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        }
 
         const explicitAgentRequests: ParsedAgentRequest[] =
           input.agentRequests?.map((r) => ({
@@ -250,16 +263,6 @@ export const commentRouter = router({
           }
         }
 
-        const issue = await tx.issue.findFirstOrThrow({
-          where: { id: input.issueId, workspaceId: ctx.workspaceId },
-          select: {
-            id: true,
-            number: true,
-            title: true,
-            assignedAgentId: true,
-            workspace: { select: { key: true } },
-          },
-        });
         const issuePrefix = `${issue.workspace.key}-${issue.number}`;
 
         // Treat structured Agent Requests as explicit mentions too. This
@@ -434,6 +437,15 @@ export const commentRouter = router({
           code: "NOT_FOUND",
           message: "Comment not found in this workspace.",
         });
+      }
+      if (existing.issueId) {
+        const issue = await ctx.db.issue.findFirst({
+          where: { id: existing.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!issue) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        }
       }
       // No-op when the body hasn't actually changed. Keeps the
       // history clean — the UI's edit-and-immediately-save path
@@ -621,7 +633,50 @@ export const commentRouter = router({
   softDelete: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) =>
-      ctx.db.comment.update({ where: { id: input.id }, data: { deletedAt: new Date() } }),
+      ctx.db.$transaction(async (tx) => {
+        const existing = await tx.comment.findFirst({
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true, body: true, issueId: true, deletedAt: true },
+        });
+        if (!existing) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "Comment not found in this workspace.",
+          });
+        }
+        if (existing.issueId) {
+          const issue = await tx.issue.findFirst({
+            where: { id: existing.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+            select: { id: true },
+          });
+          if (!issue) {
+            throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+          }
+        }
+        const deleted = await tx.comment.update({
+          where: { id: existing.id },
+          data: { deletedAt: new Date() },
+        });
+        if (existing.issueId) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "Comment",
+            entityId: deleted.id,
+            action: "delete",
+            before: { body: existing.body, deletedAt: existing.deletedAt },
+            after: deleted,
+            eventKind: EventKind.COMMENT_UPDATED,
+            subjectType: "issue",
+            subjectId: existing.issueId,
+            payload: { commentId: deleted.id, issueId: existing.issueId, deleted: true },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+        return deleted;
+      }),
     ),
 
   /**
@@ -651,6 +706,13 @@ export const commentRouter = router({
         });
       }
       return ctx.db.$transaction(async (tx) => {
+        const issue = await tx.issue.findFirst({
+          where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { id: true },
+        });
+        if (!issue) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        }
         // Open or touch the AgentRun first — every status upsert is also
         // a heartbeat for the run, so the freshness clock resets and the
         // live pulse strip stays warm even on long-running steps.

@@ -28,6 +28,11 @@ import {
 import { runPlanGeneration } from "@/server/services/ai";
 import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
 import { materializeStepAsIssueTx } from "@/server/services/execution-step-issue-service";
+import {
+  assertValidStepIndexDependencies,
+  resolveCrewRoleAssignees,
+  validateStepAssignees,
+} from "@/server/services/execution-step-integrity";
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
@@ -887,15 +892,34 @@ export async function listGoals(
  */
 async function reapPlanRuns(
   db: PrismaClient,
-  params: { workspaceId: string; planIds: string[] },
+  params: { workspaceId: string; planIds: string[]; actorId: string | null },
 ): Promise<void> {
   if (params.planIds.length === 0) return;
-  const steps = await db.executionStep.findMany({
-    where: { planId: { in: params.planIds }, workspaceId: params.workspaceId },
-    select: { id: true },
-  });
+  const [steps, plans] = await Promise.all([
+    db.executionStep.findMany({
+      where: { planId: { in: params.planIds }, workspaceId: params.workspaceId },
+      select: { id: true, planId: true, status: true, issueId: true },
+    }),
+    db.executionPlan.findMany({
+      where: { id: { in: params.planIds }, workspaceId: params.workspaceId },
+      select: { crewId: true },
+    }),
+  ]);
   const stepIds = steps.map((s) => s.id);
   if (stepIds.length === 0) return;
+  const nonTerminalStatuses: ExecutionStepStatus[] = [
+    ExecutionStepStatus.TODO,
+    ExecutionStepStatus.READY,
+    ExecutionStepStatus.RUNNING,
+    ExecutionStepStatus.REVIEW,
+    ExecutionStepStatus.BLOCKED,
+  ];
+  const canceledStepIds = steps
+    .filter((step) => nonTerminalStatuses.includes(step.status))
+    .map((step) => step.id);
+  const crewIds = Array.from(
+    new Set(plans.flatMap((plan) => (plan.crewId ? [plan.crewId] : []))),
+  ).sort();
 
   // Snapshot the live provider runs before we abandon them (need externalRunId
   // + agent/runtime to resolve a connector for the stop).
@@ -928,6 +952,12 @@ async function reapPlanRuns(
   });
 
   await db.$transaction(async (tx) => {
+    // Admissions use crew -> step/plan lock order. Acquire every affected crew
+    // in a stable order before releasing these slots so teardown cannot
+    // deadlock with a concurrent readiness cascade on the same crew.
+    for (const crewId of crewIds) {
+      await lockCrewForExecution(tx, { workspaceId: params.workspaceId, crewId });
+    }
     await tx.executionStep.updateMany({
       where: {
         planId: { in: params.planIds },
@@ -943,6 +973,18 @@ async function reapPlanRuns(
       },
       data: { status: ExecutionStepStatus.CANCELED },
     });
+    // Bulk teardown used to bypass the common step event boundary, leaving a
+    // materialized Issue looking active after its plan was abandoned or
+    // superseded. Project the persisted terminal state explicitly.
+    const { syncMaterializedIssueStatusFromStep } =
+      await import("@/server/services/execution-step-issue-sync");
+    for (const stepId of canceledStepIds) {
+      await syncMaterializedIssueStatusFromStep(tx, {
+        workspaceId: params.workspaceId,
+        stepId,
+        actorId: params.actorId,
+      });
+    }
     await tx.agentRun.updateMany({
       where: {
         executionStepId: { in: stepIds },
@@ -950,6 +992,15 @@ async function reapPlanRuns(
       },
       data: { status: AgentRunStatus.ABANDONED, finishedAt: new Date() },
     });
+    // The canceled plans are no longer eligible, but another RUNNING plan
+    // owned by the same crew may have been waiting for one of these slots.
+    for (const planId of params.planIds) {
+      await refillReadinessAfterSlotRelease(tx, {
+        workspaceId: params.workspaceId,
+        planId,
+        actorId: params.actorId,
+      });
+    }
   });
 
   for (const run of liveRuns) {
@@ -976,7 +1027,7 @@ async function reapPlanRuns(
  */
 async function demoteAndReapPriorAttempts(
   db: PrismaClient,
-  params: { workspaceId: string; goalId: string },
+  params: { workspaceId: string; goalId: string; actorId: string | null },
 ): Promise<void> {
   const dispatching = await db.executionPlan.findMany({
     where: {
@@ -1005,7 +1056,11 @@ async function demoteAndReapPriorAttempts(
       data: { isActiveAttempt: false },
     });
   });
-  await reapPlanRuns(db, { workspaceId: params.workspaceId, planIds: ids });
+  await reapPlanRuns(db, {
+    workspaceId: params.workspaceId,
+    planIds: ids,
+    actorId: params.actorId,
+  });
 }
 
 export async function abandonGoal(
@@ -1070,7 +1125,11 @@ export async function abandonGoal(
   // Cancel non-terminal steps + stop their in-flight runs so an abandoned goal
   // stops spending immediately (was: runs kept burning tokens until the stale
   // watchdog reaped them, and a late verdict could still cascade).
-  await reapPlanRuns(db, { workspaceId: params.workspaceId, planIds: canceledPlanIds });
+  await reapPlanRuns(db, {
+    workspaceId: params.workspaceId,
+    planIds: canceledPlanIds,
+    actorId: params.actorId,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,7 +1281,11 @@ export async function decomposeGoal(
   // Cancel + reap any prior dispatching attempt before starting a fresh one,
   // so two plans don't drive the same goal at once (was: a prior RUNNING plan
   // kept dispatching steps + spending in the background after re-generate).
-  await demoteAndReapPriorAttempts(db, { workspaceId: params.workspaceId, goalId: goal.id });
+  await demoteAndReapPriorAttempts(db, {
+    workspaceId: params.workspaceId,
+    goalId: goal.id,
+    actorId: params.actorId,
+  });
   const result = await db.$transaction(async (tx) => {
     const plan = await tx.executionPlan.create({
       data: {
@@ -1453,7 +1516,11 @@ export async function generatePlanForGoal(
   // Cancel + reap any prior dispatching attempt before starting a fresh one,
   // so two plans don't drive the same goal at once (was: a prior RUNNING plan
   // kept dispatching steps + spending in the background after re-generate).
-  await demoteAndReapPriorAttempts(db, { workspaceId: params.workspaceId, goalId: goal.id });
+  await demoteAndReapPriorAttempts(db, {
+    workspaceId: params.workspaceId,
+    goalId: goal.id,
+    actorId: params.actorId,
+  });
   const result = await db.$transaction(async (tx) => {
     const plan = await tx.executionPlan.create({
       data: {
@@ -1531,6 +1598,7 @@ export async function generatePlanForGoal(
         expectedOutput: s.expectedOutput,
         verification: s.verification.length ? (s.verification as Prisma.InputJsonValue) : null,
         dependsOnStepIndexes: s.dependsOnStepIndexes,
+        assignedRole: s.assignedRole,
       })),
     });
     return { planId: plan.id, stepCount: stepIds.length };
@@ -1638,44 +1706,9 @@ export interface AddStepInput {
  * index-based deps resolve to real ids) + plan touch + addSteps audit/event.
  * Shared by `addStepsToPlan` (validates first, then opens its own tx) and
  * `generatePlanForGoal` (calls this inside the plan-create tx so the whole
- * generate is one rollback-safe unit). Assumes the plan exists, is DRAFT, and
- * any explicit assignees were already validated by the caller.
+ * generate is one rollback-safe unit). Validates role/agent assignment before
+ * creating any step rows.
  */
-/**
- * Reject a set of steps whose index-based dependencies form a cycle (Kahn's
- * algorithm). A mutually-dependent pair (step 0 ↔ step 1) would otherwise leave
- * the plan RUNNING forever — cascadeReadiness flips nothing, maybeCompleteGoal
- * never fires, and no error surfaces. A bad LLM planner output silently wedges
- * the goal. Out-of-range / self indexes are ignored (dropped elsewhere too).
- */
-export function assertNoStepCycles(steps: { dependsOnStepIndexes?: number[] }[]): void {
-  const n = steps.length;
-  const indeg = new Array<number>(n).fill(0);
-  const adj: number[][] = Array.from({ length: n }, () => []);
-  for (let i = 0; i < n; i++) {
-    for (const d of steps[i].dependsOnStepIndexes ?? []) {
-      if (!Number.isInteger(d) || d < 0 || d >= n || d === i) continue;
-      adj[d].push(i);
-      indeg[i]++;
-    }
-  }
-  const queue: number[] = [];
-  for (let i = 0; i < n; i++) if (indeg[i] === 0) queue.push(i);
-  let seen = 0;
-  while (queue.length) {
-    const u = queue.shift()!;
-    seen++;
-    for (const v of adj[u]) if (--indeg[v] === 0) queue.push(v);
-  }
-  if (seen !== n) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message:
-        "Plan steps contain a dependency cycle — steps can't depend on each other in a loop.",
-    });
-  }
-}
-
 async function insertStepsTx(
   tx: Prisma.TransactionClient,
   params: {
@@ -1685,7 +1718,20 @@ async function insertStepsTx(
     steps: AddStepInput[];
   },
 ): Promise<string[]> {
-  assertNoStepCycles(params.steps);
+  assertValidStepIndexDependencies(params.steps);
+  const plan = await tx.executionPlan.findFirst({
+    where: { id: params.planId, workspaceId: params.workspaceId, archivedAt: null },
+    select: { crewId: true },
+  });
+  if (!plan) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+  }
+  const steps = await resolveCrewRoleAssignees(tx, {
+    workspaceId: params.workspaceId,
+    crewId: plan.crewId,
+    steps: params.steps,
+  });
+  await validateStepAssignees(tx, { workspaceId: params.workspaceId, steps });
   const last = await tx.executionStep.findFirst({
     where: { planId: params.planId },
     orderBy: { position: "desc" },
@@ -1695,8 +1741,8 @@ async function insertStepsTx(
 
   // First pass: create steps without deps so we get real ids by index.
   const createdIds: string[] = [];
-  for (let i = 0; i < params.steps.length; i++) {
-    const s = params.steps[i];
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
     const created = await tx.executionStep.create({
       data: {
         workspaceId: params.workspaceId,
@@ -1718,15 +1764,13 @@ async function insertStepsTx(
   }
 
   // Second pass: resolve index-based deps to real ids. Indexes refer to
-  // the position WITHIN this batch (0-based). Out-of-range or
-  // self-referential indexes are dropped defensively.
-  for (let i = 0; i < params.steps.length; i++) {
-    const s = params.steps[i];
+  // the position WITHIN this batch (0-based). Self-referential and
+  // out-of-range indexes were rejected before writes.
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i];
     const idxs = s.dependsOnStepIndexes ?? [];
     if (!idxs.length) continue;
-    const dependsOnStepIds = idxs
-      .filter((idx) => idx >= 0 && idx < createdIds.length && idx !== i)
-      .map((idx) => createdIds[idx]);
+    const dependsOnStepIds = idxs.map((idx) => createdIds[idx]);
     if (dependsOnStepIds.length === 0) continue;
     await tx.executionStep.update({
       where: { id: createdIds[i] },
@@ -1762,37 +1806,28 @@ export async function addStepsToPlan(
     steps: AddStepInput[];
   },
 ): Promise<{ stepIds: string[] }> {
-  const plan = await db.executionPlan.findFirst({
-    where: { id: params.planId, workspaceId: params.workspaceId, archivedAt: null },
-    select: { id: true, status: true },
-  });
-  if (!plan) {
-    throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
-  }
-  if (plan.status !== ExecutionPlanStatus.DRAFT) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "Steps can only be bulk-added to a DRAFT plan.",
-    });
-  }
-  // Validate any explicit assignee agents belong to the workspace.
-  const agentIds = Array.from(
-    new Set(params.steps.map((s) => s.assignedAgentId).filter((x): x is string => !!x)),
-  );
-  if (agentIds.length) {
-    const found = await db.agent.findMany({
-      where: { id: { in: agentIds }, workspaceId: params.workspaceId },
-      select: { id: true },
-    });
-    if (found.length !== agentIds.length) {
+  const stepIds = await db.$transaction(async (tx) => {
+    const [plan] = await tx.$queryRaw<
+      Array<{ id: string; status: ExecutionPlanStatus }>
+    >(Prisma.sql`
+      SELECT "id", "status"
+      FROM "ExecutionPlan"
+      WHERE "id" = ${params.planId}
+        AND "workspaceId" = ${params.workspaceId}
+        AND "archivedAt" IS NULL
+      FOR UPDATE
+    `);
+    if (!plan) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
+    }
+    if (plan.status !== ExecutionPlanStatus.DRAFT) {
       throw new TRPCError({
         code: "BAD_REQUEST",
-        message: "One or more assignedAgentId values are not agents in this workspace.",
+        message: "Steps can only be bulk-added to a DRAFT plan.",
       });
     }
-  }
-
-  const stepIds = await db.$transaction((tx) => insertStepsTx(tx, params));
+    return insertStepsTx(tx, params);
+  });
 
   return { stepIds };
 }
@@ -1825,6 +1860,7 @@ export async function cascadeReadiness(
   if (!plan || plan.status !== ExecutionPlanStatus.RUNNING) return [];
   const steps = await tx.executionStep.findMany({
     where: { planId: params.planId },
+    orderBy: { position: "asc" },
     select: { id: true, status: true, dependsOnStepIds: true },
   });
   const statusById = new Map(steps.map((s) => [s.id, s.status]));
@@ -1835,14 +1871,108 @@ export async function cascadeReadiness(
       (depId) => statusById.get(depId) === ExecutionStepStatus.DONE,
     );
     if (!allDepsDone) continue;
-    await transitionStepToReady(tx, {
+    const admitted = await transitionStepToReady(tx, {
       workspaceId: params.workspaceId,
       stepId: step.id,
       actorId: params.actorId,
     });
-    flipped.push(step.id);
+    if (admitted) flipped.push(step.id);
   }
   return flipped;
+}
+
+/**
+ * Refill a released execution slot across every RUNNING plan owned by the
+ * same crew. The least-recently-active plan is considered first, preventing a
+ * busy plan with many root siblings from indefinitely starving another plan.
+ * Individual admissions still take the AgentCrew row lock below, so this
+ * ordering remains capacity-safe when multiple releases race.
+ */
+export async function refillReadinessAfterSlotRelease(
+  tx: Tx,
+  params: { workspaceId: string; planId: string; actorId: string | null },
+): Promise<string[]> {
+  const plan = await tx.executionPlan.findFirst({
+    where: { id: params.planId, workspaceId: params.workspaceId },
+    select: { crewId: true },
+  });
+  if (!plan?.crewId) {
+    return cascadeReadiness(tx, params);
+  }
+  const runningPlans = await tx.executionPlan.findMany({
+    where: {
+      workspaceId: params.workspaceId,
+      crewId: plan.crewId,
+      status: ExecutionPlanStatus.RUNNING,
+      archivedAt: null,
+    },
+    orderBy: [{ updatedAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    select: { id: true },
+  });
+  const flipped: string[] = [];
+  // The releasing plan was just updated and normally sorts last already;
+  // make that rule explicit so timestamp ties cannot let it repeatedly claim
+  // its own slot while another plan waits.
+  const releasingPlan = runningPlans.find((candidate) => candidate.id === params.planId);
+  const refillOrder = [
+    ...runningPlans.filter((candidate) => candidate.id !== params.planId),
+    ...(releasingPlan ? [releasingPlan] : []),
+  ];
+  for (const runningPlan of refillOrder) {
+    flipped.push(
+      ...(await cascadeReadiness(tx, {
+        workspaceId: params.workspaceId,
+        planId: runningPlan.id,
+        actorId: params.actorId,
+      })),
+    );
+  }
+  return flipped;
+}
+
+/**
+ * Reserve one of a crew's execution slots.
+ *
+ * READY counts as occupied because the dispatch/run is created immediately
+ * after admission; treating only RUNNING as occupied would let a readiness
+ * cascade queue every sibling before any provider reports its first output.
+ * Locking the crew row serializes this count-and-admit decision across plans
+ * that share a crew. Callers must invoke this inside a database transaction.
+ */
+export async function lockCrewForExecution(
+  tx: Tx,
+  params: { workspaceId: string; crewId: string },
+): Promise<{ id: string; maxParallel: number } | null> {
+  const crews = await tx.$queryRaw<Array<{ id: string; maxParallel: number }>>(Prisma.sql`
+    SELECT "id", "maxParallel"
+    FROM "AgentCrew"
+    WHERE "id" = ${params.crewId} AND "workspaceId" = ${params.workspaceId}
+    FOR UPDATE
+  `);
+  return crews[0] ?? null;
+}
+
+async function crewHasExecutionCapacity(
+  tx: Tx,
+  params: {
+    workspaceId: string;
+    crewId: string;
+    /** Do not count the step when a retry is replacing its existing slot. */
+    excludeStepId?: string;
+  },
+): Promise<boolean> {
+  const crew = await lockCrewForExecution(tx, params);
+  if (!crew || crew.maxParallel === 0) return true;
+
+  const occupied = await tx.executionStep.count({
+    where: {
+      workspaceId: params.workspaceId,
+      ...(params.excludeStepId ? { id: { not: params.excludeStepId } } : {}),
+      status: { in: [ExecutionStepStatus.READY, ExecutionStepStatus.RUNNING] },
+      plan: { crewId: params.crewId },
+    },
+  });
+  return occupied < crew.maxParallel;
 }
 
 /**
@@ -1853,7 +1983,7 @@ export async function cascadeReadiness(
 async function transitionStepToReady(
   tx: Tx,
   params: { workspaceId: string; stepId: string; actorId: string | null },
-): Promise<void> {
+): Promise<boolean> {
   const step = await tx.executionStep.findFirst({
     where: { id: params.stepId, workspaceId: params.workspaceId },
     select: {
@@ -1873,12 +2003,37 @@ async function transitionStepToReady(
       },
     },
   });
-  if (!step) return;
+  if (!step) return false;
   // Defence in depth for callers other than cascadeReadiness (e.g. the
   // recordVerdict RETRY path, which re-readies a step directly): never
   // dispatch a step whose plan is no longer RUNNING. A late verdict on a
   // step whose plan was CANCELED/BLOCKED mid-flight must not re-open work.
-  if (step.plan.status !== ExecutionPlanStatus.RUNNING) return;
+  if (step.plan.status !== ExecutionPlanStatus.RUNNING) return false;
+
+  if (
+    step.plan.crewId &&
+    !(await crewHasExecutionCapacity(tx, {
+      workspaceId: params.workspaceId,
+      crewId: step.plan.crewId,
+    }))
+  ) {
+    return false;
+  }
+
+  // The crew lock above also serializes two attempts to admit this exact
+  // step. Keep the status predicate for unlimited/uncrewed plans, where no
+  // shared crew row exists to provide that serialization.
+  const admitted = await tx.executionStep.updateMany({
+    where: {
+      id: step.id,
+      workspaceId: params.workspaceId,
+      status: ExecutionStepStatus.TODO,
+    },
+    data: {
+      status: ExecutionStepStatus.READY,
+    },
+  });
+  if (admitted.count === 0) return false;
 
   // Resolve the worker: explicit assignee > crew WORKER.
   let workerAgentId = step.assignedAgentId;
@@ -1889,9 +2044,15 @@ async function transitionStepToReady(
   await tx.executionStep.update({
     where: { id: step.id },
     data: {
-      status: ExecutionStepStatus.READY,
       assignedAgentId: workerAgentId ?? step.assignedAgentId,
     },
+  });
+  const { syncMaterializedIssueStatusFromStep } =
+    await import("@/server/services/execution-step-issue-sync");
+  await syncMaterializedIssueStatusFromStep(tx, {
+    workspaceId: params.workspaceId,
+    stepId: step.id,
+    actorId: params.actorId,
   });
   await tx.executionPlan.update({
     where: { id: step.planId },
@@ -1972,6 +2133,7 @@ async function transitionStepToReady(
       });
     }
   }
+  return true;
 }
 
 /**
@@ -2034,6 +2196,24 @@ export async function retryExecutionStep(
       });
     }
 
+    if (
+      step.plan.crewId &&
+      !(await crewHasExecutionCapacity(tx, {
+        workspaceId: params.workspaceId,
+        crewId: step.plan.crewId,
+        ...(step.status === ExecutionStepStatus.READY || step.status === ExecutionStepStatus.RUNNING
+          ? { excludeStepId: step.id }
+          : {}),
+      }))
+    ) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "This crew is already at its parallel execution limit.",
+      });
+    }
+
+    // For crew-owned work, the capacity check holds the crew row lock before
+    // this read, preventing two concurrent retries from both opening a run.
     const activeRun = await tx.agentRun.findFirst({
       where: {
         workspaceId: params.workspaceId,
@@ -2084,6 +2264,14 @@ export async function retryExecutionStep(
         assignedAgentId: workerAgentId,
         issueId: runIssueId,
       },
+    });
+    const { syncMaterializedIssueStatusFromStep } =
+      await import("@/server/services/execution-step-issue-sync");
+    await syncMaterializedIssueStatusFromStep(tx, {
+      workspaceId: params.workspaceId,
+      stepId: step.id,
+      actorId: params.actorId,
+      actorAgentId: params.actorAgentId ?? null,
     });
     if (step.plan.status === ExecutionPlanStatus.BLOCKED) {
       await tx.executionPlan.update({
@@ -2683,7 +2871,13 @@ export async function handoffCompletedRunToStep(
 ): Promise<{ transitioned: boolean; status: ExecutionStepStatus }> {
   const step = await tx.executionStep.findFirst({
     where: { id: params.stepId, workspaceId: params.workspaceId },
-    select: { id: true, planId: true, status: true, sourceRunId: true },
+    select: {
+      id: true,
+      planId: true,
+      status: true,
+      sourceRunId: true,
+      plan: { select: { crewId: true } },
+    },
   });
   if (!step) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Execution step not found." });
@@ -2694,6 +2888,15 @@ export async function handoffCompletedRunToStep(
     step.status === ExecutionStepStatus.BLOCKED
   ) {
     return { transitioned: false, status: step.status };
+  }
+  if (step.plan.crewId) {
+    // Admissions take this lock before updating either a step or its plan.
+    // Releases use the same order (crew -> step/plan) so two plans completing
+    // concurrently cannot deadlock while refilling one another's slots.
+    await lockCrewForExecution(tx, {
+      workspaceId: params.workspaceId,
+      crewId: step.plan.crewId,
+    });
   }
   const transitioned = step.status !== ExecutionStepStatus.REVIEW;
   await tx.executionStep.update({
@@ -2723,6 +2926,16 @@ export async function handoffCompletedRunToStep(
         from: step.status,
         to: ExecutionStepStatus.REVIEW,
       } as Prisma.InputJsonValue,
+    });
+  }
+  if (transitioned) {
+    // REVIEW no longer occupies a crew execution slot. Re-run readiness in
+    // the same transaction so dependency-ready work anywhere in the crew can
+    // reserve the slot before a concurrent release races it.
+    await refillReadinessAfterSlotRelease(tx, {
+      workspaceId: params.workspaceId,
+      planId: step.planId,
+      actorId: params.actorId,
     });
   }
   return { transitioned, status: ExecutionStepStatus.REVIEW };

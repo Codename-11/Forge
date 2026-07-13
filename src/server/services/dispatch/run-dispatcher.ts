@@ -19,8 +19,9 @@ import {
   RUN_BUDGET_WORKSPACE_SELECT,
 } from "@/server/services/run-budget";
 import {
+  createOrchestrationContextSnapshot,
   formatOrchestrationContextForPrompt,
-  loadIssueOrchestrationContext,
+  loadRunOrchestrationContext,
 } from "@/server/services/orchestration-context";
 import { markExecutionStepRunning } from "@/server/services/execution-step-runtime";
 
@@ -230,6 +231,7 @@ async function startNewRuns(): Promise<number> {
         externalRunId: true,
         runtimePolicy: true,
         executionStepId: true,
+        orchestrationContextSnapshot: true,
       },
     });
     if (already?.externalRunId || (already && TERMINAL_RUN_STATUSES.has(already.status))) {
@@ -309,10 +311,11 @@ async function startNewRuns(): Promise<number> {
       });
 
     try {
-      const orchestrationContext = await loadIssueOrchestrationContext(db, {
+      const orchestrationContext = await loadRunOrchestrationContext(db, {
         workspaceId: evt.workspaceId,
         issueId: issue.id,
         executionStepId: already?.executionStepId,
+        snapshot: already?.orchestrationContextSnapshot,
       });
       const { externalRunId } = await connector.startRun({
         message:
@@ -345,6 +348,7 @@ async function startNewRuns(): Promise<number> {
           currentStep: "starting run",
           executionStepId: orchestrationContext?.step?.id ?? already?.executionStepId ?? null,
           engagementMode,
+          orchestrationContext,
         });
         await tx.agentRun.update({
           where: { id: run.id },
@@ -429,6 +433,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       triggerEventId: true,
       runtimePolicy: true,
       executionStepId: true,
+      orchestrationContextSnapshot: true,
     },
   });
 
@@ -500,10 +505,11 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
 
     try {
       const triggerPayload = triggerEvent?.payload as Record<string, unknown> | null;
-      const orchestrationContext = await loadIssueOrchestrationContext(db, {
+      const orchestrationContext = await loadRunOrchestrationContext(db, {
         workspaceId: run.workspaceId,
         issueId: issue.id,
         executionStepId: run.executionStepId,
+        snapshot: run.orchestrationContextSnapshot,
       });
       const operatorContext = dispatchTriggerContext(triggerEvent?.kind, triggerPayload);
       const { externalRunId } = await connector.startRun({
@@ -536,6 +542,12 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
             runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
             ...(orchestrationContext?.step?.id
               ? { executionStepId: orchestrationContext.step.id }
+              : {}),
+            ...(orchestrationContext && !run.orchestrationContextSnapshot
+              ? {
+                  orchestrationContextSnapshot:
+                    createOrchestrationContextSnapshot(orchestrationContext),
+                }
               : {}),
           },
         });
@@ -621,6 +633,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       runtimePolicy: true,
       completionMeta: true,
       executionStepId: true,
+      orchestrationContextSnapshot: true,
       issue: {
         select: {
           id: true,
@@ -706,10 +719,11 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
     const replyBlock = replies
       .map((r) => `${r.authoringAgent?.name ?? r.author?.name ?? "Operator"}: ${r.body}`)
       .join("\n\n");
-    const orchestrationContext = await loadIssueOrchestrationContext(db, {
+    const orchestrationContext = await loadRunOrchestrationContext(db, {
       workspaceId: run.workspaceId,
       issueId: run.issueId,
       executionStepId: run.executionStepId,
+      snapshot: run.orchestrationContextSnapshot,
     });
     const message =
       issueMessage(
@@ -757,6 +771,12 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
             controlRequestedAt: null,
             ...(rearmedMeta !== undefined ? { completionMeta: rearmedMeta } : {}),
             runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+            ...(orchestrationContext && !run.orchestrationContextSnapshot
+              ? {
+                  orchestrationContextSnapshot:
+                    createOrchestrationContextSnapshot(orchestrationContext),
+                }
+              : {}),
           },
         });
         await appendRunEvent(tx, {

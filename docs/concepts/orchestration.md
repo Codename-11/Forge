@@ -90,7 +90,18 @@ issue column; its Relations graph derives dependency edges from
 `dependsOnStepIds` without duplicating `IssueRelation` rows. Agent runtime
 prompts, `agent.inbox.list`, and `agent.context.bundle` use the same structured
 orchestration context, including retry feedback and completed dependency
-evidence.
+evidence. That bounded context is snapshotted onto the `AgentRun` when the run
+opens; later Goal, Plan, Step, or ContextSet edits therefore do not rewrite the
+instructions a historical run received. Legacy rows without a snapshot fall
+back to live hydration.
+
+The ExecutionStep owns in-flight lifecycle state. Its `READY`, `RUNNING`,
+`REVIEW`, `DONE`, and `CANCELED` transitions project onto a materialized Issue
+using the workspace's configured/fallback status rows. Moving an Issue around
+non-terminal board columns cannot bypass DAG readiness or manufacture review
+evidence. An operator's explicit `DONE` or `CANCELED` Issue transition is
+authoritative in the other direction: Forge updates the one unambiguous linked
+step, cascading dependents on Done or blocking the plan on Cancel.
 
 ## The loop
 
@@ -165,6 +176,13 @@ When a step reaches `DONE` (via `plans.recordVerdict` PASS **or** a manual
 `TODO` step: any whose `dependsOnStepIds` are now all `DONE` flip to
 `READY`, which resolves a worker and dispatches it. This cascade is
 transactional with the status change.
+
+For crew-owned plans, admission to `READY` also reserves a crew execution slot.
+`AgentCrew.maxParallel` counts `READY` + `RUNNING` steps across every RUNNING
+plan owned by that crew; `0` means unlimited. Admission locks the crew row so
+concurrent activations cannot oversubscribe it. A slot is released at REVIEW or
+a terminal transition, then Forge deterministically rechecks dependency-ready
+TODO work across the crew's plans.
 
 ### Worker dispatch payload
 
@@ -275,14 +293,17 @@ which is a single decompose-and-execute pass against one goal. The crew
 is the roster (who can plan / work / review); the plan run is the work.
 One crew runs many goals over its lifetime; each goal/plan points back at
 its crew via `Goal.crewId` / `ExecutionPlan.crewId`. `maxParallel` is stored
-and displayed as the crew's intended concurrency ceiling; readiness dispatch
-does not enforce that ceiling yet, so operators should not treat it as a hard
-runtime limit.
+and enforced as the crew-wide execution ceiling at readiness admission. READY
+and RUNNING steps reserve slots across all plans sharing the crew; `0` is
+unlimited.
 
 The loop resolves roles from crew membership: the PLANNER decomposes, a
 WORKER executes each READY step, a REVIEWER judges steps that enter
 REVIEW (when `autoJudge` is on). The same agent can hold multiple roles
-on one crew.
+on one crew. A planner can set `assignedRole` on `plans.addSteps`; Forge resolves
+it automatically when exactly one active crew member has that role. No match is
+rejected; multiple matches require an explicit `assignedAgentId` that actually
+holds the role, so Forge never guesses.
 
 ### Roles
 

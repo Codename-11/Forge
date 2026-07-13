@@ -151,9 +151,19 @@ export const relationRouter = router({
     return ctx.db.$transaction(async (tx) => {
       const relation = await tx.issueRelation.findFirst({
         where: { id: input.relationId, workspaceId: ctx.workspaceId },
+        include: {
+          fromIssue: { select: { deletedAt: true } },
+          toIssue: { select: { deletedAt: true } },
+        },
       });
       if (!relation) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Relation not found." });
+      }
+      if (relation.fromIssue.deletedAt || relation.toIssue.deletedAt) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "Restore archived issues before changing their relationships.",
+        });
       }
 
       await tx.issueRelation.delete({ where: { id: relation.id } });
@@ -211,6 +221,7 @@ export const relationRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         fromIssueId: input.issueId,
+        toIssue: { deletedAt: null },
       },
       include: {
         toIssue: {

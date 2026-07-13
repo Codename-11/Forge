@@ -51,5 +51,13 @@ export async function markExecutionStepRunning(
     subjectId: step.id,
     payload: { planId: step.planId, runId: params.runId, status: ExecutionStepStatus.RUNNING },
   });
+  const { syncMaterializedIssueStatusFromStep } =
+    await import("@/server/services/execution-step-issue-sync");
+  await syncMaterializedIssueStatusFromStep(tx, {
+    workspaceId: params.workspaceId,
+    stepId: step.id,
+    actorId: null,
+    actorAgentId: params.actorAgentId ?? null,
+  });
   return true;
 }

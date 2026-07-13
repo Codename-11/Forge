@@ -12,6 +12,10 @@ import { mcpTools, type McpContext } from "@/server/services/mcp";
 import { EXPLICIT_MCP_TOOL_POLICIES, mcpToolPolicy } from "@/server/services/mcp-policy";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
+  createOrchestrationContextSnapshot,
+  loadIssueOrchestrationContext,
+} from "@/server/services/orchestration-context";
+import {
   createWorkspaceFixture,
   createIssue,
   disconnectPrisma,
@@ -1855,6 +1859,38 @@ describe("mcp — awareness tools (Stream BA)", () => {
     expect(operatorView.currentRun?.id).toBe(otherRun.id);
   });
 
+  it("issues.get and agent.context.bundle hide archived issues", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "BAX" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const issue = await createIssue(f, { title: "Archived context" });
+    const comment = await prisma.comment.create({
+      data: {
+        workspaceId: f.workspace.id,
+        issueId: issue.id,
+        authorId: f.user.id,
+        body: "Frozen with the archive",
+      },
+    });
+    await prisma.issue.update({ where: { id: issue.id }, data: { deletedAt: new Date() } });
+    const { ctx } = buildMcpCtx(f);
+
+    expect(await call("issues.get", { id: issue.id }, ctx)).toBeNull();
+    expect(
+      await call("issues.get", { id: issue.id, include: { description: true } }, ctx),
+    ).toBeNull();
+    await expect(call("agent.context.bundle", { issueId: issue.id }, ctx)).rejects.toThrow(
+      /not found/i,
+    );
+    await expect(
+      call("comments.create", { issueId: issue.id, body: "Too late" }, ctx),
+    ).rejects.toThrow(/archived/i);
+    await expect(
+      call("comments.update", { id: comment.id, body: "Too late" }, ctx),
+    ).rejects.toThrow(/archived/i);
+    await expect(call("comments.delete", { id: comment.id }, ctx)).rejects.toThrow(/archived/i);
+  });
+
   it("runtimes.list returns workspace runtimes; ADMIN required", async () => {
     const f = await createWorkspaceFixture({ keyPrefix: "BAR" });
     fixtures.push(f);
@@ -2301,6 +2337,11 @@ describe("mcp — awareness tools (Stream BA)", () => {
         status: "RUNNING",
       },
     });
+    const dispatchContext = await loadIssueOrchestrationContext(prisma, {
+      workspaceId: f.workspace.id,
+      issueId: issue.id,
+      executionStepId: step.id,
+    });
     await prisma.agentRun.create({
       data: {
         workspaceId: f.workspace.id,
@@ -2308,21 +2349,31 @@ describe("mcp — awareness tools (Stream BA)", () => {
         agentId: agent.id,
         executionStepId: step.id,
         status: AgentRunStatus.ACTIVE,
+        orchestrationContextSnapshot: createOrchestrationContextSnapshot(dispatchContext!),
       },
+    });
+    await prisma.goal.update({ where: { id: goal.id }, data: { title: "Edited goal" } });
+    await prisma.executionPlan.update({
+      where: { id: plan.id },
+      data: { title: "Edited plan" },
+    });
+    await prisma.executionStep.update({
+      where: { id: step.id },
+      data: { title: "Edited step" },
     });
     const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
 
     const bundle = (await call("agent.context.bundle", { issueId: issue.id }, ctx)) as {
       orchestrationContext: {
-        goal: { id: string } | null;
-        plan: { id: string };
-        step: { id: string };
+        goal: { id: string; title: string } | null;
+        plan: { id: string; title: string };
+        step: { id: string; title: string };
       } | null;
     };
     expect(bundle.orchestrationContext).toMatchObject({
-      goal: { id: goal.id },
-      plan: { id: plan.id },
-      step: { id: step.id },
+      goal: { id: goal.id, title: "Deliver renderer" },
+      plan: { id: plan.id, title: "Renderer plan" },
+      step: { id: step.id, title: "Implement renderer" },
     });
   });
 
@@ -2740,7 +2791,7 @@ describe("mcp — notes (per-actor scoping)", () => {
 });
 
 describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
-  it("issues.create returns the stable Orca issue DTO", async () => {
+  it("issues.create preserves capture context and returns the stable issue DTO", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "MCR" });
     fixtures.push(fixture);
     const prisma = getPrisma();
@@ -2753,10 +2804,22 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
         createdById: fixture.user.id,
       },
     });
+    const status = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "IN_PROGRESS" },
+    });
+    const label = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "Captured", color: "#8a6f5a" },
+    });
 
     const created = (await call(
       "issues.create",
-      { title: "created dto", projectId: project.id, priority: "HIGH" },
+      {
+        title: "created dto",
+        projectId: project.id,
+        statusId: status.id,
+        labelIds: [label.id],
+        priority: "HIGH",
+      },
       ctx,
     )) as {
       id: string;
@@ -2779,12 +2842,21 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
       priority: "HIGH",
       project: { id: project.id, key: "DTO", name: "DTO Project" },
       assignedAgent: null,
-      labels: [],
+      status: { id: status.id, name: status.name },
+      labels: [{ name: "Captured" }],
       projectId: project.id,
     });
     expect(created.identifier).toMatch(new RegExp(`^${fixture.workspace.key}-\\d+$`));
     expect(created.url).toBe(`/w/${fixture.workspace.slug}/i/${created.identifier}`);
-    expect(created.status.category).toBe("BACKLOG");
+    expect(created.status.category).toBe("IN_PROGRESS");
+
+    const { ctx: labelScopedCtx } = buildMcpCtx(fixture, { labelIds: [label.id] });
+    await expect(
+      call("issues.create", { title: "scoped capture", labelIds: [label.id] }, labelScopedCtx),
+    ).resolves.toMatchObject({ title: "scoped capture", labels: [{ name: label.name }] });
+    await expect(call("issues.create", { title: "outside lane" }, labelScopedCtx)).rejects.toThrow(
+      /scope/i,
+    );
   });
 
   it("issues.list honors projectId, labelIds, cycleId, priority filters", async () => {
@@ -4804,11 +4876,24 @@ describe("mcp — orchestration loop tools", () => {
         name: "Planner",
       },
     });
+    const worker = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `worker-${Date.now()}`,
+        name: "Worker",
+      },
+    });
 
     // agentCrews.create + addMember + setMemberRole
     const crew = (await call(
       "agentCrews.create",
-      { name: "Loop Crew", members: [{ agentId: planner.id, role: "PLANNER" }] },
+      {
+        name: "Loop Crew",
+        members: [
+          { agentId: planner.id, role: "PLANNER" },
+          { agentId: worker.id, role: "WORKER" },
+        ],
+      },
       ctx,
     )) as { id: string };
 
@@ -4836,11 +4921,19 @@ describe("mcp — orchestration loop tools", () => {
       "plans.addSteps",
       {
         planId: decomp.planId,
-        steps: [{ title: "first" }, { title: "second", dependsOnStepIndexes: [0] }],
+        steps: [
+          { title: "first", assignedRole: "WORKER" },
+          { title: "second", dependsOnStepIndexes: [0] },
+        ],
       },
       ctx,
     )) as { stepIds: string[] };
     expect(added.stepIds).toHaveLength(2);
+    const roleAssigned = await prisma.executionStep.findUniqueOrThrow({
+      where: { id: added.stepIds[0] },
+      select: { assignedAgentId: true },
+    });
+    expect(roleAssigned.assignedAgentId).toBe(worker.id);
 
     // executionPlans.create should accept the same index-based dependency
     // shape as plans.addSteps so a hand-authored plan can be created as a DAG

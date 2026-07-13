@@ -392,6 +392,23 @@ describe("runs dispatcher", () => {
         select: { id: true },
       });
       const issue = await createIssue(fixture, { title: "recover old wake" });
+      const plan = await prisma.executionPlan.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          title: "Recovered plan context",
+          status: "RUNNING",
+        },
+      });
+      const step = await prisma.executionStep.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          planId: plan.id,
+          issueId: issue.id,
+          title: "Recovered step context",
+          position: 0,
+          status: "RUNNING",
+        },
+      });
       const oldStartedAt = new Date(Date.now() - 2 * 60 * 60_000);
       const run = await prisma.agentRun.create({
         data: {
@@ -400,6 +417,7 @@ describe("runs dispatcher", () => {
           agentId: agent.id,
           status: "ACTIVE",
           triggerKind: EventKind.COMMENT_CREATED,
+          executionStepId: step.id,
           startedAt: oldStartedAt,
           lastEventAt: new Date(),
         },
@@ -413,6 +431,7 @@ describe("runs dispatcher", () => {
         include: { events: { orderBy: { createdAt: "asc" } } },
       });
       expect(after.externalRunId).toMatch(/^mock-/);
+      expect(after.orchestrationContextSnapshot).not.toBeNull();
       expect(after.events.some((e) => e.kind === "DISPATCH_STARTED")).toBe(true);
     } finally {
       if (previousE2E === undefined) {

@@ -330,7 +330,7 @@ export function IssueMain({
   canResolveActions?: boolean;
   kind: string;
   projectId: string | null;
-  parent: { id: string; number: number; title: string } | null;
+  parent: { id: string; number: number; title: string; deletedAt: Date | string | null } | null;
   executionSteps: PlanStepIssueContext[];
 }) {
   return (

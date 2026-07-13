@@ -66,9 +66,15 @@ The unit of work.
 | `projectId`       | Optional project membership.                                                                                                |
 | `cycleId`         | Optional sprint membership.                                                                                                 |
 | `slaMinutes`      | Per-issue SLA for the breach watchdog.                                                                                      |
+| `deletedAt`       | Reversible archive timestamp. Archived issues leave active/agent surfaces until restored.                                   |
 
 The two assignment slots — `claimedById` and `assignedAgentId` — coexist
 intentionally. See [Agents → Overview](/agents/overview.html).
+
+Archiving an issue is operational teardown, not a hard delete: queue and
+claim state are cleared, live runs are abandoned, and one unambiguous active
+materialized plan step is canceled. Restoring clears `deletedAt` but does not
+restart that work automatically.
 
 The AI Triage columns (`aiTriageStatus`, `aiSuggestedPriority`,
 `aiSuggestedLabelIds`, `aiSuggestedAgentId`, `aiTriageReasoning`,
@@ -121,14 +127,15 @@ deliberate.
 
 Directed, typed link between two issues.
 
-| Field         | Meaning                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------- |
-| `fromIssueId` | The source issue.                                                                                 |
-| `toIssueId`   | The target issue.                                                                                 |
-| `kind`        | One of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `DUPLICATED_BY`, `RELATED`, `PARENT_OF`, `CHILD_OF`. |
+| Field         | Meaning                                                    |
+| ------------- | ---------------------------------------------------------- |
+| `fromIssueId` | The source issue.                                          |
+| `toIssueId`   | The target issue.                                          |
+| `kind`        | One of `BLOCKS`, `BLOCKED_BY`, `DUPLICATES`, `RELATES_TO`. |
 
-Relations are cascade-deleted from either end — when you delete an
-issue, all relations involving it disappear. Pairs of inverse kinds
+Relations are cascade-deleted from either end only on hard deletion. Issue
+archive preserves the rows for restore and hides archived targets from active
+relation views. Pairs of inverse kinds
 (`BLOCKS` / `BLOCKED_BY`) are typically created as two rows so traversal
 is symmetric.
 
@@ -297,7 +304,9 @@ agent starts work: `expectedOutput` (markdown spec),
 `artifactRequired` (must the agent attach an artifact?). On the
 other side, AgentRun gains `producedArtifactIds`,
 `verificationResult`, and `followUps` so the final response is
-structured.
+structured. `AgentRun.orchestrationContextSnapshot` stores the bounded Goal /
+Plan / Step / DAG context captured when the run opens, keeping historical run
+instructions stable after later orchestration edits.
 
 MCP `agent.context.bundle` for issues exposes both a `completionContract`
 block and, for plan-linked issues, an `orchestrationContext` block with the
@@ -312,7 +321,10 @@ project. Steps form an ordered list with optional
 `dependsOnStepIds` so the runner can mark later steps READY only
 when prerequisites are DONE. Steps can be assigned to agents or
 humans and carry their own per-step `expectedOutput` /
-`verification`.
+`verification`. Assignee, source-run, and dependency references are validated
+inside the workspace; dependencies must remain inside one plan and acyclic.
+Materialized Issues mirror step lifecycle progress, while explicit operator
+Done/Cancel decisions feed back into their unique linked step.
 
 Plan lifecycle: `DRAFT` → `APPROVED` → `RUNNING` →
 `BLOCKED` / `COMPLETED` / `CANCELED`.
@@ -328,6 +340,8 @@ A crew is a group of agents bound to roles (`PLANNER`, `WORKER`,
 `REVIEWER`, `OBSERVER`, `OPERATOR_PROXY`). The same agent can
 hold multiple roles on the same crew. ExecutionPlans optionally
 point at a crew via `crewId`.
+`maxParallel` is a hard crew-wide cap on READY + RUNNING steps across its active
+plans (`0` means unlimited); readiness admission is serialized on the crew row.
 
 ReviewGate is an approval checkpoint attached to any reviewable
 target (artifact / execution-plan / execution-step /

@@ -1,9 +1,9 @@
 "use client";
 import { use, useEffect, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus, WorkItemKind } from "@prisma/client";
-import { Bot, Paperclip, Plus, Timer, Trash2, Workflow } from "lucide-react";
+import { Archive, ArchiveRestore, Bot, Paperclip, Plus, Timer, Workflow } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -79,6 +79,8 @@ const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 export default function IssueDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const includeArchived = searchParams?.get("archived") === "1";
   const workspace = useWorkspace();
   const slug = workspace.slug;
   const isAdmin = workspace.role === "OWNER" || workspace.role === "ADMIN";
@@ -93,7 +95,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     data: issue,
     isLoading,
     error,
-  } = trpc.issue.byId.useQuery({ id }, { refetchInterval: 15_000 });
+  } = trpc.issue.byId.useQuery({ id, includeArchived }, { refetchInterval: 15_000 });
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
@@ -134,19 +136,21 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   const update = trpc.issue.update.useMutation({
     onMutate: async (input) => {
-      await utils.issue.byId.cancel({ id: input.id });
-      const prev = utils.issue.byId.getData({ id: input.id });
-      utils.issue.byId.setData({ id: input.id }, (old) => {
+      await utils.issue.byId.cancel({ id: input.id, includeArchived });
+      const prev = utils.issue.byId.getData({ id: input.id, includeArchived });
+      utils.issue.byId.setData({ id: input.id, includeArchived }, (old) => {
         if (!old) return old;
         return { ...old, ...input } as typeof old;
       });
       return { prev };
     },
     onError: (err, input, ctx) => {
-      if (ctx?.prev) utils.issue.byId.setData({ id: input.id }, ctx.prev);
+      if (ctx?.prev) {
+        utils.issue.byId.setData({ id: input.id, includeArchived }, ctx.prev);
+      }
       toast.error(err.message);
     },
-    onSettled: () => utils.issue.byId.invalidate({ id }),
+    onSettled: () => utils.issue.byId.invalidate({ id, includeArchived }),
   });
 
   const assign = trpc.issue.assign.useMutation({
@@ -180,18 +184,30 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     onError: (e) => toast.error(e.message),
   });
 
-  const softDelete = trpc.issue.softDelete.useMutation({
+  const archiveIssue = trpc.issue.archive.useMutation({
     onSuccess: () => {
-      toast.success("Issue deleted.");
+      toast.success("Issue archived.");
       utils.issue.list.invalidate();
-      router.push(`/w/${slug}/issues`);
+      utils.issue.count.invalidate();
+      router.push(`/w/${slug}/issues?archived=1`);
+    },
+    onError: (e) => toast.error(e.message),
+  });
+
+  const restoreIssue = trpc.issue.restore.useMutation({
+    onSuccess: () => {
+      toast.success("Issue restored.");
+      utils.issue.byId.invalidate({ id, includeArchived: true });
+      utils.issue.list.invalidate();
+      utils.issue.count.invalidate();
+      router.replace(`/w/${slug}/issues/${id}`);
     },
     onError: (e) => toast.error(e.message),
   });
 
   const [titleDraft, setTitleDraft] = useState("");
   const [editingTitle, setEditingTitle] = useState(false);
-  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
 
@@ -306,6 +322,62 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         { label: issueKey, mono: true },
       ];
 
+  if (issue.deletedAt) {
+    return (
+      <>
+        <Topbar
+          title={<Breadcrumb className="font-normal" items={breadcrumbItems} />}
+          subtitle={<span className="font-mono">archived</span>}
+          actions={
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => restoreIssue.mutate({ id: issue.id })}
+              disabled={restoreIssue.isPending}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" aria-hidden />
+              {restoreIssue.isPending ? "Restoring…" : "Restore issue"}
+            </Button>
+          }
+        />
+        <div className="flex flex-1 items-center justify-center p-6">
+          <div className="w-full max-w-xl rounded-lg border border-border bg-card/40 p-6">
+            <EmptyState
+              variant="section"
+              icon={<Archive />}
+              title={`${issueKey} is archived`}
+              description={
+                <span>
+                  {issue.title} left active views on {formatDate(issue.deletedAt, timePrefs)}. Its
+                  history and relationships are preserved.
+                </span>
+              }
+              action={
+                <div className="flex flex-wrap justify-center gap-2">
+                  <Button
+                    variant="ember"
+                    size="sm"
+                    onClick={() => restoreIssue.mutate({ id: issue.id })}
+                    disabled={restoreIssue.isPending}
+                  >
+                    Restore issue
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => router.push(`/w/${slug}/issues?archived=1`)}
+                  >
+                    Back to archive
+                  </Button>
+                </div>
+              }
+            />
+          </div>
+        </div>
+      </>
+    );
+  }
+
   return (
     <>
       <Topbar
@@ -324,12 +396,12 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setDeleteOpen(true)}
-              title="Delete issue"
-              aria-label="Delete issue"
+              onClick={() => setArchiveOpen(true)}
+              title="Archive issue"
+              aria-label="Archive issue"
             >
-              <Trash2 className="h-3.5 w-3.5 sm:hidden" />
-              <span className="hidden sm:inline">Delete</span>
+              <Archive className="h-3.5 w-3.5 sm:hidden" />
+              <span className="hidden sm:inline">Archive</span>
             </Button>
           </>
         }
@@ -689,15 +761,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       </div>
 
       <Confirm
-        open={deleteOpen}
-        onOpenChange={setDeleteOpen}
-        variant="destructive"
-        title={`Delete ${issueKey}?`}
-        description="Soft-deletes the issue. History is retained but the issue is removed from lists, boards, and relations."
-        primaryLabel="Delete issue"
-        typeToConfirm={issueKey}
-        loading={softDelete.isPending}
-        onConfirm={() => softDelete.mutate({ id })}
+        open={archiveOpen}
+        onOpenChange={setArchiveOpen}
+        title={`Archive ${issueKey}?`}
+        description="Moves the issue out of active views and stops its active agent work. History and relationships stay preserved, and you can restore it later."
+        primaryLabel="Archive issue"
+        loading={archiveIssue.isPending}
+        onConfirm={() => archiveIssue.mutate({ id })}
       />
       <Confirm
         open={releaseOpen}

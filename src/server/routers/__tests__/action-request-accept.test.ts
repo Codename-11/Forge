@@ -235,9 +235,33 @@ describe("actionRequestRouter — kind dispatchers", () => {
     expect(after.assignedAgentId).toBe(agent.id);
   });
 
-  it("ARCHIVE soft-deletes the issue", async () => {
+  it("ARCHIVE uses the reversible archive lifecycle and closes active work", async () => {
     const { fixture, prisma, caller } = await setup();
     const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Archive agent",
+        profileKey: `archive-agent-${Date.now()}`,
+      },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: {
+        queued: true,
+        claimedAt: new Date(),
+        claimedById: fixture.user.id,
+        assignedAgentId: agent.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
     const { id } = await caller.create({
       title: "Archive this",
       kind: ActionRequestKind.ARCHIVE,
@@ -246,6 +270,17 @@ describe("actionRequestRouter — kind dispatchers", () => {
     await caller.accept({ id });
     const after = await prisma.issue.findUniqueOrThrow({ where: { id: issue.id } });
     expect(after.deletedAt).not.toBeNull();
+    expect(after.queued).toBe(false);
+    expect(after.claimedAt).toBeNull();
+    expect(after.claimedById).toBeNull();
+    expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+      AgentRunStatus.ABANDONED,
+    );
+    expect(
+      await prisma.activityEvent.count({
+        where: { workspaceId: fixture.workspace.id, subjectId: issue.id, kind: "ISSUE_DELETED" },
+      }),
+    ).toBe(1);
   });
 
   it("CLOSE_AS_DUPLICATE writes a DUPLICATES relation", async () => {

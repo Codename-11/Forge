@@ -1,5 +1,6 @@
 import "server-only";
 import { createHash, randomBytes } from "node:crypto";
+import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import {
   AgentProvider,
@@ -348,6 +349,14 @@ async function assertMcpCommentWriteAllowed(
   const isHumanAuthor = !linkedAgentId && !!ctx.userId && comment.authorId === ctx.userId;
   if (isAgentAuthor || isHumanAuthor || (await isMcpWorkspaceAdmin(ctx))) return;
   throw new Error("Only the comment author or a workspace admin can modify this comment.");
+}
+
+async function assertMcpActiveIssue(ctx: McpContext, issueId: string): Promise<void> {
+  const issue = await db.issue.findFirst({
+    where: { id: issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+    select: { id: true },
+  });
+  if (!issue) throw new Error("Issue not found or archived in this workspace.");
 }
 
 type McpCommentMutationRow = Prisma.CommentGetPayload<{
@@ -1391,7 +1400,7 @@ export const mcpTools = {
       const include = input.include;
       if (!include) {
         return db.issue.findFirst({
-          where: { id: input.id, workspaceId: ctx.workspaceId },
+          where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
           include: {
             status: true,
             project: true,
@@ -1403,7 +1412,7 @@ export const mcpTools = {
       // Hydrated shape — base row always carries the legacy fields, then
       // we attach optional sections so callers get a single round-trip.
       const issue = await db.issue.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
+        where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
         include: {
           status: true,
           project: true,
@@ -1488,6 +1497,8 @@ export const mcpTools = {
       title: z.string().min(1).max(300),
       description: z.string().max(50_000).optional(),
       projectId: z.string().optional(),
+      statusId: z.string().cuid().optional(),
+      labelIds: z.array(z.string().cuid()).max(100).optional(),
       priority: z.enum(["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"]).optional(),
     }),
     async run(
@@ -1495,6 +1506,8 @@ export const mcpTools = {
         title: string;
         description?: string;
         projectId?: string;
+        statusId?: string;
+        labelIds?: string[];
         priority?: "NONE" | "LOW" | "MEDIUM" | "HIGH" | "URGENT";
       },
       ctx: McpContext,
@@ -1506,6 +1519,35 @@ export const mcpTools = {
           id: input.projectId,
         });
       }
+      const key = ctx.apiKey;
+      if (
+        key &&
+        (key.projectIds.length > 0 || key.labelIds.length > 0 || key.initiativeIds.length > 0)
+      ) {
+        const projectScopeMatch = input.projectId
+          ? key.projectIds.includes(input.projectId)
+          : false;
+        const labelScopeMatch = (input.labelIds ?? []).some((id) => key.labelIds.includes(id));
+        const initiativeScopeMatch =
+          input.projectId && key.initiativeIds.length > 0
+            ? Boolean(
+                await db.project.findFirst({
+                  where: {
+                    id: input.projectId,
+                    workspaceId: ctx.workspaceId,
+                    initiativeId: { in: key.initiativeIds },
+                  },
+                  select: { id: true },
+                }),
+              )
+            : false;
+        if (!projectScopeMatch && !labelScopeMatch && !initiativeScopeMatch) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "API key scope does not include the new issue's project or labels.",
+          });
+        }
+      }
       const authorId = await resolveActorId(ctx);
       const issue = await createIssueWithSideEffects({
         db,
@@ -1516,6 +1558,8 @@ export const mcpTools = {
           title: input.title,
           description: input.description,
           projectId: input.projectId,
+          statusId: input.statusId,
+          labelIds: input.labelIds,
           priority: (input.priority ?? Priority.NONE) as Priority,
         },
       });
@@ -2947,6 +2991,7 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      await assertMcpActiveIssue(ctx, input.issueId);
       const authorId = await resolveActorId(ctx);
       // When the API key is linked to an Agent, record it on the comment so
       // the issue detail UI can render it as agent-authored instead of
@@ -3052,6 +3097,7 @@ export const mcpTools = {
       if (!existing.issueId)
         throw new Error("MCP comment updates currently require an issue comment.");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: existing.issueId });
+      await assertMcpActiveIssue(ctx, existing.issueId);
       await assertMcpCommentWriteAllowed(ctx, existing);
 
       if (existing.body === input.body) {
@@ -3188,6 +3234,7 @@ export const mcpTools = {
       if (!existing.issueId)
         throw new Error("MCP comment deletion currently requires an issue comment.");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: existing.issueId });
+      await assertMcpActiveIssue(ctx, existing.issueId);
       await assertMcpCommentWriteAllowed(ctx, existing);
 
       const actorId = await resolveActorId(ctx);
@@ -7748,7 +7795,7 @@ export const mcpTools = {
         const issueId = input.issueId;
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: issueId });
         const issue = await db.issue.findFirst({
-          where: { id: issueId, workspaceId: ctx.workspaceId },
+          where: { id: issueId, workspaceId: ctx.workspaceId, deletedAt: null },
           include: {
             status: true,
             project: true,
@@ -7851,12 +7898,13 @@ export const mcpTools = {
           verificationChecklist: issue.verificationChecklist,
           artifactRequired: issue.artifactRequired,
         };
-        const { loadIssueOrchestrationContext } =
+        const { loadRunOrchestrationContext } =
           await import("@/server/services/orchestration-context");
-        const orchestrationContext = await loadIssueOrchestrationContext(db, {
+        const orchestrationContext = await loadRunOrchestrationContext(db, {
           workspaceId: ctx.workspaceId,
           issueId,
           executionStepId: currentRun?.executionStepId,
+          snapshot: currentRun?.orchestrationContextSnapshot,
         });
         const comments = sortCommentsChronologically(rawComments);
         const currentMode = (currentRun?.engagementMode ?? "EXECUTE") as EngagementMode;

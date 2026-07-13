@@ -90,6 +90,12 @@ export interface OrchestrationContextTarget {
   executionStepId?: string | null;
 }
 
+interface OrchestrationContextSnapshotEnvelope {
+  schemaVersion: 1;
+  capturedAt: string;
+  context: IssueOrchestrationContext;
+}
+
 export interface InboxOrchestrationContext {
   goal: { id: string; title: string; status: string } | null;
   plan: {
@@ -343,6 +349,81 @@ export async function loadIssueOrchestrationContext(
     targets: [{ issueId: params.issueId, executionStepId: params.executionStepId }],
   });
   return context ?? null;
+}
+
+/**
+ * Serialize the already-bounded shared context for durable storage on an
+ * AgentRun. The envelope gives us an explicit evolution point without
+ * coupling historical rows to the current Prisma result shape.
+ */
+export function createOrchestrationContextSnapshot(
+  context: IssueOrchestrationContext,
+  capturedAt = new Date(),
+): Prisma.InputJsonValue {
+  return JSON.parse(
+    JSON.stringify({
+      schemaVersion: 1,
+      capturedAt: capturedAt.toISOString(),
+      context,
+    } satisfies OrchestrationContextSnapshotEnvelope),
+  ) as Prisma.InputJsonValue;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function reviveEvidenceDate(summary: unknown): void {
+  const sourceRun = asRecord(summary)?.sourceRun;
+  const sourceRunRecord = asRecord(sourceRun);
+  if (!sourceRunRecord || typeof sourceRunRecord.completedAt !== "string") return;
+  const completedAt = new Date(sourceRunRecord.completedAt);
+  sourceRunRecord.completedAt = Number.isNaN(completedAt.getTime()) ? null : completedAt;
+}
+
+/** Parse a v1 snapshot. Invalid/unknown snapshots intentionally return null. */
+export function readOrchestrationContextSnapshot(
+  snapshot: unknown,
+): IssueOrchestrationContext | null {
+  const envelope = asRecord(snapshot);
+  if (envelope?.schemaVersion !== 1 || typeof envelope.capturedAt !== "string") return null;
+  const rawContext = asRecord(envelope.context);
+  if (
+    !rawContext ||
+    !asRecord(rawContext.plan) ||
+    !Array.isArray(rawContext.dependencies) ||
+    !Array.isArray(rawContext.dependents) ||
+    !Array.isArray(rawContext.planSteps)
+  ) {
+    return null;
+  }
+
+  // Clone before reviving timestamps so the Prisma JSON value remains a plain
+  // data object and callers get the same Date-bearing shape as live hydration.
+  const context = JSON.parse(JSON.stringify(rawContext)) as Record<string, unknown>;
+  reviveEvidenceDate(context.step);
+  for (const field of ["dependencies", "dependents", "planSteps"] as const) {
+    const summaries = context[field];
+    if (Array.isArray(summaries)) summaries.forEach(reviveEvidenceDate);
+  }
+  return context as unknown as IssueOrchestrationContext;
+}
+
+/** Prefer a run's immutable dispatch snapshot, with live hydration for legacy rows. */
+export async function loadRunOrchestrationContext(
+  client: DbClient,
+  params: {
+    workspaceId: string;
+    issueId: string;
+    executionStepId?: string | null;
+    snapshot?: unknown;
+  },
+): Promise<IssueOrchestrationContext | null> {
+  const snapshot = readOrchestrationContextSnapshot(params.snapshot);
+  if (snapshot) return snapshot;
+  return loadIssueOrchestrationContext(client, params);
 }
 
 function normalizeContext(

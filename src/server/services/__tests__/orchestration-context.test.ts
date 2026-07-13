@@ -1,7 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import {
+  createOrchestrationContextSnapshot,
   formatOrchestrationContextForPrompt,
   loadIssueOrchestrationContext,
+  loadRunOrchestrationContext,
+  readOrchestrationContextSnapshot,
 } from "@/server/services/orchestration-context";
 import {
   createIssue,
@@ -218,5 +221,71 @@ describe("orchestration context", () => {
       executionStepId: first.id,
     });
     expect(exactContext?.step?.id).toBe(first.id);
+  });
+
+  it("prefers a versioned run snapshot while legacy rows retain live fallback", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "OCS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Snapshot issue" });
+    const plan = await prisma.executionPlan.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Original plan title",
+        status: "RUNNING",
+      },
+    });
+    const step = await prisma.executionStep.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        planId: plan.id,
+        issueId: issue.id,
+        title: "Original step title",
+        position: 0,
+        status: "RUNNING",
+      },
+    });
+    const live = await loadIssueOrchestrationContext(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      executionStepId: step.id,
+    });
+    expect(live).not.toBeNull();
+    const snapshot = createOrchestrationContextSnapshot(live!);
+    expect(readOrchestrationContextSnapshot(snapshot)).toMatchObject({
+      plan: { title: "Original plan title" },
+      step: { title: "Original step title" },
+    });
+
+    await prisma.executionPlan.update({
+      where: { id: plan.id },
+      data: { title: "Edited plan title" },
+    });
+    await prisma.executionStep.update({
+      where: { id: step.id },
+      data: { title: "Edited step title" },
+    });
+
+    const frozen = await loadRunOrchestrationContext(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      executionStepId: step.id,
+      snapshot,
+    });
+    expect(frozen).toMatchObject({
+      plan: { title: "Original plan title" },
+      step: { title: "Original step title" },
+    });
+
+    const legacyFallback = await loadRunOrchestrationContext(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      executionStepId: step.id,
+      snapshot: null,
+    });
+    expect(legacyFallback).toMatchObject({
+      plan: { title: "Edited plan title" },
+      step: { title: "Edited step title" },
+    });
   });
 });

@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { Sparkles, Folder } from "lucide-react";
+import { Archive, ArchiveRestore, Sparkles, Folder } from "lucide-react";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { IssueList } from "@/components/issue-list";
@@ -74,6 +74,7 @@ export default function IssuesPage() {
   const viewIdFromUrl = searchParams?.get("view") ?? null;
   const fParam = searchParams?.get("f") ?? null;
   const dueOnFromUrl = searchParams?.get("dueOn") ?? null;
+  const showArchived = searchParams?.get("archived") === "1";
   // Reject a malformed or calendar-invalid ?dueOn (e.g. 2026-13-45, which
   // passes the shape regex but rolls over) before it reaches the chip/query.
   const dueOn = dueOnFromUrl && isRealDateString(dueOnFromUrl) ? dueOnFromUrl : null;
@@ -127,6 +128,7 @@ export default function IssuesPage() {
       group: IssueGroupBy;
       view: string | null;
       dueOn: string | null;
+      archived: boolean;
     }) => {
       const p = new URLSearchParams();
       if (s.view) p.set("view", s.view);
@@ -135,6 +137,7 @@ export default function IssuesPage() {
       if (s.sort !== "priority") p.set("sort", s.sort);
       if (s.group !== "status") p.set("group", s.group);
       if (s.dueOn) p.set("dueOn", s.dueOn);
+      if (s.archived) p.set("archived", "1");
       return p.toString();
     },
     [],
@@ -148,6 +151,7 @@ export default function IssuesPage() {
         group: IssueGroupBy;
         view: string | null;
         dueOn: string | null;
+        archived: boolean;
       }>,
       opts?: { push?: boolean },
     ) => {
@@ -158,6 +162,7 @@ export default function IssuesPage() {
         group: next.group ?? groupBy,
         view: next.view !== undefined ? next.view : (activeViewId ?? viewIdFromUrl),
         dueOn: next.dueOn !== undefined ? next.dueOn : dueOn,
+        archived: next.archived ?? showArchived,
       });
       const url = qs ? `${pathname}?${qs}` : pathname;
       if (opts?.push) router.push(url);
@@ -172,6 +177,7 @@ export default function IssuesPage() {
       activeViewId,
       viewIdFromUrl,
       dueOn,
+      showArchived,
       pathname,
       router,
     ],
@@ -219,7 +225,9 @@ export default function IssuesPage() {
   }, [fParam, viewIdFromUrl, views?.length]);
 
   // Project / Cycle / initiative chip state derives from `filters`.
-  const projectId: ProjectFilter = filters.withoutProject ? null : (filters.projectIds?.[0] ?? undefined);
+  const projectId: ProjectFilter = filters.withoutProject
+    ? null
+    : (filters.projectIds?.[0] ?? undefined);
   const cycleId: CycleFilter = filters.withoutCycle ? null : (filters.cycleIds?.[0] ?? undefined);
   const initiativeId: InitiativeFilter = filters.withoutInitiative
     ? null
@@ -288,8 +296,12 @@ export default function IssuesPage() {
     commit({ dueOn: null });
   }
 
+  function setShowArchived(archived: boolean) {
+    commit({ archived }, { push: true });
+  }
+
   const hasFilters = !isEmptyFilters(filters) || !!query || !!dueOn;
-  const isWorkspaceEmpty = !!wsCount && wsCount._count.issues === 0 && !hasFilters;
+  const isWorkspaceEmpty = !showArchived && !!wsCount && wsCount._count.issues === 0 && !hasFilters;
 
   // The query object we pass down. `query` is kept separate from the
   // saved-view filter blob (it's not persisted with views by default to
@@ -307,11 +319,12 @@ export default function IssuesPage() {
   const { data: statuses } = trpc.status.list.useQuery();
   const doneIds = useMemo(() => doneStatusIds(statuses ?? []), [statuses]);
   const countIncludeDone =
-    view === "board" ? true : resolveIncludeDone(issueQueryFilters, false, doneIds);
+    showArchived || view === "board" ? true : resolveIncludeDone(issueQueryFilters, false, doneIds);
   const { data: countData } = trpc.issue.count.useQuery({
     ...issueQueryFilters,
     includeDone: countIncludeDone,
     dueOn: dueOn ?? undefined,
+    archived: showArchived,
   });
 
   const activeView = activeViewId && views ? views.find((v) => v.id === activeViewId) : null;
@@ -319,11 +332,11 @@ export default function IssuesPage() {
   return (
     <DensityProvider>
       <Topbar
-        title="All issues"
+        title={showArchived ? "Archived issues" : "All issues"}
         subtitle={
           countData
-            ? `${countData.count} ${hasFilters ? "matching" : "issues"}`
-            : wsCount
+            ? `${countData.count} ${hasFilters ? "matching" : showArchived ? "archived" : "issues"}`
+            : !showArchived && wsCount
               ? `${wsCount._count.issues} issues`
               : undefined
         }
@@ -348,8 +361,21 @@ export default function IssuesPage() {
                 )}
               </div>
             )}
-            {view === "list" && !isWorkspaceEmpty && <DensityToggle />}
-            {!isWorkspaceEmpty && <ViewToggle value={view} onChange={setView} />}
+            {(showArchived || view === "list") && !isWorkspaceEmpty && <DensityToggle />}
+            {!showArchived && !isWorkspaceEmpty && <ViewToggle value={view} onChange={setView} />}
+            <Button
+              variant={showArchived ? "outline" : "ghost"}
+              size="sm"
+              onClick={() => setShowArchived(!showArchived)}
+              title={showArchived ? "Return to active issues" : "View archived issues"}
+            >
+              {showArchived ? (
+                <ArchiveRestore className="h-3.5 w-3.5" aria-hidden />
+              ) : (
+                <Archive className="h-3.5 w-3.5" aria-hidden />
+              )}
+              {showArchived ? "Active" : "Archive"}
+            </Button>
           </div>
         }
       />
@@ -420,7 +446,7 @@ export default function IssuesPage() {
               }
             />
           </div>
-        ) : view === "list" ? (
+        ) : showArchived || view === "list" ? (
           <div className="h-full overflow-y-auto">
             <IssueList
               workspaceKey={key}
@@ -428,8 +454,11 @@ export default function IssuesPage() {
               sort={sort}
               groupBy={groupBy}
               dueOn={dueOn ?? undefined}
+              archived={showArchived}
               emptyOverride={
-                hasFilters ? (
+                showArchived && !hasFilters ? (
+                  <ArchivedEmptyState onReturn={() => setShowArchived(false)} />
+                ) : hasFilters ? (
                   <FilteredEmptyState
                     activeViewName={activeView?.name ?? null}
                     onClear={clearAllFilters}
@@ -463,6 +492,24 @@ export default function IssuesPage() {
         onCreated={(id) => applyView(id, filters)}
       />
     </DensityProvider>
+  );
+}
+
+function ArchivedEmptyState({ onReturn }: { onReturn: () => void }) {
+  return (
+    <div className="flex h-60 items-center justify-center">
+      <EmptyState
+        variant="section"
+        icon={<Archive />}
+        title="Archive is empty"
+        description="Archived issues stay here until you restore them."
+        action={
+          <Button variant="outline" size="sm" onClick={onReturn}>
+            Back to active issues
+          </Button>
+        }
+      />
+    </div>
   );
 }
 
