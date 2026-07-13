@@ -20,7 +20,7 @@ test.describe("multi-workspace restructure", () => {
     await expect(page).toHaveURL(/\/$/);
     await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
     // Read-only badge in the global top bar.
-    await expect(page.getByText("Read-only across workspaces")).toBeVisible();
+    await expect(page.getByText("Read-only across workspaces", { exact: true })).toBeVisible();
   });
 
   test("workspace switcher navigates into a workspace", async ({ page }) => {

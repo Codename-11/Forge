@@ -1,7 +1,27 @@
 "use client";
-import { useEffect, useState } from "react";
-import { AlertTriangle, Bot, Activity, Hourglass, RefreshCw } from "lucide-react";
+
+import type { AgentStatus } from "@prisma/client";
+import Link from "next/link";
+import { useEffect, useRef, useState } from "react";
+import {
+  Activity,
+  AlertTriangle,
+  Bell,
+  ChevronDown,
+  FolderOpen,
+  GitBranch,
+  History,
+  RefreshCw,
+  Square,
+  Terminal,
+  Zap,
+} from "lucide-react";
 import { toast } from "sonner";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { RunApprovalCard } from "@/components/agents/run-approval-card";
+import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { RunTimeline } from "@/components/mission-control/run-timeline";
+import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
 import {
   EngagementModeGlyph,
   MODE_LABEL,
@@ -9,204 +29,585 @@ import {
   MODE_SUBTITLE,
   type EngagementModeValue,
 } from "@/components/ui/engagement-mode-glyph";
-import { useConfirm } from "@/components/ui/modal";
-import { trpc } from "@/lib/trpc";
-import { useRealtime } from "@/hooks/use-realtime";
-import { relativeTime, cn } from "@/lib/utils";
-import { RuntimePolicyBadges } from "@/components/runtime-tool-surface";
-import { RunApprovalCard } from "@/components/agents/run-approval-card";
+import { useRealtime, useRealtimeConnection } from "@/hooks/use-realtime";
+import { useWorkspace } from "@/hooks/use-workspace";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
+import type { RuntimeToolCapability } from "@/lib/runtime-tools";
+import { trpc } from "@/lib/trpc";
+import { presenceAvailability } from "@/lib/transport-display";
+import { cn, relativeTime } from "@/lib/utils";
+import { useConfirm } from "@/components/ui/modal";
+
+type WorkstreamAgent = {
+  id: string;
+  name: string;
+  profileKey: string;
+  avatar?: string | null;
+  status?: AgentStatus;
+  engagementMode?: EngagementModeValue | null;
+  provider?: string | null;
+  runtimeMode?: string | null;
+  lastHeartbeatAt?: Date | string | null;
+  webhookUrl?: string | null;
+  runtimeId?: string | null;
+  runtime?: {
+    name?: string | null;
+    adapterKey?: string | null;
+    config?: unknown;
+  } | null;
+};
+
+export type WorkstreamLatestRun = {
+  id: string;
+  status: string;
+  startedAt: Date | string;
+  lastEventAt: Date | string;
+  finishedAt?: Date | string | null;
+  currentStep?: string | null;
+  summary?: string | null;
+  engagementMode?: string | null;
+  runtimePolicy?: unknown;
+  agent: WorkstreamAgent;
+};
+
+type WorkstreamState =
+  | "assigned"
+  | "queued"
+  | "wake-sent"
+  | "acknowledged"
+  | "working"
+  | "quiet"
+  | "waiting"
+  | "completed"
+  | "stalled"
+  | "stopped"
+  | "errored";
 
 /**
- * Live-pulse strip for the assigned agent's current run on this issue.
+ * The issue's single operational surface for agent work.
  *
- * Subscribes to the workspace SSE bus and refreshes on `agent-run.*`
- * events. Renders nothing when no ACTIVE run — the strip is invisible
- * unless work is happening, so the issue page stays calm for issues
- * that aren't currently being worked.
- *
- * Layout: a thin warm strip with a slow pulse dot, the agent name,
- * the current step (denormalized on the run row), and "updated Ns ago"
- * relative to lastEventAt. The data comes from `agentRun.activeForIssue`
- * which already includes the agent + statusComment join.
- *
- * Since the durable inbox refactor the strip also distinguishes
- * canonical dispatch states (queued / wake-sent / acknowledged /
- * running / stalled) using `acknowledgedAt`, `outputStartedAt`,
- * `lastWakeAt`, and the legacy `lastEventAt` falloff. Webhook delivery
- * success no longer implies the agent is doing work — the agent must
- * have acked the run for the strip to show "running".
+ * Unlike the former repeated pulse strips, Workstream keeps identity,
+ * contract, runtime, controls, rolling status, and the event trace together.
+ * Active runs open their trace automatically; terminal history stays calm and
+ * collapsed. A quiet ACTIVE run is explicitly labelled Quiet — only a
+ * canonical persisted STALLED status is ever called Stalled.
  */
-export function AgentRunStrip({ issueId }: { issueId: string }) {
+export function AgentRunStrip({
+  issueId,
+  assignedAgent = null,
+  latestRun = null,
+  activityHref,
+}: {
+  issueId: string;
+  assignedAgent?: WorkstreamAgent | null;
+  latestRun?: WorkstreamLatestRun | null;
+  activityHref?: string;
+}) {
   const utils = trpc.useUtils();
-  const { data: run } = trpc.agentRun.activeForIssue.useQuery({ issueId }, { staleTime: 5_000 });
+  const workspace = useWorkspace();
+  const realtime = useRealtimeConnection();
+  const { data: activeRun } = trpc.agentRun.activeForIssue.useQuery(
+    { issueId },
+    { staleTime: 5_000 },
+  );
   const [now, setNow] = useState(() => Date.now());
+  const [expanded, setExpanded] = useState(false);
+  const initializedRunId = useRef<string | null>(null);
 
-  // Refresh the relative-time label every 10s so "updated Ns ago" stays
-  // honest without re-rendering on each second tick.
+  const relevantLatestRun =
+    latestRun && (!assignedAgent || latestRun.agent.id === assignedAgent.id) ? latestRun : null;
+  const displayRun = activeRun ?? relevantLatestRun;
+  const isActiveRun = Boolean(
+    activeRun || (displayRun && ["ACTIVE", "WAITING"].includes(displayRun.status.toUpperCase())),
+  );
+  const displayAgent = mergeAgent(
+    activeRun?.agent ?? relevantLatestRun?.agent ?? null,
+    assignedAgent,
+  );
+  const quietMs =
+    workspace.agentRunQuietMinutes > 0 ? workspace.agentRunQuietMinutes * 60_000 : null;
+  const state = deriveWorkstreamState(activeRun ?? relevantLatestRun, now, isActiveRun, quietMs);
+  const policy = (displayRun?.runtimePolicy ?? null) as RuntimePolicySnapshot | null;
+
+  const { data: events } = trpc.agentRun.events.useQuery(
+    { runId: displayRun?.id ?? "", limit: 10 },
+    { enabled: Boolean(displayRun?.id) && expanded, staleTime: 5_000 },
+  );
+
   useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 10_000);
-    return () => clearInterval(t);
+    const timer = window.setInterval(() => setNow(Date.now()), 10_000);
+    return () => window.clearInterval(timer);
   }, []);
 
-  // Patch on agent-run SSE events for this run — the full query
-  // refetches but the local state already updates immediately so the
-  // strip feels live.
-  useRealtime((evt) => {
-    if (evt.subjectType !== "agent-run") return;
-    const payload = evt.payload as { issueId?: string } | null;
+  useEffect(() => {
+    if (!displayRun || initializedRunId.current === displayRun.id) return;
+    initializedRunId.current = displayRun.id;
+    setExpanded(
+      isActiveRun && (state === "working" || state === "acknowledged" || state === "wake-sent"),
+    );
+  }, [displayRun, isActiveRun, state]);
+
+  useRealtime((event) => {
+    if (event.subjectType !== "agent-run") return;
+    const payload = event.payload as { issueId?: string } | null;
     if (payload?.issueId !== issueId) return;
     void utils.agentRun.activeForIssue.invalidate({ issueId });
+    if (displayRun?.id) {
+      void utils.agentRun.events.invalidate({ runId: displayRun.id, limit: 10 });
+    }
   });
 
-  if (!run) return null;
+  if (!displayAgent && !displayRun) return null;
 
-  const elapsedMs = now - new Date(run.startedAt).getTime();
-  const elapsedLabel = formatElapsed(elapsedMs);
-  const lastEventLabel = relativeTime(run.lastEventAt);
-  // WAITING short-circuits the wake/ack derivation entirely — when the
-  // agent has self-blocked, the operator's eye should land on "this is
-  // on you" rather than on the wake-state machine.
-  const state: StripState =
-    run.status === "WAITING"
-      ? "waiting"
-      : deriveStripState({
-          acknowledgedAt: run.acknowledgedAt,
-          outputStartedAt: run.outputStartedAt,
-          lastWakeAt: run.lastWakeAt,
-          lastEventAt: new Date(run.lastEventAt),
-          now,
-        });
+  const mode = normalizeMode(
+    displayRun?.engagementMode ?? activeRun?.engagementMode ?? assignedAgent?.engagementMode,
+  );
+  const elapsedLabel = displayRun
+    ? formatElapsed(now - new Date(displayRun.startedAt).getTime())
+    : null;
+  const lastSignalLabel = displayRun ? relativeTime(displayRun.lastEventAt) : null;
   const step =
-    state === "idle"
-      ? run.currentStep
-        ? `${run.currentStep} · idle`
-        : "idle"
-      : (run.currentStep ??
-        (state === "waiting"
-          ? "Waiting on you"
-          : state === "running"
-            ? "working…"
-            : state === "acknowledged"
-              ? "acknowledged · drafting…"
-              : state === "wake-sent"
-                ? `wake sent · waiting for ack${run.wakeAttempts > 1 ? ` (${run.wakeAttempts} attempts)` : ""}`
-                : state === "queued"
-                  ? "queued · waking…"
-                  : "no activity"));
+    activeRun?.currentStep ??
+    activeRun?.statusComment?.currentStep ??
+    relevantLatestRun?.currentStep ??
+    stateCopy(state);
+  const statusBody = activeRun?.statusComment?.body?.trim();
+  const statusTone = stateTone(state);
 
   return (
-    <div
-      className={cn(
-        "mb-3 flex min-w-0 flex-col gap-2 overflow-hidden rounded-md border px-3 py-2 text-[0.75rem]",
-        state === "running"
-          ? "border-ember/30 bg-ember/5"
-          : state === "acknowledged"
-            ? "border-ember/20 bg-ember/5"
-            : state === "waiting"
-              ? "border-ember/40 bg-ember/10"
-              : state === "stalled"
-                ? "border-amber-500/30 bg-amber-500/5"
-                : "border-border bg-card/40",
-      )}
+    <section
+      aria-label="Agent workstream"
+      className={cn("mb-5 overflow-hidden rounded-lg border bg-card/40", statusTone.container)}
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="relative flex h-2 w-2 shrink-0">
-          {state === "running" || state === "acknowledged" ? (
-            // Live pulse only while events are still arriving. Once the
-            // agent's final turn lands (no events past the live window) the
-            // state settles to "idle" — a calm static dot, no ping — so the
-            // strip stops claiming active work the moment it's done.
-            <>
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember opacity-60" />
-              <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
-            </>
-          ) : state === "waiting" ? (
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-ember" />
-          ) : state === "idle" ? (
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-ember/60" />
-          ) : state === "stalled" ? (
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-amber-500" />
-          ) : (
-            <span className="relative inline-flex h-2 w-2 rounded-full bg-muted-foreground/60" />
-          )}
-        </span>
-        {state === "waiting" ? (
-          <Hourglass className="h-3.5 w-3.5 shrink-0 text-ember" />
-        ) : (
-          <Bot
-            className={cn(
-              "h-3.5 w-3.5 shrink-0",
-              state === "stalled" ? "text-amber-600 dark:text-amber-300" : "text-ember",
-            )}
-          />
-        )}
-        <span className="shrink-0 font-medium">{run.agent.name}</span>
-        {state === "waiting" && (
-          // Soft "Waiting on you" pill in the warm ember tone — distinct
-          // from the alarming amber STALLED pill so patient agents read
-          // as "your turn" not "broken."
-          <span className="shrink-0 rounded-sm border border-ember/40 bg-ember/10 px-1.5 py-px text-[0.625rem] font-semibold uppercase tracking-wider text-ember">
-            Waiting on you
-          </span>
-        )}
-        <span className="shrink-0 text-muted-foreground">·</span>
-        <span
-          className="min-w-0 basis-full truncate text-foreground/80 sm:flex-1 sm:basis-auto"
-          title={step}
-        >
-          {step}
-        </span>
-      </div>
-      <div className="grid min-w-0 grid-cols-1 gap-2 lg:grid-cols-[minmax(0,auto)_minmax(0,1fr)] lg:items-start">
-        <RunModeControl
-          issueId={issueId}
-          runId={run.id}
-          mode={run.engagementMode as EngagementModeValue}
-        />
-        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:justify-end">
-          <RuntimePolicyBadges
-            compact
-            policy={run.runtimePolicy as RuntimePolicySnapshot | null | undefined}
-          />
-          <ProtocolDiagnostics
-            diagnostics={
-              run.protocolDiagnostics as
-                | Array<{ code: string; severity: string; title: string; description: string }>
-                | undefined
-            }
-          />
-          <span className="text-meta flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
-            <Activity className="h-3 w-3 shrink-0" />
-            <span
-              className="shrink-0"
-              title={`Started ${new Date(run.startedAt).toLocaleString()}`}
-            >
-              {elapsedLabel}
+      <div className="flex min-w-0 flex-col gap-3 px-3 py-3 sm:px-4">
+        <div className="flex min-w-0 flex-wrap items-start gap-3">
+          <button
+            type="button"
+            onClick={() => displayRun && setExpanded((value) => !value)}
+            disabled={!displayRun}
+            className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-md text-left disabled:cursor-default"
+            aria-expanded={displayRun ? expanded : undefined}
+            aria-controls={displayRun ? `workstream-events-${displayRun.id}` : undefined}
+          >
+            {displayAgent ? (
+              <span className="relative inline-flex shrink-0">
+                <AgentAvatar
+                  agent={displayAgent}
+                  size="md"
+                  shape="circle"
+                  active={state === "working" || state === "acknowledged"}
+                />
+                {displayAgent.status ? (
+                  <span className="absolute -bottom-0.5 -right-0.5">
+                    <AgentPresenceDot
+                      status={displayAgent.status}
+                      size="sm"
+                      availability={presenceAvailability(displayAgent)}
+                    />
+                  </span>
+                ) : null}
+              </span>
+            ) : null}
+            <span className="min-w-0 flex-1">
+              <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="text-xs font-semibold text-foreground">Workstream</span>
+                {displayAgent ? (
+                  <>
+                    <span className="truncate text-xs font-medium text-foreground">
+                      {displayAgent.name}
+                    </span>
+                    <span className="text-id text-muted-foreground">
+                      @{displayAgent.profileKey}
+                    </span>
+                  </>
+                ) : null}
+                <StateBadge state={state} />
+              </span>
+              <span className="text-meta mt-0.5 block truncate text-muted-foreground" title={step}>
+                {step}
+              </span>
             </span>
-            <span className="shrink-0">·</span>
-            <span
-              className="shrink-0"
-              title={`Last event ${new Date(run.lastEventAt).toLocaleString()}`}
-            >
-              updated {lastEventLabel}
-            </span>
-          </span>
+            {displayRun ? (
+              <ChevronDown
+                className={cn(
+                  "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                  expanded && "rotate-180",
+                )}
+              />
+            ) : null}
+          </button>
+
+          <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+            <RealtimeBadge status={realtime.status} />
+            {activityHref ? (
+              <Link
+                href={activityHref}
+                className="focus-ring inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
+              >
+                <History className="h-3.5 w-3.5" />
+                Activity
+              </Link>
+            ) : null}
+            <WorkstreamActions
+              issueId={issueId}
+              runId={isActiveRun ? (displayRun?.id ?? null) : null}
+              agent={assignedAgent ?? displayAgent}
+              quiet={state === "quiet"}
+            />
+          </div>
         </div>
+
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
+          {mode ? <WorkModeBadge mode={mode} /> : null}
+          {displayAgent ? <RuntimeBadge agent={displayAgent} policy={policy} /> : null}
+          <RuntimePolicyBadges compact policy={policy} />
+          <RuntimeToolBadges policy={policy} />
+          <ProtocolDiagnostics diagnostics={activeRun?.protocolDiagnostics} />
+          {displayRun ? (
+            <span className="text-meta ml-auto flex flex-wrap items-center gap-x-2 gap-y-1 text-muted-foreground">
+              <Activity className="h-3.5 w-3.5" />
+              <span title={`Started ${new Date(displayRun.startedAt).toLocaleString()}`}>
+                {elapsedLabel}
+              </span>
+              <span aria-hidden>·</span>
+              <span title={`Last signal ${new Date(displayRun.lastEventAt).toLocaleString()}`}>
+                last signal {lastSignalLabel}
+              </span>
+            </span>
+          ) : null}
+        </div>
+
+        {statusBody && statusBody !== step ? (
+          <div className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2">
+            <div className="text-meta mb-1 font-medium uppercase tracking-wide text-muted-foreground">
+              Current status
+            </div>
+            <p className="line-clamp-3 whitespace-pre-wrap text-xs leading-relaxed text-foreground/80">
+              {statusBody}
+            </p>
+          </div>
+        ) : null}
+
+        {activeRun?.awaitingApprovalAt ? (
+          <RunApprovalCard
+            runId={activeRun.id}
+            agentName={activeRun.agent.name}
+            pendingApproval={activeRun.pendingApproval}
+            onResolved={() => {
+              void utils.agentRun.activeForIssue.invalidate({ issueId });
+              void utils.issue.byId.invalidate({ id: issueId });
+              void utils.commandCenter.summary.invalidate();
+              void utils.commandCenter.decisionsCount.invalidate();
+            }}
+          />
+        ) : null}
       </div>
-      {run.awaitingApprovalAt ? (
-        <RunApprovalCard
-          runId={run.id}
-          agentName={run.agent.name}
-          pendingApproval={run.pendingApproval}
-          onResolved={() => {
-            void utils.agentRun.activeForIssue.invalidate({ issueId });
-            void utils.issue.byId.invalidate({ id: issueId });
-            void utils.commandCenter.summary.invalidate();
-            void utils.commandCenter.decisionsCount.invalidate();
-          }}
-        />
+
+      {displayRun && expanded ? (
+        <div
+          id={`workstream-events-${displayRun.id}`}
+          className="border-t border-border bg-background/30 px-3 py-2.5 sm:px-4"
+        >
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <span className="text-meta font-medium uppercase tracking-wide text-muted-foreground">
+              Live trace
+            </span>
+            <span className="text-meta text-muted-foreground">Latest 10 events</span>
+          </div>
+          <RunTimeline events={events ?? []} />
+        </div>
       ) : null}
+
+      {isActiveRun && mode && displayRun ? (
+        <div className="border-t border-border bg-card/20 px-3 py-2 sm:px-4">
+          <RunModeControl issueId={issueId} runId={displayRun.id} mode={mode} />
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function WorkstreamActions({
+  issueId,
+  runId,
+  agent,
+  quiet,
+}: {
+  issueId: string;
+  runId: string | null;
+  agent: WorkstreamAgent | null;
+  quiet: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [confirmStop, setConfirmStop] = useState(false);
+  const invalidate = () => {
+    void utils.agentRun.activeForIssue.invalidate({ issueId });
+    void utils.issue.byId.invalidate({ id: issueId });
+    void utils.agentRun.activeAll.invalidate();
+    void utils.issue.queue.invalidate();
+  };
+  const nudgeM = trpc.agentRun.nudge.useMutation({
+    onSuccess: () => {
+      invalidate();
+      toast.success("Nudge sent");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const kickM = trpc.agentRun.kick.useMutation({
+    onSuccess: (result) => {
+      invalidate();
+      if (result.kicked) toast.success("Run kicked");
+      else toast.message("Run is still fresh");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const abandonM = trpc.agentRun.abandon.useMutation({
+    onSuccess: () => {
+      invalidate();
+      setConfirmStop(false);
+      toast.success("Run stopped");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const wakeM = trpc.issue.update.useMutation({
+    onSuccess: () => {
+      invalidate();
+      toast.success("Agent wake sent");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const busy = nudgeM.isPending || kickM.isPending || abandonM.isPending || wakeM.isPending;
+  const buttonClass =
+    "focus-ring inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground disabled:pointer-events-none disabled:opacity-50";
+
+  if (confirmStop && runId) {
+    return (
+      <div className="flex items-center gap-1 rounded-md border border-warning/30 bg-warning/10 p-0.5">
+        <span className="px-1 text-[0.6875rem] text-foreground">Stop run?</span>
+        <button
+          type="button"
+          className={cn(buttonClass, "h-6 border-warning/30 text-warning")}
+          disabled={busy}
+          onClick={() => abandonM.mutate({ runId })}
+        >
+          Stop
+        </button>
+        <button
+          type="button"
+          className={cn(buttonClass, "h-6")}
+          onClick={() => setConfirmStop(false)}
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
+
+  if (!runId && agent) {
+    return (
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={busy}
+        onClick={() =>
+          wakeM.mutate({
+            id: issueId,
+            assignedAgentId: agent.id,
+            mode: agent.engagementMode ?? "EXECUTE",
+          })
+        }
+        title="Wake the assigned agent"
+      >
+        <Zap className={cn("h-3.5 w-3.5", wakeM.isPending && "animate-pulse")} />
+        Wake
+      </button>
+    );
+  }
+
+  if (!runId) return null;
+  return (
+    <>
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={busy}
+        onClick={() =>
+          nudgeM.mutate({ runId, message: "Please share a concise progress checkpoint." })
+        }
+        title="Ask the agent for a progress checkpoint"
+      >
+        <Bell className="h-3.5 w-3.5" />
+        Nudge
+      </button>
+      {quiet ? (
+        <button
+          type="button"
+          className={buttonClass}
+          disabled={busy}
+          onClick={() => kickM.mutate({ runId })}
+          title="Re-fire the wake event for this quiet run"
+        >
+          <RefreshCw className={cn("h-3.5 w-3.5", kickM.isPending && "animate-spin")} />
+          Kick
+        </button>
+      ) : null}
+      <button
+        type="button"
+        className={buttonClass}
+        disabled={busy}
+        onClick={() => setConfirmStop(true)}
+        title="Stop this run"
+      >
+        <Square className="h-3 w-3" />
+        Stop
+      </button>
+    </>
+  );
+}
+
+function StateBadge({ state }: { state: WorkstreamState }) {
+  const tone = stateTone(state);
+  const live = state === "working" || state === "acknowledged";
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider",
+        tone.badge,
+      )}
+      title={stateDescription(state)}
+    >
+      <span className="relative flex h-1.5 w-1.5">
+        {live ? (
+          <span
+            className={cn("absolute inline-flex h-full w-full animate-ping rounded-full", tone.dot)}
+          />
+        ) : null}
+        <span className={cn("relative inline-flex h-1.5 w-1.5 rounded-full", tone.dot)} />
+      </span>
+      {stateLabel(state)}
+    </span>
+  );
+}
+
+function RealtimeBadge({ status }: { status: "connecting" | "live" | "reconnecting" | "offline" }) {
+  if (status === "live") {
+    return (
+      <span
+        role="status"
+        aria-live="polite"
+        className="inline-flex items-center gap-1 text-[0.625rem] font-medium uppercase tracking-wider text-muted-foreground"
+        title="Workstream updates are live"
+      >
+        <span className="h-1.5 w-1.5 rounded-full bg-success" />
+        Live
+      </span>
+    );
+  }
+  const offline = status === "offline";
+  return (
+    <span
+      role="status"
+      aria-live="polite"
+      className={cn(
+        "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[0.625rem] font-semibold uppercase tracking-wider",
+        offline
+          ? "border-destructive/30 bg-destructive/10 text-destructive"
+          : "border-warning/30 bg-warning/10 text-warning",
+      )}
+      title={
+        offline
+          ? "Realtime is offline; periodic query refresh remains available"
+          : "The live stream is reconnecting; periodic query refresh remains available"
+      }
+    >
+      <RefreshCw className={cn("h-3 w-3", !offline && "animate-spin")} />
+      {offline ? "Offline · polling" : status === "connecting" ? "Connecting" : "Reconnecting"}
+    </span>
+  );
+}
+
+function WorkModeBadge({ mode }: { mode: EngagementModeValue }) {
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 rounded-md border border-ember/30 bg-ember/10 px-2 py-1 text-ember"
+      title={`${MODE_LABEL[mode]} — ${MODE_SUBTITLE[mode]}`}
+    >
+      <EngagementModeGlyph mode={mode} size={13} />
+      <span className="text-[0.625rem] font-semibold uppercase tracking-wider">
+        {MODE_LABEL[mode]}
+      </span>
+    </span>
+  );
+}
+
+function RuntimeBadge({
+  agent,
+  policy,
+}: {
+  agent: WorkstreamAgent;
+  policy: RuntimePolicySnapshot | null;
+}) {
+  const runtimeName =
+    policy?.runtimeName ?? agent.runtime?.name ?? providerLabel(agent.provider) ?? "Unattached";
+  const persistence = agent.runtimeMode === "EPHEMERAL" ? "Session" : "Persistent";
+  const configured = Boolean(
+    agent.runtimeId || agent.webhookUrl || agent.runtime || agent.provider,
+  );
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center rounded-md border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider",
+        configured
+          ? "border-border bg-background/60 text-muted-foreground"
+          : "border-warning/30 bg-warning/10 text-warning",
+      )}
+      title={
+        configured
+          ? "Execution substrate and runtime lifetime"
+          : "No runtime or webhook metadata is attached to this agent"
+      }
+    >
+      Runs on {runtimeName} · {persistence}
+    </span>
+  );
+}
+
+const TOOL_ICONS: Record<RuntimeToolCapability, typeof Terminal> = {
+  terminal: Terminal,
+  filesystem: FolderOpen,
+  git: GitBranch,
+};
+
+function RuntimeToolBadges({ policy }: { policy: RuntimePolicySnapshot | null }) {
+  if (!policy) return null;
+  const allowedHostTools = policy.allowedHostTools ?? [];
+  if (allowedHostTools.length === 0) {
+    return (
+      <span
+        className="rounded-md border border-border bg-background/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+        title="This run has no host tools in its effective policy"
+      >
+        no host tools
+      </span>
+    );
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {allowedHostTools.map((tool) => {
+        const Icon = TOOL_ICONS[tool];
+        return (
+          <span
+            key={tool}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-background/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
+            title={`${tool} allowed by this run's effective host policy`}
+          >
+            <Icon className="h-3 w-3" />
+            {tool}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -216,7 +617,7 @@ function ProtocolDiagnostics({
 }: {
   diagnostics?: Array<{ code: string; severity: string; title: string; description: string }>;
 }) {
-  const actionable = diagnostics?.filter((d) => d.severity !== "info") ?? [];
+  const actionable = diagnostics?.filter((diagnostic) => diagnostic.severity !== "info") ?? [];
   if (actionable.length === 0) return null;
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1">
@@ -251,54 +652,57 @@ function RunModeControl({
   const { confirm, confirmElement } = useConfirm();
   const utils = trpc.useUtils();
   const restartM = trpc.agentRun.restartWithMode.useMutation({
-    onSuccess: (res) => {
+    onSuccess: (result) => {
       void utils.agentRun.activeForIssue.invalidate({ issueId });
       void utils.agentRun.activeAll.invalidate();
       void utils.agentRun.recentTerminal.invalidate();
       void utils.issue.byId.invalidate({ id: issueId });
-      if (res.restarted)
-        toast.success(`Restarted as ${MODE_LABEL[res.mode as EngagementModeValue]}`);
-      else toast.message("Run already uses that mode");
+      if (result.restarted) {
+        toast.success(`Restarted as ${MODE_LABEL[result.mode as EngagementModeValue]}`);
+      } else {
+        toast.message("Run already uses that mode");
+      }
     },
-    onError: (err) => toast.error(err.message),
+    onError: (error) => toast.error(error.message),
   });
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-      <span className="text-meta shrink-0 text-muted-foreground">restart as</span>
+      <span className="text-meta shrink-0 text-muted-foreground">Restart as</span>
       <div
         role="group"
         aria-label="Run engagement mode"
         title="Mode is fixed per run. Pick another mode to stop this run and restart with that contract."
         className="flex min-w-0 max-w-full gap-0.5 overflow-x-auto rounded-md border border-border bg-background/80 p-0.5"
       >
-        {MODE_ORDER.map((m) => {
-          const active = mode === m;
+        {MODE_ORDER.map((nextMode) => {
+          const active = mode === nextMode;
           return (
             <button
-              key={m}
+              key={nextMode}
               type="button"
               aria-pressed={active}
               aria-label={
                 active
-                  ? `Current run mode ${MODE_LABEL[m]}`
-                  : `Stop current run and restart as ${MODE_LABEL[m]}`
+                  ? `Current run mode ${MODE_LABEL[nextMode]}`
+                  : `Stop current run and restart as ${MODE_LABEL[nextMode]}`
               }
               title={
                 active
-                  ? `${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}. Locked for this run.`
-                  : `Stop this run and restart as ${MODE_LABEL[m]} — ${MODE_SUBTITLE[m]}.`
+                  ? `${MODE_LABEL[nextMode]} — ${MODE_SUBTITLE[nextMode]}. Locked for this run.`
+                  : `Stop this run and restart as ${MODE_LABEL[nextMode]} — ${MODE_SUBTITLE[nextMode]}.`
               }
               disabled={active || restartM.isPending}
               onClick={async () => {
                 if (
                   await confirm({
-                    title: `Restart this run as ${MODE_LABEL[m]}?`,
-                    description: `Stops the current ${MODE_LABEL[mode]} run and restarts in ${MODE_LABEL[m]} mode.`,
+                    title: `Restart this run as ${MODE_LABEL[nextMode]}?`,
+                    description: `Stops the current ${MODE_LABEL[mode]} run and restarts in ${MODE_LABEL[nextMode]} mode.`,
                     primaryLabel: "Restart",
                     variant: "destructive",
                   })
-                )
-                  restartM.mutate({ runId, mode: m });
+                ) {
+                  restartM.mutate({ runId, mode: nextMode });
+                }
               }}
               className={cn(
                 "focus-ring inline-flex h-6 shrink-0 items-center gap-1 rounded px-1.5 text-[0.625rem] uppercase tracking-wider transition-colors",
@@ -306,70 +710,177 @@ function RunModeControl({
                   ? "bg-ember/10 text-foreground"
                   : "text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50",
               )}
-              data-run-id={runId}
             >
               {restartM.isPending && !active ? (
                 <RefreshCw className="h-3 w-3 animate-spin" />
               ) : (
-                <EngagementModeGlyph mode={m} size={11} />
+                <EngagementModeGlyph mode={nextMode} size={11} />
               )}
-              <span>{MODE_LABEL[m]}</span>
+              {MODE_LABEL[nextMode]}
             </button>
           );
         })}
       </div>
-      <span
-        className="text-meta shrink-0 text-muted-foreground"
-        title="Active mode is fixed for this run. Other modes stop and restart."
-      >
-        active mode locked
-      </span>
+      <span className="text-meta text-muted-foreground">Active mode is locked</span>
       {confirmElement}
     </div>
   );
 }
 
-type StripState =
-  | "queued"
-  | "wake-sent"
-  | "acknowledged"
-  | "running"
-  | "idle"
-  | "stalled"
-  | "waiting";
-
-function deriveStripState(input: {
-  acknowledgedAt: Date | string | null;
-  outputStartedAt: Date | string | null;
-  lastWakeAt: Date | string | null;
-  lastEventAt: Date;
-  now: number;
-}): Exclude<StripState, "waiting"> {
-  // Live window: how recently an event must have arrived to still read as
-  // actively "running" (pulsing). Past this — but before the stale cutoff
-  // — the run has settled (its final turn landed) and shows a calm "idle"
-  // state instead of claiming ongoing work.
-  const LIVE_MS = 90_000;
-  const STALE_MS = 5 * 60_000;
-  if (input.outputStartedAt) {
-    const idleMs = input.now - input.lastEventAt.getTime();
-    if (idleMs > STALE_MS) return "stalled";
-    return idleMs > LIVE_MS ? "idle" : "running";
+function deriveWorkstreamState(
+  run:
+    | {
+        status: string;
+        acknowledgedAt?: Date | string | null;
+        outputStartedAt?: Date | string | null;
+        lastWakeAt?: Date | string | null;
+        lastEventAt: Date | string;
+      }
+    | null
+    | undefined,
+  now: number,
+  isActiveRun: boolean,
+  quietMs: number | null,
+): WorkstreamState {
+  if (!run) return "assigned";
+  const canonical = run.status.toUpperCase();
+  if (canonical === "WAITING") return "waiting";
+  if (!isActiveRun) {
+    if (canonical === "COMPLETED") return "completed";
+    if (canonical === "STALLED") return "stalled";
+    if (canonical === "ERRORED" || canonical === "FAILED") return "errored";
+    if (canonical === "ABANDONED") return "stopped";
   }
-  if (input.acknowledgedAt) {
-    return input.now - input.lastEventAt.getTime() > STALE_MS ? "stalled" : "acknowledged";
-  }
-  if (input.lastWakeAt) {
-    const wake = new Date(input.lastWakeAt).getTime();
-    return input.now - wake > STALE_MS ? "stalled" : "wake-sent";
-  }
+  const age = now - new Date(run.lastEventAt).getTime();
+  if (quietMs !== null && age >= quietMs) return "quiet";
+  if (run.outputStartedAt) return "working";
+  if (run.acknowledgedAt) return "acknowledged";
+  if (run.lastWakeAt) return "wake-sent";
   return "queued";
+}
+
+function stateLabel(state: WorkstreamState): string {
+  return {
+    assigned: "Assigned",
+    queued: "Dispatched",
+    "wake-sent": "Wake sent",
+    acknowledged: "Acknowledged",
+    working: "Working",
+    quiet: "Quiet",
+    waiting: "Waiting on you",
+    completed: "Completed",
+    stalled: "Stalled",
+    stopped: "Stopped",
+    errored: "Errored",
+  }[state];
+}
+
+function stateCopy(state: WorkstreamState): string {
+  return {
+    assigned: "Assigned · no active run",
+    queued: "Queued for runtime dispatch",
+    "wake-sent": "Wake delivered · waiting for acknowledgement",
+    acknowledged: "Agent acknowledged · preparing output",
+    working: "Agent is working",
+    quiet: "No recent runtime signal",
+    waiting: "Waiting for your reply",
+    completed: "Latest run completed",
+    stalled: "Latest run was marked stalled",
+    stopped: "Latest run was stopped",
+    errored: "Latest run ended with an error",
+  }[state];
+}
+
+function stateDescription(state: WorkstreamState): string {
+  if (state === "quiet") {
+    return "This run is still ACTIVE but has not sent a recent signal. Quiet is not the canonical STALLED state.";
+  }
+  if (state === "stalled") return "The server recorded this run as canonically STALLED.";
+  return stateCopy(state);
+}
+
+function stateTone(state: WorkstreamState): {
+  container: string;
+  badge: string;
+  dot: string;
+} {
+  if (state === "working" || state === "acknowledged") {
+    return {
+      container: "border-ember/30",
+      badge: "border-ember/30 bg-ember/10 text-ember",
+      dot: "bg-ember",
+    };
+  }
+  if (state === "waiting") {
+    return {
+      container: "border-warning/30",
+      badge: "border-warning/30 bg-warning/10 text-warning",
+      dot: "bg-warning",
+    };
+  }
+  if (state === "quiet") {
+    return {
+      container: "border-warning/20",
+      badge: "border-warning/30 bg-warning/10 text-warning",
+      dot: "bg-warning",
+    };
+  }
+  if (state === "stalled" || state === "errored") {
+    return {
+      container: "border-destructive/30",
+      badge: "border-destructive/30 bg-destructive/10 text-destructive",
+      dot: "bg-destructive",
+    };
+  }
+  if (state === "completed") {
+    return {
+      container: "border-success/20",
+      badge: "border-success/30 bg-success/10 text-success",
+      dot: "bg-success",
+    };
+  }
+  return {
+    container: "border-border",
+    badge: "border-border bg-background/60 text-muted-foreground",
+    dot: "bg-muted-foreground",
+  };
+}
+
+function mergeAgent(
+  runAgent: WorkstreamAgent | null,
+  assignedAgent: WorkstreamAgent | null,
+): WorkstreamAgent | null {
+  if (!runAgent) return assignedAgent;
+  if (!assignedAgent || runAgent.id !== assignedAgent.id) return runAgent;
+  return {
+    ...assignedAgent,
+    ...runAgent,
+    runtime: runAgent.runtime ?? assignedAgent.runtime,
+  };
+}
+
+function normalizeMode(value: string | null | undefined): EngagementModeValue | null {
+  const normalized = value?.toUpperCase();
+  return normalized && MODE_ORDER.includes(normalized as EngagementModeValue)
+    ? (normalized as EngagementModeValue)
+    : null;
+}
+
+function providerLabel(provider: string | null | undefined): string | null {
+  const normalized = provider?.trim();
+  if (!normalized) return null;
+  return normalized
+    .toLowerCase()
+    .split(/[_\s-]+/)
+    .filter(Boolean)
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
 }
 
 function formatElapsed(ms: number): string {
   if (ms < 60_000) return `${Math.max(0, Math.floor(ms / 1000))}s`;
   if (ms < 3_600_000) return `${Math.floor(ms / 60_000)}m`;
-  const h = Math.floor(ms / 3_600_000);
-  const m = Math.floor((ms % 3_600_000) / 60_000);
-  return m === 0 ? `${h}h` : `${h}h ${m}m`;
+  const hours = Math.floor(ms / 3_600_000);
+  const minutes = Math.floor((ms % 3_600_000) / 60_000);
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }

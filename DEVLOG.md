@@ -2,6 +2,87 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — v0.11.0 live agent operations release candidate
+
+Integrated the issue Workstream and durable realtime stream with the global
+Mission Control operations overview and workspace Operations Shelf, rebased the
+combined release onto v0.10.3, and prepared the additive v0.11.0 release. Updated
+the browser contracts to address the shelf's real tab semantics and Live / Queue
+/ Agents / Chat information architecture, and made the global read-only assertion
+target the top-bar badge exactly now that the same policy is also explained in
+the page body.
+
+Verification: lint passed with existing repository warnings only; typecheck
+passed; the full Vitest suite passed (**1,209 passed; 1 skipped**); a fresh
+Next.js production build completed; the two corrected browser contract files
+passed **8/8** together; and the complete single-worker Playwright run reached
+**36/37** before the Chromium headless-shell process itself segfaulted while
+creating the last test context. That unaffected connection-affordance test then
+passed **3/3** in repeated isolated runs. CI also exposed a pre-existing
+Command Center layout assertion that depended on mutable stalled-run seed data;
+the contract now accepts both its valid empty and populated attention states
+and passed **3/3** repeated local runs. `git diff --check` passed.
+
+## 2026-07-13 — Mission Control operator hierarchy
+
+Audited the cross-workspace Mission Control overview and workspace quick-access
+dock against seeded local data at desktop and mobile viewports, then implemented
+the selected Operations Shelf direction across both surfaces. Expanded workspace
+Mission Control now reflows content above a summary / triage queue / agent
+presence shelf on desktop and becomes a near-full-height, single-scroll sheet on
+mobile. The persistent pill and glance clear the mobile bottom navigation.
+
+The global overview now leads with runtime and dispatch posture, then separates
+workspace queue, assigned attention, agent presence, runtime coverage, and
+recent activity into a coherent operator scan. Its summary is derived from real
+global query data, retains read-only navigation to durable surfaces, and renders
+independent loading, empty, and retry states without inventing mutation paths.
+
+Corrected queue truth while restructuring the surface: tab and pill badges now
+show the total queue, summary copy keeps total and unassigned counts distinct,
+and issue references use the workspace's canonical `FRG-*` key. Added explicit
+queue/agent loading and error states, real tab semantics, one Collapse action,
+platform-correct shortcut copy, 44 px mobile controls, and focused model tests.
+
+Verification: `pnpm lint` passed with existing repository warnings only,
+`pnpm typecheck` passed, focused Vitest passed (**5/5**), `git diff --check`
+passed, desktop/mobile interaction and responsive checks passed in the in-app
+browser for both surfaces, browser logs contained no attributable warnings or
+errors, and `design-qa.md` finished with `final result: passed`.
+
+## 2026-07-13 — Issue Workstream + durable realtime progress
+
+Consolidated the issue's repeated agent-status surfaces into one first-class
+Workstream beneath the issue author metadata. It now keeps agent presence,
+operational state, engagement mode, execution runtime, effective tool policy,
+elapsed/last-signal timing, rolling semantic status, approval handling,
+operator controls, and an expandable ten-event trace together. Active rolling
+STATUS comments no longer jump through the conversation timeline; terminal
+summaries remain in history. Activity now leads the issue-rail navigation and
+shows live work, while bare issue URLs preserve the historical Attachments
+default.
+
+Kept the browser transport on SSE and closed its reliability gap with durable
+cursor replay across `ActivityEvent` and `AgentRunEvent`, subscription-before-
+replay buffering, bounded reconciliation, persisted per-workspace cursors, and
+visible connecting/live/reconnecting/offline health. Granular run publishes now
+use their durable row id/timestamp instead of an unrelated transient id.
+
+Added workspace settings and migration 0100 for semantic progress cadence and
+the non-terminal quiet threshold. The versioned agent protocol now separates
+mechanical trace events from human-facing STATUS checkpoints, asks for concise
+phase/result updates at the configured cadence, and explicitly rejects
+chain-of-thought/tool-log narration. Run diagnostics expose acknowledgement,
+output, progress, and completion signals independently, and UI copy keeps Quiet
+distinct from the canonical persisted STALLED state.
+
+Verification: `pnpm lint` passed with existing repository warnings; `pnpm
+typecheck` passed; the full Vitest suite passed (**1,187 passed; 1 skipped**);
+`git diff --check` passed; and a fresh production build completed. The full
+Playwright run passed **36/37** before Chromium itself segfaulted while creating
+one workspace-switcher context; that test passed in an isolated single-worker
+rerun (**1/1**). No deployment or push performed.
+
 ## 2026-07-13 — AXI-102 expired runtime approval recovery
 
 Diagnosed AXI-102's failed approval against Hermes: Forge retained WAITING run

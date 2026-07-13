@@ -13,15 +13,9 @@ import {
  * unit-testable.
  */
 
-export const FORGE_RUN_CONTRACT_VERSION = "2026-06-06.2";
+export const FORGE_RUN_CONTRACT_VERSION = "2026-07-13.1";
 
-export type EngagementSurface =
-  | "assignment"
-  | "queue"
-  | "mention"
-  | "chat"
-  | "plan"
-  | "watcher";
+export type EngagementSurface = "assignment" | "queue" | "mention" | "chat" | "plan" | "watcher";
 
 export type EngagementSource =
   | "explicit"
@@ -61,9 +55,7 @@ const VALID_SOURCES = new Set<string>(Object.keys(SOURCE_TO_ENUM));
  * (surface-default / explicit) instead of the generic "payload" tier.
  */
 export function asEngagementSource(value: unknown): EngagementSource | null {
-  return typeof value === "string" && VALID_SOURCES.has(value)
-    ? (value as EngagementSource)
-    : null;
+  return typeof value === "string" && VALID_SOURCES.has(value) ? (value as EngagementSource) : null;
 }
 
 export interface ResolvedEngagement {
@@ -128,8 +120,7 @@ export function resolveEngagementMode(input: {
     case "queue":
       return {
         mode:
-          input.workspace.assignmentAgentEngagementMode ??
-          input.workspace.assignmentEngagementMode,
+          input.workspace.assignmentAgentEngagementMode ?? input.workspace.assignmentEngagementMode,
         source: "surface-default",
         inferable: false,
       };
@@ -148,7 +139,11 @@ export function resolveEngagementMode(input: {
             inferable: false,
           };
         case MentionEngagementPolicy.REQUIRE_MARKER:
-          return { mode: EngagementMode.DISCUSS, source: "policy-require-marker", inferable: false };
+          return {
+            mode: EngagementMode.DISCUSS,
+            source: "policy-require-marker",
+            inferable: false,
+          };
         case MentionEngagementPolicy.INFER:
         default:
           // INFER: start from the conversational default but let the agent
@@ -176,8 +171,13 @@ const RUN_PROTOCOL_INSTRUCTIONS =
   "substantive work. If you do not have a runId, call `agent.context.bundle` " +
   "with the issue id or `agent.inbox.list` to find the current run first. " +
   "When you begin producing output, call `agent.inbox.outputStarted({ runId })`. " +
-  "Use `comments.upsertStatus` only for meaningful human-facing checkpoints, " +
-  "not every internal thought. If blocked, call `runs.setWaiting({ runId, " +
+  "Automatic runtime events and tool-call events are the mechanical trace; do not " +
+  "copy them into comments. Use `comments.upsertStatus` for semantic, human-facing " +
+  "checkpoints: when the work changes phase (for example Inspecting, Implementing, " +
+  "or Verifying), when a material interim result changes the plan, and before " +
+  "continuing a long phase. State the outcome so far and the next action; never " +
+  "publish chain-of-thought, raw tool logs, or a status for every internal step. " +
+  "If blocked, call `runs.setWaiting({ runId, " +
   "reason, blocking: true })` and stop. Finish the run with `runs.complete`. " +
   "Include the mode-specific required fields when completing: EXECUTE supplies " +
   "artifact/checklist evidence when the issue contract requires it, RESEARCH " +
@@ -185,6 +185,27 @@ const RUN_PROTOCOL_INSTRUCTIONS =
   "supplies a reply only. " +
   "Non-EXECUTE modes are read/report/review only; Forge rejects issue-state " +
   "mutations from those runs.";
+
+export interface ForgeRunProtocolOptions {
+  /** Workspace-requested semantic checkpoint cadence. Zero disables reminders. */
+  progressUpdateMinutes?: number | null;
+}
+
+function progressCadenceInstruction(options?: ForgeRunProtocolOptions): string {
+  const minutes = options?.progressUpdateMinutes;
+  if (minutes === undefined || minutes === null) return "";
+  if (minutes <= 0) {
+    return (
+      " Workspace cadence reminders are disabled; still post semantic checkpoints " +
+      "at meaningful phase changes, material findings, and blockers."
+    );
+  }
+  return (
+    ` While actively working, post a semantic status checkpoint at least every ${minutes} ` +
+    `minute${minutes === 1 ? "" : "s"} when no phase change or material finding has already ` +
+    "produced one."
+  );
+}
 
 const BASE_INSTRUCTIONS: Record<EngagementMode, string> = {
   EXECUTE:
@@ -216,11 +237,14 @@ export function engagementInstruction(resolved: ResolvedEngagement): string {
 }
 
 /** Shared run lifecycle instructions injected into dispatched agent turns. */
-export function forgeRunProtocolInstruction(): string {
-  return RUN_PROTOCOL_INSTRUCTIONS;
+export function forgeRunProtocolInstruction(options?: ForgeRunProtocolOptions): string {
+  return RUN_PROTOCOL_INSTRUCTIONS + progressCadenceInstruction(options);
 }
 
 /** Complete dispatch instruction block: mode contract + Forge run protocol. */
-export function forgeRunInstruction(resolved: ResolvedEngagement): string {
-  return `${engagementInstruction(resolved)}\n\n${forgeRunProtocolInstruction()}`;
+export function forgeRunInstruction(
+  resolved: ResolvedEngagement,
+  options?: ForgeRunProtocolOptions,
+): string {
+  return `${engagementInstruction(resolved)}\n\n${forgeRunProtocolInstruction(options)}`;
 }

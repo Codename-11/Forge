@@ -121,6 +121,24 @@ ack the inbox item, mark output started when real work begins, use rolling
 status comments only for meaningful operator-facing checkpoints, call
 `runs.setWaiting` when blocked, and finish with `runs.complete`.
 
+The run trace and the rolling status serve different audiences:
+
+- **Mechanical trace** — runtime lifecycle, tool starts/completions, tests, and
+  other adapter events are appended automatically as `AgentRunEvent` rows.
+  Agents should not duplicate this telemetry in comments.
+- **Semantic status** — `comments.upsertStatus` is a compact operator update at
+  a phase change (for example Inspecting → Implementing → Verifying), after a
+  material finding changes the plan, or before continuing a long phase. It
+  states the outcome so far and the next action. It must not contain internal
+  chain-of-thought or raw tool logs.
+- **Conversation** — agents use a normal comment for a conclusion, question,
+  approval request, or decision that belongs in the durable human thread.
+
+An active run with fresh mechanical events but an old semantic checkpoint is
+**quiet**, not `STALLED`: the runtime may still be healthy, but the operator is
+missing a useful update. `STALLED` is reserved for the canonical terminal
+`AgentRun.status` set by the workspace-configured watchdog or an operator.
+
 Mode is enforced in layers. Forge MCP rejects issue-state mutations from
 active **Research**, **Review**, and **Discuss** runs; those runs can still
 comment, post status, record a verdict, set themselves waiting, and complete

@@ -54,6 +54,8 @@ export default async function WorkspaceShellLayout({
       cycleCooldownDays: true,
       timeTrackingEnabled: true,
       attachmentQuotaMb: true,
+      agentProgressUpdateMinutes: true,
+      agentRunQuietMinutes: true,
       deletedAt: true,
     },
   });
@@ -105,54 +107,56 @@ export default async function WorkspaceShellLayout({
     cycleCooldownDays: workspace.cycleCooldownDays,
     timeTrackingEnabled: workspace.timeTrackingEnabled,
     attachmentQuotaMb: workspace.attachmentQuotaMb,
+    agentProgressUpdateMinutes: workspace.agentProgressUpdateMinutes,
+    agentRunQuietMinutes: workspace.agentRunQuietMinutes,
   };
 
   return (
     <TrpcProvider workspaceSlug={workspace.slug} workspaceId={workspace.id}>
       <WorkspaceProvider value={contextValue}>
         <AppearanceProvider>
-        <AttachmentLightboxProvider>
-        <ChatContextProvider>
-        <div className="flex h-svh overflow-hidden">
-          <Sidebar
-            slug={workspace.slug}
-            user={{
-              name: session.user.name,
-              image: session.user.image,
-              email: session.user.email,
-            }}
-          />
-          <main className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background max-md:pb-20">
-            {/* Ambient background — one viewport-sized layer behind all page
+          <AttachmentLightboxProvider>
+            <ChatContextProvider>
+              <div className="flex h-svh overflow-hidden">
+                <Sidebar
+                  slug={workspace.slug}
+                  user={{
+                    name: session.user.name,
+                    image: session.user.image,
+                    email: session.user.email,
+                  }}
+                />
+                <main className="relative isolate flex min-h-0 min-w-0 flex-1 flex-col bg-background max-md:pb-20">
+                  {/* Ambient background — one viewport-sized layer behind all page
                 content, driven by the per-user `data-bg` appearance pref.
                 Lives in the non-scrolling <main> so it always covers the
                 visible area and animates smoothly (see .forge-page-bg). */}
-            <div aria-hidden className="forge-page-bg" />
-            {/* Canvas-backed ambient variants (reactive / particles).
+                  <div aria-hidden className="forge-page-bg" />
+                  {/* Canvas-backed ambient variants (reactive / particles).
                 Self-gates on <html data-bg>; renders nothing otherwise.
                 When active, the CSS below hides .forge-page-bg so the two
                 layers never stack. */}
-            <ForgeBackgroundCanvasGate />
-            <TopBar
-              user={{
-                name: session.user.name,
-                image: session.user.image,
-                email: session.user.email,
-              }}
-            />
-            {children}
-          </main>
-        </div>
-        <CommandPalette />
-        <QuickCreate />
-        <KeyboardHelp />
-        <TimeTrackerWidget />
-        <MissionControl />
-        <RealtimeProvider workspaceId={workspace.id} />
-        <RealtimeToaster />
-        <WorkspaceCookieSync slug={workspace.slug} />
-        </ChatContextProvider>
-        </AttachmentLightboxProvider>
+                  <ForgeBackgroundCanvasGate />
+                  <TopBar
+                    user={{
+                      name: session.user.name,
+                      image: session.user.image,
+                      email: session.user.email,
+                    }}
+                  />
+                  {children}
+                  <MissionControl />
+                </main>
+              </div>
+              <CommandPalette />
+              <QuickCreate />
+              <KeyboardHelp />
+              <TimeTrackerWidget />
+              <RealtimeProvider workspaceId={workspace.id} />
+              <RealtimeToaster />
+              <WorkspaceCookieSync slug={workspace.slug} />
+            </ChatContextProvider>
+          </AttachmentLightboxProvider>
         </AppearanceProvider>
       </WorkspaceProvider>
     </TrpcProvider>

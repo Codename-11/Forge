@@ -41,6 +41,8 @@ const OUTPUT_EVENT_KINDS = new Set(["COMMENT", "STATUS", "TRANSITION", "STEP", "
  * how to consume (subjectType + subjectId + payload + kind).
  */
 function publishRunEvent(params: {
+  eventId?: string;
+  createdAt?: Date;
   workspaceId: string;
   kind: EventKind;
   runId: string;
@@ -49,7 +51,7 @@ function publishRunEvent(params: {
   payload?: Record<string, unknown>;
 }): void {
   void publish({
-    id: nanoid(),
+    id: params.eventId ?? nanoid(),
     workspaceId: params.workspaceId,
     kind: params.kind,
     subjectType: "agent-run",
@@ -61,7 +63,7 @@ function publishRunEvent(params: {
       agentId: params.agentId,
     },
     actorId: null,
-    createdAt: new Date().toISOString(),
+    createdAt: (params.createdAt ?? new Date()).toISOString(),
   });
 }
 
@@ -364,7 +366,7 @@ export async function appendRunEvent(
   },
 ): Promise<void> {
   const now = new Date();
-  await tx.agentRunEvent.create({
+  const event = await tx.agentRunEvent.create({
     data: {
       workspaceId: params.workspaceId,
       runId: params.runId,
@@ -390,6 +392,8 @@ export async function appendRunEvent(
   // row. The events table is the durable timeline; this is just for the
   // live strip to react in real time.
   publishRunEvent({
+    eventId: event.id,
+    createdAt: event.createdAt,
     workspaceId: params.workspaceId,
     kind: EventKind.AGENT_RUN_STEP,
     runId: params.runId,

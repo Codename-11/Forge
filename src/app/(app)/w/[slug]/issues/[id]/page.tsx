@@ -36,11 +36,10 @@ import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
-import { IssueAgentPanel } from "@/components/issue-detail/issue-agent-panel";
+import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import { TerminalRunFailureBanner } from "@/components/issue-detail/run-failure-banner";
 import { IssueFollowThroughBanner } from "@/components/issue-detail/issue-follow-through-banner";
 import { RuntimePreflightBanner } from "@/components/issue-detail/runtime-preflight-banner";
-import { RunActivityChip } from "@/components/issue-detail/run-activity-chip";
 import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { CreateLabelModal } from "@/components/inline-create/create-label-modal";
@@ -550,11 +549,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
             />
             <AgentChip current={issue.assignedAgent} onOpen={() => setAgentPickerOpen(true)} />
-            {/* "What's the agent doing right now?" — only renders when
-                there's an ACTIVE run on this issue. Lives next to the
-                AgentChip so the operator's eye lands on agent + status
-                together. */}
-            <RunActivityChip issueId={issue.id} />
           </div>
         }
         actions={siblingScope ? <IssueSiblingNav issueId={issue.id} scope={siblingScope} /> : null}
@@ -575,6 +569,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 updated {relativeTime(issue.updatedAt)}
               </span>
             </div>
+
+            <AgentRunStrip
+              issueId={issue.id}
+              assignedAgent={issue.assignedAgent ?? null}
+              latestRun={issue.agentRuns?.[0] ?? null}
+              activityHref={`/w/${slug}/issues/${issue.id}?tab=activity`}
+            />
 
             <AiTriageCard issue={issue} slug={slug} />
 
@@ -641,12 +642,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             >
               <IssueRail
                 issueId={issue.id}
+                activityCount={recentEvents?.length ?? 0}
                 header={
                   <div className="space-y-3">
-                    <IssueAgentPanel
-                      issueId={issue.id}
-                      assignedAgent={issue.assignedAgent ?? null}
-                    />
                     <GitHubLinksPanel issueId={issue.id} />
                     <SidebarField label="Project">
                       <ProjectPickerField

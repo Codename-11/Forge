@@ -47,6 +47,10 @@ type RunWithPolicyInputs = {
     expectedOutput?: string | null;
     verificationChecklist?: Prisma.JsonValue | null;
     artifactRequired?: boolean;
+    workspace?: {
+      agentProgressUpdateMinutes: number;
+      agentRunQuietMinutes: number;
+    };
   } | null;
   agent: {
     provider?: string | null;
@@ -84,6 +88,12 @@ function enrichRun<T extends RunWithPolicyInputs>(run: T) {
             artifactRequired: run.issue.artifactRequired ?? false,
           }
         : null,
+      ...(run.issue?.workspace
+        ? {
+            progressUpdateMs: run.issue.workspace.agentProgressUpdateMinutes * 60_000,
+            quietMs: run.issue.workspace.agentRunQuietMinutes * 60_000,
+          }
+        : {}),
     }),
   };
 }
@@ -159,6 +169,12 @@ export const agentRunRouter = router({
               expectedOutput: true,
               verificationChecklist: true,
               artifactRequired: true,
+              workspace: {
+                select: {
+                  agentProgressUpdateMinutes: true,
+                  agentRunQuietMinutes: true,
+                },
+              },
             },
           },
           statusComment: {
@@ -270,7 +286,14 @@ export const agentRunRouter = router({
               verificationChecklist: true,
               artifactRequired: true,
               status: { select: { id: true, name: true, category: true, color: true } },
-              workspace: { select: { key: true, slug: true } },
+              workspace: {
+                select: {
+                  key: true,
+                  slug: true,
+                  agentProgressUpdateMinutes: true,
+                  agentRunQuietMinutes: true,
+                },
+              },
             },
           },
           statusComment: {
@@ -437,7 +460,14 @@ export const agentRunRouter = router({
               expectedOutput: true,
               verificationChecklist: true,
               artifactRequired: true,
-              workspace: { select: { key: true, slug: true } },
+              workspace: {
+                select: {
+                  key: true,
+                  slug: true,
+                  agentProgressUpdateMinutes: true,
+                  agentRunQuietMinutes: true,
+                },
+              },
             },
           },
         },

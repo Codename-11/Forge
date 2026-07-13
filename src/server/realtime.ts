@@ -7,7 +7,7 @@ import type { EventKind } from "@prisma/client";
  *
  * Publishers (API routes / tRPC mutations) call `publish(workspaceId, evt)`.
  * Subscribers live in two places:
- *   1. WebSocket route (`/api/realtime`) that fans out to connected browsers.
+ *   1. SSE route (`/api/realtime`) that fans out to connected browsers.
  *   2. Plugin webhook worker that enqueues deliveries to subscribed plugins.
  *
  * Channel convention: `forge:ws:<workspaceId>` — one channel per workspace
@@ -47,6 +47,38 @@ export function subscribe(
       // swallow malformed payloads — producer contract violated
     }
   });
+  return async () => {
+    await sub.unsubscribe(ch);
+    await sub.quit();
+  };
+}
+
+/**
+ * Subscribe and wait until Redis confirms the channel subscription. The
+ * browser SSE endpoint uses this variant so it can buffer live messages before
+ * reading the durable catch-up window, closing the otherwise tiny
+ * query-before-subscribe race. Existing plugin callers keep the synchronous
+ * `subscribe` API above.
+ */
+export async function subscribeReady(
+  workspaceId: string,
+  onMessage: (evt: RealtimeEvent) => void,
+): Promise<() => Promise<void>> {
+  const ch = channel(workspaceId);
+  const sub = redisSub.duplicate();
+  sub.on("message", (_channel, raw) => {
+    try {
+      onMessage(JSON.parse(raw) as RealtimeEvent);
+    } catch {
+      // swallow malformed payloads — producer contract violated
+    }
+  });
+  try {
+    await sub.subscribe(ch);
+  } catch (error) {
+    await sub.quit().catch(() => void 0);
+    throw error;
+  }
   return async () => {
     await sub.unsubscribe(ch);
     await sub.quit();

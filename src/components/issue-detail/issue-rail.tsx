@@ -7,21 +7,24 @@ import { IssueRelationsPanel } from "@/components/relations/issue-relations-pane
 import { IssueActivityPanel } from "@/components/issue-detail/issue-activity-panel";
 import { cn } from "@/lib/utils";
 import { MOTION } from "@/lib/motion";
+import { trpc } from "@/lib/trpc";
 
 /**
  * Tabbed right-rail for the issue detail page. Hosts the existing
  * attachments + relations panels and the new activity stream.
  *
  * Tab state is mirrored into the `?tab=` search param so individual tabs
- * are deep-linkable (and survive reloads). Keys 1/2/3 cycle between tabs
+ * are deep-linkable (and survive reloads). Activity leads the navigation;
+ * the historical bare URL still resolves to Attachments for compatibility.
+ * Keys 1/2/3 cycle between tabs
  * when the page has focus — bound here, scoped to the issue detail route
  * so we don't pollute global keybindings.
  */
 
 const TABS = [
+  { id: "activity", label: "Activity", icon: ActivityIcon },
   { id: "attachments", label: "Attachments", icon: Paperclip },
   { id: "relations", label: "Relations", icon: Link2 },
-  { id: "activity", label: "Activity", icon: ActivityIcon },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -33,8 +36,10 @@ function isTabId(v: string | null | undefined): v is TabId {
 export function IssueRail({
   issueId,
   header,
+  activityCount,
 }: {
   issueId: string;
+  activityCount?: number;
   /**
    * Optional content rendered above the tab strip — the issue detail
    * page passes its "Properties" group (project / labels / due / agent
@@ -48,6 +53,10 @@ export function IssueRail({
   const searchParams = useSearchParams();
   const raw = searchParams?.get("tab");
   const active: TabId = isTabId(raw) ? raw : "attachments";
+  const { data: activeRun } = trpc.agentRun.activeForIssue.useQuery(
+    { issueId },
+    { staleTime: 5_000 },
+  );
 
   const setTab = useCallback(
     (next: TabId) => {
@@ -74,13 +83,13 @@ export function IssueRail({
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       if (e.key === "1") {
         e.preventDefault();
-        setTab("attachments");
+        setTab("activity");
       } else if (e.key === "2") {
         e.preventDefault();
-        setTab("relations");
+        setTab("attachments");
       } else if (e.key === "3") {
         e.preventDefault();
-        setTab("activity");
+        setTab("relations");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -89,11 +98,7 @@ export function IssueRail({
 
   return (
     <div className="min-h-0">
-      {header && (
-        <div className="border-b border-border bg-card/20 px-3 py-3">
-          {header}
-        </div>
-      )}
+      {header && <div className="border-b border-border bg-card/20 px-3 py-3">{header}</div>}
       <div
         role="tablist"
         aria-label="Issue detail sections"
@@ -118,6 +123,21 @@ export function IssueRail({
             >
               <Icon className="h-3 w-3" />
               <span>{t.label}</span>
+              {t.id === "activity" && activityCount ? (
+                <span className="rounded-full bg-subtle px-1.5 py-px text-[0.5625rem] font-medium tabular-nums text-muted-foreground">
+                  {activityCount > 99 ? "99+" : activityCount}
+                </span>
+              ) : null}
+              {t.id === "activity" && activeRun ? (
+                <span
+                  className="relative flex h-1.5 w-1.5"
+                  aria-label="Live agent activity"
+                  title="Agent work is updating live"
+                >
+                  <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ember/50" />
+                  <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-ember" />
+                </span>
+              ) : null}
               {selected && (
                 <span aria-hidden className="absolute inset-x-0 -bottom-px h-px bg-ember" />
               )}

@@ -1,102 +1,73 @@
-# Dashboard operations + workspace flow design QA
+# Mission Control operations — design QA
 
-**Source visual truth**
+## Source and implementation evidence
 
-- `/home/bailey/.codex/attachments/2dfba31e-74c5-4afb-9a5e-42a2706d62a2/codex-clipboard-04bd5e13-4b34-4306-936f-d6f6703abe96.png`
-- The screenshot establishes the real production density and unused Live Operations space. The accompanying direction establishes the intended changes: Pulse + Schedule in that top area and What's New in the right-hand Workspace Flow slot.
+### Workspace Operations Shelf
 
-**Implementation evidence**
+- Source visual truth: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\11-direction-3.png`
+- Desktop implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\21-workspace-operations-desktop.png`
+- Mobile implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\22-workspace-operations-mobile.png`
+- Full-view comparison: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\24-workspace-qa-comparison.png`
+- Viewports: 1536 x 1024 desktop; 390 x 844 mobile
+- State: Forge workspace Dashboard, Mission Control expanded, Queue selected, seeded local data loaded
 
-- Desktop layout: `/home/bailey/.codex/audits/forge-dashboard-iteration-2026-07-10/dashboard-desktop-layout.png`
-- Tablet layout: `/home/bailey/.codex/audits/forge-dashboard-iteration-2026-07-10/dashboard-tablet-layout.png`
-- Mobile layout: `/home/bailey/.codex/audits/forge-dashboard-iteration-2026-07-10/dashboard-mobile-layout.png`
-- Full-view top comparison: `/home/bailey/.codex/audits/forge-dashboard-iteration-2026-07-10/top-comparison.png`
-- Focused cockpit comparison: `/home/bailey/.codex/audits/forge-dashboard-iteration-2026-07-10/cockpit-comparison.png`
-- Viewports: 1600 × 2600 desktop, 1024 × 2600 tablet, 390 × 3000 mobile; authenticated dark-theme dashboard with seeded operational data.
-- State note: the source has 12 visible personal-work cards while the implementation fixture has 6. That difference is intentional QA coverage: 9+ work cards select the taller single-column operations rail visible in the source state; sparse states select two compact operation columns.
+The full-view comparison preserves each 1536 x 1024 frame at native scale. It shows the selected bottom operations-shelf composition beside the browser-rendered implementation. Both reflow the dashboard above a bottom-attached shelf, use summary / queue / agent-presence zones, keep Queue selected, expose one ember primary action, and retain Forge's warm-earthy dark tokens and compact typography.
 
-## Findings
+The implementation intentionally omits the mock's speculative filter, sort, and inline assignee controls because the current quick-access query is read-only and deep-links to the durable issue surface. It uses honest dispatch-state copy and canonical issue links instead. This is an expected product constraint rather than unresolved visual drift.
 
-- No remaining P0, P1, or P2 findings.
-- **Information architecture:** Pulse and Schedule now belong to Live Operations. Pipeline + What's New form a bounded 2+1 Workspace Flow lead row; Suggestions, Notes, and Workspace activity reclaim the full desktop board below instead of preserving an empty right rail.
-- **Spacing and layout rhythm:** passed. Busy personal-work states use a stacked operation rail; sparse states use paired operation cards. Tablet uses two columns and mobile one. Full-width secondary modules remove the long desktop third-column void.
-- **Typography:** passed. Existing Forge font families, weights, density-aware utilities, truncation, and hierarchy are preserved. Long schedule, sprint, metric, and changelog text truncates rather than stretching cards.
-- **Colors and tokens:** passed. All changes use the existing border, card, background, muted, ember, warning, danger, and success tokens.
-- **Image and icon fidelity:** passed. The surface contains no new raster imagery. Existing product components and Lucide icons remain; no placeholder or approximate assets were introduced.
-- **Copy and content:** passed. Product labels remain concise and operational. Schedule exposes at most 3 due rows plus a remainder link; What's New exposes at most 4 current items and 3 historical headings; Workspace activity remains capped at 5 rows; Pulse displays large counts as `999+` while retaining the exact value in its title.
-- **Responsive overflow:** passed. Automated checks found no page or visible-widget horizontal overflow at 1600, 1024, or 390 px.
+### Global Mission Control
+
+- Source desktop baseline: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\01-global-desktop-accepted.png`
+- Source mobile baseline: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\02-global-mobile-accepted.jpg`
+- Desktop implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\19-global-operations-desktop.png`
+- Mobile implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\20-global-operations-mobile.png`
+- Lower mobile implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\20b-global-operations-mobile-lower.png`
+- Full-view comparison: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\23-global-qa-comparison.png`
+- Viewports: 1536 x 1024 desktop; 390 x 844 mobile
+- State: cross-workspace overview with seeded Forge workspace, zero registered runtimes, 19 open issues, no assigned attention, three offline agents, and recent activity
+
+The baseline and implementation comparison confirms the redesign preserves the global shell, real data, existing tokens, density, navigation destinations, and read-only contract while replacing the undifferentiated card grid with the selected direction's operator hierarchy. Runtime and dispatch posture now leads; workspace queue and assigned attention are the primary work plane; agent presence, runtime coverage, and activity follow as supporting evidence.
+
+## Required fidelity surfaces
+
+- **Fonts and typography:** Both surfaces use Forge's existing font stack and density-aware scale. Section labels, headings, metrics, issue keys, and row copy establish the same compact operational hierarchy without a parallel type system.
+- **Spacing and layout:** The workspace shelf attaches to the bottom of the content flow and never covers the dashboard. The global surface uses one posture banner, a 2:1 primary work grid, then three supporting columns. Mobile collapses both surfaces into one readable vertical sequence with no clipped controls or horizontal overflow.
+- **Colors and tokens:** Existing `background`, `card`, `border`, `ember`, `warning`, `danger`, `success`, `foreground`, and `muted-foreground` tokens are used throughout. No hard-coded palette, gradients, or new design system were introduced.
+- **Images and icons:** Neither target requires raster imagery. All interface icons use Forge's existing Lucide dependency; no placeholder asset, handcrafted SVG, CSS drawing, or generated substitute was added.
+- **Copy and content:** Mission Control terminology remains consistent. Workspace issue keys use canonical `FRG-*` references. The global runtime CTA appears only when setup is required, Queue remains distinct from assigned Attention, and Sprint terminology elsewhere remains unchanged.
+
+## States, interaction, and accessibility
+
+- Live, Queue, Agents, and Chat expose `tablist`, `tab`, `aria-selected`, `aria-controls`, and `tabpanel` semantics.
+- Numeric shortcuts 1–4 switch workspace tabs and Escape collapses the shelf. The primary Assign next action opens the oldest unassigned issue; issue and agent rows deep-link to their durable surfaces.
+- The global workspace row, issue-queue action, inbox, activity, agent settings, and runtime settings navigation were exercised from the rendered page.
+- Workspace Queue and Agent Presence provide explicit loading, empty, and error states. Every global query region has a bounded loading state, empty state, and retry action without hiding the rest of Mission Control.
+- Mobile workspace tabs, Settings, and Collapse meet a 44 px target. Global mobile interactive rows and actions meet at least 40 px, preserve visible focus styles from existing components, and wrap long content without collision.
+- Desktop and mobile document widths match their viewport widths. Browser log review found no warnings or errors attributable to the implementation.
 
 ## Comparison history
 
-1. **P2 — sparse-state cockpit gap:** the first pass stacked all five operation widgets, making Live Operations taller than a sparse personal-work canvas. Fixed by selecting one operation column for 9+ work cards and two columns below that threshold. Post-fix evidence: `dashboard-desktop-layout.png` and `cockpit-comparison.png`.
-2. **P2 — compact widget overflow:** automated responsive QA found Quick Notes and then Standup exceeding their mobile/half-card bounds. Fixed by allowing the Notes header to wrap and keeping Standup metrics in a two-column internal grid. Post-fix responsive E2E: passed at all three viewports.
-3. **P2 — residual Workspace Flow rail:** after moving Pulse and Schedule, wide secondary modules still occupied only two of three desktop tracks, leaving a long empty third column below What's New. Fixed by allowing Suggestions, Notes, and Workspace activity to span all three desktop tracks after the bounded Pipeline + What's New row. Post-fix evidence: `dashboard-desktop-layout.png`.
+### Iteration 1
 
-## Implementation checklist
+- **[P2] Workspace mobile controls were 24–40 px.** Settings, tabs, and Collapse did not meet the intended touch target. Fixed by increasing mobile controls to 44 px while retaining compact desktop sizing.
+- **[P1] The collapsed workspace pill could sit behind mobile navigation.** Fixed by applying bottom-navigation safe clearance to bottom-corner pill and glance states.
+- **[P1] Global runtime health was buried below workspace volume.** Fixed by replacing the equal-weight card grid with a derived runtime and dispatch posture banner, keeping registration failure visible before queue triage.
+- **[P2] Queue, attention, presence, and activity competed at the same level globally.** Fixed by separating actionable workspace queue and personal attention from supporting coverage and recency evidence.
 
-- [x] Pulse + Schedule live in the priority cockpit.
-- [x] What's New owns the compact Workspace Flow lead slot.
-- [x] Busy and sparse work states choose different operation density.
-- [x] Item caps, truncation, remainder links, and metric bounds are explicit.
-- [x] Desktop/tablet/mobile DOM order, columns, and overflow are tested.
-- [x] Saved dashboard preferences migrate once to the new structural version.
-- [x] No deployment performed.
+### Iteration 2
 
-## Command Center organization QA
+- Post-fix mobile measurement confirms the workspace controls meet 44 px and neither surface overflows at 390 x 844.
+- Post-fix desktop captures confirm the workspace shelf remains in layout and the global scan begins with runtime posture, queue, and attention.
+- Combined comparisons contain no actionable P0, P1, or P2 differences against the approved direction, captured product baseline, and existing Forge conventions.
 
-**Source visual truth**
+## Findings
 
-- `/home/bailey/.codex/attachments/1d60bf8c-1850-408c-b226-12603da14fec/codex-clipboard-6c55c8ab-47d8-4231-91ca-49d56c2a2105.png`
-- The source establishes the permanent activity rail, repeated AXI-91 decision
-  noise, inactive attention area, and uneven lower-page columns that motivated
-  the Command Center pass.
+No actionable P0, P1, or P2 findings remain.
 
-**Implementation evidence**
+## Follow-up polish
 
-- Desktop: `/home/bailey/.codex/audits/forge-command-center-iteration-2026-07-10/command-center-desktop-content.png`
-- Tablet: `/home/bailey/.codex/audits/forge-command-center-iteration-2026-07-10/command-center-tablet-content.png`
-- Mobile: `/home/bailey/.codex/audits/forge-command-center-iteration-2026-07-10/command-center-mobile-content.png`
-- Source/result overview: `/home/bailey/.codex/audits/forge-command-center-iteration-2026-07-10/command-center-comparison.png`
-- Viewports: 1600 × 2200 desktop, 1024 × 2200 tablet, and 390 × 2600 mobile;
-  authenticated dark-theme Command Center with one seeded stalled run.
+- **P3:** If Forge later exposes safe quick-assignment mutations and queue sort/filter contracts, the workspace shelf can adopt inline controls without changing its structure.
 
-### Findings
-
-- No remaining P0, P1, or P2 findings.
-- **Information architecture:** passed. Needs Action, Live Operations, and
-  Workspace Context create a clear reading order and remove the permanent
-  right-hand rail.
-- **Signal quality:** passed. Empty attention groups disappear. A stalled run
-  has one canonical recovery card; Agent Attention retains aggregate counts
-  without repeating the same run explanation.
-- **Content bounds:** passed. Attention groups scroll internally; live modules
-  cap at four rows, activity at eight, and artifacts at six, with full-surface
-  links for overflow.
-- **Responsive layout:** passed. Live modules render 3/2/1 columns and context
-  renders 8+4/stacked/stacked at desktop/tablet/mobile widths. Automated checks
-  found no horizontal overflow.
-- **Product fidelity:** passed. Existing Forge Section, activity, attention,
-  token, typography, and icon patterns are reused; no new visual system or
-  external design surface was introduced.
-
-### Comparison history
-
-1. **P1 — repeated decision rail:** one stalled issue could occupy most of the
-   fixed activity rail. Fixed by moving the bounded activity feed into Workspace
-   Context and relying on the existing grouped activity behavior.
-2. **P2 — empty attention structure:** Asks and Review Gates rendered even when
-   empty. Fixed by rendering only non-empty attention groups.
-3. **P2 — duplicate recovery detail:** Agent Attention repeated the stalled-run
-   explanation immediately below the canonical attention card. Fixed by
-   excluding those run-detail rows while preserving aggregate agent state.
-
-### Implementation checklist
-
-- [x] Needs Action leads with only actionable groups.
-- [x] Live Operations owns agent state and bounded execution summaries.
-- [x] Workspace Context replaces the permanent sticky rail.
-- [x] Caps, internal overflow, and full-surface links are explicit.
-- [x] Desktop/tablet/mobile columns and overflow are tested.
-- [x] No deployment performed.
+## Final result
 
 final result: passed

@@ -7469,6 +7469,7 @@ export const mcpTools = {
           timeTrackingEnabled: true,
           attachmentQuotaMb: true,
           requiredAckSeconds: true,
+          agentProgressUpdateMinutes: true,
           autoDispatch: true,
           autoDispatchMode: true,
         },
@@ -8015,6 +8016,7 @@ export const mcpTools = {
           timeTrackingEnabled: true,
           attachmentQuotaMb: true,
           requiredAckSeconds: true,
+          agentProgressUpdateMinutes: true,
           autoDispatch: true,
           autoDispatchMode: true,
         },
@@ -8146,7 +8148,9 @@ export const mcpTools = {
             source: "surface-default",
             inferable: false,
           }),
-          protocolInstruction: forgeRunProtocolInstruction(),
+          protocolInstruction: forgeRunProtocolInstruction({
+            progressUpdateMinutes: workspace.agentProgressUpdateMinutes,
+          }),
           mayMutateIssue: modeMayExecute(currentMode),
         };
 

@@ -251,7 +251,7 @@ async function startNewRuns(): Promise<number> {
         title: true,
         description: true,
         assignedAgentId: true,
-        workspace: { select: { key: true } },
+        workspace: { select: { key: true, agentProgressUpdateMinutes: true } },
         project: { select: { repoUrl: true, repoBranch: true } },
         assignedAgent: {
           select: {
@@ -300,11 +300,14 @@ async function startNewRuns(): Promise<number> {
     const engagementMode =
       (evtPayload.engagementMode as "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS" | undefined) ??
       "EXECUTE";
-    const instruction = forgeRunInstruction({
-      mode: engagementMode,
-      source: "surface-default",
-      inferable: false,
-    });
+    const instruction = forgeRunInstruction(
+      {
+        mode: engagementMode,
+        source: "surface-default",
+        inferable: false,
+      },
+      { progressUpdateMinutes: issue.workspace.agentProgressUpdateMinutes },
+    );
     const runtimePolicy =
       storedRuntimePolicy(already?.runtimePolicy, engagementMode) ??
       buildRuntimePolicySnapshot({
@@ -453,7 +456,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
           number: true,
           title: true,
           description: true,
-          workspace: { select: { key: true } },
+          workspace: { select: { key: true, agentProgressUpdateMinutes: true } },
         },
       }),
       db.agent.findUnique({
@@ -493,11 +496,14 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
     if (!connector) continue;
 
     const engagementMode = run.engagementMode;
-    const instruction = forgeRunInstruction({
-      mode: engagementMode,
-      source: "surface-default",
-      inferable: false,
-    });
+    const instruction = forgeRunInstruction(
+      {
+        mode: engagementMode,
+        source: "surface-default",
+        inferable: false,
+      },
+      { progressUpdateMinutes: issue.workspace.agentProgressUpdateMinutes },
+    );
     const runtimePolicy =
       storedRuntimePolicy(run.runtimePolicy, engagementMode) ??
       buildRuntimePolicySnapshot({
@@ -645,7 +651,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
           number: true,
           title: true,
           description: true,
-          workspace: { select: { key: true } },
+          workspace: { select: { key: true, agentProgressUpdateMinutes: true } },
         },
       },
       agent: {
@@ -704,11 +710,14 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
     if (replies.length === 0) continue;
 
     const engagementMode = run.engagementMode;
-    const instruction = forgeRunInstruction({
-      mode: engagementMode,
-      source: "surface-default",
-      inferable: false,
-    });
+    const instruction = forgeRunInstruction(
+      {
+        mode: engagementMode,
+        source: "surface-default",
+        inferable: false,
+      },
+      { progressUpdateMinutes: run.issue.workspace.agentProgressUpdateMinutes },
+    );
     const runtimePolicy =
       storedRuntimePolicy(run.runtimePolicy, engagementMode) ??
       buildRuntimePolicySnapshot({

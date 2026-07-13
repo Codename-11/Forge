@@ -36,6 +36,8 @@ export default function WorkspaceSettingsPage() {
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
   const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
   const [agentRunStaleMinutes, setAgentRunStaleMinutes] = useState(0);
+  const [agentProgressUpdateMinutes, setAgentProgressUpdateMinutes] = useState(5);
+  const [agentRunQuietMinutes, setAgentRunQuietMinutes] = useState(5);
   const [reviewStartTimeoutMinutes, setReviewStartTimeoutMinutes] = useState(5);
   // Per-run safety budgets. 0 = unlimited (opt-in). See run-budget.ts.
   const [runTokenBudget, setRunTokenBudget] = useState(0);
@@ -83,6 +85,8 @@ export default function WorkspaceSettingsPage() {
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
     setAssignmentSlaMinutes(current.assignmentSlaMinutes);
     setAgentRunStaleMinutes(current.agentRunStaleMinutes);
+    setAgentProgressUpdateMinutes(current.agentProgressUpdateMinutes);
+    setAgentRunQuietMinutes(current.agentRunQuietMinutes);
     setReviewStartTimeoutMinutes(current.reviewStartTimeoutMinutes);
     setRunTokenBudget(current.runTokenBudget ?? 0);
     setRunCostBudgetUsd(Number(current.runCostBudgetUsd ?? 0));
@@ -164,6 +168,11 @@ export default function WorkspaceSettingsPage() {
       ["assignmentSlaMinutes", assignmentSlaMinutes !== current.assignmentSlaMinutes],
       ["agentRunStaleMinutes", agentRunStaleMinutes !== current.agentRunStaleMinutes],
       [
+        "agentProgressUpdateMinutes",
+        agentProgressUpdateMinutes !== current.agentProgressUpdateMinutes,
+      ],
+      ["agentRunQuietMinutes", agentRunQuietMinutes !== current.agentRunQuietMinutes],
+      [
         "reviewStartTimeoutMinutes",
         reviewStartTimeoutMinutes !== current.reviewStartTimeoutMinutes,
       ],
@@ -208,6 +217,8 @@ export default function WorkspaceSettingsPage() {
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
+    agentProgressUpdateMinutes,
+    agentRunQuietMinutes,
     reviewStartTimeoutMinutes,
     runTokenBudget,
     runCostBudgetUsd,
@@ -248,6 +259,8 @@ export default function WorkspaceSettingsPage() {
       agentIdleTimeoutMinutes,
       assignmentSlaMinutes,
       agentRunStaleMinutes,
+      agentProgressUpdateMinutes,
+      agentRunQuietMinutes,
       reviewStartTimeoutMinutes,
       // Persist unlimited as NULL (not 0) so the column matches its documented
       // null = unlimited semantics; the form treats both as "no cap".
@@ -283,6 +296,8 @@ export default function WorkspaceSettingsPage() {
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
+    agentProgressUpdateMinutes,
+    agentRunQuietMinutes,
     reviewStartTimeoutMinutes,
     runTokenBudget,
     runCostBudgetUsd,
@@ -530,7 +545,7 @@ export default function WorkspaceSettingsPage() {
                 </Field>
                 <Field
                   label="Run stale timeout (minutes)"
-                  hint="Close ACTIVE agent runs as STALLED when their last run event is older than this. 0 disables auto-close; the UI can still surface runs as stale earlier."
+                  hint="Canonically close ACTIVE agent runs as STALLED when their last run event is older than this. 0 disables auto-close."
                 >
                   <Input
                     type="number"
@@ -539,6 +554,36 @@ export default function WorkspaceSettingsPage() {
                     value={agentRunStaleMinutes}
                     onChange={(e) =>
                       setAgentRunStaleMinutes(Number(e.target.value) || 0)
+                    }
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Progress update cadence (minutes)"
+                  hint="Ask agents to refresh their rolling status during long phases at this cadence. 0 disables the reminder; meaningful phase changes should still be reported."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={agentProgressUpdateMinutes}
+                    onChange={(e) =>
+                      setAgentProgressUpdateMinutes(Number(e.target.value) || 0)
+                    }
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Run quiet threshold (minutes)"
+                  hint="Show an ACTIVE run as Quiet / needing attention after this long without a run event. This is an early visual signal, not a state transition. 0 disables."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={10080}
+                    value={agentRunQuietMinutes}
+                    onChange={(e) =>
+                      setAgentRunQuietMinutes(Number(e.target.value) || 0)
                     }
                     disabled={!canEdit}
                   />
