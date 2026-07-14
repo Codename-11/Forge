@@ -472,6 +472,7 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
         ref={containerRef}
         className="relative"
         role="combobox"
+        aria-label="Mention autocomplete"
         aria-haspopup="listbox"
         aria-expanded={visible}
         aria-controls={ariaControls}

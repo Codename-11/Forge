@@ -213,7 +213,8 @@ export default function CommandCenterPage() {
                     className={cn(
                       "grid grid-cols-1 gap-3 p-3",
                       activeAttentionGroups === 2 && "lg:grid-cols-2",
-                      activeAttentionGroups >= 3 && "lg:grid-cols-3",
+                      activeAttentionGroups === 3 && "lg:grid-cols-3",
+                      activeAttentionGroups >= 4 && "lg:grid-cols-2 xl:grid-cols-4",
                     )}
                     data-testid="command-center-attention-groups"
                   >

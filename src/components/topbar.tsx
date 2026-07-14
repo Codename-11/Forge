@@ -22,7 +22,11 @@ export function Topbar({
   return (
     <header className="flex shrink-0 flex-col items-stretch gap-2 border-b border-border bg-background px-3 py-2 sm:h-12 sm:flex-row sm:items-center sm:px-5 sm:py-0">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-semibold tracking-tight">{title}</div>
+        {typeof title === "string" ? (
+          <h1 className="truncate text-sm font-semibold tracking-tight">{title}</h1>
+        ) : (
+          <div className="truncate text-sm font-semibold tracking-tight">{title}</div>
+        )}
         {subtitle && (
           <div className="text-subtitle line-clamp-2 text-muted-foreground sm:line-clamp-1">
             {subtitle}

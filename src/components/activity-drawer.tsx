@@ -1116,7 +1116,7 @@ export default function ActivityDrawer() {
   const [pages, setPages] = useState<TimelineEvent[]>([]);
   const utils = trpc.useUtils();
   const chatReadSentRef = useRef<Record<string, number>>({});
-  const dialogRef = useRef<HTMLElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const invalidateNotifications = useCallback(() => {
@@ -1258,6 +1258,23 @@ export default function ActivityDrawer() {
   );
   const { data: mineData, isLoading: mineLoading } = mineQuery;
 
+  const waitingOnMeQuery = trpc.inbox.waitingOnMe.useQuery(
+    { limit: 25 },
+    {
+      enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
+      refetchOnWindowFocus: true,
+      staleTime: 30_000,
+    },
+  );
+  const actionRequestsQuery = trpc.inbox.actionRequestsForMe.useQuery(
+    { limit: 50 },
+    {
+      enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
+      refetchOnWindowFocus: true,
+      staleTime: 30_000,
+    },
+  );
+
   const attentionQuery = trpc.notification.list.useQuery(
     { limit: 30 },
     {
@@ -1315,17 +1332,27 @@ export default function ActivityDrawer() {
   const nextCursor = data?.nextCursor ?? null;
   const attentionRows = attentionData?.notifications.map(notificationRowFromPersisted) ?? [];
   const unreadAlertCount = attentionRows.filter((row) => row.status === "UNREAD").length;
+  const actionRequestItems = actionRequestsQuery.data?.items ?? [];
+  const actionRequestIssueIds = new Set(
+    actionRequestItems.flatMap((request) => (request.issueId ? [request.issueId] : [])),
+  );
+  const waitingOnMeItems = (waitingOnMeQuery.data?.items ?? []).filter(
+    (row) => !actionRequestIssueIds.has(row.issue.id),
+  );
+  const needsInputCount = actionRequestItems.length + waitingOnMeItems.length;
   const mineCount =
     (mineData
       ? mineData.counts.assignedUnblocked + mineData.counts.mentions + mineData.counts.stalled
-      : 0) + attentionRows.length;
+      : 0) +
+    attentionRows.length +
+    needsInputCount;
 
   return (
     <div
       className={cn("fixed inset-0 z-40 bg-foreground/20 backdrop-blur-sm", MOTION.fadeIn)}
       onClick={close}
     >
-      <aside
+      <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
@@ -1432,11 +1459,22 @@ export default function ActivityDrawer() {
               ws={ws}
               data={mineData}
               isLoading={mineLoading}
+              actionRequests={actionRequestItems}
+              waitingOnMe={waitingOnMeItems}
+              needsInputLoading={waitingOnMeQuery.isLoading || actionRequestsQuery.isLoading}
               alertRows={attentionRows}
               alertsLoading={attentionLoading}
-              error={mineQuery.error?.message ?? attentionQuery.error?.message ?? null}
+              error={
+                mineQuery.error?.message ??
+                waitingOnMeQuery.error?.message ??
+                actionRequestsQuery.error?.message ??
+                attentionQuery.error?.message ??
+                null
+              }
               onRetry={() => {
                 void mineQuery.refetch();
+                void waitingOnMeQuery.refetch();
+                void actionRequestsQuery.refetch();
                 void attentionQuery.refetch();
               }}
               onAcknowledgeAlert={(id) => acknowledgeNotification.mutate({ id })}
@@ -1510,7 +1548,7 @@ export default function ActivityDrawer() {
             </div>
           )}
         </div>
-      </aside>
+      </div>
     </div>
   );
 }
@@ -1553,11 +1591,17 @@ function DrawerTab({
 }
 
 type InboxData = inferRouterOutputs<AppRouter>["inbox"]["get"];
+type WaitingOnMeItem = inferRouterOutputs<AppRouter>["inbox"]["waitingOnMe"]["items"][number];
+type ActionRequestItem =
+  inferRouterOutputs<AppRouter>["inbox"]["actionRequestsForMe"]["items"][number];
 
 function MinePanel({
   ws,
   data,
   isLoading,
+  actionRequests,
+  waitingOnMe,
+  needsInputLoading,
   alertRows,
   alertsLoading,
   error,
@@ -1571,6 +1615,9 @@ function MinePanel({
   ws: { slug: string };
   data: InboxData | undefined;
   isLoading: boolean;
+  actionRequests: ActionRequestItem[];
+  waitingOnMe: WaitingOnMeItem[];
+  needsInputLoading: boolean;
   alertRows: NotificationRow[];
   alertsLoading: boolean;
   error: string | null;
@@ -1581,14 +1628,26 @@ function MinePanel({
   alertsMutatingId: string | null;
   onNavigate: () => void;
 }) {
-  if ((isLoading || alertsLoading) && !data && alertRows.length === 0) {
+  if (
+    (isLoading || needsInputLoading || alertsLoading) &&
+    !data &&
+    actionRequests.length === 0 &&
+    waitingOnMe.length === 0 &&
+    alertRows.length === 0
+  ) {
     return (
       <div className="px-4 py-3">
         <SkeletonList rows={6} />
       </div>
     );
   }
-  if (error && !data && alertRows.length === 0) {
+  if (
+    error &&
+    !data &&
+    actionRequests.length === 0 &&
+    waitingOnMe.length === 0 &&
+    alertRows.length === 0
+  ) {
     return (
       <div className="px-4 py-6">
         <EmptyState
@@ -1606,7 +1665,7 @@ function MinePanel({
       </div>
     );
   }
-  if (!data && alertRows.length === 0) {
+  if (!data && actionRequests.length === 0 && waitingOnMe.length === 0 && alertRows.length === 0) {
     return (
       <div className="px-4 py-6">
         <EmptyState
@@ -1623,6 +1682,8 @@ function MinePanel({
     (data?.counts.assignedUnblocked ?? 0) +
     (data?.counts.mentions ?? 0) +
     (data?.counts.stalled ?? 0) +
+    actionRequests.length +
+    waitingOnMe.length +
     alertRows.length;
 
   if (totalCount === 0) {
@@ -1632,7 +1693,7 @@ function MinePanel({
           variant="card"
           icon={<Inbox />}
           title="You're caught up."
-          description="No assigned, mentioned, or stalled items right now."
+          description="No asks, assignments, mentions, alerts, or stalled items right now."
         />
       </div>
     );
@@ -1672,6 +1733,50 @@ function MinePanel({
               onResolve={onResolveAlert}
               isMutating={alertsMutatingId === row.id}
               onNavigate={onNavigate}
+            />
+          ))}
+        </MineSection>
+      )}
+
+      {actionRequests.length + waitingOnMe.length > 0 && (
+        <MineSection
+          title="Needs input"
+          count={actionRequests.length + waitingOnMe.length}
+          icon={<MessageCircle className="h-3.5 w-3.5 text-ember" />}
+        >
+          {actionRequests.slice(0, 6).map((request) => {
+            const issue = request.issue;
+            return (
+              <MineRow
+                key={request.id}
+                href={issue ? `/w/${ws.slug}/issues/${issue.id}` : `/w/${ws.slug}/command-center`}
+                onNavigate={onNavigate}
+                left={
+                  <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                    {issue ? `${issue.workspace.key}-${issue.number}` : "Ask"}
+                  </span>
+                }
+                title={request.title}
+                meta={
+                  request.requestedByAgent
+                    ? `@${request.requestedByAgent.profileKey} · ${relativeTime(request.createdAt)}`
+                    : relativeTime(request.createdAt)
+                }
+              />
+            );
+          })}
+          {waitingOnMe.slice(0, Math.max(0, 6 - actionRequests.length)).map((row) => (
+            <MineRow
+              key={row.lastComment.id}
+              href={`/w/${ws.slug}/issues/${row.issue.id}`}
+              onNavigate={onNavigate}
+              left={
+                <span className="font-mono text-[0.6875rem] text-muted-foreground">
+                  {row.issue.workspace.key}-{row.issue.number}
+                </span>
+              }
+              title={row.issue.title}
+              meta={`@${row.lastComment.author.profileKey} · ${relativeTime(row.lastComment.createdAt)}`}
             />
           ))}
         </MineSection>

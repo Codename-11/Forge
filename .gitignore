@@ -39,3 +39,5 @@ tests/e2e/.auth/
 playwright-report/
 test-results/
 .next-e2e/
+.next-lifecycle/
+playwright-report-lifecycle/

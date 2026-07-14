@@ -1,5 +1,6 @@
 "use client";
 import type { AgentStatus } from "@prisma/client";
+import type { inferRouterOutputs } from "@trpc/server";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -36,6 +37,7 @@ import { ProjectChip } from "@/components/project-chip";
 import { RowQuickActions } from "@/components/row-quick-actions";
 import { SnoozeMenu } from "@/components/snooze-menu";
 import { trpc } from "@/lib/trpc";
+import type { AppRouter } from "@/server/routers/_app";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useHotkey } from "@/lib/keyboard";
@@ -70,6 +72,27 @@ export default function InboxPage() {
   const [allWorkspaces, setAllWorkspaces] = useState(false);
 
   const { data, isLoading } = trpc.inbox.get.useQuery({ allWorkspaces });
+  const waitingOnMeQ = trpc.inbox.waitingOnMe.useQuery(
+    { limit: 25 },
+    { enabled: !allWorkspaces },
+  );
+  const actionRequestsQ = trpc.inbox.actionRequestsForMe.useQuery(
+    { limit: 50 },
+    { enabled: !allWorkspaces },
+  );
+  const actionRequests = useMemo(
+    () => actionRequestsQ.data?.items ?? [],
+    [actionRequestsQ.data?.items],
+  );
+  const requestedIssueIds = useMemo(
+    () => new Set(actionRequests.flatMap((request) => (request.issueId ? [request.issueId] : []))),
+    [actionRequests],
+  );
+  const waitingOnMe = useMemo(
+    () =>
+      (waitingOnMeQ.data?.items ?? []).filter((row) => !requestedIssueIds.has(row.issue.id)),
+    [requestedIssueIds, waitingOnMeQ.data?.items],
+  );
   const { data: agentQueue, isLoading: queueLoading } = trpc.issue.queue.useQuery(
     { includeClaimed: true, limit: 25 },
     { enabled: !allWorkspaces },
@@ -429,7 +452,9 @@ export default function InboxPage() {
                 />
               </div>
 
-              {isLoading || !data ? (
+              {isLoading ||
+              !data ||
+              (!allWorkspaces && (waitingOnMeQ.isLoading || actionRequestsQ.isLoading)) ? (
                 <div className="space-y-4">
                   <SkeletonList rows={4} />
                   <SkeletonList rows={3} />
@@ -438,7 +463,9 @@ export default function InboxPage() {
                 data.mentions.length === 0 &&
                 data.humanStalled.length === 0 &&
                 data.agentStalled.length === 0 &&
-                data.snoozed.length === 0 ? (
+                data.snoozed.length === 0 &&
+                actionRequests.length === 0 &&
+                waitingOnMe.length === 0 ? (
                 <div className="rounded-lg border border-border bg-card/30 px-6 py-16">
                   <EmptyState
                     variant="page"
@@ -458,7 +485,7 @@ export default function InboxPage() {
                 </div>
               ) : (
                 <>
-                  <BucketSection
+                  {data.counts.assignedUnblocked > 0 && <BucketSection
                     bucket="assigned"
                     title="Assigned & unblocked"
                     hint="Your assignments that aren't waiting on anything else."
@@ -480,9 +507,9 @@ export default function InboxPage() {
                     onHover={(id) => (hoveredRowRef.current = id)}
                     onPickStatus={(id) => setStatusPicker({ issueId: id })}
                     onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
-                  />
+                  />}
 
-                  <Section
+                  {data.counts.mentions > 0 && <Section
                     title={
                       <span className="flex items-center gap-2">
                         <MessageCircle className="h-3.5 w-3.5 text-muted-foreground" />
@@ -555,11 +582,17 @@ export default function InboxPage() {
                         })
                       )}
                     </Card>
-                  </Section>
+                  </Section>}
 
-                  {!allWorkspaces && <WaitingOnMeSection slug={workspace.slug} />}
+                  {!allWorkspaces && (
+                    <NeedsInputSection
+                      slug={workspace.slug}
+                      actionRequests={actionRequests}
+                      waitingOnMe={waitingOnMe}
+                    />
+                  )}
 
-                  <BucketSection
+                  {data.counts.humanStalled > 0 && <BucketSection
                     bucket="humanStalled"
                     title="Stalled — yours"
                     hint={
@@ -582,9 +615,9 @@ export default function InboxPage() {
                     onPickStatus={(id) => setStatusPicker({ issueId: id })}
                     onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
                     tone="warn"
-                  />
+                  />}
 
-                  <BucketSection
+                  {data.counts.agentStalled > 0 && <BucketSection
                     bucket="agentStalled"
                     title="Agent runs stalled"
                     hint={
@@ -608,7 +641,7 @@ export default function InboxPage() {
                     onPickAssignee={(id) => setAssigneePicker({ issueId: id })}
                     tone="warn"
                     showAgent
-                  />
+                  />}
 
                   <SnoozedSection
                     rows={data.snoozed}
@@ -1182,30 +1215,75 @@ function SnoozedSection({
 }
 
 // ---------------------------------------------------------------------------
-// Waiting on me — agent-authored comments that @mention the caller and
-// haven't been replied to. The proc is conservative on purpose (mention
-// heuristic; see the inbox router for trade-offs); the section hides
-// itself when empty so it's invisible until an agent actually pings you.
+// Needs input — precise ActionRequests and conversational agent mentions
+// share one operator-facing bucket. When both point at the same issue the
+// ActionRequest wins because it carries the clearer, resolvable ask.
 // ---------------------------------------------------------------------------
 
-function WaitingOnMeSection({ slug }: { slug: string }) {
-  const { data, isLoading } = trpc.inbox.waitingOnMe.useQuery({ limit: 25 });
-  const items = data?.items ?? [];
-  if (isLoading) return null;
-  if (items.length === 0) return null;
+type WaitingOnMeItem = inferRouterOutputs<AppRouter>["inbox"]["waitingOnMe"]["items"][number];
+type ActionRequestItem =
+  inferRouterOutputs<AppRouter>["inbox"]["actionRequestsForMe"]["items"][number];
+
+function NeedsInputSection({
+  slug,
+  actionRequests,
+  waitingOnMe,
+}: {
+  slug: string;
+  actionRequests: ActionRequestItem[];
+  waitingOnMe: WaitingOnMeItem[];
+}) {
+  const count = actionRequests.length + waitingOnMe.length;
+  if (count === 0) return null;
   return (
     <Section
       title={
         <span className="flex items-center gap-2">
           <Bot className="h-3.5 w-3.5 text-ember" />
-          Waiting on me
-          <span className="font-mono text-[0.6875rem] text-muted-foreground">{items.length}</span>
+          Needs your input
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">{count}</span>
         </span>
       }
-      hint="Agent comments that @-mention you with no reply from you yet."
+      hint="Direct asks and agent questions waiting for your response."
     >
       <Card as="ul">
-        {items.map((row) => (
+        {actionRequests.map((request) => {
+          const issue = request.issue;
+          const href = issue ? `/w/${slug}/issues/${issue.id}` : `/w/${slug}/command-center`;
+          return (
+            <li
+              key={request.id}
+              className="flex flex-wrap items-start gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40 sm:flex-nowrap sm:gap-3"
+            >
+              <span
+                aria-hidden
+                className="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-ember/10 text-ember"
+              >
+                <MessageCircle className="h-3 w-3" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+                  <Link href={href} className="text-id shrink-0 hover:underline">
+                    {issue ? formatIssueId(issue.workspace.key, issue.number) : "Workspace ask"}
+                  </Link>
+                  <span className="min-w-0 flex-1 basis-full truncate font-medium sm:basis-auto">
+                    {request.title}
+                  </span>
+                  {request.issueOpenCount > 1 && (
+                    <Badge>+{request.issueOpenCount - 1} more</Badge>
+                  )}
+                </div>
+                {request.body && (
+                  <div className="mt-0.5 line-clamp-2 text-muted-foreground">{request.body}</div>
+                )}
+              </div>
+              <span className="text-meta ml-auto shrink-0 text-muted-foreground sm:ml-0">
+                {relativeTime(request.createdAt)}
+              </span>
+            </li>
+          );
+        })}
+        {waitingOnMe.map((row) => (
           <li
             key={row.lastComment.id}
             className="flex flex-wrap items-start gap-2 px-3 py-2 text-[0.75rem] hover:bg-subtle/40 sm:flex-nowrap sm:gap-3"
