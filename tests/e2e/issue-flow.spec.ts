@@ -28,6 +28,33 @@ test.describe("Issue flow", () => {
     await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
     await expect(page.getByText(title).first()).toBeVisible();
 
+    // The bare issue URL opens recent Activity, and the rail itself does not
+    // become a second vertical scroll container.
+    const activityTab = page.getByRole("tab", { name: /Activity/ });
+    const attachmentsTab = page.getByRole("tab", { name: "Attachments" });
+    const tabPanel = page.getByRole("tabpanel");
+    await expect(activityTab).toHaveAttribute("aria-selected", "true");
+    await expect(activityTab).toHaveAttribute("tabindex", "0");
+    await expect(tabPanel).toHaveAttribute("aria-labelledby", /activity-tab$/);
+    const railSurface = page.getByLabel("Issue detail rail").locator(":scope > div");
+    await expect(railSurface).toBeVisible();
+    const railMetrics = await railSurface.evaluate((el) => ({
+      clientHeight: (el as HTMLElement).clientHeight,
+      scrollHeight: (el as HTMLElement).scrollHeight,
+    }));
+    expect(railMetrics.scrollHeight - railMetrics.clientHeight).toBeLessThanOrEqual(1);
+
+    // Standard tab arrow navigation changes both focus and the deep-link URL.
+    await activityTab.focus();
+    await activityTab.press("ArrowRight");
+    await expect(attachmentsTab).toHaveAttribute("aria-selected", "true");
+    await expect(attachmentsTab).toBeFocused();
+    await expect(page).toHaveURL(/\?tab=attachments$/);
+
+    // Returning to the bare path restores Activity as the default.
+    await page.goto(new URL(page.url()).pathname);
+    await expect(activityTab).toHaveAttribute("aria-selected", "true");
+
     // Move status on the detail page and confirm it sticks.
     const status = page.getByRole("combobox", { name: "Status" });
     await status.click();

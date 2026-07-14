@@ -12577,3 +12577,29 @@ passed, 1 skipped), and a fresh production-build Playwright run (37 passed).
 The standard parallel Vitest run exposed the known cross-file stale-work
 database race; that suite passed both independently (9 tests) and within the
 serial full run.
+
+---
+
+## 2026-07-13 — Issue detail rail UX pass
+
+Reworked the issue-detail right rail from a nested, viewport-sized scroller
+into a compact part of the page's single content scroll. Removed the runtime
+height calculator, sticky inner rail, contained overscroll, and independent
+vertical overflow. Empty GitHub state, property labels, and agent-queue help
+now consume substantially less height while preserving the existing controls.
+
+Made Activity the bare-URL default, kept Attachments and Relations deep-linkable,
+and updated attachment jumps to use `?tab=attachments`. The tab pattern now has
+larger targets, roving focus, Left/Right/Home/End navigation, and explicit
+tab/tabpanel relationships.
+
+Added focused Playwright coverage for Activity-first routing, rail overflow,
+tab semantics, keyboard navigation, and URL state. Screenshot verification at
+1440×900 and 1280×720 measured the rail at 458px with equal client/scroll
+heights and visible overflow, eliminating the previous second scroll owner.
+
+Verification: lint passed with existing repository warnings; typecheck passed;
+the focused issue-flow Playwright test passed after a fresh production build;
+and the full Playwright suite passed (37 tests). The parallel Vitest suite
+passed 1,208 tests with 1 skip and hit the known unrelated stale-work database
+race once; that failing test passed immediately in isolation.

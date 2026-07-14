@@ -1,5 +1,5 @@
 "use client";
-import { use, useEffect, useRef, useState } from "react";
+import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus, WorkItemKind } from "@prisma/client";
@@ -83,8 +83,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const workspace = useWorkspace();
   const slug = workspace.slug;
   const isAdmin = workspace.role === "OWNER" || workspace.role === "ADMIN";
-  const railCardRef = useRef<HTMLDivElement | null>(null);
-  const [railCardHeight, setRailCardHeight] = useState<number | null>(null);
   const { data: ws } = trpc.workspace.current.useQuery();
   // 15s refetch keeps the topbar's RunActivityChip (and other live
   // surfaces on this page) honest without a manual reload while an
@@ -255,37 +253,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     [siblings?.next?.id, slug],
   );
 
-  useEffect(() => {
-    let frame = 0;
-
-    const updateRailHeight = () => {
-      cancelAnimationFrame(frame);
-      frame = requestAnimationFrame(() => {
-        if (!window.matchMedia("(min-width: 768px)").matches) {
-          setRailCardHeight(null);
-          return;
-        }
-
-        const el = railCardRef.current;
-        if (!el) return;
-
-        const top = Math.max(16, el.getBoundingClientRect().top);
-        const available = Math.floor(window.innerHeight - top - 16);
-        const next = Math.max(240, available);
-        setRailCardHeight((prev) => (prev !== null && Math.abs(prev - next) < 2 ? prev : next));
-      });
-    };
-
-    updateRailHeight();
-    window.addEventListener("resize", updateRailHeight);
-    window.addEventListener("scroll", updateRailHeight, true);
-    return () => {
-      cancelAnimationFrame(frame);
-      window.removeEventListener("resize", updateRailHeight);
-      window.removeEventListener("scroll", updateRailHeight, true);
-    };
-  }, [issue?.id]);
-
   if (error)
     return (
       <div className="flex flex-1 items-center justify-center p-8">
@@ -419,11 +386,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 <button
                   type="button"
                   onClick={() => {
-                    // Jump to the right rail's Attachments tab. The rail
-                    // reads `?tab=` from the URL and "attachments" is its
-                    // default, so clearing the param works either way.
+                    // Jump to the right rail's Attachments tab. Activity is
+                    // the bare-URL default, so Attachments is explicit.
                     const url = new URL(window.location.href);
-                    url.searchParams.delete("tab");
+                    url.searchParams.set("tab", "attachments");
                     router.replace(`${url.pathname}${url.search}${url.hash}`);
                   }}
                   title={`${issue.attachments.length} attachment${issue.attachments.length === 1 ? "" : "s"}`}
@@ -633,18 +599,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
           <aside
             aria-label="Issue detail rail"
-            className="min-w-0 shrink-0 md:sticky md:top-4 md:w-[22rem] md:self-start xl:w-[26rem]"
+            className="min-w-0 shrink-0 md:w-[22rem] md:self-start xl:w-[26rem]"
           >
-            <div
-              ref={railCardRef}
-              className="min-h-0 overflow-x-hidden overflow-y-visible rounded-lg border border-border bg-card/30 md:overflow-y-auto md:overscroll-contain"
-              style={railCardHeight === null ? undefined : { height: railCardHeight }}
-            >
+            <div className="rounded-lg border border-border bg-card/30">
               <IssueRail
                 issueId={issue.id}
                 activityCount={recentEvents?.length ?? 0}
                 header={
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     <GitHubLinksPanel issueId={issue.id} />
                     <SidebarField label="Project">
                       <ProjectPickerField
@@ -713,7 +675,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       />
                     </SidebarField>
                     <SidebarField label="Agent queue">
-                      <label className="flex w-full flex-wrap items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]">
+                      <label
+                        className="flex w-full flex-wrap items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]"
+                        title="Queued issues can be picked up by an agent; assigned issues can remain unclaimed until an agent starts."
+                      >
                         <input
                           type="checkbox"
                           checked={issue.queued}
@@ -733,11 +698,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                             {issue.queued ? "Queued" : "Not queued"}
                           </Badge>
                         </span>
+                        <span className="sr-only">
+                          Queued issues can be picked up by an agent; assigned issues can remain
+                          unclaimed until an agent starts.
+                        </span>
                       </label>
-                      <div className="text-[0.6875rem] text-muted-foreground">
-                        Queued issues can be picked up by an agent; assigned issues can still sit
-                        unclaimed until an agent starts.
-                      </div>
                     </SidebarField>
                     {issue.claimedAt && (
                       <SidebarField label="Claimed by">
@@ -935,9 +900,11 @@ function KindPicker({
 
 function SidebarField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex flex-col gap-1">
-      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
-      {children}
+    <div className="grid grid-cols-[5.25rem_minmax(0,1fr)] items-start gap-2">
+      <div className="pt-1.5 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+        {label}
+      </div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }
@@ -1011,7 +978,7 @@ function PickerTrigger({
       onClick={onClick}
       className="focus-ring flex w-full items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-left text-xs hover:bg-subtle"
     >
-      {children ?? <span className="text-muted-foreground">{placeholder}</span>}
+      {children || <span className="text-muted-foreground">{placeholder}</span>}
       <span className="ml-auto text-muted-foreground">▾</span>
     </button>
   );
