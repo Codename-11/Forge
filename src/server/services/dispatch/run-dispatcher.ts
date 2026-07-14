@@ -845,10 +845,23 @@ async function applyPolledCostDelta(
 
 async function pollActiveRuns(): Promise<number> {
   const runs = await db.agentRun.findMany({
-    // A WAITING approval remains provider-owned work. Keep polling it so a
+    // A WAITING *approval* remains provider-owned work. Keep polling it so a
     // gateway restart/TTL sweep cannot leave an immortal approval in Forge.
+    //
+    // A normal runs.setWaiting pause is different: the provider turn is
+    // expected to finish after the agent records that it needs an operator
+    // reply. Polling that parked turn would reinterpret the provider's clean
+    // completion as a missing runs.complete contract, flip the patient run to
+    // STALLED, and post a synthetic failure comment that can wake the agent
+    // again. Only approval-backed WAITING rows are still provider-owned.
     where: {
-      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+      OR: [
+        { status: AgentRunStatus.ACTIVE },
+        {
+          status: AgentRunStatus.WAITING,
+          awaitingApprovalAt: { not: null },
+        },
+      ],
       externalRunId: { not: null },
     },
     orderBy: { lastEventAt: "asc" },
@@ -1032,9 +1045,7 @@ async function pollActiveRuns(): Promise<number> {
           await tx.agentRun.update({
             where: { id: run.id },
             data: {
-              ...(run.status === AgentRunStatus.WAITING
-                ? { status: AgentRunStatus.ACTIVE }
-                : {}),
+              ...(run.status === AgentRunStatus.WAITING ? { status: AgentRunStatus.ACTIVE } : {}),
               lastEventAt: new Date(),
               ...(stepChanged ? { currentStep: step } : {}),
               ...(clearApproval

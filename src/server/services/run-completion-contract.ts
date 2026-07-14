@@ -18,6 +18,7 @@ export type RunVerificationResultItem = {
 
 export type RunCompletionInput = {
   summary?: string;
+  completionCommentId?: string;
   producedArtifactIds?: string[];
   verificationResult?: RunVerificationResultItem[];
   followUps?: Array<{ title: string; body?: string; kind?: string }>;
@@ -134,9 +135,7 @@ export function validateRunCompletion(input: {
   const checklist = checklistItems(issue.verificationChecklist);
   if (checklist.length > 0) {
     const done = new Set(
-      (completion.verificationResult ?? [])
-        .filter((item) => item.done)
-        .map(verificationKey),
+      (completion.verificationResult ?? []).filter((item) => item.done).map(verificationKey),
     );
     for (const item of checklist) {
       if (!done.has(verificationKey(item))) {
@@ -147,4 +146,3 @@ export function validateRunCompletion(input: {
 
   return errors;
 }
-

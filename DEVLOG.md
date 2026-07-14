@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
+
+Closed the AXI-102 stall-comment loop introduced by approval-expiry recovery.
+The runs dispatcher was polling every provider-backed `WAITING` row even though
+ordinary `runs.setWaiting` turns are expected to finish provider-side after the
+agent parks for an operator reply. That normal completion was consequently
+reclassified as a missing `runs.complete` contract, marked STALLED, and surfaced
+as a synthetic `[dispatch · run stalled]` issue comment. Polling now covers
+ACTIVE runs plus only the WAITING rows that hold a real pending runtime
+approval; patient waits remain parked for the existing reply-based resume path.
+The generic recovery queue also excludes WAITING work so Command Center does not
+duplicate a legitimate question as a stalled run with an incorrect Abandon
+action.
+
+Added a shared compact expandable-text treatment to Command Center asks,
+runtime approvals, review prompts and summaries, recoverable-run details, and
+agent-attention items. Cards remain a consistent two-line scan by default and
+offer keyboard-accessible Show full / Show less controls only when their content
+actually overflows.
+
+Verification: focused dispatcher and operator-attention coverage passed
+(**13/13**); lint passed with existing repository warnings only; typecheck
+passed; the full Vitest suite passed (**1,211 passed; 1 skipped**); a fresh
+production build and the responsive Command Center Playwright contract passed
+(**1/1** across desktop, tablet, and mobile); and `git diff --check` passed.
+
 ## 2026-07-13 — v0.11.0 live agent operations release candidate
 
 Integrated the issue Workstream and durable realtime stream with the global
@@ -12577,3 +12603,69 @@ passed, 1 skipped), and a fresh production-build Playwright run (37 passed).
 The standard parallel Vitest run exposed the known cross-file stale-work
 database race; that suite passed both independently (9 tests) and within the
 serial full run.
+
+---
+
+## 2026-07-13 — Issue detail rail UX pass
+
+Reworked the issue-detail right rail from a nested, viewport-sized scroller
+into a compact part of the page's single content scroll. Removed the runtime
+height calculator, sticky inner rail, contained overscroll, and independent
+vertical overflow. Empty GitHub state, property labels, and agent-queue help
+now consume substantially less height while preserving the existing controls.
+
+Made Activity the bare-URL default, kept Attachments and Relations deep-linkable,
+and updated attachment jumps to use `?tab=attachments`. The tab pattern now has
+larger targets, roving focus, Left/Right/Home/End navigation, and explicit
+tab/tabpanel relationships.
+
+Added focused Playwright coverage for Activity-first routing, rail overflow,
+tab semantics, keyboard navigation, and URL state. Screenshot verification at
+1440×900 and 1280×720 measured the rail at 458px with equal client/scroll
+heights and visible overflow, eliminating the previous second scroll owner.
+
+Verification: lint passed with existing repository warnings; typecheck passed;
+the focused issue-flow Playwright test passed after a fresh production build;
+and the full Playwright suite passed (37 tests). The parallel Vitest suite
+passed 1,208 tests with 1 skip and hit the known unrelated stale-work database
+race once; that failing test passed immediately in isolation.
+
+---
+
+## 2026-07-14 — Run closure and shared operational-alert lifecycle
+
+Made successful agent-run closure visible and durable across every engagement
+mode. The shared `finishRun` path now creates one agent-authored final issue
+comment (or adopts the agent's explicitly supplied final BODY comment), stores
+its ID in completion metadata, and keeps mode-specific `runs.complete`
+validation intact. Terminal transitions clear live-only step/approval state,
+and buffered provider trace events can no longer revive a completed card as
+“thinking” or “live”; explicit operator reconciliation events remain durable.
+
+GitHub issue and pull-request URLs submitted through generic link attachment
+paths now route into Forge's native GitHub resource relation, preserving sync,
+checks, and PR state instead of creating an opaque attachment.
+
+Restored unpin compatibility for migration-0023 rows such as AXI-28. Those
+historical pins deliberately use opaque `pin_<md5>` IDs rather than CUIDs, so
+the remove/reorder API now accepts both persisted formats. Cross-workspace
+navbar chips also expose a direct per-item unpin action for issues, projects,
+initiatives, sprints, views, and agents.
+
+Unified operational alerts and notifications around `NotificationState`.
+Active stale/no-ack/plan alerts reconcile to Resolved when durable product state
+proves recovery, while a human follow-up alone does not falsely clear an agent
+stall. The notification drawer now exposes clearer “I’m handling”, Hide, and
+Resolve actions with per-item feedback, retryable error states, larger targets,
+modal focus containment, and focus restoration. Command Center groups repeated
+active-stale symptoms by agent, shows exact run/approval counts, confirms
+destructive recovery, and no longer reports fetch failures as empty state.
+Agent attention/runroom and Inbox empty/roster language now distinguish
+verified clear states from unavailable or offline conditions.
+
+Verification: lint passed with existing repository warnings; typecheck passed;
+focused database suites passed (156 tests). The parallel full Vitest run passed
+1,212 tests with 1 skip and hit the known cross-suite stale-work race once; its
+9-test file passed immediately in isolation. A fresh production build passed
+the Command Center and issue-flow Playwright specs, and the notification drawer
+focus-containment/restore regression also passed (3 focused browser tests).

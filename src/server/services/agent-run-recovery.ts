@@ -11,10 +11,7 @@ import {
 
 type Tx = PrismaClient | Prisma.TransactionClient;
 
-export type RunRecoveryReason =
-  | "active-stale"
-  | "terminal-failure"
-  | "protocol-failed";
+export type RunRecoveryReason = "active-stale" | "terminal-failure" | "protocol-failed";
 
 export type RunRecoveryAction = "ABANDON" | "CLEAR" | "RECONCILE";
 
@@ -180,23 +177,19 @@ export function classifyRunForRecovery(
     };
   }
 
-  if (
-    (run.status === "ACTIVE" || run.status === "WAITING") &&
-    !run.awaitingApprovalAt &&
-    idleMs >= STALE_RUN_MS
-  ) {
+  // WAITING is a deliberate patient-agent state, not generic stale work.
+  // Questions and approvals surface through their dedicated attention rows;
+  // listing a quiet wait again as a "stalled run" duplicates the operator
+  // card and invites an incorrect abandon action.
+  if (run.status === "ACTIVE" && !run.awaitingApprovalAt && idleMs >= STALE_RUN_MS) {
     const detail =
       warningDiagnostic?.description ??
-      (run.status === "WAITING"
-        ? "The agent is waiting and has not updated the run recently."
-        : "The run is active but has not emitted a recent AgentRunEvent.");
+      "The run is active but has not emitted a recent AgentRunEvent.";
     return {
       id: run.id,
       reason: "active-stale",
       severity: "warning",
-      title:
-        warningDiagnostic?.title ??
-        (run.status === "WAITING" ? "Waiting run is quiet" : "Active run is stale"),
+      title: warningDiagnostic?.title ?? "Active run is stale",
       detail,
       idleMs,
       recommendedAction: "ABANDON",
@@ -273,10 +266,7 @@ export async function listRunRecoveryItems(
 async function clearRun(
   tx: Tx,
   input: {
-    run: Pick<
-      AgentRunRecoveryRow,
-      "id" | "issueId" | "agentId" | "status" | "clearedAt"
-    >;
+    run: Pick<AgentRunRecoveryRow, "id" | "issueId" | "agentId" | "status" | "clearedAt">;
     workspaceId: string;
     actorId: string;
     actorAgentId?: string | null;
@@ -401,6 +391,7 @@ export async function recoverAgentRuns(
             diagnostics: item.diagnostics,
           },
           currentStep: "reconciled by operator",
+          allowTerminal: true,
         });
         await clearRun(tx, {
           run,

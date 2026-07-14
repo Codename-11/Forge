@@ -4,6 +4,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import {
   ArrowRight,
+  AlertTriangle,
   Bot,
   CalendarClock,
   Check,
@@ -23,7 +24,8 @@ import {
 import type { Role } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
-import { Picker } from "@/components/ui/modal";
+import { ExpandableText } from "@/components/ui/expandable-text";
+import { Picker, useConfirm } from "@/components/ui/modal";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
 import { RunApprovalCard } from "@/components/agents/run-approval-card";
@@ -61,7 +63,8 @@ export default function CommandCenterPage() {
   const utils = trpc.useUtils();
   const canRecoverRuns = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
   const summaryInput = { dueWindowDays: 7, limit: 20 } as const;
-  const { data, isLoading } = trpc.commandCenter.summary.useQuery(summaryInput);
+  const summaryQuery = trpc.commandCenter.summary.useQuery(summaryInput);
+  const { data, isLoading } = summaryQuery;
 
   // Realtime fan-out. The summary stitches together action requests,
   // review gates, goals, and agent runs — invalidate on the events that
@@ -153,10 +156,10 @@ export default function CommandCenterPage() {
     },
   });
   const attentionCount = data
-    ? data.actionRequests.length +
-      data.runtimeApprovals.length +
-      data.reviewGates.length +
-      data.stalledRuns.length
+    ? data.counts.actionRequests +
+      data.counts.runtimeApprovals +
+      data.counts.reviewGates +
+      data.counts.stalledRuns
     : 0;
   const activeAttentionGroups = data
     ? Number(data.actionRequests.length > 0) +
@@ -164,6 +167,7 @@ export default function CommandCenterPage() {
       Number(data.stalledRuns.length > 0) +
       Number(data.reviewGates.length > 0)
     : 0;
+  const runRecoveryGroups = data ? groupRunRecoveries(data.stalledRuns) : [];
 
   return (
     <>
@@ -181,13 +185,19 @@ export default function CommandCenterPage() {
       <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         {isLoading ? (
           <SkeletonList rows={6} />
-        ) : !data ? (
+        ) : summaryQuery.isError ? (
           <EmptyState
             variant="page"
-            title="Nothing to load"
-            description="The command center couldn't fetch its summary."
+            icon={<AlertTriangle />}
+            title="Command Center is unavailable"
+            description={summaryQuery.error.message}
+            action={
+              <Button variant="outline" onClick={() => void summaryQuery.refetch()}>
+                Try again
+              </Button>
+            }
           />
-        ) : (
+        ) : !data ? null : (
           <div className="mx-auto max-w-7xl space-y-5" data-testid="command-center-content">
             <section data-testid="command-center-priority">
               <Section
@@ -210,7 +220,7 @@ export default function CommandCenterPage() {
                     {data.actionRequests.length > 0 ? (
                       <AttentionGroup
                         title="Asks"
-                        count={data.actionRequests.length}
+                        count={data.counts.actionRequests}
                         empty="No agent asks."
                       >
                         {data.actionRequests.map((row) => (
@@ -226,7 +236,7 @@ export default function CommandCenterPage() {
                     {data.runtimeApprovals.length > 0 ? (
                       <AttentionGroup
                         title="Runtime approvals"
-                        count={data.runtimeApprovals.length}
+                        count={data.counts.runtimeApprovals}
                         empty="No runtime approvals."
                       >
                         {data.runtimeApprovals.map((run) => (
@@ -242,7 +252,7 @@ export default function CommandCenterPage() {
                     {data.stalledRuns.length > 0 ? (
                       <AttentionGroup
                         title="Stalled runs"
-                        count={data.stalledRuns.length}
+                        count={data.counts.stalledRuns}
                         empty="No recoverable runs."
                         action={
                           canRecoverRuns ? (
@@ -254,22 +264,35 @@ export default function CommandCenterPage() {
                           ) : null
                         }
                       >
-                        {data.stalledRuns.map((row) => (
-                          <RunFailureCard
-                            key={row.id}
-                            run={row}
-                            slug={ws.slug}
-                            canRecover={canRecoverRuns}
-                            pending={recoverRuns.isPending}
-                            onRecover={(action) => recoverRuns.mutate({ action, runIds: [row.id] })}
-                          />
-                        ))}
+                        {runRecoveryGroups.map((runs) =>
+                          runs.length === 1 ? (
+                            <RunFailureCard
+                              key={runs[0]!.id}
+                              run={runs[0]!}
+                              slug={ws.slug}
+                              canRecover={canRecoverRuns}
+                              pending={recoverRuns.isPending}
+                              onRecover={(action) =>
+                                recoverRuns.mutate({ action, runIds: [runs[0]!.id] })
+                              }
+                            />
+                          ) : (
+                            <RunRecoveryIncidentCard
+                              key={`${runs[0]!.agent.profileKey}:${runs[0]!.recoveryReason}`}
+                              runs={runs}
+                              slug={ws.slug}
+                              canRecover={canRecoverRuns}
+                              pending={recoverRuns.isPending}
+                              onRecover={(action, runIds) => recoverRuns.mutate({ action, runIds })}
+                            />
+                          ),
+                        )}
                       </AttentionGroup>
                     ) : null}
                     {data.reviewGates.length > 0 ? (
                       <AttentionGroup
                         title="Review gates"
-                        count={data.reviewGates.length}
+                        count={data.counts.reviewGates}
                         empty="No review gates."
                       >
                         {data.reviewGates.map((row) => (
@@ -368,7 +391,7 @@ export default function CommandCenterPage() {
                   icon={<Workflow className="h-3.5 w-3.5" />}
                   title="Active runs"
                   empty="No agents running."
-                  count={data.activeRuns.length}
+                  count={data.counts.activeRuns}
                   action={<SectionLink href={`/w/${ws.slug}/agents`} label="Open all" />}
                 >
                   {data.activeRuns.slice(0, COMMAND_MODULE_LIMIT).map((row) => (
@@ -543,19 +566,20 @@ function RuntimeApprovalDecisionCard({
   const href = `/w/${run.issue.workspace.slug || slug}/i/${run.issue.workspace.key}-${run.issue.number}`;
   return (
     <div className="space-y-2 rounded-md border border-warning/35 bg-warning/[0.04] p-2">
-      <Link href={href} className="block min-w-0 hover:text-ember">
+      <div className="min-w-0">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium">
+          <Link href={href} className="truncate text-sm font-medium hover:text-ember">
             {run.issue.workspace.key}-{run.issue.number} · {run.issue.title}
-          </span>
+          </Link>
           <span className="text-meta shrink-0 text-warning">@{run.agent.profileKey}</span>
         </div>
         {run.currentStep ? (
-          <p className="text-meta mt-0.5 line-clamp-2 text-muted-foreground">
-            {run.currentStep}
-          </p>
+          <ExpandableText
+            content={run.currentStep}
+            className="text-meta mt-0.5 text-muted-foreground"
+          />
         ) : null}
-      </Link>
+      </div>
       <RunApprovalCard
         runId={run.id}
         agentName={run.agent.name}
@@ -659,7 +683,7 @@ function ActionRequestDecisionCard({
         <SeverityChip severity={request.severity} />
       </div>
       {request.body ? (
-        <p className="text-meta line-clamp-2 text-muted-foreground">{request.body}</p>
+        <ExpandableText content={request.body} className="text-meta text-muted-foreground" />
       ) : null}
       {request.issue ? (
         <span className="text-meta break-words text-muted-foreground">
@@ -932,23 +956,39 @@ function ReviewGateDecisionCard({
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
       <div className="flex flex-col gap-0.5">
-        {href ? (
+        {step && href ? (
           <Link href={href} className="text-sm font-medium hover:underline">
-            {step
-              ? `${step.title} · step ${step.position + 1} of ${step.plan._count.steps}`
-              : gate.prompt.slice(0, 80)}
+            {step.title} · step {step.position + 1} of {step.plan._count.steps}
           </Link>
-        ) : (
-          <span className="text-sm font-medium">{gate.prompt.slice(0, 80)}</span>
-        )}
-        <span className="text-meta text-muted-foreground">
-          {step
-            ? `${step.plan.title}${step.issue ? ` · ${step.issue.title}` : ""}`
-            : gate.targetType.replace(/-/g, " ")}
-          {href ? "" : ` · ${gate.targetId.slice(0, 12)}…`}
-        </span>
+        ) : step ? (
+          <span className="text-sm font-medium">
+            {step.title} · step {step.position + 1} of {step.plan._count.steps}
+          </span>
+        ) : null}
+        <ExpandableText
+          content={gate.prompt}
+          className={cn(
+            step ? "text-meta text-muted-foreground" : "text-sm font-medium text-foreground",
+          )}
+        />
+        <div className="text-meta flex min-w-0 items-center gap-2 text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">
+            {step
+              ? `${step.plan.title}${step.issue ? ` · ${step.issue.title}` : ""}`
+              : gate.targetType.replace(/-/g, " ")}
+            {href ? "" : ` · ${gate.targetId.slice(0, 12)}…`}
+          </span>
+          {!step && href ? (
+            <Link href={href} className="focus-ring shrink-0 rounded hover:text-foreground">
+              Open target
+            </Link>
+          ) : null}
+        </div>
         {step?.runs[0]?.summary ? (
-          <p className="text-meta line-clamp-2 text-muted-foreground">{step.runs[0].summary}</p>
+          <ExpandableText
+            content={step.runs[0].summary}
+            className="text-meta text-muted-foreground"
+          />
         ) : null}
       </div>
       {!canResolve ? (
@@ -1183,6 +1223,23 @@ type CCRunFailure = {
   };
 };
 
+function groupRunRecoveries(runs: CCRunFailure[]): CCRunFailure[][] {
+  const groups = new Map<string, CCRunFailure[]>();
+  for (const run of runs) {
+    // Quiet active rows usually share one upstream runtime/agent condition;
+    // collapse those symptoms into a root incident. Terminal/protocol
+    // failures remain issue-specific because their recovery evidence differs.
+    const key =
+      run.recoveryReason === "active-stale"
+        ? `${run.agent.profileKey}:${run.recoveryReason}`
+        : run.id;
+    const group = groups.get(key) ?? [];
+    group.push(run);
+    groups.set(key, group);
+  }
+  return [...groups.values()];
+}
+
 function recoveryActionLabel(action: CCRunFailure["recommendedAction"]): string {
   if (action === "ABANDON") return "Abandon";
   if (action === "RECONCILE") return "Reconcile";
@@ -1204,30 +1261,52 @@ function RunRecoveryBulkActions({
   pending: boolean;
   onRecover: (action: CCRunFailure["recommendedAction"], runIds: string[]) => void;
 }) {
+  const { confirm, confirmElement } = useConfirm();
   return (
-    <div className="flex flex-wrap gap-1">
-      {(["ABANDON", "RECONCILE", "CLEAR"] as const).map((action) => {
-        const runIds = runs
-          .filter((run) => run.availableActions.includes(action))
-          .map((run) => run.id);
-        if (runIds.length === 0) return null;
-        const Icon = recoveryActionIcon(action);
-        return (
-          <Button
-            key={action}
-            size="sm"
-            variant="ghost"
-            className="h-6 px-1.5 text-[0.6875rem] normal-case tracking-normal"
-            disabled={pending}
-            onClick={() => onRecover(action, runIds)}
-            title={`${recoveryActionLabel(action)} ${runIds.length} run${runIds.length === 1 ? "" : "s"}`}
-          >
-            {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}
-            {recoveryActionLabel(action)} {runIds.length}
-          </Button>
-        );
-      })}
-    </div>
+    <>
+      <div className="flex flex-wrap gap-1">
+        {(["ABANDON", "RECONCILE", "CLEAR"] as const).map((action) => {
+          const runIds = runs
+            .filter((run) => run.availableActions.includes(action))
+            .map((run) => run.id);
+          if (runIds.length === 0) return null;
+          const Icon = recoveryActionIcon(action);
+          return (
+            <Button
+              key={action}
+              size="sm"
+              variant="ghost"
+              className="h-6 px-1.5 text-[0.6875rem] normal-case tracking-normal"
+              disabled={pending}
+              onClick={async () => {
+                if (
+                  action !== "ABANDON" ||
+                  (await confirm({
+                    title: `Abandon ${runIds.length} active run${runIds.length === 1 ? "" : "s"}?`,
+                    description:
+                      "This closes every selected run and removes it from active operational queues. The issues and run history remain available.",
+                    primaryLabel: `Abandon ${runIds.length}`,
+                    variant: "destructive",
+                    ...(runIds.length >= 5 ? { typeToConfirm: "ABANDON" } : {}),
+                  }))
+                ) {
+                  onRecover(action, runIds);
+                }
+              }}
+              title={`${recoveryActionLabel(action)} ${runIds.length} run${runIds.length === 1 ? "" : "s"}`}
+            >
+              {pending ? (
+                <Loader2 className="h-3 w-3 animate-spin" />
+              ) : (
+                <Icon className="h-3 w-3" />
+              )}
+              {recoveryActionLabel(action)} {runIds.length}
+            </Button>
+          );
+        })}
+      </div>
+      {confirmElement}
+    </>
   );
 }
 
@@ -1244,42 +1323,119 @@ function RunFailureCard({
   pending: boolean;
   onRecover: (action: CCRunFailure["recommendedAction"]) => void;
 }) {
+  const { confirm, confirmElement } = useConfirm();
   const ts = run.finishedAt ?? run.lastEventAt;
   const excerpt = run.recoveryDetail ?? run.summary ?? run.currentStep ?? run.issue.title;
   const ActionIcon = recoveryActionIcon(run.recommendedAction);
   return (
-    <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
-      <Link href={`/w/${slug}/issues/${run.issue.id}`} className="min-w-0 flex-1">
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">
-            {run.issue.workspace.key}-{run.issue.number}
+    <>
+      <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
+            <Link
+              href={`/w/${slug}/issues/${run.issue.id}`}
+              className="text-sm font-medium hover:underline"
+            >
+              {run.issue.workspace.key}-{run.issue.number}
+            </Link>
+            <span className="rounded bg-warning/10 px-1 py-0.5 text-[10px] uppercase text-warning">
+              {run.recoveryReason.replace("-", " ")}
+            </span>
+          </div>
+          <span className="text-meta block font-medium text-foreground/80">
+            {run.recoveryTitle}
           </span>
-          <span className="rounded bg-warning/10 px-1 py-0.5 text-[10px] uppercase text-warning">
-            {run.recoveryReason.replace("-", " ")}
-          </span>
+          <ExpandableText
+            content={`@${run.agent.profileKey} · ${new Date(ts).toLocaleString()} · ${excerpt}`}
+            className="text-meta text-muted-foreground"
+          />
         </div>
-        <span className="text-meta block font-medium text-foreground/80">{run.recoveryTitle}</span>
-        <span className="text-meta line-clamp-2 text-muted-foreground">
-          @{run.agent.profileKey} · {new Date(ts).toLocaleString()} · {excerpt}
-        </span>
-      </Link>
-      {canRecover ? (
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-7 shrink-0 px-2 text-muted-foreground"
-          disabled={pending}
-          onClick={() => onRecover(run.recommendedAction)}
-          title={`${recoveryActionLabel(run.recommendedAction)} this run from operational queues`}
-          aria-label={`${recoveryActionLabel(run.recommendedAction)} run`}
-        >
-          {pending ? (
-            <Loader2 className="h-3 w-3 animate-spin" />
-          ) : (
-            <ActionIcon className="h-3 w-3" />
-          )}
-        </Button>
-      ) : null}
+        {canRecover ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7 shrink-0 px-2 text-muted-foreground"
+            disabled={pending}
+            onClick={async () => {
+              if (
+                run.recommendedAction !== "ABANDON" ||
+                (await confirm({
+                  title: `Abandon ${run.issue.workspace.key}-${run.issue.number} run?`,
+                  description:
+                    "This closes the active run and removes it from operational queues. The issue and run history remain available.",
+                  primaryLabel: "Abandon run",
+                  variant: "destructive",
+                }))
+              ) {
+                onRecover(run.recommendedAction);
+              }
+            }}
+            title={`${recoveryActionLabel(run.recommendedAction)} this run from operational queues`}
+            aria-label={`${recoveryActionLabel(run.recommendedAction)} run`}
+          >
+            {pending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <ActionIcon className="h-3 w-3" />
+            )}
+          </Button>
+        ) : null}
+      </div>
+      {confirmElement}
+    </>
+  );
+}
+
+function RunRecoveryIncidentCard({
+  runs,
+  slug,
+  canRecover,
+  pending,
+  onRecover,
+}: {
+  runs: CCRunFailure[];
+  slug: string;
+  canRecover: boolean;
+  pending: boolean;
+  onRecover: (action: CCRunFailure["recommendedAction"], runIds: string[]) => void;
+}) {
+  const first = runs[0]!;
+  return (
+    <div className="rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
+      <div className="flex min-w-0 flex-wrap items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-medium">
+            @{first.agent.profileKey} · {runs.length} affected runs
+          </div>
+          <ExpandableText
+            content={`${first.recoveryTitle}. ${first.recoveryDetail ?? first.summary ?? first.currentStep ?? "Inspect the affected runs for recovery details."}`}
+            className="text-meta text-muted-foreground"
+          />
+        </div>
+        {canRecover ? (
+          <RunRecoveryBulkActions runs={runs} pending={pending} onRecover={onRecover} />
+        ) : null}
+      </div>
+      <details className="mt-2 border-t border-border/60 pt-2">
+        <summary className="focus-ring cursor-pointer rounded-sm text-[0.6875rem] font-medium text-muted-foreground hover:text-foreground">
+          View {runs.length} affected issues
+        </summary>
+        <ul className="mt-1.5 space-y-1">
+          {runs.map((run) => (
+            <li key={run.id}>
+              <Link
+                href={`/w/${slug}/issues/${run.issue.id}`}
+                className="focus-ring flex min-w-0 items-center gap-2 rounded px-1 py-1 text-[0.75rem] hover:bg-subtle/60"
+              >
+                <span className="text-id shrink-0 text-muted-foreground">
+                  {run.issue.workspace.key}-{run.issue.number}
+                </span>
+                <span className="min-w-0 flex-1 truncate">{run.issue.title}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      </details>
     </div>
   );
 }

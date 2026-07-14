@@ -24,9 +24,11 @@ import {
   Inbox,
   MessageCircle,
   CircleCheck,
+  RefreshCw,
   UserCheck,
   X,
 } from "lucide-react";
+import { toast } from "sonner";
 import type { inferRouterOutputs } from "@trpc/server";
 import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
@@ -40,7 +42,7 @@ import {
   mapActivityEventToNotification,
   type EventNotificationMetadata,
 } from "@/lib/notifications/event-notification";
-import { EmptyState, MOTION, SkeletonList } from "@/components/ui";
+import { Button, EmptyState, MOTION, SkeletonList } from "@/components/ui";
 
 type Kind =
   | "ISSUE_CREATED"
@@ -1060,7 +1062,7 @@ function AlertActivityRow({
                   disabled={isMutating || !onResolve}
                   title="Resolve alert"
                   aria-label="Resolve alert"
-                  className="focus-ring inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+                  className="focus-ring inline-flex min-h-8 items-center gap-1 rounded-sm px-2 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
                 >
                   <CircleCheck className="h-3 w-3" />
                   Resolve
@@ -1070,24 +1072,24 @@ function AlertActivityRow({
                   type="button"
                   onClick={() => onAcknowledge?.(stateId)}
                   disabled={isMutating || !onAcknowledge}
-                  title="Acknowledge alert"
-                  aria-label="Acknowledge alert"
-                  className="focus-ring inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+                  title="Mark as being handled"
+                  aria-label="Mark alert as being handled"
+                  className="focus-ring inline-flex min-h-8 items-center gap-1 rounded-sm px-2 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
                 >
                   <Check className="h-3 w-3" />
-                  Ack
+                  I’m handling
                 </button>
               )}
               <button
                 type="button"
                 onClick={() => onDismiss?.(stateId)}
                 disabled={isMutating || !onDismiss}
-                title="Dismiss alert"
-                aria-label="Dismiss alert"
-                className="focus-ring inline-flex h-6 items-center gap-1 rounded-sm px-1.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
+                title="Hide this alert"
+                aria-label="Hide this alert"
+                className="focus-ring inline-flex min-h-8 items-center gap-1 rounded-sm px-2 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-50"
               >
                 <Archive className="h-3 w-3" />
-                Dismiss
+                Hide
               </button>
             </span>
           )}
@@ -1114,6 +1116,8 @@ export default function ActivityDrawer() {
   const [pages, setPages] = useState<TimelineEvent[]>([]);
   const utils = trpc.useUtils();
   const chatReadSentRef = useRef<Record<string, number>>({});
+  const dialogRef = useRef<HTMLElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
 
   const invalidateNotifications = useCallback(() => {
     void utils.notification.list.invalidate();
@@ -1129,13 +1133,25 @@ export default function ActivityDrawer() {
   const markChatReadMutate = markChatRead.mutate;
   const markNotificationReadMutate = markNotificationRead.mutate;
   const acknowledgeNotification = trpc.notification.acknowledge.useMutation({
-    onSuccess: invalidateNotifications,
+    onSuccess: () => {
+      invalidateNotifications();
+      toast.success("Marked as being handled");
+    },
+    onError: (error) => toast.error("Could not acknowledge alert", { description: error.message }),
   });
   const dismissNotification = trpc.notification.dismiss.useMutation({
-    onSuccess: invalidateNotifications,
+    onSuccess: () => {
+      invalidateNotifications();
+      toast.success("Alert hidden");
+    },
+    onError: (error) => toast.error("Could not dismiss alert", { description: error.message }),
   });
   const resolveNotification = trpc.notification.resolve.useMutation({
-    onSuccess: invalidateNotifications,
+    onSuccess: () => {
+      invalidateNotifications();
+      toast.success("Alert resolved");
+    },
+    onError: (error) => toast.error("Could not resolve alert", { description: error.message }),
   });
   // Closing the drawer also counts as "seeing" the inbox preview, so the
   // inbox-derived half of the bell badge (now a since-visit count) settles
@@ -1144,11 +1160,11 @@ export default function ActivityDrawer() {
     onSuccess: () => void utils.inbox.badge.invalidate(),
   });
   const inboxVisitMutate = inboxVisit.mutate;
-  const notificationMutating =
-    markNotificationRead.isPending ||
-    acknowledgeNotification.isPending ||
-    dismissNotification.isPending ||
-    resolveNotification.isPending;
+  const notificationMutatingId =
+    (acknowledgeNotification.isPending ? acknowledgeNotification.variables?.id : null) ??
+    (dismissNotification.isPending ? dismissNotification.variables?.id : null) ??
+    (resolveNotification.isPending ? resolveNotification.variables?.id : null) ??
+    null;
 
   useEffect(() => {
     if (open) setHasOpenedOnce(true);
@@ -1166,11 +1182,43 @@ export default function ActivityDrawer() {
 
   useEffect(() => {
     if (!open) return;
+    returnFocusRef.current = document.activeElement as HTMLElement | null;
+    window.requestAnimationFrame(() => dialogRef.current?.focus());
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") close();
+      if (e.key === "Escape") {
+        close();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ).filter((element) => !element.hasAttribute("hidden"));
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0]!;
+      const last = focusable[focusable.length - 1]!;
+      const active = document.activeElement;
+      if (active === dialogRef.current || !dialogRef.current.contains(active)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && active === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && active === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      returnFocusRef.current?.focus();
+    };
   }, [open, close]);
 
   // Mark "seen" when the drawer CLOSES, not on a timer while it's open.
@@ -1200,7 +1248,7 @@ export default function ActivityDrawer() {
 
   // Mine tab: pulls the same payload that powers /inbox so the badge
   // count, the drawer preview, and the full page all share a source.
-  const { data: mineData, isLoading: mineLoading } = trpc.inbox.get.useQuery(
+  const mineQuery = trpc.inbox.get.useQuery(
     { allWorkspaces: false },
     {
       enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
@@ -1208,8 +1256,9 @@ export default function ActivityDrawer() {
       staleTime: 30_000,
     },
   );
+  const { data: mineData, isLoading: mineLoading } = mineQuery;
 
-  const { data: attentionData, isLoading: attentionLoading } = trpc.notification.list.useQuery(
+  const attentionQuery = trpc.notification.list.useQuery(
     { limit: 30 },
     {
       enabled: Boolean(ws) && (open || hasOpenedOnce) && tab === "mine",
@@ -1217,6 +1266,7 @@ export default function ActivityDrawer() {
       staleTime: 30_000,
     },
   );
+  const { data: attentionData, isLoading: attentionLoading } = attentionQuery;
 
   useEffect(() => {
     if (!data) return;
@@ -1276,9 +1326,11 @@ export default function ActivityDrawer() {
       onClick={close}
     >
       <aside
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-label="Activity"
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         className={cn(
           "fixed right-0 top-0 z-40 flex h-svh w-[420px] max-w-full flex-col border-l border-border bg-card shadow-xl",
@@ -1332,7 +1384,7 @@ export default function ActivityDrawer() {
                 aria-label="Close"
                 onClick={close}
                 className={cn(
-                  "focus-ring rounded-md p-1 text-muted-foreground hover:bg-subtle hover:text-foreground",
+                  "focus-ring inline-flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground",
                   MOTION.fast,
                 )}
               >
@@ -1382,10 +1434,15 @@ export default function ActivityDrawer() {
               isLoading={mineLoading}
               alertRows={attentionRows}
               alertsLoading={attentionLoading}
+              error={mineQuery.error?.message ?? attentionQuery.error?.message ?? null}
+              onRetry={() => {
+                void mineQuery.refetch();
+                void attentionQuery.refetch();
+              }}
               onAcknowledgeAlert={(id) => acknowledgeNotification.mutate({ id })}
               onDismissAlert={(id) => dismissNotification.mutate({ id })}
               onResolveAlert={(id) => resolveNotification.mutate({ id })}
-              alertsMutating={notificationMutating}
+              alertsMutatingId={notificationMutatingId}
               onNavigate={close}
             />
           ) : isLoading && events.length === 0 ? (
@@ -1503,10 +1560,12 @@ function MinePanel({
   isLoading,
   alertRows,
   alertsLoading,
+  error,
+  onRetry,
   onAcknowledgeAlert,
   onDismissAlert,
   onResolveAlert,
-  alertsMutating,
+  alertsMutatingId,
   onNavigate,
 }: {
   ws: { slug: string };
@@ -1514,16 +1573,36 @@ function MinePanel({
   isLoading: boolean;
   alertRows: NotificationRow[];
   alertsLoading: boolean;
+  error: string | null;
+  onRetry: () => void;
   onAcknowledgeAlert: (id: string) => void;
   onDismissAlert: (id: string) => void;
   onResolveAlert: (id: string) => void;
-  alertsMutating: boolean;
+  alertsMutatingId: string | null;
   onNavigate: () => void;
 }) {
   if ((isLoading || alertsLoading) && !data && alertRows.length === 0) {
     return (
       <div className="px-4 py-3">
         <SkeletonList rows={6} />
+      </div>
+    );
+  }
+  if (error && !data && alertRows.length === 0) {
+    return (
+      <div className="px-4 py-6">
+        <EmptyState
+          variant="card"
+          icon={<AlertTriangle />}
+          title="Notifications are unavailable"
+          description={error}
+          action={
+            <Button size="sm" variant="outline" onClick={onRetry}>
+              <RefreshCw className="h-3.5 w-3.5" />
+              Try again
+            </Button>
+          }
+        />
       </div>
     );
   }
@@ -1561,6 +1640,23 @@ function MinePanel({
 
   return (
     <div className="divide-y divide-border">
+      {error ? (
+        <div
+          role="alert"
+          className="flex items-center gap-2 bg-warning/5 px-4 py-2 text-[0.75rem] text-warning"
+        >
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          <span className="min-w-0 flex-1">Some notification data could not be refreshed.</span>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="focus-ring inline-flex min-h-8 items-center gap-1 rounded px-2 font-medium hover:bg-warning/10"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Retry
+          </button>
+        </div>
+      ) : null}
       {alertRows.length > 0 && (
         <MineSection
           title="Alerts"
@@ -1574,7 +1670,7 @@ function MinePanel({
               onAcknowledge={onAcknowledgeAlert}
               onDismiss={onDismissAlert}
               onResolve={onResolveAlert}
-              isMutating={alertsMutating}
+              isMutating={alertsMutatingId === row.id}
               onNavigate={onNavigate}
             />
           ))}

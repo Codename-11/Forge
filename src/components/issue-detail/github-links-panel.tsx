@@ -40,13 +40,15 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
 
   return (
     <div className="rounded-md border border-border bg-card/40">
-      <div className="flex items-center gap-2 border-b border-border/60 px-2.5 py-2">
+      <div
+        className={`flex items-center gap-2 px-2.5 py-2 ${links && links.length > 0 ? "border-b border-border/60" : ""}`}
+      >
         <Github className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
           GitHub
         </span>
         <span className="font-mono text-[0.625rem] text-muted-foreground">
-          {links?.length ?? 0}
+          {isLoading ? "…" : (links?.length ?? 0)}
         </span>
         <button
           type="button"
@@ -59,19 +61,14 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
         </button>
       </div>
 
-      <div className="space-y-2 p-2.5">
-        {isLoading ? (
-          <div className="text-meta text-muted-foreground">Loading links...</div>
-        ) : links && links.length > 0 ? (
+      {links && links.length > 0 ? (
+        <div className="space-y-2 p-2.5">
           <div className="space-y-1.5">
             {links.map((link) => {
               const resource = link.externalResource;
               const isPr = resource.resourceType === "PULL_REQUEST";
               return (
-                <div
-                  key={link.id}
-                  className="rounded-md border border-border bg-background/70 p-2"
-                >
+                <div key={link.id} className="rounded-md border border-border bg-background/70 p-2">
                   <div className="flex min-w-0 items-start gap-2">
                     {isPr ? (
                       <GitPullRequest className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -124,17 +121,8 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
               );
             })}
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setModalOpen(true)}
-            className="focus-ring flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border bg-background/60 p-2.5 text-meta text-muted-foreground hover:border-border hover:text-foreground"
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Link a GitHub issue or PR
-          </button>
-        )}
-      </div>
+        </div>
+      ) : null}
 
       <GitHubLinkModal issueId={issueId} open={modalOpen} onOpenChange={setModalOpen} />
     </div>

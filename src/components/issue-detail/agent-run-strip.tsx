@@ -166,11 +166,15 @@ export function AgentRunStrip({
     ? formatElapsed(now - new Date(displayRun.startedAt).getTime())
     : null;
   const lastSignalLabel = displayRun ? relativeTime(displayRun.lastEventAt) : null;
-  const step =
+  const liveStep =
     activeRun?.currentStep ??
     activeRun?.statusComment?.currentStep ??
     relevantLatestRun?.currentStep ??
-    stateCopy(state);
+    null;
+  // Historical rows may contain a buffered provider step written around the
+  // completion boundary. Terminal presentation is owned by lifecycle state,
+  // never by a stale live-step label.
+  const step = isActiveRun ? (liveStep ?? stateCopy(state)) : stateCopy(state);
   const statusBody = activeRun?.statusComment?.body?.trim();
   const statusTone = stateTone(state);
 
@@ -238,7 +242,7 @@ export function AgentRunStrip({
           </button>
 
           <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-            <RealtimeBadge status={realtime.status} />
+            {isActiveRun ? <RealtimeBadge status={realtime.status} /> : null}
             {activityHref ? (
               <Link
                 href={activityHref}

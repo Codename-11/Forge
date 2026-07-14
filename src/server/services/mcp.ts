@@ -124,6 +124,7 @@ import { searchGitHubIssuesAndPulls } from "@/server/services/github/client";
 import { listGitHubRepoMappings } from "@/server/services/github/linkability";
 import { githubInstallationId } from "@/server/services/github/mapping-policy";
 import { parseGitHubUrl } from "@/server/services/github/url";
+import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
 import {
   EXTERNAL_LINK_KINDS,
   GITHUB_RESOURCE_TYPES,
@@ -4704,11 +4705,13 @@ export const mcpTools = {
   "attachments.attachLink": {
     scopes: ["WRITE_ISSUES"] as const,
     description: [
-      "Attach an external URL (Google Doc, GitHub PR, Linear ticket, web page, …)",
+      "Attach a generic external URL (Google Doc, Linear ticket, web page, …)",
       "as a first-class Attachment row on a Forge entity. No bytes are uploaded —",
       "the URL is the entirety of the payload.",
       "",
-      "Use this for any link to off-platform content. For uploading bytes (images,",
+      "GitHub issue/PR URLs targeting an issue are automatically routed through",
+      "Forge's native GitHub relation so state, checks, and sync remain available.",
+      "For other off-platform content use this link attachment path. For uploading bytes (images,",
       "PDFs, text/html, JSON, audio, video, …) use attachments.initUpload.",
       "",
       `Allowed target types: ${[...ALLOWED_TARGET_TYPES].sort().join(", ")}.`,
@@ -4760,6 +4763,21 @@ export const mcpTools = {
         });
       } else if (input.targetType === "chat-message") {
         await assertMcpChatMessageTarget(ctx, input.targetId);
+      }
+      if (input.targetType === "issue" && parseGitHubIssueOrPrRef(input.url)) {
+        const actorId = await resolveActorId(ctx);
+        const native = await linkGitHubUrlToIssue({
+          db,
+          workspaceId: ctx.workspaceId,
+          issueId: input.targetId,
+          url: input.url,
+          kind: "RELATES_TO",
+          actor: {
+            actorId,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          },
+        });
+        return { routedTo: "github.link" as const, ...native };
       }
       // If the caller didn't supply a label, try to scrape <title> from
       // the target page so the chip is meaningful out of the box. Fail
@@ -6636,6 +6654,13 @@ export const mcpTools = {
     input: z.object({
       runId: z.string().min(1).max(40),
       summary: z.string().max(50_000).optional(),
+      completionCommentId: z
+        .string()
+        .cuid()
+        .optional()
+        .describe(
+          "Optional BODY comment already posted as this run's final response. When omitted, Forge creates an agent-authored final comment from summary so every completed run closes visibly in the issue thread.",
+        ),
       producedArtifactIds: z.array(z.string().cuid()).max(50).optional(),
       verificationResult: z
         .array(
@@ -6666,6 +6691,7 @@ export const mcpTools = {
       input: {
         runId: string;
         summary?: string;
+        completionCommentId?: string;
         producedArtifactIds?: string[];
         verificationResult?: Array<{
           id?: string;
@@ -6691,6 +6717,7 @@ export const mcpTools = {
           agentId: true,
           issueId: true,
           status: true,
+          startedAt: true,
           engagementMode: true,
           executionStepId: true,
           issue: {
@@ -6710,6 +6737,26 @@ export const mcpTools = {
         throw new Error(`Run is ${run.status}; only ACTIVE / WAITING runs can be completed.`);
       }
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: run.issueId });
+
+      if (input.completionCommentId) {
+        const completionComment = await db.comment.findFirst({
+          where: {
+            id: input.completionCommentId,
+            workspaceId: ctx.workspaceId,
+            issueId: run.issueId,
+            authoringAgentId: linkedAgentId,
+            kind: CommentKind.BODY,
+            deletedAt: null,
+            createdAt: { gte: run.startedAt },
+          },
+          select: { id: true },
+        });
+        if (!completionComment) {
+          throw new Error(
+            "completionCommentId must be a live BODY comment posted by this run's agent on the same issue after the run started.",
+          );
+        }
+      }
 
       let issueLinkedArtifactIds = new Set<string>();
       // Validate every producedArtifactId belongs to this workspace.
@@ -6746,7 +6793,10 @@ export const mcpTools = {
         );
       }
 
-      const completionMeta = runCompletionMeta(run.engagementMode, input);
+      const completionMeta = {
+        ...runCompletionMeta(run.engagementMode, input),
+        ...(input.completionCommentId ? { completionCommentId: input.completionCommentId } : {}),
+      };
       const data: Prisma.AgentRunUpdateInput = {};
       if (input.summary !== undefined) data.summary = input.summary;
       if (input.producedArtifactIds !== undefined) {

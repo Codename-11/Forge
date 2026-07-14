@@ -48,6 +48,14 @@ const MAX_LEGACY_PINS = 3;
  */
 const MAX_PINS_PER_SCOPE = 5;
 
+// Migration 0023 backfilled existing pins as `pin_${md5(...)}` while
+// Prisma-generated rows use CUIDs. Both are durable public row ids and
+// must remain accepted anywhere a pin id is supplied.
+const pinRowIdSchema = z.union([
+  z.string().cuid(),
+  z.string().regex(/^pin_[a-f0-9]{32}$/, "Invalid pin id."),
+]);
+
 // ---------------------------------------------------------------------------
 // Hydration helpers
 // ---------------------------------------------------------------------------
@@ -765,7 +773,7 @@ export const pinRouter = router({
   remove: protectedProcedure
     .input(
       z.union([
-        z.object({ id: z.string().cuid() }),
+        z.object({ id: pinRowIdSchema }),
         z.object({
           targetType: z.nativeEnum(PinTargetType),
           targetId: z.string(),
@@ -865,7 +873,7 @@ export const pinRouter = router({
     .input(
       z.object({
         workspaceId: z.string().cuid().nullable().optional(),
-        ids: z.array(z.string().cuid()).max(200),
+        ids: z.array(pinRowIdSchema).max(200),
       }),
     )
     .mutation(async ({ ctx, input }) => {

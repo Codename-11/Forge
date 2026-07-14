@@ -14,8 +14,8 @@ import { trpc } from "@/lib/trpc";
  * attachments + relations panels and the new activity stream.
  *
  * Tab state is mirrored into the `?tab=` search param so individual tabs
- * are deep-linkable (and survive reloads). Activity leads the navigation;
- * the historical bare URL still resolves to Attachments for compatibility.
+ * are deep-linkable (and survive reloads). Activity leads the navigation
+ * and is the bare-URL default so recent work is visible without discovery.
  * Keys 1/2/3 cycle between tabs
  * when the page has focus — bound here, scoped to the issue detail route
  * so we don't pollute global keybindings.
@@ -28,6 +28,14 @@ const TABS = [
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
+
+function tabButtonId(issueId: string, tab: TabId) {
+  return `issue-${issueId}-${tab}-tab`;
+}
+
+function tabPanelId(issueId: string) {
+  return `issue-${issueId}-detail-panel`;
+}
 
 function isTabId(v: string | null | undefined): v is TabId {
   return v === "attachments" || v === "relations" || v === "activity";
@@ -52,7 +60,7 @@ export function IssueRail({
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const raw = searchParams?.get("tab");
-  const active: TabId = isTabId(raw) ? raw : "attachments";
+  const active: TabId = isTabId(raw) ? raw : "activity";
   const { data: activeRun } = trpc.agentRun.activeForIssue.useQuery(
     { issueId },
     { staleTime: 5_000 },
@@ -61,7 +69,7 @@ export function IssueRail({
   const setTab = useCallback(
     (next: TabId) => {
       const params = new URLSearchParams(searchParams?.toString() ?? "");
-      if (next === "attachments") params.delete("tab");
+      if (next === "activity") params.delete("tab");
       else params.set("tab", next);
       const q = params.toString();
       router.replace(q ? `${pathname}?${q}` : pathname, { scroll: false });
@@ -96,9 +104,17 @@ export function IssueRail({
     return () => window.removeEventListener("keydown", onKey);
   }, [setTab]);
 
+  const focusTab = useCallback(
+    (next: TabId) => {
+      setTab(next);
+      requestAnimationFrame(() => document.getElementById(tabButtonId(issueId, next))?.focus());
+    },
+    [issueId, setTab],
+  );
+
   return (
     <div className="min-h-0">
-      {header && <div className="border-b border-border bg-card/20 px-3 py-3">{header}</div>}
+      {header && <div className="border-b border-border bg-card/20 px-3 py-2.5">{header}</div>}
       <div
         role="tablist"
         aria-label="Issue detail sections"
@@ -107,23 +123,38 @@ export function IssueRail({
         {TABS.map((t) => {
           const Icon = t.icon;
           const selected = active === t.id;
+          const index = TABS.indexOf(t);
           return (
             <button
               key={t.id}
+              id={tabButtonId(issueId, t.id)}
               role="tab"
               type="button"
               aria-selected={selected}
+              aria-controls={tabPanelId(issueId)}
+              tabIndex={selected ? 0 : -1}
               onClick={() => setTab(t.id)}
+              onKeyDown={(event) => {
+                let next: TabId | null = null;
+                if (event.key === "ArrowRight") next = TABS[(index + 1) % TABS.length].id;
+                else if (event.key === "ArrowLeft")
+                  next = TABS[(index - 1 + TABS.length) % TABS.length].id;
+                else if (event.key === "Home") next = TABS[0].id;
+                else if (event.key === "End") next = TABS[TABS.length - 1].id;
+                if (!next) return;
+                event.preventDefault();
+                focusTab(next);
+              }}
               className={cn(
-                "focus-ring relative flex h-8 items-center gap-1.5 rounded-t-md px-2.5 text-[0.6875rem] font-medium",
+                "focus-ring relative flex h-9 items-center gap-1.5 rounded-t-md px-2.5 text-xs font-medium",
                 MOTION.fast,
                 selected ? "text-foreground" : "text-muted-foreground hover:text-foreground",
               )}
               title={`${t.label} — ${TABS.indexOf(t) + 1}`}
             >
-              <Icon className="h-3 w-3" />
+              <Icon aria-hidden className="h-3 w-3" />
               <span>{t.label}</span>
-              {t.id === "activity" && activityCount ? (
+              {t.id === "activity" && activityCount !== undefined ? (
                 <span className="rounded-full bg-subtle px-1.5 py-px text-[0.5625rem] font-medium tabular-nums text-muted-foreground">
                   {activityCount > 99 ? "99+" : activityCount}
                 </span>
@@ -145,7 +176,13 @@ export function IssueRail({
           );
         })}
       </div>
-      <div className="px-3 py-3">
+      <div
+        id={tabPanelId(issueId)}
+        role="tabpanel"
+        aria-labelledby={tabButtonId(issueId, active)}
+        tabIndex={0}
+        className="focus-ring rounded-b-lg px-3 py-3"
+      >
         {/* Keep each tab simple — reuse the battle-tested panels as-is. */}
         <ActiveTab tab={active} issueId={issueId} />
       </div>

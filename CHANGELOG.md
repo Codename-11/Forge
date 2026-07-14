@@ -11,6 +11,22 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-14] — v0.12.0 · Calmer issue operations
+
+### Added
+
+- **Every successful agent run now leaves one durable issue reply.** Terminal outcomes are visible in the issue conversation across all engagement modes, while late provider trace events can no longer resurrect completed work as Thinking.
+- **Operational alerts now share one lifecycle.** Command Center and the notification drawer reconcile durable active and resolved state, with accessible notification focus behavior and clearer incident grouping, counts, recovery actions, and error feedback.
+
+### Changed
+
+- **Issue detail keeps context visible without forcing a full sidebar.** The page has one predictable scroll owner, Activity is the default rail view, dense cards start clean and expand for full content, and patient user waits no longer generate repeated stall replies.
+- **GitHub URLs use Forge's native resource relation.** GitHub issues and pull requests submitted through generic link paths retain checks, sync, and PR state instead of becoming opaque attachments.
+
+### Fixed
+
+- **Historical pins can be removed and reordered again.** Migration-era `pin_<md5>` rows and modern CUID rows are both accepted, and each compact navbar pin now has a direct unpin action.
+
 ## [2026-07-13] — v0.11.0 · Live agent operations
 
 ### Added

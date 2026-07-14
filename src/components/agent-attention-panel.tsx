@@ -8,12 +8,14 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  RefreshCw,
   ShieldCheck,
   Workflow,
 } from "lucide-react";
 import type { inferRouterOutputs } from "@trpc/server";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
-import { EmptyState, SkeletonList } from "@/components/ui";
+import { Button, EmptyState, SkeletonList } from "@/components/ui";
+import { ExpandableText } from "@/components/ui/expandable-text";
 import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -77,7 +79,7 @@ export function AgentAttentionPanel({
     ...row,
     items: row.items.filter((item) => !excludedItems.has(item.id)),
   }));
-  if (!showEmpty && !query.isLoading && rows.length === 0) return null;
+  if (!showEmpty && !query.isLoading && !query.isError && rows.length === 0) return null;
 
   return (
     <section className={cn("rounded-lg border border-border bg-card/40", className)}>
@@ -85,7 +87,11 @@ export function AgentAttentionPanel({
         <Bot className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-sm font-medium">Agent attention</span>
         <span className="text-meta text-muted-foreground">
-          {rows.length > 0 ? `${rows.length} with activity` : "All clear"}
+          {query.isError
+            ? "Unavailable"
+            : rows.length > 0
+              ? `${rows.length} with activity`
+              : "All clear"}
         </span>
         <Link
           href={`/w/${slug}/agents`}
@@ -100,6 +106,19 @@ export function AgentAttentionPanel({
           <div className="p-4">
             <SkeletonList rows={4} />
           </div>
+        ) : query.isError ? (
+          <EmptyState
+            variant="card"
+            icon={<AlertTriangle />}
+            title="Agent attention is unavailable"
+            description="Forge could not verify whether any agents need attention."
+            action={
+              <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Try again
+              </Button>
+            }
+          />
         ) : rows.length === 0 ? (
           <EmptyState
             variant="card"
@@ -141,10 +160,7 @@ function AgentAttentionCard({ row, slug }: { row: AgentAttentionRow; slug: strin
       <ul className="space-y-1.5">
         {row.items.map((item) => (
           <li key={item.id}>
-            <Link
-              href={item.href}
-              className="group flex min-w-0 items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 hover:border-ember/40"
-            >
+            <div className="group flex min-w-0 items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 hover:border-ember/40">
               <span
                 className={cn(
                   "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full",
@@ -153,16 +169,19 @@ function AgentAttentionCard({ row, slug }: { row: AgentAttentionRow; slug: strin
               >
                 <ItemIcon item={item} />
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[0.75rem] font-medium">{item.title}</span>
-                <span className="text-meta line-clamp-2 block text-muted-foreground">
-                  {item.detail}
-                </span>
-              </span>
+              <div className="min-w-0 flex-1">
+                <Link
+                  href={item.href}
+                  className="block truncate text-[0.75rem] font-medium hover:underline"
+                >
+                  {item.title}
+                </Link>
+                <ExpandableText content={item.detail} className="text-meta text-muted-foreground" />
+              </div>
               <span className="text-meta shrink-0 pt-0.5 tabular-nums text-muted-foreground">
                 {relativeTime(item.createdAt)}
               </span>
-            </Link>
+            </div>
           </li>
         ))}
       </ul>

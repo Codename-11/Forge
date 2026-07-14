@@ -78,8 +78,12 @@ export const commandCenterRouter = router({
 
       const [
         actionRequests,
+        actionRequestCount,
         reviewGates,
+        reviewGateCount,
         activeRuns,
+        activeRunCount,
+        runtimeApprovalCount,
         runRecovery,
         recentArtifacts,
         dueIssues,
@@ -109,10 +113,16 @@ export const commandCenterRouter = router({
               },
             })
           : Promise.resolve([]),
+        userId
+          ? ctx.db.actionRequest.count({ where: decisionAskWhere(ctx.workspaceId, userId) })
+          : Promise.resolve(0),
         listReviewGatesWithContext(ctx.db, {
           workspaceId: ctx.workspaceId,
           status: ReviewGateStatus.PENDING,
           limit: input.limit,
+        }),
+        ctx.db.reviewGate.count({
+          where: { workspaceId: ctx.workspaceId, status: ReviewGateStatus.PENDING },
         }),
         ctx.db.agentRun.findMany({
           where: {
@@ -134,6 +144,20 @@ export const commandCenterRouter = router({
                 workspace: { select: { slug: true, key: true } },
               },
             },
+          },
+        }),
+        ctx.db.agentRun.count({
+          where: {
+            workspaceId: ctx.workspaceId,
+            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            awaitingApprovalAt: null,
+          },
+        }),
+        ctx.db.agentRun.count({
+          where: {
+            workspaceId: ctx.workspaceId,
+            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            awaitingApprovalAt: { not: null },
           },
         }),
         listRunRecoveryItems(ctx.db, {
@@ -255,10 +279,10 @@ export const commandCenterRouter = router({
         runningTimer,
         liveGoals,
         counts: {
-          actionRequests: groupedActionRequests.length,
-          reviewGates: reviewGates.length,
-          activeRuns: visibleActiveRuns.length,
-          runtimeApprovals: runtimeApprovals.length,
+          actionRequests: actionRequestCount,
+          reviewGates: reviewGateCount,
+          activeRuns: activeRunCount,
+          runtimeApprovals: runtimeApprovalCount,
           stalledRuns: runRecovery.counts.total,
           recentArtifacts: recentArtifacts.length,
           dueIssues: dueIssues.length,

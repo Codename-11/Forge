@@ -443,8 +443,8 @@ export default function InboxPage() {
                   <EmptyState
                     variant="page"
                     icon={<Sun />}
-                    title="Inbox zero — nothing's waiting"
-                    description="When someone @mentions you, assigns work, or replies to a thread you're following, it lands here."
+                    title="Your inbox is clear"
+                    description="Nothing is assigned to you, mentioning you, or waiting in a thread you follow. Workspace operations may still need attention in Command Center."
                     action={
                       <Link
                         href={`/w/${workspace.slug}/dashboard`}
@@ -1830,16 +1830,19 @@ type RosterAgent = {
 };
 
 function AgentsOnlineRail({ agents }: { agents: RosterAgent[] }) {
+  const reachable = agents.filter((agent) => agent.status !== "OFFLINE").length;
   return (
     <Section
       title={
         <span className="flex items-center gap-2">
           <UsersRound className="h-3.5 w-3.5 text-muted-foreground" />
-          Agents online
-          <span className="font-mono text-[0.6875rem] text-muted-foreground">{agents.length}</span>
+          Agent roster
+          <span className="font-mono text-[0.6875rem] text-muted-foreground">
+            {reachable}/{agents.length} reachable
+          </span>
         </span>
       }
-      hint="Every active agent in this workspace and what it can pick up."
+      hint="Every active agent binding in this workspace, including offline agents."
     >
       <Card as="ul">
         {agents.length === 0 ? (

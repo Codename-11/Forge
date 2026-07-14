@@ -1,8 +1,8 @@
 import "server-only";
 
 import {
+  EventKind,
   NotificationStatus,
-  type EventKind,
   type NotificationDelivery,
   type NotificationSeverity as PrismaNotificationSeverity,
   type NotificationState,
@@ -31,6 +31,214 @@ export const ACTIVE_NOTIFICATION_STATUSES = [
   NotificationStatus.READ,
   NotificationStatus.ACKNOWLEDGED,
 ] as const;
+
+function payloadString(payload: Prisma.JsonValue, key: string): string | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const value = (payload as Prisma.JsonObject)[key];
+  return typeof value === "string" ? value : null;
+}
+
+/**
+ * Keep the mutable alert lifecycle aligned with the subject that produced it.
+ * NotificationState is the shared alert/notification record; surfaces should
+ * not each invent their own stale-open interpretation. This reconciler closes
+ * alerts when durable product state proves the condition recovered.
+ */
+export async function reconcileRecoveredNotifications(
+  db: DbClient,
+  params: { workspaceId: string; userId: string; limit?: number },
+): Promise<number> {
+  const rows = await db.notificationState.findMany({
+    where: {
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      status: { in: [...ACTIVE_NOTIFICATION_STATUSES] },
+    },
+    orderBy: { createdAt: "desc" },
+    take: Math.min(Math.max(params.limit ?? 100, 1), 250),
+    select: {
+      id: true,
+      event: {
+        select: {
+          kind: true,
+          subjectType: true,
+          subjectId: true,
+          payload: true,
+          createdAt: true,
+        },
+      },
+    },
+  });
+
+  const issueAlerts = rows.filter(
+    (row) =>
+      row.event.kind === EventKind.ISSUE_STALLED || row.event.kind === EventKind.ISSUE_SLA_BREACH,
+  );
+  const issueIds = [
+    ...new Set(
+      issueAlerts.map((row) => payloadString(row.event.payload, "issueId") ?? row.event.subjectId),
+    ),
+  ];
+  const runIds = [
+    ...new Set(
+      rows.flatMap((row) => {
+        if (row.event.kind === EventKind.AGENT_NOACK) {
+          const runId = payloadString(row.event.payload, "runId");
+          return runId ? [runId] : [];
+        }
+        if (row.event.kind === EventKind.AGENT_RUN_STALLED) {
+          return [payloadString(row.event.payload, "runId") ?? row.event.subjectId];
+        }
+        return [];
+      }),
+    ),
+  ];
+  const planIds = [
+    ...new Set(
+      rows
+        .filter(
+          (row) =>
+            row.event.kind === EventKind.PLAN_BUDGET_EXCEEDED ||
+            row.event.kind === EventKind.PLAN_STALLED,
+        )
+        .map((row) => row.event.subjectId),
+    ),
+  ];
+  const stepIds = [
+    ...new Set(
+      rows
+        .filter((row) => row.event.kind === EventKind.EXECUTION_STEP_JUDGED)
+        .map((row) => row.event.subjectId),
+    ),
+  ];
+  const earliestIssueAlert = issueAlerts.reduce<Date | null>(
+    (earliest, row) =>
+      !earliest || row.event.createdAt < earliest ? row.event.createdAt : earliest,
+    null,
+  );
+
+  // Batch recovery evidence by entity class. This runs whenever the bell
+  // count refreshes, so an N+1 query per active alert would become costly for
+  // noisy workspaces.
+  const [issues, issueMovements, runs, plans, steps] = await Promise.all([
+    db.issue.findMany({
+      where: { id: { in: issueIds }, workspaceId: params.workspaceId },
+      select: { id: true, deletedAt: true, status: { select: { category: true } } },
+    }),
+    db.activityEvent.findMany({
+      where: {
+        workspaceId: params.workspaceId,
+        subjectType: "issue",
+        subjectId: { in: issueIds },
+        ...(earliestIssueAlert ? { createdAt: { gt: earliestIssueAlert } } : {}),
+        OR: [
+          {
+            kind: {
+              in: [
+                EventKind.ISSUE_STATUS_CHANGED,
+                EventKind.ISSUE_ASSIGNED,
+                EventKind.AGENT_ASSIGNED,
+              ],
+            },
+          },
+          { kind: EventKind.COMMENT_CREATED, actorAgentId: { not: null } },
+        ],
+      },
+      select: { subjectId: true, kind: true, actorAgentId: true, createdAt: true },
+    }),
+    db.agentRun.findMany({
+      where: { id: { in: runIds }, workspaceId: params.workspaceId },
+      select: {
+        id: true,
+        status: true,
+        acknowledgedAt: true,
+        outputStartedAt: true,
+        clearedAt: true,
+        supersededByRunId: true,
+      },
+    }),
+    db.executionPlan.findMany({
+      where: { id: { in: planIds }, workspaceId: params.workspaceId },
+      select: { id: true, status: true, updatedAt: true, archivedAt: true },
+    }),
+    db.executionStep.findMany({
+      where: { id: { in: stepIds }, workspaceId: params.workspaceId },
+      select: { id: true, status: true },
+    }),
+  ]);
+  const issueById = new Map(issues.map((issue) => [issue.id, issue]));
+  const runById = new Map(runs.map((run) => [run.id, run]));
+  const planById = new Map(plans.map((plan) => [plan.id, plan]));
+  const stepById = new Map(steps.map((step) => [step.id, step]));
+
+  const recovered = rows.flatMap((row) => {
+    const event = row.event;
+    if (event.kind === EventKind.ISSUE_STALLED || event.kind === EventKind.ISSUE_SLA_BREACH) {
+      const issueId = payloadString(event.payload, "issueId") ?? event.subjectId;
+      const issue = issueById.get(issueId);
+      if (!issue || issue.deletedAt) return [row.id];
+      if (["IN_REVIEW", "DONE", "CANCELED"].includes(issue.status.category)) return [row.id];
+      const assignedAgentId = payloadString(event.payload, "assignedAgentId");
+      const moved = issueMovements.some(
+        (movement) =>
+          movement.subjectId === issueId &&
+          movement.createdAt > event.createdAt &&
+          (movement.kind !== EventKind.COMMENT_CREATED ||
+            (movement.actorAgentId &&
+              (!assignedAgentId || movement.actorAgentId === assignedAgentId))),
+      );
+      return moved ? [row.id] : [];
+    }
+
+    if (event.kind === EventKind.AGENT_NOACK) {
+      const runId = payloadString(event.payload, "runId");
+      if (!runId) return [];
+      const run = runById.get(runId);
+      return !run || run.acknowledgedAt || run.outputStartedAt || run.status !== "ACTIVE"
+        ? [row.id]
+        : [];
+    }
+
+    if (event.kind === EventKind.AGENT_RUN_STALLED) {
+      const runId = payloadString(event.payload, "runId") ?? event.subjectId;
+      const run = runById.get(runId);
+      return !run || run.clearedAt || run.supersededByRunId || run.status === "COMPLETED"
+        ? [row.id]
+        : [];
+    }
+
+    if (event.kind === EventKind.PLAN_BUDGET_EXCEEDED || event.kind === EventKind.PLAN_STALLED) {
+      const plan = planById.get(event.subjectId);
+      if (!plan || plan.archivedAt) return [row.id];
+      if (event.kind === EventKind.PLAN_BUDGET_EXCEEDED) {
+        return plan.status !== "BLOCKED" ? [row.id] : [];
+      }
+      return plan.updatedAt > event.createdAt && !["RUNNING", "BLOCKED"].includes(plan.status)
+        ? [row.id]
+        : [];
+    }
+
+    if (event.kind === EventKind.EXECUTION_STEP_JUDGED) {
+      const step = stepById.get(event.subjectId);
+      return !step || step.status !== "BLOCKED" ? [row.id] : [];
+    }
+
+    return [];
+  });
+
+  if (recovered.length === 0) return 0;
+  const now = new Date();
+  const result = await db.notificationState.updateMany({
+    where: {
+      id: { in: recovered },
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      status: { in: [...ACTIVE_NOTIFICATION_STATUSES] },
+    },
+    data: { status: NotificationStatus.RESOLVED, readAt: now, resolvedAt: now },
+  });
+  return result.count;
+}
 
 const notificationEventSelect = {
   id: true,

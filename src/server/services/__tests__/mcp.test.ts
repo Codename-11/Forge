@@ -3933,7 +3933,7 @@ describe("mcp runs.complete + completion contract", () => {
       producedArtifactIds: string[];
       verificationResult: unknown;
       followUps: unknown;
-      completionMeta: { mode: string; contractVersion: string };
+      completionMeta: { mode: string; contractVersion: string; completionCommentId: string };
     };
     expect(result.summary).toBe("Migration shipped.");
     expect(result.producedArtifactIds).toEqual([artifact.id]);
@@ -3941,6 +3941,17 @@ describe("mcp runs.complete + completion contract", () => {
     expect(result.followUps).toBeTruthy();
     expect(result.completionMeta.mode).toBe("EXECUTE");
     expect(result.completionMeta.contractVersion).toMatch(/^2026-/);
+    expect(result.completionMeta.completionCommentId).toBeTruthy();
+
+    const completionComment = await prisma.comment.findUniqueOrThrow({
+      where: { id: result.completionMeta.completionCommentId },
+    });
+    expect(completionComment).toMatchObject({
+      issueId: issue.id,
+      authoringAgentId: agent.id,
+      kind: "BODY",
+      body: "Migration shipped.",
+    });
 
     const completed = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(completed.status).toBe("COMPLETED");
@@ -3967,6 +3978,52 @@ describe("mcp runs.complete + completion contract", () => {
     });
     expect(audit.actorId).toBe(fixture.user.id);
     expect(audit.actorAgentId).toBe(agent.id);
+  });
+
+  it("runs.complete can adopt an already-posted final comment without duplicating it", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCC" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `ccc-${Date.now()}`,
+        name: "Comment closer",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        engagementMode: EngagementMode.DISCUSS,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+    const comment = (await call(
+      "comments.create",
+      { issueId: issue.id, body: "Yes — the PR is linked natively." },
+      scopedCtx,
+    )) as { id: string };
+
+    const completed = (await call(
+      "runs.complete",
+      {
+        runId: run.id,
+        summary: "Yes — the PR is linked natively.",
+        completionCommentId: comment.id,
+      },
+      scopedCtx,
+    )) as { completionMeta: { completionCommentId: string } };
+
+    expect(completed.completionMeta.completionCommentId).toBe(comment.id);
+    expect(
+      await prisma.comment.count({
+        where: { issueId: issue.id, authoringAgentId: agent.id, kind: "BODY" },
+      }),
+    ).toBe(1);
   });
 
   it("runs.complete atomically advances its execution step to review", async () => {

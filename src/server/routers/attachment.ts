@@ -22,6 +22,8 @@ import {
   presignUploadUrl,
   workspaceQuotaStats,
 } from "@/server/services/storage";
+import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
+import { linkGitHubUrlToIssue } from "@/server/services/github/resource-sync";
 
 /**
  * Map an exception from the storage layer onto a tRPC error. We use a
@@ -171,7 +173,7 @@ export const attachmentRouter = router({
     }),
 
   /**
-   * Attach an external link (Google Doc, GitHub PR, Linear ticket, …)
+   * Attach an external link (Google Doc, Linear ticket, …)
    * as a first-class Attachment row. No bytes hit MinIO. Mirrors the
    * MCP `attachments.attachLink` tool — the storage helper enforces
    * the FILE-shaped column population (filename = title ?? hostname,
@@ -183,6 +185,22 @@ export const attachmentRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertTargetInWorkspace(ctx, input.targetType, input.targetId);
       const safeUrl = assertSafeExternalUrl(input.url);
+      if (input.targetType === "issue" && parseGitHubIssueOrPrRef(safeUrl)) {
+        const native = await linkGitHubUrlToIssue({
+          db: ctx.db,
+          workspaceId: ctx.workspaceId,
+          issueId: input.targetId,
+          url: safeUrl,
+          kind: "RELATES_TO",
+          actor: {
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+        });
+        return { id: native.link.id, routedTo: "github.link" as const, ...native };
+      }
       // Caller didn't provide a label → try to scrape <title> off the
       // target page so the chip is meaningful. Fail soft: any error
       // leaves resolvedTitle null and createLinkAttachment falls back
