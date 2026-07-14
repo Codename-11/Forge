@@ -363,9 +363,35 @@ export async function appendRunEvent(
     kind: string;
     payload?: Prisma.InputJsonValue;
     currentStep?: string | null;
+    /** Internal operator audit events may be appended without reviving terminal UI state. */
+    allowTerminal?: boolean;
   },
 ): Promise<void> {
   const now = new Date();
+  // Terminal rows are immutable from the operator's point of view. Provider
+  // subscriptions can deliver a buffered thinking/tool event after
+  // `runs.complete` has already closed the run; claim the live row first so
+  // that late event cannot put a COMPLETED card back into "thinking".
+  const live = await tx.agentRun.updateMany({
+    where: {
+      id: params.runId,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+    },
+    data: {
+      lastEventAt: now,
+      ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
+    },
+  });
+  if (live.count === 0 && !params.allowTerminal) return;
+
+  if (live.count === 0) {
+    const terminal = await tx.agentRun.findFirst({
+      where: { id: params.runId, workspaceId: params.workspaceId },
+      select: { id: true },
+    });
+    if (!terminal) return;
+  }
+
   const event = await tx.agentRunEvent.create({
     data: {
       workspaceId: params.workspaceId,
@@ -374,19 +400,12 @@ export async function appendRunEvent(
       payload: params.payload ?? Prisma.JsonNull,
     },
   });
-  if (OUTPUT_EVENT_KINDS.has(params.kind)) {
+  if (live.count > 0 && OUTPUT_EVENT_KINDS.has(params.kind)) {
     await tx.agentRun.updateMany({
       where: { id: params.runId, outputStartedAt: null },
       data: { outputStartedAt: now },
     });
   }
-  await tx.agentRun.update({
-    where: { id: params.runId },
-    data: {
-      lastEventAt: now,
-      ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
-    },
-  });
 
   // Lightweight SSE-only publish — no AuditLog row, no ActivityEvent
   // row. The events table is the durable timeline; this is just for the
@@ -413,7 +432,8 @@ export async function appendRunEvent(
  * terminal status (COMPLETED), is manually canceled (ABANDONED), or
  * the watchdog flags it (STALLED).
  *
- * Idempotent: returns null if the run is already terminal.
+ * Idempotent: concurrent or repeated finish attempts return the terminal row
+ * without duplicating comments, terminal events, or audit activity.
  */
 export async function finishRun(
   tx: Tx,
@@ -428,15 +448,31 @@ export async function finishRun(
     actorAgentId?: string | null;
   },
 ): Promise<AgentRun | null> {
-  const existing = await tx.agentRun.findUnique({ where: { id: params.runId } });
+  const existing = await tx.agentRun.findFirst({
+    where: {
+      id: params.runId,
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      agentId: params.agentId,
+    },
+  });
   if (!existing) return null;
   if (existing.status !== AgentRunStatus.ACTIVE && existing.status !== AgentRunStatus.WAITING) {
     return existing;
   }
 
   const now = new Date();
-  const finished = await tx.agentRun.update({
-    where: { id: params.runId },
+  // Claim the live row before producing any terminal side effect. Competing
+  // completion paths can otherwise both observe ACTIVE and create duplicate
+  // final comments before either writes the terminal status.
+  const claimed = await tx.agentRun.updateMany({
+    where: {
+      id: params.runId,
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      agentId: params.agentId,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+    },
     data: {
       status: AgentRunStatus[params.status],
       finishedAt: now,
@@ -445,8 +481,54 @@ export async function finishRun(
       // not `finishedAt` (which is stamped for any terminal transition).
       ...(params.status === "COMPLETED" ? { completedAt: now } : {}),
       ...(params.summary !== undefined ? { summary: params.summary } : {}),
+      // Live-only presentation state must not survive a terminal transition.
+      // In particular this prevents COMPLETED · thinking · LIVE cards when a
+      // provider flushes a buffered trace event around completion.
+      currentStep: null,
+      awaitingApprovalAt: null,
+      pendingApproval: Prisma.DbNull,
+      controlState: "NONE",
+      controlRequestedAt: null,
+      controlRequestedById: null,
     },
   });
+  if (claimed.count !== 1) {
+    return tx.agentRun.findFirst({
+      where: {
+        id: params.runId,
+        workspaceId: params.workspaceId,
+        issueId: params.issueId,
+        agentId: params.agentId,
+      },
+    });
+  }
+
+  let finished: AgentRun;
+  if (params.status === "COMPLETED") {
+    const completionMeta =
+      existing.completionMeta &&
+      typeof existing.completionMeta === "object" &&
+      !Array.isArray(existing.completionMeta)
+        ? { ...(existing.completionMeta as Record<string, unknown>) }
+        : {};
+    const knownCommentId = completionMeta.completionCommentId;
+    if (typeof knownCommentId !== "string" || !knownCommentId) {
+      const body = params.summary?.trim() || existing.summary?.trim() || "Run completed.";
+      const comment = await postAgentRunComment(tx, {
+        workspaceId: params.workspaceId,
+        issueId: params.issueId,
+        agentId: params.agentId,
+        body,
+      });
+      completionMeta.completionCommentId = comment.id;
+    }
+    finished = await tx.agentRun.update({
+      where: { id: params.runId },
+      data: { completionMeta: completionMeta as Prisma.InputJsonValue },
+    });
+  } else {
+    finished = await tx.agentRun.findUniqueOrThrow({ where: { id: params.runId } });
+  }
 
   await tx.agentRunEvent.create({
     data: {
@@ -487,13 +569,13 @@ export async function finishRun(
  * Post an issue comment authored AS the agent, on behalf of a dispatched run.
  *
  * The RUNS-engine dispatcher owns the agent loop over the connector socket.
- * A provider that lacks Forge MCP — or that fails before calling
- * `comments.create` itself — leaves its output orphaned in `AgentRun.summary`,
- * visible only in Mission Control's run/recovery overlay. For terminal
- * *failures* we surface that output as a real issue comment so the timeline +
- * watcher notifications carry it, exactly like a normal agent reply. Authored
- * with `authoringAgentId` and a null human author (Comment.authorId is
- * nullable since migration 0047) so the UI renders it as the agent speaking.
+ * A provider that lacks Forge MCP — or that finishes without calling
+ * `comments.create` itself — can otherwise leave its output orphaned in
+ * `AgentRun.summary`, visible only in the run overlay. Successful completions
+ * use this helper as a shared final-comment guarantee; terminal failures use
+ * it when the dispatcher needs to surface output. Authored with
+ * `authoringAgentId` and a null human author so the UI renders the agent as
+ * the speaker.
  */
 export async function postAgentRunComment(
   tx: Tx,
@@ -503,7 +585,7 @@ export async function postAgentRunComment(
     agentId: string;
     body: string;
   },
-): Promise<void> {
+): Promise<{ id: string }> {
   const comment = await tx.comment.create({
     data: {
       workspaceId: params.workspaceId,
@@ -530,6 +612,7 @@ export async function postAgentRunComment(
       preview: params.body.slice(0, 120),
     },
   });
+  return { id: comment.id };
 }
 
 /**

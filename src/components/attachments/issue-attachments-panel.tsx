@@ -136,6 +136,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
         targetType: "issue",
         targetId: issueId,
       });
+      utils.github.listLinked.invalidate({ issueId });
       utils.issue.byId.invalidate({ id: issueId });
     },
     onError: (e) => toast.error(e.message),

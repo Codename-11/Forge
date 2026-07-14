@@ -15,13 +15,14 @@ import {
   GitBranch,
   Inbox,
   Radio,
+  RefreshCw,
   Server,
   ShieldAlert,
   Workflow,
   XCircle,
 } from "lucide-react";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
-import { EmptyState, SkeletonList } from "@/components/ui";
+import { Button, EmptyState, SkeletonList } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -50,15 +51,18 @@ const FAILED_RUNS_INPUT = {
 export function AgentRunroomDashboard() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
-  const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
-  const { data: pipeline } = trpc.agent.pipeline.useQuery({});
+  const agentsQuery = trpc.agent.list.useQuery({ includeArchived: false });
+  const pipelineQuery = trpc.agent.pipeline.useQuery({});
   const { data: dispatch } = trpc.analytics.dispatch.summary.useQuery({});
-  const { data: workspace } = trpc.workspace.current.useQuery();
+  const workspaceQuery = trpc.workspace.current.useQuery();
   const { data: runtimes } = trpc.runtime.list.useQuery({ includeArchived: false });
   const { data: globalRuntimes } = trpc.global.runtimes.useQuery();
   const { data: activeRuns } = trpc.agentRun.activeAll.useQuery({ limit: 50 });
   const { data: failedRuns } = trpc.agentRun.list.useQuery(FAILED_RUNS_INPUT);
   const { data: timeline } = trpc.agent.timeline.useQuery({ limit: 12 });
+  const agents = agentsQuery.data;
+  const pipeline = pipelineQuery.data;
+  const workspace = workspaceQuery.data;
 
   useRealtime(
     () => {
@@ -89,6 +93,31 @@ export function AgentRunroomDashboard() {
       ],
     },
   );
+
+  const blockingError = agentsQuery.error ?? pipelineQuery.error ?? workspaceQuery.error;
+  if (blockingError) {
+    return (
+      <EmptyState
+        variant="card"
+        icon={<AlertTriangle />}
+        title="Agent runroom is unavailable"
+        description={blockingError.message}
+        action={
+          <Button
+            variant="outline"
+            onClick={() => {
+              void agentsQuery.refetch();
+              void pipelineQuery.refetch();
+              void workspaceQuery.refetch();
+            }}
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            Try again
+          </Button>
+        }
+      />
+    );
+  }
 
   if (!agents || !pipeline || !workspace) {
     return (
@@ -127,8 +156,7 @@ export function AgentRunroomDashboard() {
   const runtimeOnline = (runtimes ?? []).filter(
     (runtime) => runtime.health.kind === "online",
   ).length;
-  const missedWakes =
-    noAckEvents.length + failedWindow.filter((run) => run.status === "STALLED").length;
+  const missedWakes = noAckEvents.length;
   const healthScore = Math.max(
     0,
     Math.round(
@@ -458,7 +486,13 @@ function AgentLaneCard({
       </div>
 
       <div className="mt-3 space-y-3">
-        <IssueBucket label="Running" issues={lane.inFlight} slug={slug} wsKey={wsKey} limit={2} />
+        <IssueBucket
+          label="In-progress issues"
+          issues={lane.inFlight}
+          slug={slug}
+          wsKey={wsKey}
+          limit={2}
+        />
         <IssueBucket
           label={isDown ? "Held work" : "Waiting"}
           issues={heldWork.length > 0 && isDown ? heldWork : lane.assigned}

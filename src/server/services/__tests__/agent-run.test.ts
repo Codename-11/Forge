@@ -98,6 +98,19 @@ describe("agent-run lifecycle", () => {
     expect(completed.actorId).toBe(fixture.user.id);
     expect(completed.actorAgentId).toBe(agent.id);
 
+    const finalComment = await prisma.comment.findFirstOrThrow({
+      where: {
+        issueId: issue.id,
+        authoringAgentId: agent.id,
+        kind: "BODY",
+        body: "Done.",
+      },
+    });
+    const completedRun = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(completedRun.completionMeta).toMatchObject({
+      completionCommentId: finalComment.id,
+    });
+
     const audit = await prisma.auditLog.findMany({
       where: {
         workspaceId: fixture.workspace.id,
@@ -108,6 +121,49 @@ describe("agent-run lifecycle", () => {
     });
     expect(audit.map((row) => row.action)).toEqual(["create", "finish"]);
     expect(audit.every((row) => row.actorAgentId === agent.id)).toBe(true);
+  });
+
+  it("creates one final comment when completion attempts race", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARC" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arc-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+    const complete = () =>
+      prisma.$transaction((tx) =>
+        finishRun(tx, {
+          runId: run.id,
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          status: "COMPLETED",
+          summary: "One durable result.",
+          actorAgentId: agent.id,
+        }),
+      );
+
+    await Promise.all([complete(), complete()]);
+
+    expect(
+      await prisma.comment.count({
+        where: { issueId: issue.id, authoringAgentId: agent.id, body: "One durable result." },
+      }),
+    ).toBe(1);
+    expect(await prisma.agentRunEvent.count({ where: { runId: run.id, kind: "COMPLETED" } })).toBe(
+      1,
+    );
+    expect(
+      await prisma.activityEvent.count({
+        where: { subjectType: "agent-run", subjectId: run.id, kind: EventKind.AGENT_RUN_COMPLETED },
+      }),
+    ).toBe(1);
   });
 
   it("a fresh assignment touch re-stamps mode + source and resumes WAITING (Phase 2)", async () => {
@@ -222,6 +278,23 @@ describe("agent-run lifecycle", () => {
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(after.status).toBe(AgentRunStatus.ABANDONED);
     expect(after.finishedAt).not.toBeNull();
+    expect(after.currentStep).toBeNull();
+
+    const eventCount = await prisma.agentRunEvent.count({ where: { runId: run.id } });
+    await prisma.$transaction((tx) =>
+      appendRunEvent(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        kind: "STEP",
+        currentStep: "late thinking",
+        payload: { thinking: "buffered after completion" },
+      }),
+    );
+    const afterLateEvent = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(afterLateEvent.currentStep).toBeNull();
+    expect(await prisma.agentRunEvent.count({ where: { runId: run.id } })).toBe(eventCount);
   });
 
   it("records one actionable approval lifecycle across competing producers", async () => {

@@ -12629,3 +12629,37 @@ the focused issue-flow Playwright test passed after a fresh production build;
 and the full Playwright suite passed (37 tests). The parallel Vitest suite
 passed 1,208 tests with 1 skip and hit the known unrelated stale-work database
 race once; that failing test passed immediately in isolation.
+
+---
+
+## 2026-07-14 — Run closure and shared operational-alert lifecycle
+
+Made successful agent-run closure visible and durable across every engagement
+mode. The shared `finishRun` path now creates one agent-authored final issue
+comment (or adopts the agent's explicitly supplied final BODY comment), stores
+its ID in completion metadata, and keeps mode-specific `runs.complete`
+validation intact. Terminal transitions clear live-only step/approval state,
+and buffered provider trace events can no longer revive a completed card as
+“thinking” or “live”; explicit operator reconciliation events remain durable.
+
+GitHub issue and pull-request URLs submitted through generic link attachment
+paths now route into Forge's native GitHub resource relation, preserving sync,
+checks, and PR state instead of creating an opaque attachment.
+
+Unified operational alerts and notifications around `NotificationState`.
+Active stale/no-ack/plan alerts reconcile to Resolved when durable product state
+proves recovery, while a human follow-up alone does not falsely clear an agent
+stall. The notification drawer now exposes clearer “I’m handling”, Hide, and
+Resolve actions with per-item feedback, retryable error states, larger targets,
+modal focus containment, and focus restoration. Command Center groups repeated
+active-stale symptoms by agent, shows exact run/approval counts, confirms
+destructive recovery, and no longer reports fetch failures as empty state.
+Agent attention/runroom and Inbox empty/roster language now distinguish
+verified clear states from unavailable or offline conditions.
+
+Verification: lint passed with existing repository warnings; typecheck passed;
+focused database suites passed (155 tests). The parallel full Vitest run passed
+1,212 tests with 1 skip and hit the known cross-suite stale-work race once; its
+9-test file passed immediately in isolation. A fresh production build passed
+the Command Center and issue-flow Playwright specs, and the notification drawer
+focus-containment/restore regression also passed (3 focused browser tests).

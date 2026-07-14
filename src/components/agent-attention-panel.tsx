@@ -8,12 +8,13 @@ import {
   ChevronRight,
   CircleHelp,
   Clock3,
+  RefreshCw,
   ShieldCheck,
   Workflow,
 } from "lucide-react";
 import type { inferRouterOutputs } from "@trpc/server";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
-import { EmptyState, SkeletonList } from "@/components/ui";
+import { Button, EmptyState, SkeletonList } from "@/components/ui";
 import { ExpandableText } from "@/components/ui/expandable-text";
 import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
@@ -78,7 +79,7 @@ export function AgentAttentionPanel({
     ...row,
     items: row.items.filter((item) => !excludedItems.has(item.id)),
   }));
-  if (!showEmpty && !query.isLoading && rows.length === 0) return null;
+  if (!showEmpty && !query.isLoading && !query.isError && rows.length === 0) return null;
 
   return (
     <section className={cn("rounded-lg border border-border bg-card/40", className)}>
@@ -86,7 +87,11 @@ export function AgentAttentionPanel({
         <Bot className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-sm font-medium">Agent attention</span>
         <span className="text-meta text-muted-foreground">
-          {rows.length > 0 ? `${rows.length} with activity` : "All clear"}
+          {query.isError
+            ? "Unavailable"
+            : rows.length > 0
+              ? `${rows.length} with activity`
+              : "All clear"}
         </span>
         <Link
           href={`/w/${slug}/agents`}
@@ -101,6 +106,19 @@ export function AgentAttentionPanel({
           <div className="p-4">
             <SkeletonList rows={4} />
           </div>
+        ) : query.isError ? (
+          <EmptyState
+            variant="card"
+            icon={<AlertTriangle />}
+            title="Agent attention is unavailable"
+            description="Forge could not verify whether any agents need attention."
+            action={
+              <Button size="sm" variant="outline" onClick={() => void query.refetch()}>
+                <RefreshCw className="h-3.5 w-3.5" />
+                Try again
+              </Button>
+            }
+          />
         ) : rows.length === 0 ? (
           <EmptyState
             variant="card"

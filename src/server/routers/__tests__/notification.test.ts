@@ -66,10 +66,7 @@ async function createStalledEvent(params: Awaited<ReturnType<typeof setup>>, cre
 describe("notificationRouter", () => {
   it("materializes alertable activity events into persisted notification state", async () => {
     const setupData = await setup();
-    const event = await createStalledEvent(
-      setupData,
-      new Date("2026-04-26T12:00:00Z"),
-    );
+    const event = await createStalledEvent(setupData, new Date("2026-04-26T12:00:00Z"));
 
     const unread = await setupData.caller.unreadCount();
     expect(unread.count).toBe(1);
@@ -136,14 +133,8 @@ describe("notificationRouter", () => {
 
   it("uses replacementKey to keep only the latest matching alert active", async () => {
     const setupData = await setup();
-    const older = await createStalledEvent(
-      setupData,
-      new Date("2026-04-26T14:00:00Z"),
-    );
-    const newer = await createStalledEvent(
-      setupData,
-      new Date("2026-04-26T14:05:00Z"),
-    );
+    const older = await createStalledEvent(setupData, new Date("2026-04-26T14:00:00Z"));
+    const newer = await createStalledEvent(setupData, new Date("2026-04-26T14:05:00Z"));
 
     const list = await setupData.caller.list({ limit: 10 });
     expect(list.notifications.map((n) => n.event.id)).toEqual([newer.id]);
@@ -161,5 +152,52 @@ describe("notificationRouter", () => {
       NotificationStatus.UNREAD,
     ]);
     expect(states[0].replacementKey).toBe(states[1].replacementKey);
+  });
+
+  it("auto-resolves a stalled alert after later issue activity proves recovery", async () => {
+    const setupData = await setup();
+    const stalled = await createStalledEvent(setupData, new Date("2026-04-26T15:00:00Z"));
+
+    expect((await setupData.caller.list({ limit: 10 })).notifications).toHaveLength(1);
+
+    await setupData.prisma.activityEvent.create({
+      data: {
+        workspaceId: setupData.fixture.workspace.id,
+        kind: EventKind.COMMENT_CREATED,
+        actorId: setupData.fixture.user.id,
+        subjectType: "issue",
+        subjectId: setupData.issue.id,
+        payload: { issueId: setupData.issue.id, body: "Are you still working on this?" },
+        createdAt: new Date("2026-04-26T15:00:30Z"),
+      },
+    });
+    expect((await setupData.caller.list({ limit: 10 })).notifications).toHaveLength(1);
+
+    await setupData.prisma.activityEvent.create({
+      data: {
+        workspaceId: setupData.fixture.workspace.id,
+        kind: EventKind.COMMENT_CREATED,
+        actorAgentId: setupData.agent.id,
+        subjectType: "issue",
+        subjectId: setupData.issue.id,
+        payload: { issueId: setupData.issue.id, body: "Recovered and replied." },
+        createdAt: new Date("2026-04-26T15:01:00Z"),
+      },
+    });
+
+    expect((await setupData.caller.list({ limit: 10 })).notifications).toHaveLength(0);
+    expect((await setupData.caller.unreadCount()).count).toBe(0);
+
+    const state = await setupData.prisma.notificationState.findUniqueOrThrow({
+      where: {
+        workspaceId_userId_eventId: {
+          workspaceId: setupData.fixture.workspace.id,
+          userId: setupData.fixture.user.id,
+          eventId: stalled.id,
+        },
+      },
+    });
+    expect(state.status).toBe(NotificationStatus.RESOLVED);
+    expect(state.resolvedAt).toBeInstanceOf(Date);
   });
 });

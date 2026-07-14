@@ -16,6 +16,7 @@ import {
   loadEffectivePreferenceMap,
   materializeRecentNotifications,
   notificationStateInclude,
+  reconcileRecoveredNotifications,
 } from "@/server/services/notifications";
 import {
   getWebPushPublicKey,
@@ -98,6 +99,11 @@ export const notificationRouter = router({
       userId: ctx.session.user.id,
       limit: Math.max(input.limit * 3, 100),
     });
+    await reconcileRecoveredNotifications(ctx.db, {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.session.user.id,
+      limit: Math.max(input.limit * 3, 100),
+    });
 
     const cursorRow = input.cursor
       ? await ctx.db.notificationState.findFirst({
@@ -139,6 +145,11 @@ export const notificationRouter = router({
 
   unreadCount: workspaceProcedure.query(async ({ ctx }) => {
     await materializeRecentNotifications(ctx.db, {
+      workspaceId: ctx.workspaceId,
+      userId: ctx.session.user.id,
+      limit: 100,
+    });
+    await reconcileRecoveredNotifications(ctx.db, {
       workspaceId: ctx.workspaceId,
       userId: ctx.session.user.id,
       limit: 100,

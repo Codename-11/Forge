@@ -13,7 +13,7 @@ import {
  * unit-testable.
  */
 
-export const FORGE_RUN_CONTRACT_VERSION = "2026-07-13.1";
+export const FORGE_RUN_CONTRACT_VERSION = "2026-07-14.1";
 
 export type EngagementSurface = "assignment" | "queue" | "mention" | "chat" | "plan" | "watcher";
 
@@ -182,7 +182,9 @@ const RUN_PROTOCOL_INSTRUCTIONS =
   "Include the mode-specific required fields when completing: EXECUTE supplies " +
   "artifact/checklist evidence when the issue contract requires it, RESEARCH " +
   "supplies findings plus confidence, REVIEW supplies a verdict, and DISCUSS " +
-  "supplies a reply only. " +
+  "supplies a reply only. Every successful run ends with a durable issue comment: " +
+  "either post the final BODY comment first and pass its id as completionCommentId, " +
+  "or let runs.complete create the final comment from summary. " +
   "Non-EXECUTE modes are read/report/review only; Forge rejects issue-state " +
   "mutations from those runs.";
 

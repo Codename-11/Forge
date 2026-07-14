@@ -391,6 +391,7 @@ export async function recoverAgentRuns(
             diagnostics: item.diagnostics,
           },
           currentStep: "reconciled by operator",
+          allowTerminal: true,
         });
         await clearRun(tx, {
           run,
