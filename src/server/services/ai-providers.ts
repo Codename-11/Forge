@@ -1,6 +1,6 @@
 import "server-only";
 import OpenAI from "openai";
-import type { PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { logger } from "@/server/logger";
 import { decryptSecret } from "@/server/crypto";
 
@@ -76,8 +76,7 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
     supportsImageInput: true,
     resolve: () => {
       const apiKey = process.env.OPENAI_API_KEY;
-      if (!apiKey)
-        return { ok: false, reason: "OPENAI_API_KEY not set" };
+      if (!apiKey) return { ok: false, reason: "OPENAI_API_KEY not set" };
       const baseURL = process.env.OPENAI_BASE_URL ?? "https://api.openai.com/v1";
       return { ok: true, baseURL, apiKey };
     },
@@ -85,14 +84,12 @@ const PROVIDERS: Record<ProviderId, ProviderDef> = {
   anthropic: {
     id: "anthropic",
     label: "Anthropic (direct)",
-    description:
-      "Anthropic's OpenAI-compatible endpoint. Set ANTHROPIC_API_KEY.",
+    description: "Anthropic's OpenAI-compatible endpoint. Set ANTHROPIC_API_KEY.",
     defaultModel: "claude-haiku-4-5-20251001",
     supportsImageInput: true,
     resolve: () => {
       const apiKey = process.env.ANTHROPIC_API_KEY;
-      if (!apiKey)
-        return { ok: false, reason: "ANTHROPIC_API_KEY not set" };
+      if (!apiKey) return { ok: false, reason: "ANTHROPIC_API_KEY not set" };
       // Anthropic's OpenAI-compat surface lives under /v1/.
       return {
         ok: true,
@@ -161,9 +158,7 @@ export function isProviderAvailable(id: string | null | undefined): boolean {
  * Build a configured OpenAI SDK client for the named provider, or null
  * if its env isn't set up. Callers treat null as "AI unavailable".
  */
-export function getClient(
-  providerId: string | null | undefined,
-): {
+export function getClient(providerId: string | null | undefined): {
   client: OpenAI;
   defaultModel: string;
   providerId: ProviderId;
@@ -172,10 +167,7 @@ export function getClient(
   const provider = getProvider(providerId);
   const r = provider.resolve();
   if (!r.ok) {
-    logger.warn(
-      { provider: provider.id, reason: r.reason },
-      "ai-providers: provider unavailable",
-    );
+    logger.warn({ provider: provider.id, reason: r.reason }, "ai-providers: provider unavailable");
     return null;
   }
   return {
@@ -235,7 +227,7 @@ function canonicalBaseFor(
  * "no chat model configured" notice — never falls back to another platform).
  */
 export async function resolveWorkspaceProviderClient(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   workspaceId: string,
   providerId: string | null | undefined,
 ): Promise<ResolvedProviderClient | null> {
@@ -247,10 +239,7 @@ export async function resolveWorkspaceProviderClient(
   if (cred && cred.enabled && cred.apiKeyEnc) {
     const base = canonicalBaseFor(provider.id, cred.baseUrl);
     if (!base) {
-      logger.warn(
-        { provider: provider.id },
-        "ai-providers: custom credential missing base URL",
-      );
+      logger.warn({ provider: provider.id }, "ai-providers: custom credential missing base URL");
       return getClient(provider.id);
     }
     let apiKey: string;
@@ -276,13 +265,18 @@ export async function resolveWorkspaceProviderClient(
  * to decide if a Completions turn will reach a model. One query, sync predicate.
  */
 export async function workspaceChatProviderAvailability(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   workspaceId: string,
 ): Promise<(providerId: string) => boolean> {
   const creds = await db.providerCredential.findMany({
     where: { workspaceId, enabled: true, NOT: { apiKeyEnc: null } },
-    select: { providerId: true },
+    select: { providerId: true, baseUrl: true },
   });
-  const dbSet = new Set(creds.map((c) => c.providerId));
-  return (providerId: string) => dbSet.has(getProvider(providerId).id) || isProviderAvailable(providerId);
+  const dbSet = new Set(
+    creds
+      .filter((credential) => credential.providerId !== "custom" || credential.baseUrl?.trim())
+      .map((credential) => credential.providerId),
+  );
+  return (providerId: string) =>
+    dbSet.has(getProvider(providerId).id) || isProviderAvailable(providerId);
 }

@@ -22,12 +22,17 @@ When enabled, two columns control routing:
 
 ### Provider matrix
 
-| Provider | Default model | Env vars |
-| --- | --- | --- |
-| `hermes` | `claude-haiku-4-5-20251001` | `HERMES_GATEWAY_URL`, `HERMES_GATEWAY_TOKEN` |
-| `openai` | `gpt-4o-mini` | `OPENAI_API_KEY`, `OPENAI_BASE_URL` |
-| `anthropic` | `claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY` |
-| `custom` | `gpt-4o-mini` | `FORGE_AI_BASE_URL`, `FORGE_AI_API_KEY` |
+| Provider    | Default model               | Env vars                                     |
+| ----------- | --------------------------- | -------------------------------------------- |
+| `hermes`    | `claude-haiku-4-5-20251001` | `HERMES_GATEWAY_URL`, `HERMES_GATEWAY_TOKEN` |
+| `openai`    | `gpt-4o-mini`               | `OPENAI_API_KEY`, `OPENAI_BASE_URL`          |
+| `anthropic` | `claude-haiku-4-5-20251001` | `ANTHROPIC_API_KEY`                          |
+| `custom`    | `gpt-4o-mini`               | `FORGE_AI_BASE_URL`, `FORGE_AI_API_KEY`      |
+
+OpenAI, Anthropic, and custom providers can also use an enabled encrypted
+`ProviderCredential` stored for the workspace. Stored credentials take
+precedence over environment variables and are shared by Triage, Coach,
+description assist, and plan generation.
 
 `custom` exists for OpenAI-compatible endpoints that aren't OpenAI
 themselves — Together, Groq, vLLM behind a proxy, a local LLM gateway, etc.
@@ -47,8 +52,8 @@ Suggests priority, labels, and an assignee on issue create.
 
 ### Knob
 
-| Column | Purpose |
-| --- | --- |
+| Column                       | Purpose                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
 | `Workspace.aiTriageOnCreate` | Default `true`. When `aiEnabled` is also true, every new issue triggers a triage call. |
 
 ### How it runs
@@ -66,8 +71,8 @@ The call loads four pieces of context:
   capabilities, role).
 - A small recent-issues sample (titles only) for tone calibration.
 
-It then issues a structured tool-use call against a single tool named
-`submit_triage`:
+Direct OpenAI-compatible providers receive a structured tool-use call against
+a single tool named `submit_triage`:
 
 ```ts
 const tool = {
@@ -86,24 +91,33 @@ const tool = {
 };
 ```
 
-The tool input is validated, mapped against the workspace's actual labels
-and agents, and persisted onto the issue:
+Hermes receives the same schema as a plain-JSON response contract. Forge does
+not register `submit_triage` with Hermes because the gateway owns its own
+server-side tool registry; sending a request-scoped function there would turn
+the schema into an executable agent tool and fail as unknown.
 
-| Column | Set to |
-| --- | --- |
-| `aiTriageStatus` | `READY` on success; `ERROR` on failure. Starts at `PENDING` while in flight. |
-| `aiSuggestedPriority` | The model's `priority` choice. |
-| `aiSuggestedLabelIds[]` | The model's `label_ids`, filtered to ids that exist in the workspace. |
-| `aiSuggestedAgentId` | The model's `agent_id`, or null. |
-| `aiTriageReasoning` | The model's free-text rationale. |
-| `aiTriagedAt` | Timestamp of completion. |
-| `aiTriageDecidedAt` | Set when a human applies or dismisses the suggestion. |
+The response is validated, mapped against the workspace's actual labels and
+agents, and persisted onto the issue. Exact ids are preferred. Unique label
+names, agent profile keys, and agent names are accepted as a compatibility
+fallback; ambiguous names are ignored. Name-based assignment is only parsed
+from an explicit agent/assignee clause, never from free-form reasoning.
+
+| Column                  | Set to                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------- |
+| `aiTriageStatus`        | `READY` on success; `ERROR` on failure. Starts at `PENDING` while in flight. |
+| `aiSuggestedPriority`   | The model's `priority` choice.                                               |
+| `aiSuggestedLabelIds[]` | The model's `label_ids`, filtered to ids that exist in the workspace.        |
+| `aiSuggestedAgentId`    | The model's `agent_id`, or null.                                             |
+| `aiTriageReasoning`     | The model's free-text rationale.                                             |
+| `aiTriagedAt`           | Timestamp of completion.                                                     |
+| `aiTriageDecidedAt`     | Set when a human applies or dismisses the suggestion.                        |
 
 ### Idempotency
 
-Triage skips any issue with `aiTriageStatus IS NOT NULL`. So if you
-manually re-trigger triage you have to clear the status first; otherwise
-the call is a no-op.
+The runner atomically claims an issue by changing a null status to `PENDING`.
+Concurrent create hooks or rerun requests therefore produce at most one model
+call. The public rerun mutation clears a completed/failed/decided state before
+starting a new claim and rejects a duplicate request while one is pending.
 
 ### What the user sees
 
@@ -112,7 +126,9 @@ proposed priority, labels, and agent, plus the reasoning. Two buttons:
 
 - **Apply** — writes the suggested values onto the issue's actual
   `priority`, `labels[]`, and `assignedAgentId`. Sets `aiTriageStatus =
-  APPLIED` and `aiTriageDecidedAt`.
+APPLIED` and `aiTriageDecidedAt`. Label changes are audited, and agent
+  changes run the standard manual-assignment lifecycle (dispatch reason,
+  engagement mode, run cleanup, template application, and watcher wake target).
 - **Dismiss** — leaves the issue alone. Sets `aiTriageStatus = DISMISSED`
   and `aiTriageDecidedAt`.
 
@@ -125,8 +141,8 @@ Posts a diagnostic comment when work goes off-track.
 
 ### Knob
 
-| Column | Purpose |
-| --- | --- |
+| Column                     | Purpose                                                                  |
+| -------------------------- | ------------------------------------------------------------------------ |
 | `Workspace.aiCoachEnabled` | Default `true`. Requires a `COACH`-role agent to exist in the workspace. |
 
 ### How it runs

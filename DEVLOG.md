@@ -12669,3 +12669,28 @@ focused database suites passed (156 tests). The parallel full Vitest run passed
 9-test file passed immediately in isolation. A fresh production build passed
 the Command Center and issue-flow Playwright specs, and the notification drawer
 focus-containment/restore regression also passed (3 focused browser tests).
+
+---
+
+## 2026-07-14 — AXI-104 AI triage audit and repair
+
+Audited the full AI-triage path after AXI-104 exposed a Hermes response saying
+`Unknown tool: submit_triage`. Hermes now receives an exact plain-JSON response
+contract instead of a request-scoped function that its server-side tool
+registry cannot execute. Direct OpenAI-compatible providers retain forced tool
+output. The compatibility parser now safely resolves unique label names, agent
+profile keys, and agent names, while restricting name-based assignments to
+explicit assignment clauses and stripping provider/tool failure prose from the
+operator-facing rationale.
+
+Unified Triage, Coach, description assist, plan generation, and AI settings
+health around the same workspace-first provider credential resolver. Added
+atomic triage claims and apply decisions, rejected duplicate in-flight reruns,
+added a five-minute claim lease plus stale-only Retry so process exits cannot
+strand the card in `PENDING`, and made Apply run the standard assignment lifecycle: label audit/events,
+manual dispatch attribution, engagement-mode metadata, previous-run cleanup,
+agent templates, and a single current wake target.
+
+Verification: focused parser, lease, and database router suites passed 17 tests; lint
+passed with existing repository warnings; typecheck passed; and the full
+Vitest suite passed 1,223 tests with 1 skip.

@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { isAiTriagePendingStale } from "@/lib/ai-triage";
 
 /**
  * AI triage suggestion card. Renders above the issue description when the
@@ -17,13 +18,7 @@ import { Badge } from "@/components/ui/badge";
 interface Issue {
   id: string;
   aiTriageStatus: "PENDING" | "READY" | "APPLIED" | "DISMISSED" | "ERROR" | null;
-  aiSuggestedPriority:
-    | "NONE"
-    | "LOW"
-    | "MEDIUM"
-    | "HIGH"
-    | "URGENT"
-    | null;
+  aiSuggestedPriority: "NONE" | "LOW" | "MEDIUM" | "HIGH" | "URGENT" | null;
   aiSuggestedLabelIds: string[];
   aiSuggestedAgentId: string | null;
   aiTriageReasoning: string | null;
@@ -49,13 +44,7 @@ const PRIORITY_TONE: Record<Issue["priority"], string> = {
   URGENT: "bg-red-400/15 text-red-200",
 };
 
-export function AiTriageCard({
-  issue,
-  slug,
-}: {
-  issue: Issue;
-  slug: string;
-}) {
+export function AiTriageCard({ issue, slug }: { issue: Issue; slug: string }) {
   const utils = trpc.useUtils();
   const { data: allLabels } = trpc.label.list.useQuery();
   const { data: agents } = trpc.agent.list.useQuery();
@@ -70,14 +59,8 @@ export function AiTriageCard({
 
   useEffect(() => {
     if (issue.aiSuggestedPriority === issue.priority) setApplyPriority(false);
-    if (issue.aiSuggestedAgentId === (issue.assignedAgent?.id ?? null))
-      setApplyAgent(false);
-  }, [
-    issue.aiSuggestedPriority,
-    issue.priority,
-    issue.aiSuggestedAgentId,
-    issue.assignedAgent,
-  ]);
+    if (issue.aiSuggestedAgentId === (issue.assignedAgent?.id ?? null)) setApplyAgent(false);
+  }, [issue.aiSuggestedPriority, issue.priority, issue.aiSuggestedAgentId, issue.assignedAgent]);
 
   const apply = trpc.ai.triageApply.useMutation({
     onSuccess: () => {
@@ -113,10 +96,25 @@ export function AiTriageCard({
   if (status === "APPLIED" || status === "DISMISSED") return null;
 
   if (status === "PENDING") {
+    const stale = isAiTriagePendingStale(issue.aiTriagedAt);
     return (
-      <div className="mb-5 flex items-center gap-2 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
-        <Sparkles className="h-3.5 w-3.5 animate-pulse text-amber-300" />
-        <span>Triaging…</span>
+      <div className="mb-5 flex items-center justify-between gap-3 rounded-lg border border-border/60 bg-card/40 px-3 py-2 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <Sparkles className={`h-3.5 w-3.5 text-amber-300 ${stale ? "" : "animate-pulse"}`} />
+          <span>{stale ? "Triage is taking longer than expected." : "Triaging…"}</span>
+        </div>
+        {stale && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="shrink-0"
+            onClick={() => rerun.mutate({ issueId: issue.id })}
+            disabled={rerun.isPending}
+          >
+            <RefreshCw className="mr-1 h-3 w-3" />
+            Retry
+          </Button>
+        )}
       </div>
     );
   }
@@ -154,9 +152,7 @@ export function AiTriageCard({
   }
 
   // READY
-  const labelLookup = new Map(
-    (allLabels ?? []).map((l) => [l.id, l]),
-  );
+  const labelLookup = new Map((allLabels ?? []).map((l) => [l.id, l]));
   const agentLookup = new Map((agents ?? []).map((a) => [a.id, a]));
 
   const newLabels = issue.aiSuggestedLabelIds.filter(
@@ -165,12 +161,9 @@ export function AiTriageCard({
   const suggestedAgent = issue.aiSuggestedAgentId
     ? agentLookup.get(issue.aiSuggestedAgentId)
     : null;
-  const priorityChanged =
-    issue.aiSuggestedPriority &&
-    issue.aiSuggestedPriority !== issue.priority;
+  const priorityChanged = issue.aiSuggestedPriority && issue.aiSuggestedPriority !== issue.priority;
 
-  const nothingToApply =
-    !priorityChanged && newLabels.length === 0 && !suggestedAgent;
+  const nothingToApply = !priorityChanged && newLabels.length === 0 && !suggestedAgent;
 
   return (
     <div className="mb-5 rounded-lg border border-amber-300/20 bg-amber-300/[0.03] p-3">
@@ -200,11 +193,7 @@ export function AiTriageCard({
 
       <div className="space-y-2">
         {priorityChanged && (
-          <SuggestionRow
-            checked={applyPriority}
-            onChange={setApplyPriority}
-            label="Priority"
-          >
+          <SuggestionRow checked={applyPriority} onChange={setApplyPriority} label="Priority">
             <span
               className={`rounded-md px-2 py-0.5 text-[0.6875rem] font-medium ${PRIORITY_TONE[issue.priority]}`}
             >
@@ -220,11 +209,7 @@ export function AiTriageCard({
         )}
 
         {newLabels.length > 0 && (
-          <SuggestionRow
-            checked={applyLabels}
-            onChange={setApplyLabels}
-            label="Add labels"
-          >
+          <SuggestionRow checked={applyLabels} onChange={setApplyLabels} label="Add labels">
             <div className="flex flex-wrap gap-1.5">
               {newLabels.map((id) => {
                 const l = labelLookup.get(id);
@@ -239,17 +224,11 @@ export function AiTriageCard({
         )}
 
         {suggestedAgent && (
-          <SuggestionRow
-            checked={applyAgent}
-            onChange={setApplyAgent}
-            label="Assign agent"
-          >
+          <SuggestionRow checked={applyAgent} onChange={setApplyAgent} label="Assign agent">
             <span className="font-mono text-[0.6875rem] text-foreground">
               {suggestedAgent.profileKey}
             </span>
-            <span className="text-[0.6875rem] text-muted-foreground">
-              ({suggestedAgent.name})
-            </span>
+            <span className="text-[0.6875rem] text-muted-foreground">({suggestedAgent.name})</span>
           </SuggestionRow>
         )}
 
@@ -292,9 +271,7 @@ export function AiTriageCard({
               })
             }
             disabled={
-              apply.isPending ||
-              nothingToApply ||
-              (!applyPriority && !applyLabels && !applyAgent)
+              apply.isPending || nothingToApply || (!applyPriority && !applyLabels && !applyAgent)
             }
           >
             {apply.isPending ? "Applying…" : "Apply"}
