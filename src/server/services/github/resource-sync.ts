@@ -66,6 +66,31 @@ function publicResource(row: ExternalResource) {
   return row;
 }
 
+export function gitHubPartialChecksError(metadata: unknown): GitHubRequestError | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const checks = (metadata as Record<string, unknown>).checks;
+  if (!checks || typeof checks !== "object" || Array.isArray(checks)) return null;
+  const values = checks as Record<string, unknown>;
+  if (values.partial !== true) return null;
+  const retryAt =
+    typeof values.retryAt === "string" && Number.isFinite(Date.parse(values.retryAt))
+      ? new Date(values.retryAt)
+      : null;
+  const rateLimited = values.rateLimited === true;
+  const timedOut = values.timedOut === true;
+  const message =
+    typeof values.diagnostic === "string" && values.diagnostic.trim()
+      ? values.diagnostic
+      : "GitHub returned partial checks data.";
+  return new GitHubRequestError(
+    message,
+    rateLimited ? 429 : timedOut ? 408 : 403,
+    retryAt,
+    rateLimited,
+    timedOut,
+  );
+}
+
 export async function resolveGitHubRepoMapping(args: {
   db: PrismaClient;
   workspaceId: string;
@@ -780,7 +805,7 @@ export async function syncGitHubExternalResource(args: {
     }
     throw error;
   }
-  const resource = await args.db.$transaction(async (tx) => {
+  let resource = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
       workspaceId: args.workspaceId,
       connectionMappingId: mapping.id,
@@ -796,6 +821,28 @@ export async function syncGitHubExternalResource(args: {
     });
     return publicResource(resource);
   });
+  const partialChecksError = gitHubPartialChecksError(snapshot.metadata);
+  if (!args.skipCollisionGuard && partialChecksError) {
+    const failureNow = new Date();
+    const failure = await persistGitHubManualSyncFailure({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      externalResourceId: existing.id,
+      connectionMappingId: mapping.id,
+      currentFailureCount: existing.syncFailureCount,
+      now: failureNow,
+      baseMinutes: workspace.githubSyncBackoffMinutes,
+      maxMinutes: workspace.githubSyncMaxBackoffMinutes,
+      error: partialChecksError,
+    });
+    resource = {
+      ...resource,
+      syncAttemptedAt: failureNow,
+      syncRetryAt: failure.retryAt,
+      syncFailureCount: failure.failureCount,
+      syncLastError: partialChecksError.message.slice(0, 2_000),
+    };
+  }
   if (resource.resourceType === "PULL_REQUEST") {
     await reconcileGitHubPullRequestCompletion(args.db, {
       workspaceId: args.workspaceId,

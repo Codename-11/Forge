@@ -18,6 +18,10 @@ anchored after the provider call finishes.
 The second review pass found that a shorter new mapping-wide delay could
 replace a longer existing provider reset on sibling resources. Mapping circuits
 are now monotonic: only missing or earlier retry gates are extended.
+The final review pass identified the non-throwing partial-checks path: PR reads
+can succeed while Checks API calls return a settled partial snapshot. Manual
+and MCP syncs now promote that metadata into the same persisted mapping-wide
+failure circuit and return the updated diagnostic/backoff state immediately.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs

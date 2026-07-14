@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { GitHubRequestError } from "@/server/services/github/client";
 import {
   claimGitHubManualSync,
+  gitHubPartialChecksError,
   persistGitHubManualSyncFailure,
   upsertExternalResource,
 } from "@/server/services/github/resource-sync";
@@ -90,6 +91,28 @@ async function setupResource() {
 }
 
 describe("GitHub status reconciliation", () => {
+  it("promotes partial checks metadata into a mapping-wide manual failure", () => {
+    const retryAt = "2026-07-14T13:00:00.000Z";
+    expect(
+      gitHubPartialChecksError({
+        checks: {
+          partial: true,
+          rateLimited: true,
+          timedOut: false,
+          diagnostic: "Checks API rate limit exceeded",
+          retryAt,
+        },
+      }),
+    ).toMatchObject({
+      message: "Checks API rate limit exceeded",
+      status: 429,
+      retryAt: new Date(retryAt),
+      rateLimited: true,
+      timedOut: false,
+    });
+    expect(gitHubPartialChecksError({ checks: { partial: false } })).toBeNull();
+  });
+
   it("polls only stale native implementation links and is a no-op once fresh", async () => {
     const { fixture, prisma, resource } = await setupResource();
     const now = new Date("2026-07-14T12:00:00.000Z");
