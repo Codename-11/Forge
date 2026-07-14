@@ -43,7 +43,9 @@ function metadataRecord(value: unknown): Record<string, unknown> {
 
 function checkConclusion(metadata: unknown): string | null {
   const checks = metadataRecord(metadataRecord(metadata).checks);
-  return typeof checks.conclusion === "string" ? checks.conclusion : null;
+  return checks.source === "api-aggregate" && typeof checks.conclusion === "string"
+    ? checks.conclusion
+    : null;
 }
 
 function checksArePassing(conclusion: string | null): boolean {

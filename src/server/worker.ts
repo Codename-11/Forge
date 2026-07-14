@@ -29,6 +29,7 @@ import { ingestRunsDispatch } from "@/server/services/dispatch/run-dispatcher";
 import { purgeExpiredSessionKeys } from "@/server/services/api-key-purge";
 import { sweepIdleEphemeralAgents } from "@/server/services/ephemeral-idle";
 import { sweepCompletionCandidates } from "@/server/services/completion-candidate";
+import { sweepGitHubStatusReconciliation } from "@/server/services/github/reconciliation";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -60,6 +61,8 @@ const EPHEMERAL_IDLE_SWEEP_INTERVAL_MS = 5 * 60_000;
 const EPHEMERAL_IDLE_SWEEP_JOB_ID = "ephemeral-idle-sweep";
 const COMPLETION_CANDIDATE_SWEEP_INTERVAL_MS = 5 * 60_000;
 const COMPLETION_CANDIDATE_SWEEP_JOB_ID = "completion-candidate-sweep";
+const GITHUB_RECONCILIATION_SWEEP_INTERVAL_MS = 5 * 60_000;
+const GITHUB_RECONCILIATION_SWEEP_JOB_ID = "github-reconciliation-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -321,6 +324,9 @@ export const maintenanceWorker = new Worker(
       case "completion-candidate-sweep": {
         return sweepCompletionCandidates(db);
       }
+      case "github-reconciliation-sweep": {
+        return sweepGitHubStatusReconciliation(db);
+      }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;
         if (!eventId) return null;
@@ -581,6 +587,20 @@ export async function registerCompletionCandidateSweepJob(): Promise<void> {
   );
 }
 
+/** Webhook repair loop for stale native GitHub implementation links. */
+export async function registerGitHubReconciliationSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "github-reconciliation-sweep",
+    {},
+    {
+      jobId: GITHUB_RECONCILIATION_SWEEP_JOB_ID,
+      repeat: { every: GITHUB_RECONCILIATION_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -619,6 +639,9 @@ void registerEphemeralIdleSweepJob().catch((err) => {
 });
 void registerCompletionCandidateSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register completion-candidate-sweep job");
+});
+void registerGitHubReconciliationSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register github-reconciliation-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {

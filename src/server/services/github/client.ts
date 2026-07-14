@@ -4,6 +4,8 @@ import { resolveInstallationToken } from "@/server/services/github/installation-
 import type { GitHubResourceSnapshot } from "@/server/services/github/types";
 
 const GITHUB_API_BASE = "https://api.github.com";
+const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 10_000;
+const MAX_CHECK_SUITE_PAGES = 10;
 
 type GitHubUser = { login?: string | null };
 type GitHubLabel = { name?: string | null; color?: string | null };
@@ -62,6 +64,49 @@ type GitHubListReposResponse = {
   repositories?: GitHubRepoResponse[];
 };
 
+type GitHubCheckSuite = {
+  status?: string | null;
+  conclusion?: string | null;
+};
+
+type GitHubCheckSuitesResponse = {
+  total_count?: number;
+  check_suites?: GitHubCheckSuite[];
+};
+
+type GitHubCombinedStatusResponse = {
+  state?: "error" | "failure" | "pending" | "success";
+  total_count?: number;
+};
+
+export type GitHubChecksSnapshot = {
+  status: "completed" | "pending" | "unknown";
+  conclusion: string | null;
+  suiteCount: number;
+  statusCount: number;
+  updatedAt: string;
+  source: "api-aggregate";
+  partial: boolean;
+  rateLimited: boolean;
+  timedOut: boolean;
+  diagnostic: string | null;
+  retryAt: string | null;
+  headSha: string;
+};
+
+export class GitHubRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly retryAt: Date | null,
+    readonly rateLimited: boolean = status === 429,
+    readonly timedOut: boolean = status === 408,
+  ) {
+    super(message);
+    this.name = "GitHubRequestError";
+  }
+}
+
 export type GitHubInstallationResponse = {
   id: number;
   account?: { login?: string | null; type?: string | null } | null;
@@ -70,16 +115,48 @@ export type GitHubInstallationResponse = {
   events?: string[];
 };
 
-async function githubAppRequest<T>(path: string): Promise<T> {
+function requestSignal(signal: AbortSignal | null | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(Math.max(1, timeoutMs));
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function timeoutError(timeoutMs: number): GitHubRequestError {
+  return new GitHubRequestError(
+    `GitHub API request timed out after ${timeoutMs}ms.`,
+    408,
+    null,
+    false,
+    true,
+  );
+}
+
+async function githubAppRequest<T>(
+  path: string,
+  timeoutMs = DEFAULT_GITHUB_REQUEST_TIMEOUT_MS,
+): Promise<T> {
   const jwt = await createGitHubAppJwt();
-  const res = await fetch(`${GITHUB_API_BASE}${path}`, {
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${jwt}`,
-      "user-agent": "forge-github-app",
-      "x-github-api-version": "2022-11-28",
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GITHUB_API_BASE}${path}`, {
+      signal: requestSignal(null, timeoutMs),
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${jwt}`,
+        "user-agent": "forge-github-app",
+        "x-github-api-version": "2022-11-28",
+      },
+    });
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error.name === "TimeoutError" || error.name === "AbortError")
+    ) {
+      throw timeoutError(timeoutMs);
+    }
+    throw error;
+  }
   const json = (await res.json().catch(() => ({}))) as { message?: string };
   if (!res.ok) {
     throw new Error(json.message || `GitHub API returned HTTP ${res.status}.`);
@@ -91,21 +168,36 @@ async function githubRequest<T>(
   installationId: string | number,
   path: string,
   init: RequestInit = {},
+  timeoutMs = DEFAULT_GITHUB_REQUEST_TIMEOUT_MS,
 ): Promise<T> {
   // Prefer a configured GithubApp's credentials for this installation, falling
   // back to the global env app — so linking works off the same app a workspace
   // set up in Settings → GitHub Apps.
   const token = await resolveInstallationToken(installationId);
-  const res = await fetch(`${GITHUB_API_BASE}${path}`, {
-    ...init,
-    headers: {
-      accept: "application/vnd.github+json",
-      authorization: `Bearer ${token}`,
-      "user-agent": "forge-github-app",
-      "x-github-api-version": "2022-11-28",
-      ...(init.headers ?? {}),
-    },
-  });
+  let res: Response;
+  try {
+    res = await fetch(`${GITHUB_API_BASE}${path}`, {
+      ...init,
+      signal: requestSignal(init.signal, timeoutMs),
+      headers: {
+        accept: "application/vnd.github+json",
+        authorization: `Bearer ${token}`,
+        "user-agent": "forge-github-app",
+        "x-github-api-version": "2022-11-28",
+        ...(init.headers ?? {}),
+      },
+    });
+  } catch (error) {
+    if (
+      error &&
+      typeof error === "object" &&
+      "name" in error &&
+      (error.name === "TimeoutError" || error.name === "AbortError")
+    ) {
+      throw timeoutError(timeoutMs);
+    }
+    throw error;
+  }
   const text = await res.text();
   let json: unknown = {};
   if (text) {
@@ -120,7 +212,19 @@ async function githubRequest<T>(
       json && typeof json === "object" && "message" in json && typeof json.message === "string"
         ? json.message
         : `GitHub API returned HTTP ${res.status}.`;
-    throw new Error(message);
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const rateLimitReset = Number(res.headers.get("x-ratelimit-reset"));
+    const retryAt =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? new Date(Date.now() + retryAfter * 1000)
+        : Number.isFinite(rateLimitReset) && rateLimitReset > 0
+          ? new Date(rateLimitReset * 1000)
+          : null;
+    const rateLimited =
+      res.status === 429 ||
+      (res.status === 403 &&
+        (res.headers.has("retry-after") || res.headers.get("x-ratelimit-remaining") === "0"));
+    throw new GitHubRequestError(message, res.status, retryAt, rateLimited, false);
   }
   return json as T;
 }
@@ -138,9 +242,7 @@ function labels(labels: GitHubLabel[] | undefined): Array<{ name: string; color:
 }
 
 function assignees(users: GitHubUser[] | undefined): Array<{ login: string }> {
-  return (users ?? [])
-    .map((u) => ({ login: u.login ?? "" }))
-    .filter((u) => u.login.length > 0);
+  return (users ?? []).map((u) => ({ login: u.login ?? "" })).filter((u) => u.login.length > 0);
 }
 
 export async function getGitHubIssue(args: {
@@ -148,10 +250,14 @@ export async function getGitHubIssue(args: {
   owner: string;
   repo: string;
   number: number;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<GitHubIssueResponse> {
   return githubRequest<GitHubIssueResponse>(
     args.installationId,
     `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/issues/${args.number}`,
+    { signal: args.signal },
+    args.requestTimeoutMs,
   );
 }
 
@@ -160,11 +266,162 @@ export async function getGitHubPullRequest(args: {
   owner: string;
   repo: string;
   number: number;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<GitHubPullResponse> {
   return githubRequest<GitHubPullResponse>(
     args.installationId,
     `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/pulls/${args.number}`,
+    { signal: args.signal },
+    args.requestTimeoutMs,
   );
+}
+
+/**
+ * Read both GitHub Checks and legacy commit statuses for a PR head. A passing
+ * result is only returned when every discovered signal is complete and green;
+ * zero discovered signals stays unknown and cannot certify completion.
+ */
+export async function getGitHubPullRequestChecks(args: {
+  installationId: string | number;
+  owner: string;
+  repo: string;
+  headSha: string;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<GitHubChecksSnapshot> {
+  const ref = encodeURIComponent(args.headSha);
+  const suiteResult = await settle(() => listAllCheckSuites({ ...args, ref }));
+  // Deliberately serial: GitHub recommends avoiding concurrent REST requests
+  // to reduce secondary-rate-limit pressure.
+  const statusResult = await settle(() =>
+    githubRequest<GitHubCombinedStatusResponse>(
+      args.installationId,
+      `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${ref}/status`,
+      { signal: args.signal },
+      args.requestTimeoutMs,
+    ),
+  );
+  const suites: GitHubCheckSuitesResponse & { truncated?: boolean } =
+    suiteResult.status === "fulfilled" ? suiteResult.value : {};
+  const statuses: GitHubCombinedStatusResponse =
+    statusResult.status === "fulfilled" ? statusResult.value : {};
+  const rows = suites.check_suites ?? [];
+  const suiteCount = suites.total_count ?? rows.length;
+  const statusCount = statuses.total_count ?? 0;
+  const discovered = suiteCount + statusCount;
+  const pending = rows.some((suite) => suite.status !== "completed");
+  const failedSuite = rows.find(
+    (suite) =>
+      suite.status === "completed" &&
+      !!suite.conclusion &&
+      !["success", "neutral", "skipped"].includes(suite.conclusion),
+  );
+  const failedStatus = statuses.state === "failure" || statuses.state === "error";
+  const conclusion =
+    failedSuite?.conclusion ?? (failedStatus ? (statuses.state ?? "failure") : null);
+  const failures = [suiteResult, statusResult].filter(
+    (result): result is { status: "rejected"; reason: unknown } => result.status === "rejected",
+  );
+  const incompleteSuites = suiteResult.status === "fulfilled" && suiteResult.value.truncated;
+  const partial = failures.length > 0 || incompleteSuites;
+  const rateLimited = failures.some(
+    (failure) => failure.reason instanceof GitHubRequestError && failure.reason.rateLimited,
+  );
+  const timedOut = failures.some(
+    (failure) => failure.reason instanceof GitHubRequestError && failure.reason.timedOut,
+  );
+  const retryAt =
+    failures
+      .map((failure) =>
+        failure.reason instanceof GitHubRequestError ? failure.reason.retryAt : null,
+      )
+      .filter((value): value is Date => value instanceof Date)
+      .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+
+  const nullConclusion = rows.some(
+    (suite) => suite.status === "completed" && suite.conclusion == null,
+  );
+  const statusPending = statusCount > 0 && statuses.state === "pending";
+  const statusUnknown = statusCount > 0 && statuses.state == null;
+  const unresolved = pending || nullConclusion || statusPending || statusUnknown;
+
+  return {
+    status:
+      conclusion !== null
+        ? "completed"
+        : partial || discovered === 0 || nullConclusion || statusUnknown
+          ? "unknown"
+          : unresolved
+            ? "pending"
+            : "completed",
+    conclusion: conclusion ?? (!partial && discovered > 0 && !unresolved ? "success" : null),
+    suiteCount,
+    statusCount,
+    updatedAt: new Date().toISOString(),
+    source: "api-aggregate",
+    partial,
+    rateLimited,
+    timedOut,
+    diagnostic:
+      partial || nullConclusion || statusUnknown
+        ? [
+            ...failures.map((failure) =>
+              failure.reason instanceof Error
+                ? failure.reason.message
+                : "GitHub checks unavailable",
+            ),
+            ...(incompleteSuites
+              ? [`More than ${MAX_CHECK_SUITE_PAGES * 100} check suites require another page.`]
+              : []),
+            ...(nullConclusion ? ["A completed check suite has no conclusion."] : []),
+            ...(statusUnknown
+              ? ["GitHub returned commit statuses without an aggregate state."]
+              : []),
+          ]
+            .join("; ")
+            .slice(0, 2_000)
+        : null,
+    retryAt: retryAt?.toISOString() ?? null,
+    headSha: args.headSha,
+  };
+}
+
+type Settled<T> = { status: "fulfilled"; value: T } | { status: "rejected"; reason: unknown };
+
+async function settle<T>(fn: () => Promise<T>): Promise<Settled<T>> {
+  try {
+    return { status: "fulfilled", value: await fn() };
+  } catch (reason) {
+    return { status: "rejected", reason };
+  }
+}
+
+async function listAllCheckSuites(args: {
+  installationId: string | number;
+  owner: string;
+  repo: string;
+  ref: string;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<GitHubCheckSuitesResponse & { truncated: boolean }> {
+  const check_suites: GitHubCheckSuite[] = [];
+  let total = 0;
+  for (let page = 1; page <= MAX_CHECK_SUITE_PAGES; page += 1) {
+    const response = await githubRequest<GitHubCheckSuitesResponse>(
+      args.installationId,
+      `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${args.ref}/check-suites?per_page=100&page=${page}`,
+      { signal: args.signal },
+      args.requestTimeoutMs,
+    );
+    const rows = response.check_suites ?? [];
+    check_suites.push(...rows);
+    total = response.total_count ?? check_suites.length;
+    if (check_suites.length >= total || rows.length < 100) {
+      return { total_count: total, check_suites, truncated: false };
+    }
+  }
+  return { total_count: total, check_suites, truncated: check_suites.length < total };
 }
 
 export async function listGitHubInstallationRepos(args: {

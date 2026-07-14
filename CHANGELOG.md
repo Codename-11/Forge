@@ -9,7 +9,17 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
-## [Unreleased]
+## [2026-07-14] — v0.15.0 · Reliable GitHub status recovery
+
+### Added
+
+- **Linked implementation PRs now self-heal after missed GitHub webhooks.** A settings-driven stale-only worker refreshes PR lifecycle and aggregate checks with bounded batches, restart-safe leases, provider-aware rate-limit backoff, and visible retry diagnostics.
+
+### Fixed
+
+- **GitHub status recovery cannot certify stale or partial evidence.** New PR heads invalidate cached checks, late check events for older heads are ignored, partial GitHub App permissions remain non-blocking, and merged PRs without confirmed checks back off instead of polling hot or closing issues.
+- **Check webhooks are refresh hints, not repository-wide success.** Forge now paginates every check suite, combines legacy commit status, distrusts incomplete or malformed aggregates, and only completion evidence read directly from GitHub can close work.
+- **Provider failures cannot monopolize maintenance.** Configurable request timeouts, sweep budgets, manual-refresh cooldowns, dormant closed-PR rechecks, atomic leases, and mapping-wide backoff contain timeouts, permission failures, and rate limits while allowing other workspaces to continue.
 
 ## [2026-07-14] — v0.14.0 · Proactive completion handoff
 

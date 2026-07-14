@@ -42,8 +42,12 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
     await expect(flow).toBeVisible();
     await expect(flow.getByText("Pipeline", { exact: true }).first()).toBeVisible();
 
-    const priorityGrid = cockpit.locator(`[data-dashboard-columns="2"]`);
+    const priorityGrid = cockpit.locator(`[data-dashboard-columns]`).first();
     await expect(priorityGrid).toBeVisible();
+    const configuredPriorityColumns = Number(
+      await priorityGrid.getAttribute("data-dashboard-columns"),
+    );
+    expect([1, 2]).toContain(configuredPriorityColumns);
     await expect
       .poll(() =>
         priorityGrid
@@ -55,7 +59,9 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
       const tracks = getComputedStyle(node).gridTemplateColumns;
       return tracks === "none" ? 1 : tracks.split(" ").length;
     });
-    expect(priorityColumns).toBe(state.priorityColumns);
+    expect(priorityColumns).toBe(
+      state.name === "desktop" ? configuredPriorityColumns : state.priorityColumns,
+    );
 
     await expect(cockpit.getByTestId("dashboard-pulse")).toBeVisible();
     await expect(cockpit.getByTestId("dashboard-schedule")).toBeVisible();

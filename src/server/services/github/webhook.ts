@@ -39,11 +39,13 @@ type GitHubWebhookPayload = {
   pull_request?: GitHubPullResponse;
   review?: { state?: string | null };
   check_suite?: {
+    head_sha?: string | null;
     conclusion?: string | null;
     status?: string | null;
     pull_requests?: Array<{ number?: number | null; url?: string | null }>;
   };
   check_run?: {
+    head_sha?: string | null;
     conclusion?: string | null;
     status?: string | null;
     pull_requests?: Array<{ number?: number | null; url?: string | null }>;
@@ -338,15 +340,20 @@ function completedCheckPullRequestNumbers(payload: GitHubWebhookPayload): number
   return [...out];
 }
 
-export function aggregateGitHubCheckConclusion(args: {
+export function githubCheckWebhookHint(args: {
   event: "check_suite" | "check_run";
   conclusion: string | null;
-  existingConclusion: unknown;
-}): string | null {
-  const successful =
-    args.conclusion !== null && ["success", "neutral", "skipped"].includes(args.conclusion);
-  if (args.event === "check_suite" || !successful) return args.conclusion;
-  return typeof args.existingConclusion === "string" ? args.existingConclusion : null;
+  headSha?: string | null;
+}) {
+  return {
+    status: "dirty",
+    conclusion: null,
+    source: "webhook-hint",
+    updatedAt: new Date().toISOString(),
+    event: args.event,
+    observedConclusion: args.conclusion,
+    ...(args.headSha ? { headSha: args.headSha } : {}),
+  } as const;
 }
 
 async function processCheckEvent(args: {
@@ -384,7 +391,7 @@ async function processCheckEvent(args: {
       resourceType: "PULL_REQUEST",
       number: { in: numbers },
     },
-    select: { id: true, number: true, metadata: true },
+    select: { id: true, number: true, state: true, metadata: true },
   });
   if (resources.length === 0) return 0;
 
@@ -401,13 +408,21 @@ async function processCheckEvent(args: {
         metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
           ? (metadata.checks as Record<string, unknown>)
           : {};
-      // A check_suite conclusion is aggregate. A successful check_run only
-      // proves one job passed, so it must not certify the whole PR; failures
-      // remain safe to persist immediately.
-      const aggregateConclusion = aggregateGitHubCheckConclusion({
+      const head =
+        metadata.head && typeof metadata.head === "object" && !Array.isArray(metadata.head)
+          ? (metadata.head as Record<string, unknown>)
+          : {};
+      const eventHeadSha = args.payload.check_suite?.head_sha ?? args.payload.check_run?.head_sha;
+      if (eventHeadSha && typeof head.sha === "string" && head.sha !== eventHeadSha) {
+        continue;
+      }
+      // A webhook check_suite is only one suite, not repository-wide CI.
+      // Persist it as a dirty hint; the worker must fetch every suite plus the
+      // combined commit status before completion can trust a conclusion.
+      const webhookHint = githubCheckWebhookHint({
         event: args.payload.check_suite ? "check_suite" : "check_run",
         conclusion,
-        existingConclusion: existingChecks.conclusion,
+        headSha: eventHeadSha,
       });
       await tx.externalResource.update({
         where: { id: resource.id },
@@ -416,13 +431,12 @@ async function processCheckEvent(args: {
             ...metadata,
             checks: {
               ...existingChecks,
-              status: "completed",
-              conclusion: aggregateConclusion,
-              updatedAt: new Date().toISOString(),
-              event: args.payload.check_suite ? "check_suite" : "check_run",
+              ...webhookHint,
               ...(args.payload.check_run ? { lastRunConclusion: conclusion } : {}),
             },
           } as Prisma.InputJsonValue,
+          lastSyncedAt: null,
+          syncTerminalAt: null,
         },
       });
       processed += 1;

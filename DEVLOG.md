@@ -2,6 +2,45 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-14 — Resilient linked-PR status reconciliation
+
+Added a webhook-first repair loop for native GitHub `IMPLEMENTS` links. The
+maintenance worker now scans only stale, non-terminal PR snapshots in bounded
+per-workspace batches, claims each row with an expiring database lease, and
+refreshes PR lifecycle plus both GitHub check suites and legacy combined commit
+statuses. Workspace admins can configure enablement, stale age, batch size, and
+initial/maximum backoff from Connections settings.
+
+Persisted provider attempt, retry, failure, diagnostic, and terminal state on
+`ExternalResource`. GitHub rate-limit headers override exponential retry;
+missing/paused mappings are re-resolved by repository; inaccessible resources
+back off without being unlinked; closed PRs enter a slow configurable re-probe
+cadence so a missed reopen event self-heals; and confirmed-green merged PRs stop
+polling. Partial Checks/status permissions no longer prevent a readable PR from
+linking, but partial evidence cannot certify completion. Head changes clear
+cached checks and late check webhooks for an older head are ignored. Repeated
+unchanged refreshes produce no issue activity or duplicate completion cards.
+
+The safety review removed webhook conclusions as aggregate completion evidence:
+check-suite and check-run deliveries now mark a resource dirty, while the repair
+loop paginates every check suite and combines legacy commit status before it can
+trust success. Completed suites without conclusions, malformed aggregates, and
+partially readable endpoints stay unresolved. Configurable request timeouts,
+shared-worker wall budgets, atomic manual-refresh cooldowns, exact stale-row
+claims, and persistent mapping-wide circuits contain permission failures,
+timeouts, and rate limits without blocking later workspaces.
+
+Verification: Prisma migrations 0102 and 0103 applied locally; lint passed with
+existing repository warnings only; typecheck passed; focused GitHub
+reconciliation, client, check aggregation, completion, timeout, circuit-breaker,
+dormant-reopen, cooldown, and lease-race coverage passed (**22/22**); the full
+Vitest suite passed **1,259 tests** with one intentional live-connector skip; a
+fresh production build passed; and the full serial Playwright suite passed
+**38/38**. The browser gate also exposed a stale dashboard assertion that
+hard-coded two rail columns despite the existing work-count threshold; the
+assertion now follows the rendered layout mode and passed both alone and in the
+full suite.
+
 ## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
 
 Closed the AXI-102 stall-comment loop introduced by approval-expiry recovery.

@@ -25,6 +25,7 @@ import { Input } from "@/components/ui/input";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
+import { GitHubReconciliationPolicy } from "@/components/settings/github-reconciliation-policy";
 import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 
@@ -442,6 +443,8 @@ export default function ConnectionsMappingPage() {
               in another — same token, different mapping.
             </p>
           </div>
+
+          <GitHubReconciliationPolicy isAdmin={isAdmin} />
 
           {!connectionsLoading && !hasAnyConnection && (
             <EmptyState
