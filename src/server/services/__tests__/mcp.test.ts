@@ -4406,6 +4406,8 @@ describe("mcp runs.setWaiting + runs.resumeWork", () => {
         workspaceId: fixture.workspace.id,
         profileKey: `rw2-${Date.now()}`,
         name: "Patient2",
+        webhookUrl: "https://example.invalid/patient2",
+        webhookSecret: "test-secret",
       },
     });
     const issue = await createIssue(fixture);
@@ -4438,6 +4440,14 @@ describe("mcp runs.setWaiting + runs.resumeWork", () => {
     const payload = blockedEvents[0].payload as Record<string, unknown>;
     expect(payload.reason).toBe("review needed");
     expect(payload.agentId).toBe(agent.id);
+    expect(
+      await prisma.webhookDelivery.count({
+        where: {
+          eventId: blockedEvents[0].id,
+          webhook: { url: { startsWith: "agent:dispatch" } },
+        },
+      }),
+    ).toBe(0);
   });
 
   it("setWaiting without linkedAgentId is rejected", async () => {

@@ -186,9 +186,10 @@ const EMPTY_ENSURE: EnsureCanonicalResult = Object.freeze({
  * Ensures canonical work rows exist for the just-recorded ActivityEvent.
  * Idempotent; callers can invoke once per `recordChange` write.
  *
- * For issue-routed events (AGENT_ASSIGNED, ISSUE_QUEUED, mention
- * COMMENT_CREATED, ISSUE_PRIORITY_CHANGED, watcher fan-out) we call
- * `openOrTouchRun` once per resolved agent and stamp the trigger.
+ * For issue-routed events (AGENT_ASSIGNED, ISSUE_QUEUED, actionable
+ * COMMENT_CREATED, and true priority escalations) we call `openOrTouchRun`
+ * once per resolved agent and stamp the trigger. Notification-only issue
+ * activity never reaches this boundary.
  *
  * For chat-routed CHAT_MESSAGE_POSTED USER turns the user's ChatMessage
  * row IS the canonical work — we just ensure its lifecycle fields are
@@ -362,13 +363,9 @@ async function ensureIssueRuns(
     // agent-request > payload > sticky-active-run > surface) mirrors the prior
     // `??`-chain exactly.
     //
-    // Behavioral equivalence with the deleted resolveIssueRunEngagementMode is
-    // exact, including its two EXECUTE fallbacks: (1) a non-assignee agent woken
-    // by a NON-comment event (watcher fan-out: ISSUE_STALLED / SLA / NUDGED /
-    // PRIORITY_CHANGED), and (2) a missing issue/workspace row. Both resolved to
-    // a bare EXECUTE before (after the upper tiers), regardless of agent binding
-    // or workspace default — so we force the surface default to EXECUTE for those
-    // cases here rather than letting the assignment surface read agent/ws config.
+    // Keep a defensive EXECUTE fallback for legacy non-assignee, non-comment
+    // canonical rows and for a missing issue/workspace. Current wake policy no
+    // longer creates those rows from stalled/SLA/nudge/metadata watcher churn.
     const forceExecuteDefault = !hasWorkspace || (!assigned && !commentWake);
     const surface: EngagementSurface = assigned
       ? "assignment"
@@ -429,6 +426,11 @@ async function ensureIssueRuns(
       runEngineSource: engine?.source ?? null,
       runtimePolicy: runtimePolicy as Prisma.InputJsonValue | null,
       executionStepId,
+      // A fresh assignment is an explicit restart. Webhook/completions agents
+      // reactivate when their actionable wake is delivered. RUNS agents stay
+      // WAITING so resumeWaitingRuns can start a clean provider turn carrying
+      // the operator reply instead of polling the expired external run.
+      resumeWaiting: isAssigned || engine?.engine !== "RUNS",
     });
     // Stamp the latest trigger on the run so the inbox can distinguish
     // "Victor was just re-mentioned in AXI-31" from "Victor is the

@@ -1438,6 +1438,7 @@ export const issueRouter = router({
           // Touch the run on transition by the assigned agent so the
           // status-change is reflected in the timeline as a STEP event.
           before.assignedAgentId &&
+          ctx.apiKey?.linkedAgentId === before.assignedAgentId &&
           patch.statusId &&
           patch.statusId !== before.statusId
         ) {
@@ -1449,6 +1450,7 @@ export const issueRouter = router({
             payload: { from: before.statusId, to: patch.statusId, category: nextCategory },
             actorId: ctx.session.user.id,
             actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            resumeWaiting: true,
           });
         }
 

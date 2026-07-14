@@ -3,12 +3,7 @@ import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
-import {
-  openOrTouchRun,
-  appendRunEvent,
-  finishRun,
-  postAgentRunComment,
-} from "@/server/services/agent-run";
+import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
 import { FORGE_RUN_CONTRACT_VERSION, forgeRunInstruction } from "@/server/services/engagement-mode";
 import { deriveRepoPath } from "@/server/services/repo-path";
 import { buildRuntimePolicySnapshot, type RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
@@ -29,6 +24,10 @@ import {
   resolveRunApproval,
   type PendingRunApproval,
 } from "@/server/services/run-approval-lifecycle";
+import {
+  isActionableAssignedComment,
+  isActionablePriorityEscalation,
+} from "@/server/services/agent-wake-policy";
 
 /**
  * Dispatch-via-runs ingestion (worker-hosted, poll-based).
@@ -357,6 +356,7 @@ async function startNewRuns(): Promise<number> {
           executionStepId: orchestrationContext?.step?.id ?? already?.executionStepId ?? null,
           engagementMode,
           orchestrationContext,
+          resumeWaiting: true,
         });
         await tx.agentRun.update({
           where: { id: run.id },
@@ -643,6 +643,8 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       lastEventAt: true,
       runtimePolicy: true,
       completionMeta: true,
+      triggerEventId: true,
+      triggerKind: true,
       executionStepId: true,
       orchestrationContextSnapshot: true,
       issue: {
@@ -685,29 +687,66 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
     });
     if (!connector?.startRun) continue;
 
-    // A reply that landed after the run paused wakes it. Any comment the agent
-    // didn't author itself counts — the Nudge button and a plain `@agent`
-    // comment both produce one. Skip the agent's own posts so its closing
-    // status note doesn't self-resume.
-    const replies = await db.comment.findMany({
+    // Resume only from the canonical trigger stamped by recordChange. Looking
+    // for "any newer comment" treated coach/system output as an operator
+    // reply and re-ran held work. The wake policy has already filtered the
+    // trigger once; validate it again at this provider boundary.
+    if (!run.triggerEventId || !run.triggerKind) continue;
+    const triggerEvent = await db.activityEvent.findFirst({
       where: {
-        issueId: run.issueId,
+        id: run.triggerEventId,
+        workspaceId: run.workspaceId,
         createdAt: { gt: run.lastEventAt },
-        deletedAt: null,
-        // Anything the waiting agent didn't author itself. Must include human
-        // comments (authoringAgentId IS NULL) — a bare `NOT: { authoringAgentId }`
-        // drops NULLs under SQL three-valued logic, so spell out the OR.
-        OR: [{ authoringAgentId: null }, { authoringAgentId: { not: run.agentId } }],
       },
-      orderBy: { createdAt: "asc" },
-      take: 10,
-      select: {
-        body: true,
-        author: { select: { name: true } },
-        authoringAgent: { select: { name: true } },
-      },
+      select: { kind: true, actorId: true, actorAgentId: true, payload: true },
     });
-    if (replies.length === 0) continue;
+    if (!triggerEvent) continue;
+
+    const triggerPayload =
+      triggerEvent.payload &&
+      typeof triggerEvent.payload === "object" &&
+      !Array.isArray(triggerEvent.payload)
+        ? (triggerEvent.payload as Record<string, unknown>)
+        : {};
+    let replyBlock: string | null = null;
+    if (triggerEvent.kind === EventKind.COMMENT_CREATED) {
+      if (
+        !isActionableAssignedComment({
+          actorId: triggerEvent.actorId,
+          actorAgentId: triggerEvent.actorAgentId,
+          targetAgentId: run.agentId,
+          payload: triggerPayload,
+        })
+      ) {
+        continue;
+      }
+      const commentId =
+        typeof triggerPayload.commentId === "string" ? triggerPayload.commentId : null;
+      if (!commentId) continue;
+      const reply = await db.comment.findFirst({
+        where: {
+          id: commentId,
+          workspaceId: run.workspaceId,
+          issueId: run.issueId,
+          kind: "BODY",
+          deletedAt: null,
+          createdAt: { gt: run.lastEventAt },
+        },
+        select: {
+          body: true,
+          author: { select: { name: true } },
+          authoringAgent: { select: { name: true } },
+        },
+      });
+      if (!reply) continue;
+      replyBlock = `${reply.authoringAgent?.name ?? reply.author?.name ?? "Operator"}: ${reply.body}`;
+    } else if (
+      triggerEvent.kind === EventKind.ISSUE_PRIORITY_CHANGED &&
+      isActionablePriorityEscalation(triggerPayload)
+    ) {
+      replyBlock = `Priority escalated from ${String(triggerPayload.from)} to ${String(triggerPayload.to)}.`;
+    }
+    if (!replyBlock) continue;
 
     const engagementMode = run.engagementMode;
     const instruction = forgeRunInstruction(
@@ -730,9 +769,6 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       });
 
     const waitingReason = (run.currentStep || run.summary || "").trim();
-    const replyBlock = replies
-      .map((r) => `${r.authoringAgent?.name ?? r.author?.name ?? "Operator"}: ${r.body}`)
-      .join("\n\n");
     const orchestrationContext = await loadRunOrchestrationContext(db, {
       workspaceId: run.workspaceId,
       issueId: run.issueId,
@@ -804,7 +840,8 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
             externalRunId,
             engine: "RUNS",
             resumedFromWaiting: true,
-            replyCount: replies.length,
+            triggerKind: triggerEvent.kind,
+            triggerEventId: run.triggerEventId,
             contractVersion: FORGE_RUN_CONTRACT_VERSION,
           },
         });
@@ -1098,22 +1135,6 @@ async function pollActiveRuns(): Promise<number> {
           status: terminal,
           summary,
         });
-        // Surface a terminal *failure* on the issue itself. A clean
-        // COMPLETED run closed through `runs.complete`, so the agent has
-        // already posted its own comments via MCP — re-posting the summary
-        // would duplicate. But a STALLED/ABANDONED run's output otherwise
-        // lives only in `AgentRun.summary` (Mission Control overlay only),
-        // so without this a failed dispatch is invisible on the issue. Post
-        // it as an agent-authored comment so the timeline + watcher
-        // notifications carry it like any other reply.
-        if (terminal !== "COMPLETED" && run.issueId && summary) {
-          await postAgentRunComment(tx, {
-            workspaceId: run.workspaceId,
-            issueId: run.issueId,
-            agentId: run.agentId,
-            body: `[dispatch · run ${terminal.toLowerCase()}]\n\n` + summary,
-          });
-        }
         const usage = status.usage;
         await tx.agentRun.update({
           where: { id: run.id },

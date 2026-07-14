@@ -12728,3 +12728,39 @@ cover card content while scrolling. The repository-wide browser run passed 36
 of 38 tests in parallel; the two failures (shared chat state and a composer
 locator exposed by the accessibility change) both passed independently after
 the composer name was corrected.
+
+---
+
+## 2026-07-14 — Agent wake-boundary and terminal-comment audit
+
+Traced AXI-104 from production activity, delivery, and run records after a
+stalled agent reply immediately opened a replacement run. The audit found that
+agent-authored terminal comments were being judged by mutable payload fields
+instead of authoritative actor identity; human status edits could directly
+resume the assigned agent; all priority changes woke watchers; nudges emitted
+two independently deliverable events; blocking and coach output could appear
+operator-authored; and WAITING runs could be revived by incidental touches.
+
+Centralized wake policy now separates notification-only activity from
+actionable work. Human BODY replies, safe agent-to-agent mentions, assignment,
+explicit restart, and upward escalation into HIGH or URGENT are wakeable;
+self-authored, actor-less, status, label, downward priority, stall, SLA, coach,
+and blocking events remain durable activity without invoking an agent. Human
+status changes no longer impersonate agent progress. The nudge marker and
+AGENT_RUN_BLOCKED remain observable but do not create duplicate or bounce-back
+deliveries.
+
+WAITING resume is now explicit and engine-aware. RUNS agents stay parked until
+the dispatcher validates the canonical trigger and starts a fresh provider
+turn containing the operator input; webhook and completions agents reactivate
+for the actionable delivery. Completion, stall, and abandonment now use one
+atomic terminal claim that creates exactly one agent comment even under
+concurrent pollers and records its durable comment ID on the run.
+
+Verification: lint passed with existing repository warnings; typecheck passed;
+the full Vitest suite passed 1,236 tests with 1 intentional live-connector skip;
+the post-audit engine compatibility suites passed 28 tests; a production Next
+build passed; and all 38 Playwright journeys passed serially. The canonical
+gate first encountered the known cross-suite stale-work redispatch race; that
+9-test file passed immediately in isolation and the full suite then passed
+cleanly.

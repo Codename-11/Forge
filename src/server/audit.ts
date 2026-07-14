@@ -16,6 +16,12 @@ import {
   ALERTABLE_EVENT_KINDS,
   scheduleEventNotificationFanout,
 } from "@/server/services/notifications";
+import {
+  isActionableAssignedComment,
+  isActionableExplicitMention,
+  isActionablePriorityEscalation,
+  mentionedAgentIdsFromWakePayload,
+} from "@/server/services/agent-wake-policy";
 
 /**
  * Synthetic slug + url used to route agent-bound dispatches through the
@@ -43,59 +49,7 @@ export function agentDispatchUrlFor(agentId: string): string {
   return `${AGENT_DISPATCH_WEBHOOK_URL_PREFIX}${agentId}`;
 }
 
-function mentionedAgentIdsFromPayload(payloadIn: unknown): string[] {
-  const payload = payloadIn as
-    | {
-        agentRequests?: Array<{ agentId?: unknown }>;
-        mentions?:
-          | {
-              agentIds?: unknown[];
-              agents?: Array<{ agentId?: unknown }>;
-            }
-          | Array<{ agentId?: unknown }>;
-      }
-    | undefined;
-  const out = new Set<string>();
-  if (Array.isArray(payload?.agentRequests)) {
-    for (const request of payload.agentRequests) {
-      if (typeof request.agentId === "string" && request.agentId.length > 0) {
-        out.add(request.agentId);
-      }
-    }
-  }
-  const mentionsRaw = payload?.mentions;
-  if (Array.isArray(mentionsRaw)) {
-    for (const mention of mentionsRaw) {
-      if (typeof mention.agentId === "string" && mention.agentId.length > 0) {
-        out.add(mention.agentId);
-      }
-    }
-    return [...out];
-  }
-  if (mentionsRaw && typeof mentionsRaw === "object") {
-    if (Array.isArray(mentionsRaw.agentIds)) {
-      for (const id of mentionsRaw.agentIds) {
-        if (typeof id === "string" && id.length > 0) out.add(id);
-      }
-    }
-    if (Array.isArray(mentionsRaw.agents)) {
-      for (const mention of mentionsRaw.agents) {
-        if (typeof mention.agentId === "string" && mention.agentId.length > 0) {
-          out.add(mention.agentId);
-        }
-      }
-    }
-  }
-  return [...out];
-}
-
-const AGENT_WATCHER_FANOUT_EVENT_KINDS = new Set<EventKind>([
-  EventKind.COMMENT_CREATED,
-  EventKind.ISSUE_PRIORITY_CHANGED,
-  EventKind.ISSUE_STALLED,
-  EventKind.ISSUE_SLA_BREACH,
-  EventKind.ISSUE_NUDGED,
-]);
+const AGENT_WATCHER_FANOUT_EVENT_KINDS = new Set<EventKind>([EventKind.COMMENT_CREATED]);
 
 const ENGAGEMENT_MODE_LABEL: Record<string, string> = {
   EXECUTE: "EXECUTE",
@@ -455,11 +409,7 @@ async function upsertAgentDispatchWebhook(
         EventKind.ISSUE_QUEUED,
         EventKind.COMMENT_CREATED,
         EventKind.ISSUE_PRIORITY_CHANGED,
-        EventKind.ISSUE_STALLED,
-        EventKind.ISSUE_SLA_BREACH,
-        EventKind.ISSUE_NUDGED,
         EventKind.CHAT_MESSAGE_POSTED,
-        EventKind.AGENT_RUN_BLOCKED,
       ],
       active: true,
     },
@@ -911,8 +861,7 @@ export async function recordChange(
   //     to the assignee via a per-agent shim so the delivery carries its
   //     own target id (doesn't re-resolve the issue's assignee later).
   if (params.eventKind === EventKind.ISSUE_PRIORITY_CHANGED && params.subjectType === "issue") {
-    const to = (params.payload as { to?: string } | undefined)?.to;
-    if (to === "HIGH" || to === "URGENT") {
+    if (isActionablePriorityEscalation(params.payload)) {
       const issue = await tx.issue.findUnique({
         where: { id: params.subjectId },
         select: {
@@ -976,7 +925,7 @@ export async function recordChange(
     (params.subjectType === "issue" || params.subjectType === "execution-step");
   if (isCommentMentionEvent) {
     // Normalize to a flat list of agent ids regardless of incoming shape.
-    const mentionedAgentIds = mentionedAgentIdsFromPayload(params.payload);
+    const mentionedAgentIds = [...mentionedAgentIdsFromWakePayload(params.payload)];
     if (mentionedAgentIds.length) {
       // Load mentioned agents within workspace scope. We canonicalize
       // every mentioned active agent into the inbox so the operator's
@@ -1006,6 +955,16 @@ export async function recordChange(
         },
       });
       for (const a of agents) {
+        if (
+          !isActionableExplicitMention({
+            actorId: params.actorId,
+            actorAgentId: params.actorAgentId ?? null,
+            targetAgentId: a.id,
+            payload: params.payload,
+          })
+        ) {
+          continue;
+        }
         resolvedAgentIds.push(a.id);
         if (a.webhookUrl && !isRunsDrivenAgent(a)) {
           const wid = await upsertAgentDispatchWebhook(
@@ -1053,47 +1012,10 @@ export async function recordChange(
     }
   }
 
-  // (d2) AGENT_RUN_BLOCKED — the agent itself just flipped a run to
-  //      WAITING via `runs.setWaiting({ blocking: true })`. Route the
-  //      event back to the agent's own webhook so the runtime sees its
-  //      block confirmed (useful for receipts / acks). Subject is the
-  //      agent-run row; we resolve the owning agent from the payload's
-  //      `agentId`. Also surfaces the event in the standard agent
-  //      activity feed via the normal ActivityEvent write that already
-  //      happened above.
-  if (params.eventKind === EventKind.AGENT_RUN_BLOCKED && params.subjectType === "agent-run") {
-    const payload = params.payload as { agentId?: string } | undefined;
-    const blockedAgentId =
-      typeof payload?.agentId === "string" && payload.agentId.length > 0 ? payload.agentId : null;
-    if (blockedAgentId) {
-      const agent = await tx.agent.findFirst({
-        where: {
-          workspaceId: params.workspaceId,
-          id: blockedAgentId,
-          archivedAt: null,
-        },
-        select: { id: true, webhookUrl: true },
-      });
-      if (agent) {
-        resolvedAgentIds.push(agent.id);
-        if (agent.webhookUrl) {
-          const wid = await upsertAgentDispatchWebhook(
-            tx,
-            params.workspaceId,
-            agentDispatchUrlFor(agent.id),
-          );
-          agentWebhookIds.push(wid);
-        }
-      }
-    }
-  }
-
-  // (e) Watchers — for actionable issue-subject events, fan out to every
-  //     subscribed agent watcher whose webhook is configured. Skip
-  //     the actor's own row to avoid self-paging. Human watchers
-  //     don't need a synthetic webhook — they're served by the
-  //     inbox / notification surfaces. Agent watchers are routed
-  //     through the same per-agent shim used for comment @mentions.
+  // (e) Watchers — human BODY comments can wake the currently assigned
+  //     agent; explicit @mentions can wake another watched agent. Agent
+  //     output requires an explicit mention and can never wake its author.
+  //     Human watchers remain served by inbox / notification surfaces.
   //
   //     Deliberately exclude low-signal lifecycle/status churn from the
   //     durable agent inbox. A watched issue transitioning status or a
@@ -1124,7 +1046,7 @@ export async function recordChange(
     !isCommentEdit &&
     !isRollingStatusComment;
   if (isAgentWatcherFanoutEvent) {
-    const mentionedAgentIds = new Set(mentionedAgentIdsFromPayload(params.payload));
+    const mentionedAgentIds = mentionedAgentIdsFromWakePayload(params.payload);
     const currentIssue =
       params.eventKind === EventKind.COMMENT_CREATED
         ? await tx.issue.findUnique({
@@ -1163,6 +1085,17 @@ export async function recordChange(
     });
     for (const w of watchers) {
       if (!w.agent) continue;
+      if (
+        params.eventKind === EventKind.COMMENT_CREATED &&
+        !isActionableAssignedComment({
+          actorId: params.actorId,
+          actorAgentId: params.actorAgentId ?? null,
+          targetAgentId: w.agent.id,
+          payload: params.payload,
+        })
+      ) {
+        continue;
+      }
       // Body comments should wake the assigned agent and explicit @mentions.
       // Former assignees can remain sticky watchers; that stale watcher row
       // should not become fresh canonical work after reassignment.
@@ -1176,15 +1109,6 @@ export async function recordChange(
       if (params.eventKind !== EventKind.COMMENT_CREATED && !w.wakeOnActivity) {
         continue;
       }
-      // Don't fan out the actor's own action back to themselves —
-      // when an agent comments and is also a watcher, the COMMENT_CREATED
-      // already routes via the assigned-agent + mention shims. Watcher
-      // fan-out is for OTHER stakeholders.
-      // Note: actorId is a User id, agentId is an Agent id; equality
-      // is impossible. We instead detect agent-as-actor via the
-      // payload's `agentId` field when present.
-      const payloadAgentId = (params.payload as { agentId?: string } | undefined)?.agentId;
-      if (payloadAgentId && payloadAgentId === w.agent.id) continue;
       resolvedAgentIds.push(w.agent.id);
       if (w.agent.webhookUrl && !isRunsDrivenAgent(w.agent)) {
         const wid = await upsertAgentDispatchWebhook(

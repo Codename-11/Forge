@@ -428,6 +428,18 @@ describe("runs dispatcher", () => {
         select: { id: true },
       });
       const issue = await createIssue(fixture, { title: "blocked then replied" });
+      await prisma.issue.update({
+        where: { id: issue.id },
+        data: { assignedAgentId: agent.id },
+      });
+      await prisma.issueWatcher.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          wakeOnActivity: true,
+        },
+      });
       // A run that paused 5 minutes ago via runs.setWaiting: WAITING, has an
       // externalRunId from the prior turn, nobody re-invoking it.
       const pausedAt = new Date(Date.now() - 5 * 60_000);
@@ -443,7 +455,7 @@ describe("runs dispatcher", () => {
         },
       });
       // Operator reply that lands AFTER the run paused.
-      await prisma.comment.create({
+      const reply = await prisma.comment.create({
         data: {
           workspaceId: fixture.workspace.id,
           issueId: issue.id,
@@ -451,6 +463,21 @@ describe("runs dispatcher", () => {
           body: "go ahead, skip the DB-backed tests",
         },
       });
+      await recordChange(prisma, {
+        workspaceId: fixture.workspace.id,
+        actorId: fixture.user.id,
+        entity: "Comment",
+        entityId: reply.id,
+        action: "create",
+        eventKind: EventKind.COMMENT_CREATED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: { commentId: reply.id, issueId: issue.id, kind: "BODY" },
+      });
+
+      expect((await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).status).toBe(
+        AgentRunStatus.WAITING,
+      );
 
       const tick = await ingestRunsDispatch();
       expect(tick.resumed).toBeGreaterThanOrEqual(1);
@@ -671,7 +698,7 @@ describe("runs dispatcher", () => {
       const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
       expect(after.status).toBe("STALLED");
       expect(after.summary).toMatch(/without a valid Forge runs\.complete contract/);
-      expect(after.completionMeta).toBeNull();
+      expect(after.completionMeta).toMatchObject({ terminalCommentId: expect.any(String) });
 
       // A terminal failure must surface on the issue itself, not only in the
       // run overlay — posted as an agent-authored comment carrying the output.

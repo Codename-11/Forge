@@ -154,6 +154,7 @@ export async function coachOnEvent(
     await recordChange(client, {
       workspaceId: params.workspaceId,
       actorId: null,
+      actorAgentId: coach.id,
       entity: "Comment",
       entityId: comment.id,
       action: "ai-coach",
@@ -163,6 +164,7 @@ export async function coachOnEvent(
       subjectId: issue.id,
       payload: {
         commentId: comment.id,
+        agentId: coach.id,
         authoringAgentId: coach.id,
         coachEvent: params.eventKind,
       },

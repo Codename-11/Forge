@@ -919,6 +919,7 @@ async function dispatchActionRequestKind(
       runEngine: grantEngine.engine,
       runEngineSource: grantEngine.source,
       runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,
+      resumeWaiting: true,
     });
     // Collapse the runs we just abandoned (above) under the fresh grant
     // run so the stack reads as one thread. Prior STALLED attempts are
