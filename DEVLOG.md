@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-14 — Settings scope and information-architecture review
+
+Mapped Forge's personal/global, workspace, Mission Control/Activity, and
+instance-admin configuration surfaces against their routes, permission gates,
+and Prisma ownership model. The review proposes one settings frame with an
+explicit Personal / Workspace / Instance scope control, preserves Mission
+Control as the cross-workspace operating home, renames the in-workspace dock to
+Activity, and reorganizes workspace configuration around work management,
+agents and automation, integrations, and governance.
+
+The code inventory also found two functional dead ends to address in the first
+implementation slice: auto-dispatch fall-through is displayed read-only and
+points to a workspace control that does not exist, and the global runtime
+inventory can link through a non-home workspace even though the runtime detail
+router requires the home `workspaceId`. The durable review records current
+ownership, naming changes, a phased migration, accessibility risks, and P0/P1/P2
+priorities under
+`docs/audits/settings-information-architecture-2026-07-14/`.
+
+Current-run screenshot capture was blocked because the in-app Browser was not
+exposed and Chrome remote debugging was disabled. Per the Product Design audit
+contract, no old screenshots or Playwright substitute were used and the output
+is explicitly labeled as a code-based IA review rather than a visual/WCAG
+audit.
+
 ## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
 
 Closed the AXI-102 stall-comment loop introduced by approval-expiry recovery.
