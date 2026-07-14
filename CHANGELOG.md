@@ -9,6 +9,13 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-14] — v0.15.1 · Manual GitHub retry safety
+
+### Fixed
+
+- **Manual GitHub refresh failures now honor provider retry timing.** Rate limits, permission failures, and timeouts persist the real diagnostic and mapping-wide retry circuit instead of falling back to a short collision lease.
+- **Release builds exclude every generated Next output directory.** Lifecycle and other named `.next-*` caches no longer inflate Docker contexts or exhaust builder storage.
+
 ## [2026-07-14] — v0.15.0 · Reliable GitHub status recovery
 
 ### Added

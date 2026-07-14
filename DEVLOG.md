@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-14 — Manual GitHub retry persistence and release context hygiene
+
+Addressed the post-merge Codex review on PR #29 before production deployment.
+Manual and MCP-triggered GitHub refreshes now catch provider failures before
+returning them, replace the temporary collision lease with the later of the
+workspace exponential backoff or GitHub retry/reset header, persist the failure
+count and diagnostic, and open the same mapping-wide circuit used by scheduled
+reconciliation for rate limits, permissions, and timeouts. Scheduled sweeps
+retain their existing single-owner retry accounting. Resource existence is
+also checked before the manual lease so missing links still return NOT_FOUND.
+
+The first release image attempt also exposed that `.dockerignore` covered
+`.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs
+are now excluded so local verification caches cannot inflate release contexts
+or exhaust Docker storage.
+
+Verification: focused GitHub reconciliation and completion policy suite (23/23),
+lint (existing warnings only), TypeScript typecheck, and `git diff --check`.
+
 ## 2026-07-14 — Resilient linked-PR status reconciliation
 
 Added a webhook-first repair loop for native GitHub `IMPLEMENTS` links. The

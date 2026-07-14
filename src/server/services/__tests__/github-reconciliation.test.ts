@@ -2,6 +2,7 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { GitHubRequestError } from "@/server/services/github/client";
 import {
   claimGitHubManualSync,
+  persistGitHubManualSyncFailure,
   upsertExternalResource,
 } from "@/server/services/github/resource-sync";
 import {
@@ -431,6 +432,54 @@ describe("GitHub status reconciliation", () => {
         leaseUntil: new Date("2026-07-14T12:00:41.000Z"),
       }),
     ).resolves.toBe(true);
+  });
+
+  it("persists provider retry timing and diagnostics after a manual refresh failure", async () => {
+    const { fixture, prisma, resource, mapping } = await setupResource();
+    const now = new Date("2026-07-14T12:00:00.000Z");
+    const reset = new Date("2026-07-14T13:00:00.000Z");
+    const sibling = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 99,
+        url: "https://github.com/acme/forge/pull/99",
+        title: "Same mapping",
+        state: "open",
+        connectionMappingId: mapping.id,
+      },
+    });
+
+    await expect(
+      persistGitHubManualSyncFailure({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        externalResourceId: resource.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: 0,
+        now,
+        baseMinutes: 5,
+        maxMinutes: 1440,
+        error: new GitHubRequestError("API rate limit exceeded", 429, reset, true),
+      }),
+    ).resolves.toEqual({ retryAt: reset, failureCount: 1, mappingWide: true });
+
+    const [failed, mappedSibling] = await Promise.all([
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+      prisma.externalResource.findUniqueOrThrow({ where: { id: sibling.id } }),
+    ]);
+    expect(failed).toMatchObject({
+      syncRetryAt: reset,
+      syncFailureCount: 1,
+      syncLastError: "API rate limit exceeded",
+    });
+    expect(mappedSibling).toMatchObject({
+      syncRetryAt: reset,
+      syncFailureCount: 0,
+      syncLastError: "API rate limit exceeded",
+    });
   });
 
   it("stops starting resources after the workspace sweep budget is exhausted", async () => {

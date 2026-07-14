@@ -2,8 +2,10 @@ node_modules
 **/node_modules
 .next
 .next-e2e
+.next-*
 **/.next
 **/.next-e2e
+**/.next-*
 docs/.vitepress/dist
 public/docs
 .git

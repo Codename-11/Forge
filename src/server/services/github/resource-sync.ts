@@ -17,6 +17,7 @@ import {
   getGitHubIssue,
   getGitHubPullRequest,
   getGitHubPullRequestChecks,
+  GitHubRequestError,
   issueSnapshot,
   pullRequestSnapshot,
 } from "@/server/services/github/client";
@@ -697,27 +698,12 @@ export async function syncGitHubExternalResource(args: {
     select: {
       githubRequestTimeoutSeconds: true,
       githubManualCooldownSeconds: true,
+      githubSyncBackoffMinutes: true,
+      githubSyncMaxBackoffMinutes: true,
     },
   });
   if (!workspace) throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
   const now = new Date();
-  if (!args.skipCollisionGuard) {
-    const leaseMs = workspace.githubRequestTimeoutSeconds * 12_000 + 5_000;
-    const claimed = await claimGitHubManualSync({
-      db: args.db,
-      workspaceId: args.workspaceId,
-      externalResourceId: args.externalResourceId,
-      now,
-      cooldownSeconds: workspace.githubManualCooldownSeconds,
-      leaseUntil: new Date(now.getTime() + leaseMs),
-    });
-    if (!claimed) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "This GitHub link was refreshed recently or is already being refreshed.",
-      });
-    }
-  }
   const existing = await args.db.externalResource.findFirst({
     where: {
       id: args.externalResourceId,
@@ -736,6 +722,23 @@ export async function syncGitHubExternalResource(args: {
       message: "Linked GitHub resource not found.",
     });
   }
+  if (!args.skipCollisionGuard) {
+    const leaseMs = workspace.githubRequestTimeoutSeconds * 12_000 + 5_000;
+    const claimed = await claimGitHubManualSync({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      externalResourceId: args.externalResourceId,
+      now,
+      cooldownSeconds: workspace.githubManualCooldownSeconds,
+      leaseUntil: new Date(now.getTime() + leaseMs),
+    });
+    if (!claimed) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "This GitHub link was refreshed recently or is already being refreshed.",
+      });
+    }
+  }
   const mapping =
     existing.connectionMapping?.status === "active"
       ? (existing.connectionMapping as GitHubMappingWithConnection)
@@ -744,14 +747,36 @@ export async function syncGitHubExternalResource(args: {
           workspaceId: args.workspaceId,
           repoFullName: existing.repoFullName,
         });
-  const snapshot = await fetchGitHubSnapshot({
-    mapping,
-    repoFullName: existing.repoFullName,
-    resourceType: existing.resourceType as GitHubResourceType,
-    number: existing.number,
-    requestTimeoutMs: workspace.githubRequestTimeoutSeconds * 1000,
-    signal: args.signal,
-  });
+  let snapshot: GitHubResourceSnapshot;
+  try {
+    snapshot = await fetchGitHubSnapshot({
+      mapping,
+      repoFullName: existing.repoFullName,
+      resourceType: existing.resourceType as GitHubResourceType,
+      number: existing.number,
+      requestTimeoutMs: workspace.githubRequestTimeoutSeconds * 1000,
+      signal: args.signal,
+    });
+  } catch (error) {
+    // Scheduled reconciliation owns its own retry accounting. Manual/MCP
+    // refreshes must persist the provider reset/backoff before returning the
+    // error so a short collision lease cannot accidentally become the retry
+    // policy and the issue panel retains the real diagnostic.
+    if (!args.skipCollisionGuard) {
+      await persistGitHubManualSyncFailure({
+        db: args.db,
+        workspaceId: args.workspaceId,
+        externalResourceId: existing.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: existing.syncFailureCount,
+        now,
+        baseMinutes: workspace.githubSyncBackoffMinutes,
+        maxMinutes: workspace.githubSyncMaxBackoffMinutes,
+        error,
+      });
+    }
+    throw error;
+  }
   const resource = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
       workspaceId: args.workspaceId,
@@ -799,4 +824,60 @@ export async function claimGitHubManualSync(args: {
     data: { syncAttemptedAt: args.now, syncRetryAt: args.leaseUntil },
   });
   return claimed.count === 1;
+}
+
+export async function persistGitHubManualSyncFailure(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  externalResourceId: string;
+  connectionMappingId: string | null;
+  currentFailureCount: number;
+  now: Date;
+  baseMinutes: number;
+  maxMinutes: number;
+  error: unknown;
+}): Promise<{ retryAt: Date; failureCount: number; mappingWide: boolean }> {
+  const failureCount = args.currentFailureCount + 1;
+  const exponentialMinutes = Math.min(
+    Math.max(1, args.maxMinutes),
+    Math.max(1, args.baseMinutes) * 2 ** Math.max(0, failureCount - 1),
+  );
+  const fallbackRetryAt = new Date(args.now.getTime() + exponentialMinutes * 60_000);
+  const providerRetryAt = args.error instanceof GitHubRequestError ? args.error.retryAt : null;
+  const retryAt =
+    providerRetryAt && providerRetryAt > fallbackRetryAt ? providerRetryAt : fallbackRetryAt;
+  const message =
+    args.error instanceof Error ? args.error.message.slice(0, 2_000) : "Unknown GitHub sync error";
+  const mappingWide =
+    args.error instanceof GitHubRequestError &&
+    (args.error.rateLimited || args.error.timedOut || [401, 403].includes(args.error.status));
+
+  await args.db.$transaction(async (tx) => {
+    await tx.externalResource.updateMany({
+      where: {
+        id: args.externalResourceId,
+        workspaceId: args.workspaceId,
+        provider: GITHUB_PROVIDER,
+      },
+      data: {
+        syncAttemptedAt: args.now,
+        syncRetryAt: retryAt,
+        syncFailureCount: failureCount,
+        syncLastError: message,
+      },
+    });
+    if (mappingWide && args.connectionMappingId) {
+      await tx.externalResource.updateMany({
+        where: {
+          id: { not: args.externalResourceId },
+          workspaceId: args.workspaceId,
+          provider: GITHUB_PROVIDER,
+          connectionMappingId: args.connectionMappingId,
+        },
+        data: { syncRetryAt: retryAt, syncLastError: message },
+      });
+    }
+  });
+
+  return { retryAt, failureCount, mappingWide };
 }
