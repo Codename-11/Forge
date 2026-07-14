@@ -33,6 +33,11 @@ atomically so concurrent errors cannot lose accounting.
 Partial-check diagnostics are already counted by the snapshot upsert, so the
 subsequent mapping-circuit extension now preserves that count instead of
 incrementing it a second time and skipping an exponential-backoff step.
+Failure persistence now recognizes the exact collision lease acquired by the
+current manual refresh, allowing it to be replaced by a shorter configured
+backoff while still preserving any different, later provider gate written by
+an overlapping refresh. The Docker ignore file also explicitly re-includes
+`next-env.d.ts` for the worker stage's `COPY` contract.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs

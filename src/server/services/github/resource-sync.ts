@@ -730,6 +730,7 @@ export async function syncGitHubExternalResource(args: {
   });
   if (!workspace) throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
   const now = new Date();
+  let manualLeaseUntil: Date | null = null;
   const existing = await args.db.externalResource.findFirst({
     where: {
       id: args.externalResourceId,
@@ -750,13 +751,14 @@ export async function syncGitHubExternalResource(args: {
   }
   if (!args.skipCollisionGuard) {
     const leaseMs = workspace.githubRequestTimeoutSeconds * 12_000 + 5_000;
+    manualLeaseUntil = new Date(now.getTime() + leaseMs);
     const claimed = await claimGitHubManualSync({
       db: args.db,
       workspaceId: args.workspaceId,
       externalResourceId: args.externalResourceId,
       now,
       cooldownSeconds: workspace.githubManualCooldownSeconds,
-      leaseUntil: new Date(now.getTime() + leaseMs),
+      leaseUntil: manualLeaseUntil,
     });
     if (!claimed) {
       throw new TRPCError({
@@ -802,6 +804,7 @@ export async function syncGitHubExternalResource(args: {
         baseMinutes: workspace.githubSyncBackoffMinutes,
         maxMinutes: workspace.githubSyncMaxBackoffMinutes,
         error,
+        claimedLeaseUntil: manualLeaseUntil,
       });
     }
     throw error;
@@ -836,6 +839,7 @@ export async function syncGitHubExternalResource(args: {
       maxMinutes: workspace.githubSyncMaxBackoffMinutes,
       error: partialChecksError,
       incrementFailureCount: false,
+      claimedLeaseUntil: manualLeaseUntil,
     });
     resource = {
       ...resource,
@@ -889,6 +893,7 @@ export async function persistGitHubManualSyncFailure(args: {
   maxMinutes: number;
   error: unknown;
   incrementFailureCount?: boolean;
+  claimedLeaseUntil?: Date | null;
 }): Promise<{ retryAt: Date; failureCount: number; mappingWide: boolean }> {
   const failureCount = args.currentFailureCount + 1;
   const exponentialMinutes = Math.min(
@@ -923,7 +928,11 @@ export async function persistGitHubManualSyncFailure(args: {
         id: args.externalResourceId,
         workspaceId: args.workspaceId,
         provider: GITHUB_PROVIDER,
-        OR: [{ syncRetryAt: null }, { syncRetryAt: { lt: retryAt } }],
+        OR: [
+          { syncRetryAt: null },
+          { syncRetryAt: { lt: retryAt } },
+          ...(args.claimedLeaseUntil ? [{ syncRetryAt: { equals: args.claimedLeaseUntil } }] : []),
+        ],
       },
       data: { syncRetryAt: retryAt },
     });

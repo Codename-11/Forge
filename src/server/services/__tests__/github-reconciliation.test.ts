@@ -560,6 +560,35 @@ describe("GitHub status reconciliation", () => {
     ).resolves.toMatchObject({ syncFailureCount: 1 });
   });
 
+  it("replaces the current manual lease without shortening an older provider gate", async () => {
+    const { fixture, prisma, resource, mapping } = await setupResource();
+    const now = new Date("2026-07-14T12:00:00.000Z");
+    const retryAt = new Date("2026-07-14T12:05:00.000Z");
+    const claimedLeaseUntil = new Date("2026-07-14T12:10:00.000Z");
+    await prisma.externalResource.update({
+      where: { id: resource.id },
+      data: { syncRetryAt: claimedLeaseUntil },
+    });
+
+    await expect(
+      persistGitHubManualSyncFailure({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        externalResourceId: resource.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: 0,
+        now,
+        baseMinutes: 5,
+        maxMinutes: 1440,
+        error: new GitHubRequestError("Timed out", 408, retryAt, false, true),
+        claimedLeaseUntil,
+      }),
+    ).resolves.toMatchObject({ retryAt, failureCount: 1, mappingWide: true });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({ syncRetryAt: retryAt });
+  });
+
   it("stops starting resources after the workspace sweep budget is exhausted", async () => {
     const { fixture, prisma, resource } = await setupResource();
     const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
