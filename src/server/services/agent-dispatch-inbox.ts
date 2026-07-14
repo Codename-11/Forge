@@ -1066,9 +1066,9 @@ async function listChatInbox(
           agentId: true,
           messages: {
             where: { role: "AGENT" },
-            orderBy: { createdAt: "desc" },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             take: 1,
-            select: { createdAt: true, contextSnapshot: true },
+            select: { id: true, createdAt: true, contextSnapshot: true },
           },
         },
       },
@@ -1079,7 +1079,12 @@ async function listChatInbox(
     .filter((m) => m.dispatchedAt !== null)
     .filter((m) => {
       const latestAgentReply = m.thread.messages[0];
-      if (!latestAgentReply || latestAgentReply.createdAt.getTime() <= m.createdAt.getTime()) {
+      const replyIsLater =
+        latestAgentReply &&
+        (latestAgentReply.createdAt.getTime() > m.createdAt.getTime() ||
+          (latestAgentReply.createdAt.getTime() === m.createdAt.getTime() &&
+            latestAgentReply.id > m.id));
+      if (!replyIsLater) {
         return true;
       }
       const snapshot =

@@ -185,6 +185,8 @@ const RUN_PROTOCOL_INSTRUCTIONS =
   "supplies a reply only. Every successful run ends with a durable issue comment: " +
   "either post the final BODY comment first and pass its id as completionCommentId, " +
   "or let runs.complete create the final comment from summary. " +
+  "For EXECUTE, set recommendIssueCompletion true only when the verified issue outcome " +
+  "itself is ready to close; Forge will apply the workspace safety policy. " +
   "Non-EXECUTE modes are read/report/review only; Forge rejects issue-state " +
   "mutations from those runs.";
 

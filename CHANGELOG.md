@@ -11,6 +11,22 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-14] — v0.14.0 · Proactive completion handoff
+
+### Added
+
+- **Verified work can now become one actionable close-out decision.** EXECUTE agents can explicitly recommend issue completion, while merged implementation PRs and completed GitHub checks feed the same idempotent evidence card in issue detail, Command Center, Dashboard, Inbox, and notifications.
+- **Completion behavior is policy-driven.** Workspaces can disable, recommend, or safely automate completion against a chosen DONE status, and projects can inherit or override that policy.
+
+### Changed
+
+- **Automatic completion is guarded centrally.** Live runs, pending review gates, unresolved decisions, blocking issues, unmerged implementation PRs, and unconfirmed checks hold automation and remain visible as evidence instead of silently closing work.
+- **Closed, unmerged PRs produce a recovery decision.** Review-stage work can return to the configured active status or link a replacement PR from the native GitHub panel.
+
+### Fixed
+
+- **Repeated lifecycle signals no longer stack cards or notifications.** Producer-owned dedupe keys refresh one durable request, identical refreshes are no-ops, and a periodic reconciler repairs missed transitions and completes newly-unblocked safe candidates.
+
 ## [2026-07-14] — v0.13.1 · Reliable agent wake boundaries
 
 ### Changed

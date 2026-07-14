@@ -16,6 +16,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { workspaceColor } from "@/lib/workspace-color";
 
 type DefaultIssueAssigneeMode = "NONE" | "CREATOR" | "USER";
+type CompletionAutomation = "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE";
 
 export default function WorkspaceSettingsPage() {
   const router = useRouter();
@@ -52,16 +53,18 @@ export default function WorkspaceSettingsPage() {
   const [aiEnabled, setAiEnabled] = useState(false);
   const [aiTriageOnCreate, setAiTriageOnCreate] = useState(true);
   const [aiCoachEnabled, setAiCoachEnabled] = useState(true);
-  const [aiProvider, setAiProvider] = useState<
-    "hermes" | "openai" | "anthropic" | "custom"
-  >("hermes");
+  const [aiProvider, setAiProvider] = useState<"hermes" | "openai" | "anthropic" | "custom">(
+    "hermes",
+  );
   const [aiModel, setAiModel] = useState("");
   const [startedStatusId, setStartedStatusId] = useState<string | null>(null);
   const [reviewStatusId, setReviewStatusId] = useState<string | null>(null);
+  const [completionAutomation, setCompletionAutomation] =
+    useState<CompletionAutomation>("RECOMMEND");
+  const [completionStatusId, setCompletionStatusId] = useState<string | null>(null);
   const [defaultIssueAssigneeMode, setDefaultIssueAssigneeMode] =
     useState<DefaultIssueAssigneeMode>("NONE");
-  const [defaultIssueAssigneeUserId, setDefaultIssueAssigneeUserId] =
-    useState<string | null>(null);
+  const [defaultIssueAssigneeUserId, setDefaultIssueAssigneeUserId] = useState<string | null>(null);
 
   const { data: aiStatus, refetch: refetchAi } = trpc.ai.status.useQuery();
   const ensureCoach = trpc.ai.ensureCoach.useMutation({
@@ -100,13 +103,12 @@ export default function WorkspaceSettingsPage() {
     setAiEnabled(current.aiEnabled);
     setAiTriageOnCreate(current.aiTriageOnCreate);
     setAiCoachEnabled(current.aiCoachEnabled);
-    setAiProvider(
-      (current.aiProvider as "hermes" | "openai" | "anthropic" | "custom") ??
-        "hermes",
-    );
+    setAiProvider((current.aiProvider as "hermes" | "openai" | "anthropic" | "custom") ?? "hermes");
     setAiModel(current.aiModel ?? "");
     setStartedStatusId(current.startedStatusId ?? null);
     setReviewStatusId(current.reviewStatusId ?? null);
+    setCompletionAutomation(current.completionAutomation ?? "RECOMMEND");
+    setCompletionStatusId(current.completionStatusId ?? null);
     setDefaultIssueAssigneeMode(
       (current.defaultIssueAssigneeMode ?? "NONE") as DefaultIssueAssigneeMode,
     );
@@ -180,7 +182,10 @@ export default function WorkspaceSettingsPage() {
       ["runCostBudgetUsd", runCostBudgetUsd !== Number(current.runCostBudgetUsd ?? 0)],
       ["runMaxMinutes", runMaxMinutes !== (current.runMaxMinutes ?? 0)],
       ["runBudgetWarnPct", runBudgetWarnPct !== (current.runBudgetWarnPct ?? 80)],
-      ["runBudgetAction", runBudgetAction !== ((current.runBudgetAction as "PAUSE" | "STOP") ?? "PAUSE")],
+      [
+        "runBudgetAction",
+        runBudgetAction !== ((current.runBudgetAction as "PAUSE" | "STOP") ?? "PAUSE"),
+      ],
       ["autoRedispatchOnStall", autoRedispatchOnStall !== current.autoRedispatchOnStall],
       ["requiredAckSeconds", requiredAckSeconds !== current.requiredAckSeconds],
       ["autoRedispatchOnNoack", autoRedispatchOnNoack !== current.autoRedispatchOnNoack],
@@ -192,6 +197,11 @@ export default function WorkspaceSettingsPage() {
       ["aiModel", (aiModel.trim() || "") !== (current.aiModel ?? "")],
       ["startedStatusId", (startedStatusId ?? null) !== (current.startedStatusId ?? null)],
       ["reviewStatusId", (reviewStatusId ?? null) !== (current.reviewStatusId ?? null)],
+      [
+        "completionAutomation",
+        completionAutomation !== (current.completionAutomation ?? "RECOMMEND"),
+      ],
+      ["completionStatusId", (completionStatusId ?? null) !== (current.completionStatusId ?? null)],
       [
         "defaultIssueAssigneeMode",
         defaultIssueAssigneeMode !==
@@ -236,6 +246,8 @@ export default function WorkspaceSettingsPage() {
     aiModel,
     startedStatusId,
     reviewStatusId,
+    completionAutomation,
+    completionStatusId,
     defaultIssueAssigneeMode,
     normalizedDefaultIssueAssigneeUserId,
   ]);
@@ -280,6 +292,8 @@ export default function WorkspaceSettingsPage() {
       aiModel: aiModel.trim() ? aiModel.trim() : null,
       startedStatusId,
       reviewStatusId,
+      completionAutomation,
+      completionStatusId,
       defaultIssueAssigneeMode,
       defaultIssueAssigneeUserId: normalizedDefaultIssueAssigneeUserId,
     });
@@ -315,6 +329,8 @@ export default function WorkspaceSettingsPage() {
     aiModel,
     startedStatusId,
     reviewStatusId,
+    completionAutomation,
+    completionStatusId,
     defaultIssueAssigneeMode,
     defaultIssueAssigneeUserId,
     normalizedDefaultIssueAssigneeUserId,
@@ -363,11 +379,7 @@ export default function WorkspaceSettingsPage() {
                       maxLength={80}
                     />
                   </Field>
-                  <Field
-                    label="Avatar URL"
-                    optional
-                    hint="Leave empty for the auto color badge."
-                  >
+                  <Field label="Avatar URL" optional hint="Leave empty for the auto color badge.">
                     <Input
                       value={avatarUrl}
                       onChange={(e) => setAvatarUrl(e.target.value)}
@@ -375,10 +387,7 @@ export default function WorkspaceSettingsPage() {
                       disabled={!canEdit}
                     />
                   </Field>
-                  <Field
-                    label="Key"
-                    hint="Used in issue ids like FRG-42. Can't be changed."
-                  >
+                  <Field label="Key" hint="Used in issue ids like FRG-42. Can't be changed.">
                     <Input value={ws.key} className="font-mono" disabled readOnly />
                   </Field>
                   <Field label="Slug" hint="Appears in URLs.">
@@ -457,9 +466,7 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     max={1440}
                     value={agentIdleTimeoutMinutes}
-                    onChange={(e) =>
-                      setAgentIdleTimeoutMinutes(Number(e.target.value) || 0)
-                    }
+                    onChange={(e) => setAgentIdleTimeoutMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>
@@ -499,9 +506,7 @@ export default function WorkspaceSettingsPage() {
                 >
                   <select
                     value={defaultIssueAssigneeUserId ?? ""}
-                    onChange={(e) =>
-                      setDefaultIssueAssigneeUserId(e.target.value || null)
-                    }
+                    onChange={(e) => setDefaultIssueAssigneeUserId(e.target.value || null)}
                     disabled={!canEdit}
                     className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                   >
@@ -515,9 +520,9 @@ export default function WorkspaceSettingsPage() {
                 </Field>
               )}
 
-              <div className="rounded-md border border-border/60 bg-background/40 px-3 py-2 text-meta text-muted-foreground">
-                Existing issues are unchanged. New issues with an explicit
-                assignee keep that explicit choice.
+              <div className="text-meta rounded-md border border-border/60 bg-background/40 px-3 py-2 text-muted-foreground">
+                Existing issues are unchanged. New issues with an explicit assignee keep that
+                explicit choice.
               </div>
             </FormCard>
           </Section>
@@ -537,9 +542,7 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     max={10080}
                     value={assignmentSlaMinutes}
-                    onChange={(e) =>
-                      setAssignmentSlaMinutes(Number(e.target.value) || 0)
-                    }
+                    onChange={(e) => setAssignmentSlaMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>
@@ -552,9 +555,7 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     max={10080}
                     value={agentRunStaleMinutes}
-                    onChange={(e) =>
-                      setAgentRunStaleMinutes(Number(e.target.value) || 0)
-                    }
+                    onChange={(e) => setAgentRunStaleMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>
@@ -567,9 +568,7 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     max={1440}
                     value={agentProgressUpdateMinutes}
-                    onChange={(e) =>
-                      setAgentProgressUpdateMinutes(Number(e.target.value) || 0)
-                    }
+                    onChange={(e) => setAgentProgressUpdateMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>
@@ -582,9 +581,7 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     max={10080}
                     value={agentRunQuietMinutes}
-                    onChange={(e) =>
-                      setAgentRunQuietMinutes(Number(e.target.value) || 0)
-                    }
+                    onChange={(e) => setAgentRunQuietMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>
@@ -597,9 +594,7 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     max={10080}
                     value={reviewStartTimeoutMinutes}
-                    onChange={(e) =>
-                      setReviewStartTimeoutMinutes(Number(e.target.value) || 0)
-                    }
+                    onChange={(e) => setReviewStartTimeoutMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>
@@ -613,9 +608,7 @@ export default function WorkspaceSettingsPage() {
                   min={0}
                   max={3600}
                   value={requiredAckSeconds}
-                  onChange={(e) =>
-                    setRequiredAckSeconds(Number(e.target.value) || 0)
-                  }
+                  onChange={(e) => setRequiredAckSeconds(Number(e.target.value) || 0)}
                   disabled={!canEdit}
                 />
               </Field>
@@ -651,12 +644,10 @@ export default function WorkspaceSettingsPage() {
           >
             <FormCard className="space-y-5 p-5">
               {runTokenBudget === 0 && runCostBudgetUsd === 0 && runMaxMinutes === 0 && (
-                <div className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-meta text-foreground/80">
-                  No per-run budget set — agent runs are uncapped. A single
-                  runaway run has burned 21M+ tokens here before. Set a token,
-                  cost, or time cap below to auto-
-                  {runBudgetAction === "STOP" ? "stop" : "pause"} a run that
-                  exceeds it.
+                <div className="text-meta rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-foreground/80">
+                  No per-run budget set — agent runs are uncapped. A single runaway run has burned
+                  21M+ tokens here before. Set a token, cost, or time cap below to auto-
+                  {runBudgetAction === "STOP" ? "stop" : "pause"} a run that exceeds it.
                 </div>
               )}
               <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
@@ -721,9 +712,7 @@ export default function WorkspaceSettingsPage() {
                 >
                   <select
                     value={runBudgetAction}
-                    onChange={(e) =>
-                      setRunBudgetAction(e.target.value as "PAUSE" | "STOP")
-                    }
+                    onChange={(e) => setRunBudgetAction(e.target.value as "PAUSE" | "STOP")}
                     disabled={!canEdit}
                     className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
                   >
@@ -747,9 +736,7 @@ export default function WorkspaceSettingsPage() {
                 <select
                   value={startedStatusId ?? ""}
                   onChange={(e) =>
-                    setStartedStatusId(
-                      e.target.value === "" ? null : e.target.value,
-                    )
+                    setStartedStatusId(e.target.value === "" ? null : e.target.value)
                   }
                   disabled={!canEdit}
                   className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
@@ -765,12 +752,10 @@ export default function WorkspaceSettingsPage() {
                 </select>
               </Field>
               {startedStatusId && (
-                <div className="rounded-md border border-border bg-background/40 px-3 py-2 text-meta text-muted-foreground">
-                  When AGENT_ASSIGNED fires, the issue auto-transitions to this
-                  status. The event payload gains an{" "}
-                  <code>autoTransitionedTo</code> field so receivers can
-                  distinguish a server-driven transition from a pre-existing
-                  status.
+                <div className="text-meta rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground">
+                  When AGENT_ASSIGNED fires, the issue auto-transitions to this status. The event
+                  payload gains an <code>autoTransitionedTo</code> field so receivers can
+                  distinguish a server-driven transition from a pre-existing status.
                 </div>
               )}
             </FormCard>
@@ -799,9 +784,59 @@ export default function WorkspaceSettingsPage() {
                 />
               </Field>
               {reviewStatusId && (
-                <div className="rounded-md border border-border bg-background/40 px-3 py-2 text-meta text-muted-foreground">
-                  When an EXECUTE run completes successfully, the issue
-                  auto-transitions to this status for human review.
+                <div className="text-meta rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground">
+                  When an EXECUTE run completes successfully, the issue auto-transitions to this
+                  status for human review.
+                </div>
+              )}
+            </FormCard>
+          </Section>
+
+          <Section
+            title="Completion recommendations"
+            hint="Turn verified agent results and merged implementation PRs into one shared, actionable close-out card. Forge can either recommend the transition or apply it only when every central safety check passes."
+          >
+            <FormCard className="space-y-5 p-5">
+              <Field
+                label="Completion policy"
+                hint="Recommend is the safe default. Automatic completion is held while runs, review gates, decisions, blockers, unmerged PRs, or unconfirmed checks remain."
+              >
+                <Combobox
+                  ariaLabel="Completion policy"
+                  value={completionAutomation}
+                  onChange={(value) =>
+                    setCompletionAutomation((value ?? "RECOMMEND") as CompletionAutomation)
+                  }
+                  disabled={!canEdit}
+                  options={[
+                    { value: "OFF", label: "Off" },
+                    { value: "RECOMMEND", label: "Recommend — ask a person to mark done" },
+                    { value: "AUTO_WHEN_SAFE", label: "Automatic when safe" },
+                  ]}
+                />
+              </Field>
+              <Field
+                label="Done status"
+                hint="The DONE-category status used by the recommendation action and safe automatic transition."
+              >
+                <Combobox
+                  ariaLabel="Completion status"
+                  value={completionStatusId}
+                  onChange={setCompletionStatusId}
+                  disabled={!canEdit}
+                  allowNone
+                  noneLabel="Off — choose no completion status"
+                  placeholder="Choose a done status"
+                  options={(current?.statuses ?? [])
+                    .filter((s) => s.category === "DONE")
+                    .map((s) => ({ value: s.id, label: s.name, color: s.color }))}
+                />
+              </Field>
+              {completionAutomation === "AUTO_WHEN_SAFE" && completionStatusId && (
+                <div className="text-meta rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground">
+                  Forge marks the issue done only after the shared safety gate passes. If anything
+                  is unresolved, the same close-out card appears with the held reasons and evidence
+                  instead.
                 </div>
               )}
             </FormCard>
@@ -819,13 +854,7 @@ export default function WorkspaceSettingsPage() {
                 <select
                   value={aiProvider}
                   onChange={(e) =>
-                    setAiProvider(
-                      e.target.value as
-                        | "hermes"
-                        | "openai"
-                        | "anthropic"
-                        | "custom",
-                    )
+                    setAiProvider(e.target.value as "hermes" | "openai" | "anthropic" | "custom")
                   }
                   disabled={!canEdit}
                   className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1.5 text-sm"
@@ -838,15 +867,12 @@ export default function WorkspaceSettingsPage() {
                   ))}
                 </select>
               </Field>
-              {aiStatus &&
-                !aiStatus.activeProviderAvailable &&
-                aiStatus.activeProviderReason && (
-                  <div className="rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-meta text-amber-200/90">
-                    <span className="font-medium">Provider unavailable.</span>{" "}
-                    {aiStatus.activeProviderReason} — calls will be skipped
-                    until env is set.
-                  </div>
-                )}
+              {aiStatus && !aiStatus.activeProviderAvailable && aiStatus.activeProviderReason && (
+                <div className="text-meta rounded-md border border-amber-300/30 bg-amber-300/[0.05] px-3 py-2 text-amber-200/90">
+                  <span className="font-medium">Provider unavailable.</span>{" "}
+                  {aiStatus.activeProviderReason} — calls will be skipped until env is set.
+                </div>
+              )}
               <Field
                 label="Model"
                 optional
@@ -856,8 +882,8 @@ export default function WorkspaceSettingsPage() {
                   value={aiModel}
                   onChange={(e) => setAiModel(e.target.value)}
                   placeholder={
-                    aiStatus?.providers.find((p) => p.id === aiProvider)
-                      ?.defaultModel ?? "(provider default)"
+                    aiStatus?.providers.find((p) => p.id === aiProvider)?.defaultModel ??
+                    "(provider default)"
                   }
                   className="font-mono"
                   disabled={!canEdit || !aiEnabled}
@@ -972,17 +998,9 @@ export default function WorkspaceSettingsPage() {
 /* ────────────────────────── Local layout helpers ────────────────────────── */
 
 /** Sectioned card surface — bg-card/40 with a hairline border. */
-function FormCard({
-  children,
-  className = "",
-}: {
-  children: React.ReactNode;
-  className?: string;
-}) {
+function FormCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={`rounded-lg border border-border bg-card/40 ${className}`}>
-      {children}
-    </div>
+    <div className={`rounded-lg border border-border bg-card/40 ${className}`}>{children}</div>
   );
 }
 
@@ -1001,18 +1019,10 @@ function Field({
   return (
     <div>
       <div className="flex items-baseline gap-1.5">
-        <span className="text-[0.8125rem] font-medium tracking-tight text-foreground">
-          {label}
-        </span>
-        {optional && (
-          <span className="text-meta text-muted-foreground/70">optional</span>
-        )}
+        <span className="text-[0.8125rem] font-medium tracking-tight text-foreground">{label}</span>
+        {optional && <span className="text-meta text-muted-foreground/70">optional</span>}
       </div>
-      {hint && (
-        <p className="mt-0.5 max-w-[480px] text-meta text-muted-foreground">
-          {hint}
-        </p>
-      )}
+      {hint && <p className="text-meta mt-0.5 max-w-[480px] text-muted-foreground">{hint}</p>}
       <div className="mt-2">{children}</div>
     </div>
   );
@@ -1033,9 +1043,7 @@ function FormToggle({
   hint?: string;
 }) {
   return (
-    <label
-      className={`flex items-start gap-3 ${disabled ? "opacity-60" : "cursor-pointer"}`}
-    >
+    <label className={`flex items-start gap-3 ${disabled ? "opacity-60" : "cursor-pointer"}`}>
       <button
         type="button"
         role="switch"
@@ -1056,9 +1064,7 @@ function FormToggle({
       <span className="min-w-0">
         <span className="block text-[0.8125rem] font-medium">{label}</span>
         {hint && (
-          <span className="mt-0.5 block max-w-[460px] text-meta text-muted-foreground">
-            {hint}
-          </span>
+          <span className="text-meta mt-0.5 block max-w-[460px] text-muted-foreground">{hint}</span>
         )}
       </span>
     </label>
@@ -1072,9 +1078,7 @@ function DangerZone({ children }: { children: React.ReactNode }) {
       <header className="flex flex-wrap items-center gap-2 border-b border-danger/20 bg-danger/5 px-4 py-2.5">
         <AlertTriangle size={13} className="text-danger" />
         <h2 className="text-sm font-semibold text-danger">Danger zone</h2>
-        <span className="text-meta text-danger/80">
-          Irreversible. Confirm before continuing.
-        </span>
+        <span className="text-meta text-danger/80">Irreversible. Confirm before continuing.</span>
       </header>
       <div className="divide-y divide-danger/15">{children}</div>
     </section>
@@ -1098,9 +1102,7 @@ function DangerRow({
     <div className="flex flex-col gap-4 px-4 py-3 sm:flex-row sm:items-center">
       <div className="min-w-0 flex-1">
         <div className="text-sm font-medium">{title}</div>
-        <div className="mt-0.5 max-w-[520px] text-meta text-muted-foreground">
-          {blurb}
-        </div>
+        <div className="text-meta mt-0.5 max-w-[520px] text-muted-foreground">{blurb}</div>
       </div>
       <div className="flex w-full items-center gap-2 sm:w-auto">
         {confirmHint && (
@@ -1136,8 +1138,8 @@ function SaveBar({
   if (!pending) return null;
   return (
     <div className="sticky bottom-0 z-10 flex flex-col gap-3 border-t border-border bg-background/95 px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:px-6">
-      <div className="flex items-center gap-2 text-meta text-muted-foreground">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-ember forge-breath" />
+      <div className="text-meta flex items-center gap-2 text-muted-foreground">
+        <span className="forge-breath inline-block h-1.5 w-1.5 rounded-full bg-ember" />
         <span>
           {pending} pending change{pending === 1 ? "" : "s"}
         </span>
@@ -1167,10 +1169,28 @@ function SaveBar({
  * model with NO environment variables. Keys are write-only — the server
  * returns `hasKey`, never the secret.
  */
-const CRED_PROVIDERS: Array<{ id: "openai" | "anthropic" | "custom"; label: string; hint: string; needsBase?: boolean }> = [
-  { id: "openai", label: "OpenAI", hint: "Direct OpenAI API key (sk-…). Optional base URL for OpenRouter / LM Studio." },
-  { id: "anthropic", label: "Anthropic", hint: "Anthropic API key — used via the OpenAI-compatible endpoint." },
-  { id: "custom", label: "Custom (OpenAI-compatible)", hint: "Any OpenAI-compatible endpoint (vLLM, OpenRouter, …). Base URL required.", needsBase: true },
+const CRED_PROVIDERS: Array<{
+  id: "openai" | "anthropic" | "custom";
+  label: string;
+  hint: string;
+  needsBase?: boolean;
+}> = [
+  {
+    id: "openai",
+    label: "OpenAI",
+    hint: "Direct OpenAI API key (sk-…). Optional base URL for OpenRouter / LM Studio.",
+  },
+  {
+    id: "anthropic",
+    label: "Anthropic",
+    hint: "Anthropic API key — used via the OpenAI-compatible endpoint.",
+  },
+  {
+    id: "custom",
+    label: "Custom (OpenAI-compatible)",
+    hint: "Any OpenAI-compatible endpoint (vLLM, OpenRouter, …). Base URL required.",
+    needsBase: true,
+  },
 ];
 
 function ModelCredentials({ canEdit }: { canEdit: boolean }) {
@@ -1200,9 +1220,9 @@ function ModelCredentials({ canEdit }: { canEdit: boolean }) {
       <div>
         <div className="text-sm font-medium">Model credentials</div>
         <div className="text-meta text-muted-foreground">
-          Store a chat-model key per provider so the Streaming engine and AI
-          features work without environment variables. Keys are encrypted at
-          rest and never shown again. A stored key overrides any env var.
+          Store a chat-model key per provider so the Streaming engine and AI features work without
+          environment variables. Keys are encrypted at rest and never shown again. A stored key
+          overrides any env var.
         </div>
       </div>
       <div className="space-y-2">
@@ -1232,9 +1252,19 @@ function CredentialRow({
   onRemove,
 }: {
   meta: { id: string; label: string; hint: string; needsBase?: boolean };
-  existing?: { hasKey: boolean; baseUrl: string | null; defaultModel: string | null; enabled: boolean };
+  existing?: {
+    hasKey: boolean;
+    baseUrl: string | null;
+    defaultModel: string | null;
+    enabled: boolean;
+  };
   busy: boolean;
-  onSave: (vals: { apiKey?: string; baseUrl?: string; defaultModel?: string; enabled?: boolean }) => void;
+  onSave: (vals: {
+    apiKey?: string;
+    baseUrl?: string;
+    defaultModel?: string;
+    enabled?: boolean;
+  }) => void;
   onRemove: () => void;
 }) {
   const [open, setOpen] = useState(false);

@@ -39,7 +39,7 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
   });
 
   return (
-    <div className="rounded-md border border-border bg-card/40">
+    <div id="github-links" className="scroll-mt-20 rounded-md border border-border bg-card/40">
       <div
         className={`flex items-center gap-2 px-2.5 py-2 ${links && links.length > 0 ? "border-b border-border/60" : ""}`}
       >

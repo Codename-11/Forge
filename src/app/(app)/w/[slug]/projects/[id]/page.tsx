@@ -22,6 +22,7 @@ import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Combobox } from "@/components/ui/combobox";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { EmptyState, Skeleton } from "@/components/ui";
 import { InitiativeChip } from "@/components/initiative-chip";
@@ -46,8 +47,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const { data: ws } = trpc.workspace.current.useQuery();
 
   const tabParam = (searchParams?.get("view") ?? "overview") as Tab;
-  const tab: Tab =
-    tabParam === "list" || tabParam === "board" ? tabParam : "overview";
+  const tab: Tab = tabParam === "list" || tabParam === "board" ? tabParam : "overview";
 
   const setTab = (next: Tab) => {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
@@ -99,11 +99,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           title="Project not found"
           description={error.message}
           action={
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => router.push(`/w/${slug}/projects`)}
-            >
+            <Button variant="outline" size="sm" onClick={() => router.push(`/w/${slug}/projects`)}>
               Back to projects
             </Button>
           }
@@ -137,11 +133,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         subtitle={project.key}
         actions={
           <div className="flex items-center gap-2">
-            <PinButton
-              targetType="PROJECT"
-              targetId={project.id}
-              workspaceId={workspace.id}
-            />
+            <PinButton targetType="PROJECT" targetId={project.id} workspaceId={workspace.id} />
             <Button
               variant="ember"
               size="sm"
@@ -197,9 +189,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               <IssueList workspaceKey={ws?.key ?? "—"} projectId={project.id} includeDone />
             </div>
           )}
-          {tab === "board" && (
-            <IssueBoard workspaceKey={ws?.key ?? "—"} projectId={project.id} />
-          )}
+          {tab === "board" && <IssueBoard workspaceKey={ws?.key ?? "—"} projectId={project.id} />}
         </div>
       </div>
 
@@ -260,13 +250,7 @@ function ProjectTabButton({
 // Overview tab
 // ---------------------------------------------------------------------------
 
-function OverviewTab({
-  projectId,
-  workspaceSlug,
-}: {
-  projectId: string;
-  workspaceSlug: string;
-}) {
+function OverviewTab({ projectId, workspaceSlug }: { projectId: string; workspaceSlug: string }) {
   const { data, isLoading, refetch } = trpc.project.overview.useQuery({
     id: projectId,
   });
@@ -293,8 +277,7 @@ function OverviewTab({
     );
   }
 
-  const { project, counts, linkedInitiative, currentCycleSlice, members, recentActivity } =
-    data;
+  const { project, counts, linkedInitiative, currentCycleSlice, members, recentActivity } = data;
 
   const headerStats: Array<{ label: string; value: number; tone?: "warn" }> = [
     { label: "Total", value: counts.total },
@@ -308,15 +291,19 @@ function OverviewTab({
     },
   ];
 
-  const completionPct =
-    counts.total > 0 ? Math.round((counts.done / counts.total) * 100) : 0;
+  const completionPct = counts.total > 0 ? Math.round((counts.done / counts.total) * 100) : 0;
 
   // Per-bucket breakdown for the Progress card. The overview payload only
   // exposes category-bucket counts (not per-Status rows), so the breakdown
   // mirrors those buckets. StatusDot is category-aware; colors are token
   // driven via `hsl(var(--…))`.
   const breakdown: Array<{ label: string; category: string; color: string; count: number }> = [
-    { label: "In progress", category: "IN_PROGRESS", color: "hsl(var(--ember))", count: counts.inProgress },
+    {
+      label: "In progress",
+      category: "IN_PROGRESS",
+      color: "hsl(var(--ember))",
+      count: counts.inProgress,
+    },
     {
       label: "Open",
       category: "TODO",
@@ -339,189 +326,179 @@ function OverviewTab({
     <div className="mx-auto grid max-w-6xl grid-cols-1 gap-6 p-6 lg:grid-cols-[1fr_320px]">
       {/* Left column — primary content (preserved live sections). */}
       <div className="min-w-0 space-y-6">
-      {/* Header — name + description (inline edit). Edit/avatar/etc. live
+        {/* Header — name + description (inline edit). Edit/avatar/etc. live
           on the page Topbar so they're consistent across tabs. */}
-      <header className="space-y-2">
-        <div className="flex items-baseline gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">
-            {project.icon && <span className="mr-1.5">{project.icon}</span>}
-            {project.name}
-          </h1>
-          <span className="text-id text-muted-foreground">{project.key}</span>
-        </div>
-        {editingDesc ? (
-          <div className="space-y-2">
-            <textarea
-              autoFocus
-              value={descDraft}
-              onChange={(e) => setDescDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                  e.preventDefault();
-                  update.mutate({
-                    id: project.id,
-                    description: descDraft.trim() || null,
-                  });
-                  setEditingDesc(false);
-                } else if (e.key === "Escape") {
-                  e.preventDefault();
-                  setDescDraft(project.description ?? "");
-                  setEditingDesc(false);
-                }
-              }}
-              rows={4}
-              className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
-            />
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                variant="ember"
-                disabled={update.isPending}
-                onClick={() => {
-                  update.mutate({
-                    id: project.id,
-                    description: descDraft.trim() || null,
-                  });
-                  setEditingDesc(false);
-                }}
-              >
-                Save
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => {
-                  setDescDraft(project.description ?? "");
-                  setEditingDesc(false);
-                }}
-              >
-                Cancel
-              </Button>
-            </div>
+        <header className="space-y-2">
+          <div className="flex items-baseline gap-3">
+            <h1 className="text-xl font-semibold tracking-tight">
+              {project.icon && <span className="mr-1.5">{project.icon}</span>}
+              {project.name}
+            </h1>
+            <span className="text-id text-muted-foreground">{project.key}</span>
           </div>
-        ) : (
-          <p
-            className="cursor-text whitespace-pre-wrap rounded-md px-1 py-0.5 text-sm text-foreground/80 hover:bg-subtle/40"
-            onClick={() => {
-              setDescDraft(project.description ?? "");
-              setEditingDesc(true);
-            }}
-            title="Click to edit"
-          >
-            {project.description || (
-              <span className="text-muted-foreground">
-                No description. Click to add.
-              </span>
-            )}
-          </p>
-        )}
-        <div className="flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
-          {project.startDate && <span>Starts {relativeTime(project.startDate)}</span>}
-          {project.targetDate && <span>Target {relativeTime(project.targetDate)}</span>}
-          <span>Updated {relativeTime(project.updatedAt)}</span>
-          {project.archived && <Badge color="#d97706">archived</Badge>}
-        </div>
-      </header>
-
-      {/* Status row — clean horizontal stat strip. Numbers prominent,
-          labels muted. Blocked goes warm-warning when > 0. */}
-      <section
-        aria-label="Project status"
-        className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5"
-      >
-        {headerStats.map((s) => (
-          <Stat key={s.label} label={s.label} value={s.value} tone={s.tone} />
-        ))}
-      </section>
-
-      {/* Current sprint slice */}
-      {currentCycleSlice && (
-        <section aria-label="Current sprint">
-          <div className="mb-2 flex items-baseline justify-between">
-            <SectionEyebrow>Current sprint</SectionEyebrow>
-            <span className="text-meta text-muted-foreground">
-              {currentCycleSlice.total} issue
-              {currentCycleSlice.total === 1 ? "" : "s"}
-            </span>
-          </div>
-          <div className="rounded-lg border border-border bg-card/40">
-            <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-              <CycleChip
-                cycle={currentCycleSlice}
-                slug={workspaceSlug}
+          {editingDesc ? (
+            <div className="space-y-2">
+              <textarea
+                autoFocus
+                value={descDraft}
+                onChange={(e) => setDescDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    update.mutate({
+                      id: project.id,
+                      description: descDraft.trim() || null,
+                    });
+                    setEditingDesc(false);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    setDescDraft(project.description ?? "");
+                    setEditingDesc(false);
+                  }
+                }}
+                rows={4}
+                className="focus-ring w-full rounded-md border border-input bg-background p-2 text-sm"
               />
-              <span className="text-meta text-muted-foreground">
-                ends {relativeTime(currentCycleSlice.endsAt)}
-              </span>
-              <Link
-                href={`/w/${workspaceSlug}/cycles/${currentCycleSlice.id}`}
-                className="ml-auto text-meta text-muted-foreground hover:text-ember"
-              >
-                View all in sprint →
-              </Link>
-            </div>
-            <ul className="divide-y divide-border">
-              {currentCycleSlice.issues.map((i) => (
-                <li key={i.id}>
-                  <Link
-                    href={`/w/${workspaceSlug}/issues/${i.id}`}
-                    className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle/60"
-                  >
-                    <span className="text-id text-muted-foreground">
-                      {project.key}-{i.number}
-                    </span>
-                    <span className="min-w-0 flex-1 truncate text-foreground">
-                      {i.title}
-                    </span>
-                    <StatusPill status={i.status} />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
-      )}
-
-      {/* Recent activity */}
-      <section aria-label="Recent activity">
-        <SectionEyebrow>Recent activity</SectionEyebrow>
-        <div className="mt-2 rounded-lg border border-border bg-card/40">
-          {recentActivity.length === 0 ? (
-            <div className="px-3 py-4 text-meta text-muted-foreground">
-              No activity yet. Create an issue to start the timeline.
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="ember"
+                  disabled={update.isPending}
+                  onClick={() => {
+                    update.mutate({
+                      id: project.id,
+                      description: descDraft.trim() || null,
+                    });
+                    setEditingDesc(false);
+                  }}
+                >
+                  Save
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setDescDraft(project.description ?? "");
+                    setEditingDesc(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
           ) : (
-            <ul className="divide-y divide-border">
-              {recentActivity.map((evt) => (
-                <li
-                  key={evt.id}
-                  className="flex items-start gap-2 px-3 py-2 text-xs"
-                >
-                  <span className="mt-0.5 shrink-0">
-                    <ActivityIcon kind={evt.kind} />
-                  </span>
-                  <Avatar
-                    name={evt.actor?.name}
-                    image={evt.actor?.image}
-                    size={20}
-                    className="shrink-0"
-                  />
-                  <div className="min-w-0 flex-1">
-                    <ActivitySummary
-                      evt={evt}
-                      projectKey={project.key}
-                      workspaceSlug={workspaceSlug}
-                    />
-                  </div>
-                  <span className="text-meta shrink-0 text-muted-foreground">
-                    {relativeTime(evt.createdAt)}
-                  </span>
-                </li>
-              ))}
-            </ul>
+            <p
+              className="cursor-text whitespace-pre-wrap rounded-md px-1 py-0.5 text-sm text-foreground/80 hover:bg-subtle/40"
+              onClick={() => {
+                setDescDraft(project.description ?? "");
+                setEditingDesc(true);
+              }}
+              title="Click to edit"
+            >
+              {project.description || (
+                <span className="text-muted-foreground">No description. Click to add.</span>
+              )}
+            </p>
           )}
-        </div>
-      </section>
+          <div className="text-meta flex flex-wrap items-center gap-3 text-muted-foreground">
+            {project.startDate && <span>Starts {relativeTime(project.startDate)}</span>}
+            {project.targetDate && <span>Target {relativeTime(project.targetDate)}</span>}
+            <span>Updated {relativeTime(project.updatedAt)}</span>
+            {project.archived && <Badge color="#d97706">archived</Badge>}
+          </div>
+        </header>
+
+        {/* Status row — clean horizontal stat strip. Numbers prominent,
+          labels muted. Blocked goes warm-warning when > 0. */}
+        <section
+          aria-label="Project status"
+          className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5"
+        >
+          {headerStats.map((s) => (
+            <Stat key={s.label} label={s.label} value={s.value} tone={s.tone} />
+          ))}
+        </section>
+
+        {/* Current sprint slice */}
+        {currentCycleSlice && (
+          <section aria-label="Current sprint">
+            <div className="mb-2 flex items-baseline justify-between">
+              <SectionEyebrow>Current sprint</SectionEyebrow>
+              <span className="text-meta text-muted-foreground">
+                {currentCycleSlice.total} issue
+                {currentCycleSlice.total === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="rounded-lg border border-border bg-card/40">
+              <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+                <CycleChip cycle={currentCycleSlice} slug={workspaceSlug} />
+                <span className="text-meta text-muted-foreground">
+                  ends {relativeTime(currentCycleSlice.endsAt)}
+                </span>
+                <Link
+                  href={`/w/${workspaceSlug}/cycles/${currentCycleSlice.id}`}
+                  className="text-meta ml-auto text-muted-foreground hover:text-ember"
+                >
+                  View all in sprint →
+                </Link>
+              </div>
+              <ul className="divide-y divide-border">
+                {currentCycleSlice.issues.map((i) => (
+                  <li key={i.id}>
+                    <Link
+                      href={`/w/${workspaceSlug}/issues/${i.id}`}
+                      className="flex items-center gap-2 px-3 py-2 text-xs hover:bg-subtle/60"
+                    >
+                      <span className="text-id text-muted-foreground">
+                        {project.key}-{i.number}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-foreground">{i.title}</span>
+                      <StatusPill status={i.status} />
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </section>
+        )}
+
+        {/* Recent activity */}
+        <section aria-label="Recent activity">
+          <SectionEyebrow>Recent activity</SectionEyebrow>
+          <div className="mt-2 rounded-lg border border-border bg-card/40">
+            {recentActivity.length === 0 ? (
+              <div className="text-meta px-3 py-4 text-muted-foreground">
+                No activity yet. Create an issue to start the timeline.
+              </div>
+            ) : (
+              <ul className="divide-y divide-border">
+                {recentActivity.map((evt) => (
+                  <li key={evt.id} className="flex items-start gap-2 px-3 py-2 text-xs">
+                    <span className="mt-0.5 shrink-0">
+                      <ActivityIcon kind={evt.kind} />
+                    </span>
+                    <Avatar
+                      name={evt.actor?.name}
+                      image={evt.actor?.image}
+                      size={20}
+                      className="shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <ActivitySummary
+                        evt={evt}
+                        projectKey={project.key}
+                        workspaceSlug={workspaceSlug}
+                      />
+                    </div>
+                    <span className="text-meta shrink-0 text-muted-foreground">
+                      {relativeTime(evt.createdAt)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
       </div>
 
       {/* Right rail — Properties / Progress / Contributors. Only fields
@@ -534,37 +511,25 @@ function OverviewTab({
           <dl className="mt-2 grid grid-cols-[88px_1fr] gap-y-2.5 text-sm">
             {linkedInitiative && (
               <>
-                <dt className="text-meta self-center text-muted-foreground">
-                  Status
-                </dt>
+                <dt className="text-meta self-center text-muted-foreground">Status</dt>
                 <dd className="text-meta self-center text-muted-foreground">
                   {linkedInitiative.status.toLowerCase().replace(/_/g, " ")}
                 </dd>
               </>
             )}
 
-            <dt className="text-meta self-center text-muted-foreground">
-              Initiative
-            </dt>
+            <dt className="text-meta self-center text-muted-foreground">Initiative</dt>
             <dd className="min-w-0">
               {linkedInitiative ? (
-                <InitiativeChip
-                  initiative={linkedInitiative}
-                  slug={workspaceSlug}
-                />
+                <InitiativeChip initiative={linkedInitiative} slug={workspaceSlug} />
               ) : (
-                <LinkInitiativeCta
-                  projectId={project.id}
-                  onLinked={() => refetch()}
-                />
+                <LinkInitiativeCta projectId={project.id} onLinked={() => refetch()} />
               )}
             </dd>
 
             {project.startDate && (
               <>
-                <dt className="text-meta self-center text-muted-foreground">
-                  Starts
-                </dt>
+                <dt className="text-meta self-center text-muted-foreground">Starts</dt>
                 <dd className="text-meta self-center text-muted-foreground">
                   {relativeTime(project.startDate)}
                 </dd>
@@ -573,25 +538,19 @@ function OverviewTab({
 
             {project.targetDate && (
               <>
-                <dt className="text-meta self-center text-muted-foreground">
-                  Target
-                </dt>
+                <dt className="text-meta self-center text-muted-foreground">Target</dt>
                 <dd className="text-meta self-center text-muted-foreground">
                   {relativeTime(project.targetDate)}
                 </dd>
               </>
             )}
 
-            <dt className="text-meta self-center text-muted-foreground">
-              Created
-            </dt>
+            <dt className="text-meta self-center text-muted-foreground">Created</dt>
             <dd className="text-meta self-center text-muted-foreground">
               {relativeTime(project.createdAt)}
             </dd>
 
-            <dt className="text-meta self-center text-muted-foreground">
-              Updated
-            </dt>
+            <dt className="text-meta self-center text-muted-foreground">Updated</dt>
             <dd className="text-meta self-center text-muted-foreground">
               {relativeTime(project.updatedAt)}
             </dd>
@@ -618,17 +577,10 @@ function OverviewTab({
             </div>
             <ul className="mt-3 flex flex-col gap-1.5">
               {breakdown.map((b) => (
-                <li
-                  key={b.category}
-                  className="flex items-center gap-2 text-meta"
-                >
-                  <StatusDot
-                    status={{ category: b.category, color: b.color }}
-                  />
+                <li key={b.category} className="text-meta flex items-center gap-2">
+                  <StatusDot status={{ category: b.category, color: b.color }} />
                   <span>{b.label}</span>
-                  <span className="ml-auto tabular-nums text-muted-foreground">
-                    {b.count}
-                  </span>
+                  <span className="ml-auto tabular-nums text-muted-foreground">{b.count}</span>
                 </li>
               ))}
             </ul>
@@ -640,14 +592,10 @@ function OverviewTab({
         <section aria-label="Contributors">
           <div className="mb-2 flex items-baseline justify-between">
             <SectionEyebrow>Contributors</SectionEyebrow>
-            <span className="text-meta text-muted-foreground">
-              {members.length}
-            </span>
+            <span className="text-meta text-muted-foreground">{members.length}</span>
           </div>
           {members.length === 0 ? (
-            <p className="text-meta text-muted-foreground">
-              No contributors yet.
-            </p>
+            <p className="text-meta text-muted-foreground">No contributors yet.</p>
           ) : (
             <ul className="flex flex-col gap-1.5">
               {members.map((m) => (
@@ -677,20 +625,10 @@ function SectionEyebrow({ children }: { children: React.ReactNode }) {
   );
 }
 
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: number;
-  tone?: "warn";
-}) {
+function Stat({ label, value, tone }: { label: string; value: number; tone?: "warn" }) {
   return (
     <div className="rounded-lg border border-border bg-card/40 p-4">
-      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
+      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div
         className={cn(
           "mt-1 text-2xl font-semibold tabular-nums",
@@ -710,7 +648,7 @@ function StatusPill({
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-id"
+      className="text-id inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5"
       style={{
         backgroundColor: `${status.color}1F`,
         color: status.color,
@@ -806,11 +744,7 @@ function ActivitySummary({
           <div>
             {actorName} created {issueLink}
           </div>
-          {issue && (
-            <div className="text-meta truncate text-muted-foreground">
-              {issue.title}
-            </div>
-          )}
+          {issue && <div className="text-meta truncate text-muted-foreground">{issue.title}</div>}
         </div>
       );
     case "ISSUE_STATUS_CHANGED":
@@ -821,18 +755,11 @@ function ActivitySummary({
             {issue && (
               <>
                 {" "}
-                &rarr;{" "}
-                <span style={{ color: issue.status.color }}>
-                  {issue.status.name}
-                </span>
+                &rarr; <span style={{ color: issue.status.color }}>{issue.status.name}</span>
               </>
             )}
           </div>
-          {issue && (
-            <div className="text-meta truncate text-muted-foreground">
-              {issue.title}
-            </div>
-          )}
+          {issue && <div className="text-meta truncate text-muted-foreground">{issue.title}</div>}
         </div>
       );
     case "ISSUE_ASSIGNED": {
@@ -864,9 +791,7 @@ function ActivitySummary({
             )}
           </div>
           {mode && (
-            <div className="text-meta truncate text-muted-foreground">
-              mode &middot; {mode}
-            </div>
+            <div className="text-meta truncate text-muted-foreground">mode &middot; {mode}</div>
           )}
         </div>
       );
@@ -899,11 +824,7 @@ function ActivitySummary({
             {actorName}
           </span>{" "}
           commented on {issueLink}
-          {issue && (
-            <div className="text-meta truncate text-muted-foreground">
-              {issue.title}
-            </div>
-          )}
+          {issue && <div className="text-meta truncate text-muted-foreground">{issue.title}</div>}
         </div>
       );
     default:
@@ -920,19 +841,10 @@ function ActivitySummary({
 // pattern on the initiative detail page, without adding a route trip).
 // ---------------------------------------------------------------------------
 
-function LinkInitiativeCta({
-  projectId,
-  onLinked,
-}: {
-  projectId: string;
-  onLinked: () => void;
-}) {
+function LinkInitiativeCta({ projectId, onLinked }: { projectId: string; onLinked: () => void }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const { data: initiatives } = trpc.initiative.list.useQuery(
-    {},
-    { enabled: open },
-  );
+  const { data: initiatives } = trpc.initiative.list.useQuery({}, { enabled: open });
   const link = trpc.initiative.linkProject.useMutation({
     onSuccess: () => {
       toast.success("Linked.");
@@ -954,7 +866,7 @@ function LinkInitiativeCta({
         type="button"
         onClick={() => setOpen(true)}
         className={cn(
-          "mt-2 inline-flex items-center gap-1.5 rounded-md border border-dashed border-border bg-card/20 px-2 py-1 text-meta text-muted-foreground",
+          "text-meta mt-2 inline-flex items-center gap-1.5 rounded-md border border-dashed border-border bg-card/20 px-2 py-1 text-muted-foreground",
           "hover:border-ember/40 hover:text-ember",
         )}
       >
@@ -980,18 +892,14 @@ function LinkInitiativeCta({
       </div>
       <ul className="mt-2 max-h-56 overflow-y-auto">
         {filtered.length === 0 ? (
-          <li className="px-2 py-2 text-meta text-muted-foreground">
-            No initiatives match.
-          </li>
+          <li className="text-meta px-2 py-2 text-muted-foreground">No initiatives match.</li>
         ) : (
           filtered.map((i) => (
             <li key={i.id}>
               <button
                 type="button"
                 disabled={link.isPending}
-                onClick={() =>
-                  link.mutate({ initiativeId: i.id, projectId })
-                }
+                onClick={() => link.mutate({ initiativeId: i.id, projectId })}
                 className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-subtle disabled:opacity-50"
               >
                 <span
@@ -1000,9 +908,7 @@ function LinkInitiativeCta({
                   style={{ backgroundColor: i.color ?? "#78716c" }}
                 />
                 <span className="truncate">{i.name}</span>
-                <span className="ml-auto text-id text-muted-foreground">
-                  {i.slug}
-                </span>
+                <span className="text-id ml-auto text-muted-foreground">{i.slug}</span>
               </button>
             </li>
           ))
@@ -1032,6 +938,7 @@ function EditProjectDialog({
     icon: string | null;
     repoUrl?: string | null;
     repoBranch?: string | null;
+    completionAutomation?: "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE" | null;
   };
   onSaved: () => void;
 }) {
@@ -1041,6 +948,11 @@ function EditProjectDialog({
   const [icon, setIcon] = useState(project.icon ?? "");
   const [repoUrl, setRepoUrl] = useState(project.repoUrl ?? "");
   const [repoBranch, setRepoBranch] = useState(project.repoBranch ?? "");
+  const [completionAutomation, setCompletionAutomation] = useState<
+    "INHERIT" | "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE"
+  >(
+    project.completionAutomation ?? "INHERIT",
+  );
 
   const update = trpc.project.update.useMutation({
     onSuccess: () => {
@@ -1068,6 +980,7 @@ function EditProjectDialog({
             icon: icon.trim() || undefined,
             repoUrl: repoUrl.trim() || null,
             repoBranch: repoBranch.trim() || null,
+            completionAutomation: completionAutomation === "INHERIT" ? null : completionAutomation,
           });
         } catch (e) {
           return { error: e instanceof Error ? e.message : "Failed to save." };
@@ -1095,20 +1008,11 @@ function EditProjectDialog({
               onChange={(e) => setColor(e.target.value)}
               className="h-8 w-10 cursor-pointer rounded border border-input bg-background"
             />
-            <Input
-              value={color}
-              onChange={(e) => setColor(e.target.value)}
-              className="flex-1"
-            />
+            <Input value={color} onChange={(e) => setColor(e.target.value)} className="flex-1" />
           </div>
         </QuickForm.Field>
         <QuickForm.Field label="Icon (emoji)">
-          <Input
-            name="icon"
-            value={icon}
-            onChange={(e) => setIcon(e.target.value)}
-            maxLength={8}
-          />
+          <Input name="icon" value={icon} onChange={(e) => setIcon(e.target.value)} maxLength={8} />
         </QuickForm.Field>
       </div>
       <QuickForm.Field label="Repository">
@@ -1127,6 +1031,27 @@ function EditProjectDialog({
           onChange={(e) => setRepoBranch(e.target.value)}
           placeholder="main"
           className="font-mono"
+        />
+      </QuickForm.Field>
+      <QuickForm.Field label="Completion policy">
+        <Combobox
+          ariaLabel="Project completion policy"
+          value={completionAutomation}
+          onChange={(value) =>
+            setCompletionAutomation(
+              (value ?? "INHERIT") as
+                | "INHERIT"
+                | "OFF"
+                | "RECOMMEND"
+                | "AUTO_WHEN_SAFE",
+            )
+          }
+          options={[
+            { value: "INHERIT", label: "Inherit workspace policy" },
+            { value: "OFF", label: "Off for this project" },
+            { value: "RECOMMEND", label: "Recommend completion" },
+            { value: "AUTO_WHEN_SAFE", label: "Automatic when safe" },
+          ]}
         />
       </QuickForm.Field>
     </QuickForm>

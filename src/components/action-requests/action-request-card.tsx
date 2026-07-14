@@ -1,5 +1,6 @@
 "use client";
 import { useState, useMemo } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   CheckCircle2,
@@ -9,6 +10,8 @@ import {
   XCircle,
   Loader2,
   ShieldCheck,
+  ExternalLink,
+  GitPullRequest,
 } from "lucide-react";
 import type {
   ActionRequestKind,
@@ -154,6 +157,8 @@ function ActionRequestCardForRequest({
         setDeclineReason("");
       }}
       pending={accept.isPending || decline.isPending}
+      issueId={issueId}
+      workspaceSlug={ws.slug}
     />
   );
 }
@@ -184,12 +189,15 @@ function ActionRequestCardForComment({
       await utils.actionRequest.forComment.cancel({ commentId });
       const prev = utils.actionRequest.forComment.getData({ commentId });
       if (prev) {
-        utils.actionRequest.forComment.setData({ commentId }, {
-          ...prev,
-          status: "RESOLVED" as ActionRequestStatus,
-          resolvedAt: new Date(),
-          resolution: "Accepted",
-        });
+        utils.actionRequest.forComment.setData(
+          { commentId },
+          {
+            ...prev,
+            status: "RESOLVED" as ActionRequestStatus,
+            resolvedAt: new Date(),
+            resolution: "Accepted",
+          },
+        );
       }
       return { prev };
     },
@@ -214,12 +222,15 @@ function ActionRequestCardForComment({
       await utils.actionRequest.forComment.cancel({ commentId });
       const prev = utils.actionRequest.forComment.getData({ commentId });
       if (prev) {
-        utils.actionRequest.forComment.setData({ commentId }, {
-          ...prev,
-          status: "REJECTED" as ActionRequestStatus,
-          resolvedAt: new Date(),
-          resolution: declineReason ? `Declined: ${declineReason}` : "Declined",
-        });
+        utils.actionRequest.forComment.setData(
+          { commentId },
+          {
+            ...prev,
+            status: "REJECTED" as ActionRequestStatus,
+            resolvedAt: new Date(),
+            resolution: declineReason ? `Declined: ${declineReason}` : "Declined",
+          },
+        );
       }
       return { prev };
     },
@@ -259,6 +270,8 @@ function ActionRequestCardForComment({
         setDeclineReason("");
       }}
       pending={accept.isPending || decline.isPending}
+      issueId={issueId}
+      workspaceSlug={ws.slug}
     />
   );
 }
@@ -270,11 +283,7 @@ function ActionRequestCardForComment({
  * crew kickoff) server-side. Returns `null` when no row is bound so the
  * caller's direct-approve fallback can take over.
  */
-function ActionRequestCardForPlan({
-  planId,
-  canResolve,
-  onResolved,
-}: ActionRequestCardPlanProps) {
+function ActionRequestCardForPlan({ planId, canResolve, onResolved }: ActionRequestCardPlanProps) {
   const utils = trpc.useUtils();
   const ws = useWorkspace();
   const isAdmin = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
@@ -293,12 +302,15 @@ function ActionRequestCardForPlan({
       await utils.actionRequest.forPlan.cancel({ planId });
       const prev = utils.actionRequest.forPlan.getData({ planId });
       if (prev) {
-        utils.actionRequest.forPlan.setData({ planId }, {
-          ...prev,
-          status: "RESOLVED" as ActionRequestStatus,
-          resolvedAt: new Date(),
-          resolution: "Accepted",
-        });
+        utils.actionRequest.forPlan.setData(
+          { planId },
+          {
+            ...prev,
+            status: "RESOLVED" as ActionRequestStatus,
+            resolvedAt: new Date(),
+            resolution: "Accepted",
+          },
+        );
       }
       return { prev };
     },
@@ -317,12 +329,15 @@ function ActionRequestCardForPlan({
       await utils.actionRequest.forPlan.cancel({ planId });
       const prev = utils.actionRequest.forPlan.getData({ planId });
       if (prev) {
-        utils.actionRequest.forPlan.setData({ planId }, {
-          ...prev,
-          status: "REJECTED" as ActionRequestStatus,
-          resolvedAt: new Date(),
-          resolution: declineReason ? `Declined: ${declineReason}` : "Declined",
-        });
+        utils.actionRequest.forPlan.setData(
+          { planId },
+          {
+            ...prev,
+            status: "REJECTED" as ActionRequestStatus,
+            resolvedAt: new Date(),
+            resolution: declineReason ? `Declined: ${declineReason}` : "Declined",
+          },
+        );
       }
       return { prev };
     },
@@ -361,6 +376,7 @@ function ActionRequestCardForPlan({
         setDeclineReason("");
       }}
       pending={accept.isPending || decline.isPending}
+      workspaceSlug={ws.slug}
     />
   );
 }
@@ -380,6 +396,8 @@ function ActionRequestCardView({
   onDecline,
   onCancelDecline,
   pending,
+  issueId,
+  workspaceSlug,
 }: {
   request: {
     id: string;
@@ -395,6 +413,7 @@ function ActionRequestCardView({
     resolvedByUser?: { id: string; name: string | null; handle: string | null } | null;
     requestedByAgent?: { id: string; name: string; profileKey: string } | null;
     requestedByUser?: { id: string; name: string | null; handle: string | null } | null;
+    sourceType?: string | null;
   };
   visibleCanResolve: boolean;
   showDeclineReason: boolean;
@@ -404,35 +423,39 @@ function ActionRequestCardView({
   onDecline: () => void;
   onCancelDecline: () => void;
   pending: boolean;
+  issueId?: string;
+  workspaceSlug: string;
 }) {
   const isOpen = request.status === "OPEN";
   const isResolved = request.status === "RESOLVED";
   const isRejected = request.status === "REJECTED";
 
   const tone = useMemo(() => severityToTone(request.severity), [request.severity]);
-  const kindChip = useMemo(() => kindChipLabel(request.kind, request.payload), [
-    request.kind,
-    request.payload,
-  ]);
+  const kindChip = useMemo(
+    () => kindChipLabel(request.kind, request.payload),
+    [request.kind, request.payload],
+  );
   const runtimeGrant = useMemo(
     () =>
-      request.kind === "RUNTIME_TOOL_GRANT"
-        ? readRuntimeToolGrantPayload(request.payload)
-        : null,
+      request.kind === "RUNTIME_TOOL_GRANT" ? readRuntimeToolGrantPayload(request.payload) : null,
+    [request.kind, request.payload],
+  );
+  const completion = useMemo(
+    () => (request.kind === "TRANSITION" ? readCompletionTransitionPayload(request.payload) : null),
     [request.kind, request.payload],
   );
   const requesterName = request.requestedByAgent
     ? `@${request.requestedByAgent.profileKey}`
     : request.requestedByUser?.handle
       ? `@${request.requestedByUser.handle}`
-      : request.requestedByUser?.name ?? "system";
+      : (request.requestedByUser?.name ?? "system");
 
   return (
     <div
       role="article"
       aria-label={`Action request: ${request.title}`}
       className={[
-        "rounded-md border-l-2 border-y border-r p-3",
+        "rounded-md border-y border-l-2 border-r p-3",
         "border-y-border border-r-border",
         isOpen ? tone.borderClass : "border-l-border/60",
         isOpen ? tone.bgClass : "bg-card/30",
@@ -444,21 +467,21 @@ function ActionRequestCardView({
           className={[
             "mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
             isOpen ? tone.iconBgClass : "bg-muted/40",
+            isOpen && completion ? "motion-safe:animate-pulse motion-reduce:animate-none" : "",
           ].join(" ")}
         >
           {isResolved ? (
             <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />
           ) : isRejected ? (
             <XCircle className="h-3 w-3 text-danger" />
-          ) : tone.icon}
+          ) : (
+            tone.icon
+          )}
         </span>
         <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="flex flex-wrap items-center gap-1.5 text-meta">
+          <div className="text-meta flex flex-wrap items-center gap-1.5">
             <span className="font-semibold text-foreground">{request.title}</span>
-            <Badge
-              color="#6366f1"
-              className="font-mono text-[0.625rem] uppercase tracking-wider"
-            >
+            <Badge color="#6366f1" className="font-mono text-[0.625rem] uppercase tracking-wider">
               recommendation
             </Badge>
             {kindChip && (
@@ -482,6 +505,13 @@ function ActionRequestCardView({
             />
           )}
           {runtimeGrant && <RuntimeToolGrantSummary grant={runtimeGrant} />}
+          {completion && (
+            <CompletionEvidenceSummary
+              completion={completion}
+              issueId={issueId}
+              workspaceSlug={workspaceSlug}
+            />
+          )}
 
           {isOpen && visibleCanResolve && !showDeclineReason && (
             <div className="flex gap-2 pt-1">
@@ -503,7 +533,13 @@ function ActionRequestCardView({
                 ) : (
                   <Sparkles className="h-3 w-3" />
                 )}
-                {request.kind === "RUNTIME_TOOL_GRANT" ? "Grant and rerun" : "Accept"}
+                {request.kind === "RUNTIME_TOOL_GRANT"
+                  ? "Grant and rerun"
+                  : completion?.intent === "COMPLETE"
+                    ? "Mark done"
+                    : completion?.intent === "RECOVER"
+                      ? "Return to in progress"
+                      : "Accept"}
               </Button>
               <Button
                 variant="outline"
@@ -512,7 +548,11 @@ function ActionRequestCardView({
                 disabled={pending}
                 aria-label="Decline this action request"
               >
-                Decline
+                {completion?.intent === "COMPLETE"
+                  ? "Keep in review"
+                  : completion?.intent === "RECOVER"
+                    ? "Keep current status"
+                    : "Decline"}
               </Button>
             </div>
           )}
@@ -524,31 +564,31 @@ function ActionRequestCardView({
                 type="text"
                 value={declineReason}
                 onChange={(e) => onDeclineReasonChange(e.target.value)}
-                placeholder="Reason (optional)"
+                placeholder={
+                  completion?.intent === "COMPLETE"
+                    ? "Why should this stay in review? (optional)"
+                    : completion?.intent === "RECOVER"
+                      ? "Why keep the current status? (optional)"
+                      : "Reason (optional)"
+                }
                 maxLength={2_000}
                 className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-[0.8125rem]"
                 aria-label="Decline reason"
               />
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={onDecline}
-                  disabled={pending}
-                >
+                <Button variant="outline" size="sm" onClick={onDecline} disabled={pending}>
                   {pending ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
                   ) : (
                     <XCircle className="h-3 w-3" />
                   )}
-                  Decline
+                  {completion?.intent === "COMPLETE"
+                    ? "Keep in review"
+                    : completion?.intent === "RECOVER"
+                      ? "Keep current status"
+                      : "Decline"}
                 </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onCancelDecline}
-                  disabled={pending}
-                >
+                <Button variant="ghost" size="sm" onClick={onCancelDecline} disabled={pending}>
                   Cancel
                 </Button>
               </div>
@@ -571,6 +611,128 @@ function ActionRequestCardView({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+type CompletionTransitionPayload = {
+  intent: "COMPLETE" | "RECOVER";
+  sourceLabel: string | null;
+  sourceUrl: string | null;
+  evidence: Array<{
+    label: string;
+    value: string;
+    tone: "SUCCESS" | "WARNING" | "NEUTRAL";
+  }>;
+  autoHeldReasons: string[];
+};
+
+function readCompletionTransitionPayload(payload: unknown): CompletionTransitionPayload | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const value = payload as Record<string, unknown>;
+  if (value.intent !== "COMPLETE" && value.intent !== "RECOVER") return null;
+  const evidence: CompletionTransitionPayload["evidence"] = Array.isArray(value.evidence)
+    ? value.evidence.flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const row = item as Record<string, unknown>;
+        if (typeof row.label !== "string" || typeof row.value !== "string") return [];
+        return [
+          {
+            label: row.label,
+            value: row.value,
+            tone:
+              row.tone === "SUCCESS" || row.tone === "WARNING" ? row.tone : ("NEUTRAL" as const),
+          },
+        ];
+      })
+    : [];
+  return {
+    intent: value.intent,
+    sourceLabel: typeof value.sourceLabel === "string" ? value.sourceLabel : null,
+    sourceUrl: typeof value.sourceUrl === "string" ? value.sourceUrl : null,
+    evidence,
+    autoHeldReasons: Array.isArray(value.autoHeldReasons)
+      ? value.autoHeldReasons.filter((reason): reason is string => typeof reason === "string")
+      : [],
+  };
+}
+
+function CompletionEvidenceSummary({
+  completion,
+  issueId,
+  workspaceSlug,
+}: {
+  completion: CompletionTransitionPayload;
+  issueId?: string;
+  workspaceSlug: string;
+}) {
+  return (
+    <div className="text-meta rounded-md border border-border bg-background/40 px-2.5 py-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium text-foreground">
+          {completion.intent === "COMPLETE" ? "Ready-to-close evidence" : "Recovery options"}
+        </span>
+        {completion.sourceUrl && (
+          <a
+            href={completion.sourceUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="focus-ring inline-flex items-center gap-1 rounded text-muted-foreground hover:text-foreground"
+          >
+            <GitPullRequest className="h-3 w-3" />
+            {completion.sourceLabel ?? "View source"}
+            <ExternalLink className="h-2.5 w-2.5" />
+          </a>
+        )}
+        {completion.intent === "RECOVER" && issueId && (
+          <Link
+            href={`/w/${workspaceSlug}/issues/${issueId}#github-links`}
+            className="focus-ring inline-flex items-center gap-1 rounded text-muted-foreground hover:text-foreground"
+          >
+            Link replacement PR
+          </Link>
+        )}
+      </div>
+      {(completion.evidence.length > 0 || completion.autoHeldReasons.length > 0) && (
+        <details className="mt-1.5">
+          <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
+            View evidence
+            {completion.autoHeldReasons.length > 0
+              ? ` · ${completion.autoHeldReasons.length} auto-completion hold${completion.autoHeldReasons.length === 1 ? "" : "s"}`
+              : ""}
+          </summary>
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+            {completion.evidence.map((item, index) => (
+              <div
+                key={`${item.label}-${index}`}
+                className="rounded border border-border/70 bg-card/40 px-2 py-1.5"
+              >
+                <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                  {item.label}
+                </div>
+                <div
+                  className={
+                    item.tone === "SUCCESS"
+                      ? "text-ember"
+                      : item.tone === "WARNING"
+                        ? "text-warning"
+                        : "text-foreground/80"
+                  }
+                >
+                  {item.value}
+                </div>
+              </div>
+            ))}
+          </div>
+          {completion.autoHeldReasons.length > 0 && (
+            <ul className="mt-2 list-disc space-y-0.5 pl-4 text-warning">
+              {completion.autoHeldReasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          )}
+        </details>
+      )}
     </div>
   );
 }
@@ -602,7 +764,7 @@ function readRuntimeToolGrantPayload(payload: unknown): RuntimeToolGrantPayload 
 function RuntimeToolGrantSummary({ grant }: { grant: RuntimeToolGrantPayload }) {
   const access = grant.accessLevel === "READ_ONLY" ? "read-only" : "full";
   return (
-    <div className="grid gap-2 rounded-md border border-border bg-background/40 p-2 text-meta sm:grid-cols-2">
+    <div className="text-meta grid gap-2 rounded-md border border-border bg-background/40 p-2 sm:grid-cols-2">
       <div className="min-w-0">
         <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/80">
           Run
@@ -711,6 +873,12 @@ function kindChipLabel(
       return null;
     case "TRANSITION": {
       const id = typeof p.statusId === "string" ? p.statusId : "?";
+      if (p.intent === "COMPLETE") {
+        return { label: "ready to close", title: "Will mark the issue done" };
+      }
+      if (p.intent === "RECOVER") {
+        return { label: "recovery", title: "Will return the issue to active work" };
+      }
       return {
         label: `transition · ${id.slice(0, 6)}…`,
         title: `Will move issue to status ${id}`,
@@ -744,8 +912,7 @@ function kindChipLabel(
         title: "Will soft-delete the issue",
       };
     case "CLOSE_AS_DUPLICATE": {
-      const id =
-        typeof p.duplicateOfIssueId === "string" ? p.duplicateOfIssueId : "?";
+      const id = typeof p.duplicateOfIssueId === "string" ? p.duplicateOfIssueId : "?";
       return {
         label: `dup of · ${id.slice(0, 6)}…`,
         title: `Will mark issue as duplicate of ${id}`,
