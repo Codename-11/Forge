@@ -10,9 +10,8 @@ import {
 } from "@/server/routers/__tests__/helpers";
 
 /**
- * Coverage for the audit.ts fan-out branches that emit SYSTEM comments
- * (assignment notice) and route AGENT_RUN_BLOCKED to the owning agent's
- * webhook. Real Postgres, no mocks.
+ * Coverage for assignment comments and the activity-event → agent-wake
+ * boundary. Real Postgres, no mocks.
  */
 
 const fixtures: TestFixture[] = [];
@@ -83,7 +82,9 @@ describe("audit.ts — AGENT_ASSIGNED system comment", () => {
     expect(sys[0].authoringAgentId).toBeNull();
     expect(sys[0].body).toContain(`@${agent.profileKey}`);
     expect(sys[0].body).toContain(fixture.user.name ?? "");
-    expect(sys[0].body).toContain("_Runtime: Test runtime · local daemon · tools from local daemon._");
+    expect(sys[0].body).toContain(
+      "_Runtime: Test runtime · local daemon · tools from local daemon._",
+    );
 
     // The SYSTEM comment is NOT routed through recordChange — verify
     // no COMMENT_CREATED row fired for it.
@@ -357,6 +358,28 @@ describe("audit.ts — watcher fan-out", () => {
       },
     });
     expect(deliveries).toHaveLength(0);
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Issue",
+      entityId: issue.id,
+      action: "set-labels",
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { labelIds: ["label-bug"], operation: "add" },
+    });
+    const labelEvent = await prisma.activityEvent.findFirstOrThrow({
+      where: { subjectId: issue.id, kind: EventKind.ISSUE_UPDATED },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(
+      await prisma.agentRun.count({
+        where: { issueId: issue.id, agentId: agent.id, triggerEventId: labelEvent.id },
+      }),
+    ).toBe(0);
+    expect(await prisma.webhookDelivery.count({ where: { eventId: labelEvent.id } })).toBe(0);
   });
 
   it("does not re-page watchers for rolling STATUS comment updates", async () => {
@@ -499,6 +522,181 @@ describe("audit.ts — watcher fan-out", () => {
     expect(deliveries).toHaveLength(1);
   });
 
+  it("does not let an agent-authored terminal comment wake its own replacement run", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WFS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wfs-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/victor",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        wakeOnActivity: true,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: null,
+      actorAgentId: agent.id,
+      entity: "Comment",
+      entityId: "terminal-comment-id",
+      action: "create",
+      eventKind: EventKind.COMMENT_CREATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: {
+        commentId: "terminal-comment-id",
+        issueId: issue.id,
+        preview: "[dispatch · run stalled]",
+        // Intentionally omit payload.agentId: actorAgentId is authoritative.
+      },
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        subjectId: issue.id,
+        kind: EventKind.COMMENT_CREATED,
+      },
+    });
+    expect(
+      await prisma.agentRun.count({
+        where: { workspaceId: fixture.workspace.id, issueId: issue.id },
+      }),
+    ).toBe(0);
+    expect(await prisma.webhookDelivery.count({ where: { eventId: event.id } })).toBe(0);
+  });
+
+  it("does not treat actor-less automated comments as operator replies", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WFA" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wfa-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/victor",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        wakeOnActivity: true,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: null,
+      entity: "Comment",
+      entityId: "automated-comment-id",
+      action: "create",
+      eventKind: EventKind.COMMENT_CREATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { commentId: "automated-comment-id", issueId: issue.id, kind: "BODY" },
+    });
+
+    expect(
+      await prisma.agentRun.count({
+        where: { workspaceId: fixture.workspace.id, issueId: issue.id },
+      }),
+    ).toBe(0);
+  });
+
+  it("turns a nudge comment into one wake instead of dispatching its marker twice", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WFN" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wfn-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/victor",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        wakeOnActivity: true,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Comment",
+      entityId: "nudge-comment-id",
+      action: "create",
+      eventKind: EventKind.COMMENT_CREATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: {
+        commentId: "nudge-comment-id",
+        issueId: issue.id,
+        kind: "BODY",
+        isNudge: true,
+        mentions: { agentIds: [agent.id], userIds: [] },
+      },
+    });
+    const commentEvent = await prisma.activityEvent.findFirstOrThrow({
+      where: { subjectId: issue.id, kind: EventKind.COMMENT_CREATED },
+    });
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Issue",
+      entityId: issue.id,
+      action: "nudge",
+      eventKind: EventKind.ISSUE_NUDGED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { commentId: "nudge-comment-id", agentId: agent.id },
+    });
+    const nudgeEvent = await prisma.activityEvent.findFirstOrThrow({
+      where: { subjectId: issue.id, kind: EventKind.ISSUE_NUDGED },
+    });
+
+    const runs = await prisma.agentRun.findMany({ where: { issueId: issue.id } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.triggerEventId).toBe(commentEvent.id);
+    expect(await prisma.webhookDelivery.count({ where: { eventId: commentEvent.id } })).toBe(1);
+    expect(await prisma.webhookDelivery.count({ where: { eventId: nudgeEvent.id } })).toBe(0);
+  });
+
   it("does not open work for a former assigned-agent watcher when another agent is mentioned", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "WF4" });
     fixtures.push(fixture);
@@ -598,7 +796,7 @@ describe("audit.ts — watcher fan-out", () => {
     expect(deliveries[0]?.webhook.url).toBe(agentDispatchUrlFor(victor.id));
   });
 
-  it("only wakes agent watchers that are activity-wake enabled for generic issue activity", async () => {
+  it("does not wake agent watchers for a downward priority change", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "WF5" });
     fixtures.push(fixture);
     const prisma = getPrisma();
@@ -639,6 +837,10 @@ describe("audit.ts — watcher fan-out", () => {
       ],
     });
 
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: active.id },
+    });
     await recordChange(prisma, {
       workspaceId: fixture.workspace.id,
       actorId: fixture.user.id,
@@ -648,7 +850,7 @@ describe("audit.ts — watcher fan-out", () => {
       eventKind: EventKind.ISSUE_PRIORITY_CHANGED,
       subjectType: "issue",
       subjectId: issue.id,
-      payload: { priority: "HIGH" },
+      payload: { from: "HIGH", to: "LOW" },
     });
 
     const event = await prisma.activityEvent.findFirstOrThrow({
@@ -666,7 +868,7 @@ describe("audit.ts — watcher fan-out", () => {
         triggerEventId: event.id,
       },
     });
-    expect(runs.map((run) => run.agentId)).toEqual([active.id]);
+    expect(runs).toHaveLength(0);
 
     const deliveries = await prisma.webhookDelivery.findMany({
       where: {
@@ -678,7 +880,65 @@ describe("audit.ts — watcher fan-out", () => {
       },
       include: { webhook: true },
     });
+    expect(deliveries).toHaveLength(0);
+  });
+
+  it("wakes only the assigned agent once for a genuine priority escalation", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "WF6" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Victor",
+        profileKey: `wf6-victor-${Date.now()}`,
+        webhookUrl: "https://example.invalid/victor",
+        webhookSecret: "test-secret",
+      },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        wakeOnActivity: true,
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Issue",
+      entityId: issue.id,
+      action: "priority",
+      eventKind: EventKind.ISSUE_PRIORITY_CHANGED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { from: "MEDIUM", to: "HIGH" },
+    });
+
+    const event = await prisma.activityEvent.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.ISSUE_PRIORITY_CHANGED,
+        subjectId: issue.id,
+      },
+    });
+    expect(
+      await prisma.agentRun.count({
+        where: { issueId: issue.id, agentId: agent.id, triggerEventId: event.id },
+      }),
+    ).toBe(1);
+    const deliveries = await prisma.webhookDelivery.findMany({
+      where: { eventId: event.id },
+      include: { webhook: true },
+    });
     expect(deliveries).toHaveLength(1);
-    expect(deliveries[0]?.webhook.url).toBe(agentDispatchUrlFor(active.id));
+    expect(deliveries[0]?.webhook.url).toBe(agentDispatchUrlFor(agent.id));
   });
 });

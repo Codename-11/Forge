@@ -1561,6 +1561,7 @@ export async function decomposeGoal(
           triggerEventId: event.id,
           triggerKind: EventKind.ISSUE_UPDATED,
           currentStep: `Planning: ${goal.title}`,
+          resumeWaiting: true,
           ...orchestrationRunStamp(plannerDispatchAgent, EngagementMode.DISCUSS),
         });
       } else {
@@ -2308,6 +2309,7 @@ async function transitionStepToReady(
         triggerKind: EventKind.EXECUTION_STEP_READY,
         currentStep: step.title,
         executionStepId: step.id,
+        resumeWaiting: true,
         ...orchestrationRunStamp(worker),
       });
     }
@@ -2531,6 +2533,7 @@ export async function retryExecutionStep(
       triggerKind: EventKind.EXECUTION_STEP_READY,
       currentStep: step.title,
       executionStepId: step.id,
+      resumeWaiting: true,
       ...orchestrationRunStamp(worker),
     });
 
@@ -2665,6 +2668,7 @@ export async function dispatchJudge(
       triggerKind: EventKind.EXECUTION_STEP_READY,
       currentStep: `Reviewing: ${step.title}`,
       executionStepId: step.id,
+      resumeWaiting: true,
       ...orchestrationRunStamp(judge, EngagementMode.REVIEW),
     });
     const isRuntimeOnlyJudge = Boolean(judge.runtimeId && !judge.webhookUrl);

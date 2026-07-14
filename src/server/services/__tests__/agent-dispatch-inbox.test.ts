@@ -100,6 +100,54 @@ describe("agent-dispatch-inbox — ensureCanonicalFromEvent", () => {
     expect(run!.assignmentEventId).toBe(run!.triggerEventId);
   });
 
+  it("reactivates a webhook/completions WAITING run for an actionable human reply", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "INR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "inr-a1");
+    await prisma.agent.update({
+      where: { id: agent.id },
+      data: { runEngine: "COMPLETIONS" },
+    });
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        wakeOnActivity: true,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "WAITING",
+      },
+    });
+
+    await recordChange(prisma, {
+      workspaceId: fixture.workspace.id,
+      actorId: fixture.user.id,
+      entity: "Comment",
+      entityId: "inr-reply",
+      action: "create",
+      eventKind: EventKind.COMMENT_CREATED,
+      subjectType: "issue",
+      subjectId: issue.id,
+      payload: { commentId: "inr-reply", issueId: issue.id, kind: "BODY" },
+    });
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe("ACTIVE");
+    expect(after.triggerKind).toBe(EventKind.COMMENT_CREATED);
+  });
+
   it("binds an ordinary materialized-issue assignment back to its single active step", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "INS" });
     fixtures.push(fixture);

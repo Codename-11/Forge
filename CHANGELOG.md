@@ -11,6 +11,18 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-14] — v0.13.1 · Reliable agent wake boundaries
+
+### Changed
+
+- **Activity and notifications no longer imply agent work.** Labels, ordinary status changes, non-escalating priority changes, stall and SLA markers, coach output, and other system activity remain visible without invoking an LLM.
+- **Waiting agents resume through an explicit, engine-aware boundary.** Actionable human replies, direct mentions, explicit restarts, reassignment, and true priority escalation can wake work; RUNS agents receive a fresh provider turn while webhook and completions agents reactivate directly.
+
+### Fixed
+
+- **Agent output cannot wake its author.** Terminal and stalled replies, blocking markers, and automated comments no longer create replacement runs, while nudges produce one delivery instead of two.
+- **Every terminal run leaves exactly one durable issue reply.** Completion, stall, and abandonment comments are claimed atomically so concurrent pollers cannot duplicate them.
+
 ## [2026-07-14] — v0.13.0 · Reliable lifecycle operations
 
 ### Added

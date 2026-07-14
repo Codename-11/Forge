@@ -102,6 +102,63 @@ describe("issueRouter — list filtering", () => {
   });
 });
 
+describe("issueRouter — agent wake boundaries", () => {
+  it("records a human status transition without resuming the assigned agent", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Metadata is not a prompt" });
+    const currentIssue = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      select: { statusId: true },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Status worker",
+        profileKey: `status-worker-${Date.now()}`,
+      },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    const pausedAt = new Date(Date.now() - 60_000);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        lastEventAt: pausedAt,
+        currentStep: "waiting for the operator",
+      },
+    });
+    const nextStatus = await prisma.status.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        id: { not: currentIssue.statusId },
+        category: { in: ["TODO", "IN_PROGRESS"] },
+      },
+    });
+
+    await caller.update({ id: issue.id, statusId: nextStatus.id });
+
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe(AgentRunStatus.WAITING);
+    expect(after.lastEventAt).toEqual(pausedAt);
+    expect(after.currentStep).toBe("waiting for the operator");
+    expect(
+      await prisma.activityEvent.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          subjectId: issue.id,
+          kind: "ISSUE_STATUS_CHANGED",
+        },
+      }),
+    ).toBe(1);
+  });
+});
+
 describe("issueRouter — archive integrity", () => {
   it("archives reversibly, closes live work, clears dispatch state, and audits both directions", async () => {
     const { caller, fixture } = await setup();

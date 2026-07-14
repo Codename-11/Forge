@@ -74,9 +74,10 @@ function publishRunEvent(params: {
  * enforces it.
  *
  * "Non-terminal" includes both ACTIVE and WAITING. A WAITING run is a
- * patient agent that's blocked on the operator; subsequent activity
- * (operator nudge, MCP write) should resume it rather than open a
- * fresh second run — `openOrTouchRun` handles the resume.
+ * patient agent that's blocked on the operator. Incidental output touches
+ * reuse it without resuming; only callers with explicit resume authority
+ * may flip it ACTIVE, so a held run never becomes work because metadata or
+ * an automated comment changed.
  */
 export async function findActiveRun(
   tx: Tx,
@@ -181,6 +182,14 @@ export async function openOrTouchRun(
     triggerEventId?: string | null;
     /** String mirror of ActivityEvent.kind for the latest wake. */
     triggerKind?: string | null;
+    /**
+     * Explicit authority to move a parked WAITING run back to ACTIVE.
+     * Output/status touches leave this false; assignments, agent-owned
+     * transitions, and operator resume controls set it true. Human replies
+     * for RUNS engines stay WAITING until resumeWaitingRuns starts a fresh
+     * provider turn with the reply context.
+     */
+    resumeWaiting?: boolean;
   },
 ): Promise<{ run: AgentRun; isNew: boolean }> {
   const existing = await findActiveRun(tx, {
@@ -209,7 +218,9 @@ export async function openOrTouchRun(
     // Conscious choice not to emit a separate event here — the
     // triggering caller (comment.create, MCP write, etc.) already
     // records its own audit row.
-    const resumeFromWaiting = existing.status === AgentRunStatus.WAITING;
+    const resumeAuthorized = params.resumeWaiting ?? Boolean(params.assignmentEventId);
+    const resumeFromWaiting = existing.status === AgentRunStatus.WAITING && resumeAuthorized;
+    const preserveParkedWaiting = existing.status === AgentRunStatus.WAITING && !resumeFromWaiting;
     // Re-arm run-budget enforcement when a paused run resumes. Inlined (not
     // imported from run-budget.ts) to avoid a module cycle — run-budget
     // already imports this file. No-op unless a budget breach/warn marker is
@@ -238,7 +249,7 @@ export async function openOrTouchRun(
     const updated = await tx.agentRun.update({
       where: { id: existing.id },
       data: {
-        lastEventAt: new Date(),
+        ...(!preserveParkedWaiting ? { lastEventAt: new Date() } : {}),
         ...(resumeFromWaiting
           ? { status: AgentRunStatus.ACTIVE, controlState: "NONE", controlRequestedAt: null }
           : {}),
@@ -503,32 +514,45 @@ export async function finishRun(
     });
   }
 
-  let finished: AgentRun;
-  if (params.status === "COMPLETED") {
-    const completionMeta =
-      existing.completionMeta &&
-      typeof existing.completionMeta === "object" &&
-      !Array.isArray(existing.completionMeta)
-        ? { ...(existing.completionMeta as Record<string, unknown>) }
-        : {};
-    const knownCommentId = completionMeta.completionCommentId;
-    if (typeof knownCommentId !== "string" || !knownCommentId) {
-      const body = params.summary?.trim() || existing.summary?.trim() || "Run completed.";
-      const comment = await postAgentRunComment(tx, {
-        workspaceId: params.workspaceId,
-        issueId: params.issueId,
-        agentId: params.agentId,
-        body,
-      });
-      completionMeta.completionCommentId = comment.id;
-    }
-    finished = await tx.agentRun.update({
-      where: { id: params.runId },
-      data: { completionMeta: completionMeta as Prisma.InputJsonValue },
+  // Every terminal run gets exactly one durable issue comment. Keeping this
+  // inside the row-claim boundary makes failure comments idempotent too: two
+  // polling workers can observe the same provider terminal state, but only the
+  // winner above reaches this side effect. Previously the dispatcher posted a
+  // STALLED comment after finishRun returned, so a race could post twice and
+  // each comment could self-wake the same agent.
+  const completionMeta =
+    existing.completionMeta &&
+    typeof existing.completionMeta === "object" &&
+    !Array.isArray(existing.completionMeta)
+      ? { ...(existing.completionMeta as Record<string, unknown>) }
+      : {};
+  const knownTerminalCommentId =
+    typeof completionMeta.terminalCommentId === "string"
+      ? completionMeta.terminalCommentId
+      : params.status === "COMPLETED" && typeof completionMeta.completionCommentId === "string"
+        ? completionMeta.completionCommentId
+        : null;
+  if (!knownTerminalCommentId) {
+    const summary = params.summary?.trim() || existing.summary?.trim();
+    const body =
+      params.status === "COMPLETED"
+        ? summary || "Run completed."
+        : params.status === "STALLED"
+          ? `[dispatch · run stalled]\n\n${summary || "The run stopped making progress before it completed."}`
+          : `[dispatch · run abandoned]\n\n${summary || "The run was stopped before it completed."}`;
+    const comment = await postAgentRunComment(tx, {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      agentId: params.agentId,
+      body,
     });
-  } else {
-    finished = await tx.agentRun.findUniqueOrThrow({ where: { id: params.runId } });
+    completionMeta.terminalCommentId = comment.id;
+    if (params.status === "COMPLETED") completionMeta.completionCommentId = comment.id;
   }
+  const finished = await tx.agentRun.update({
+    where: { id: params.runId },
+    data: { completionMeta: completionMeta as Prisma.InputJsonValue },
+  });
 
   await tx.agentRunEvent.create({
     data: {
@@ -609,6 +633,7 @@ export async function postAgentRunComment(
     payload: {
       commentId: comment.id,
       issueId: params.issueId,
+      agentId: params.agentId,
       preview: params.body.slice(0, 120),
     },
   });
@@ -637,6 +662,7 @@ export async function recordAgentAction(
     actorId?: string | null;
     actorAgentId?: string | null;
     assignmentEventId?: string | null;
+    resumeWaiting?: boolean;
   },
 ): Promise<{ runId: string; isNewRun: boolean }> {
   const { run, isNew } = await openOrTouchRun(tx, {
@@ -647,6 +673,7 @@ export async function recordAgentAction(
     actorAgentId: params.actorAgentId ?? null,
     assignmentEventId: params.assignmentEventId ?? null,
     currentStep: params.currentStep,
+    resumeWaiting: params.resumeWaiting ?? false,
   });
 
   // Skip the "STARTED" duplicate event when the run was just opened —

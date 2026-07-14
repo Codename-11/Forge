@@ -1896,6 +1896,7 @@ export const mcpTools = {
             actorId,
             actorAgentId: agentId,
             currentStep: `→ ${status.name}`,
+            resumeWaiting: true,
           });
           if (!isNew) {
             await appendRunEvent(tx, {
@@ -6473,6 +6474,7 @@ export const mcpTools = {
           actorAgentId: linkedAgentId,
           engagementMode: (input.mode as EngagementMode | undefined) ?? "EXECUTE",
           currentStep: input.summary ?? "opened by agent",
+          resumeWaiting: true,
         }),
       );
       return { runId: run.id, isNew, status: run.status, issueId: issue.id };
@@ -6893,16 +6895,13 @@ export const mcpTools = {
    *    resumes via `runs.resumeWork`, the stale timer measures
    *    against the resume moment, not the original block moment.
    *  - If `blocking: true`, also emits `AGENT_RUN_BLOCKED` via the
-   *    standard `recordChange` flow. The audit fan-out branch in
-   *    `audit.ts` then notifies the agent's webhook so its runtime
-   *    sees the block confirmed. Set `blocking: false` (default) for
-   *    silent waits that don't need to wake anyone.
+   *    standard `recordChange` flow for operator alerts, activity, and
+   *    notifications. It deliberately does not dispatch back to the agent
+   *    that just parked itself.
    *
-   * Resuming work later: call `runs.resumeWork({ runId })`. Any
-   * subsequent activity routed through `openOrTouchRun` (a comment,
-   * a status upsert) will also auto-resume the run, so the explicit
-   * `resumeWork` call is only required for "I'm back" pings that
-   * don't otherwise touch the run.
+   * Resuming work later: call `runs.resumeWork({ runId })`, or let an
+   * actionable operator reply reach the dedicated RUNS resume dispatcher.
+   * Status output and unrelated issue changes leave the run parked.
    */
   "runs.setWaiting": {
     scopes: ["WRITE_ISSUES"] as const,
@@ -6919,7 +6918,7 @@ export const mcpTools = {
         .boolean()
         .default(false)
         .describe(
-          "When true, emit AGENT_RUN_BLOCKED so the agent's webhook is notified. Default false for silent waits.",
+          "When true, emit AGENT_RUN_BLOCKED for operator activity and notifications. It does not wake the parked agent.",
         ),
     }),
     async run(input: { runId: string; reason?: string; blocking: boolean }, ctx: McpContext) {

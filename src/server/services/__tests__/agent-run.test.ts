@@ -166,6 +166,116 @@ describe("agent-run lifecycle", () => {
     ).toBe(1);
   });
 
+  it("posts one stalled terminal comment without opening a replacement run", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "ars-a1");
+    const issue = await createIssue(fixture);
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { assignedAgentId: agent.id },
+    });
+    await prisma.issueWatcher.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        wakeOnActivity: true,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+      },
+    });
+
+    await Promise.all([
+      prisma.$transaction((tx) =>
+        finishRun(tx, {
+          runId: run.id,
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          status: "STALLED",
+          summary: "Provider contract ended unexpectedly.",
+        }),
+      ),
+      prisma.$transaction((tx) =>
+        finishRun(tx, {
+          runId: run.id,
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: agent.id,
+          status: "STALLED",
+          summary: "Provider contract ended unexpectedly.",
+        }),
+      ),
+    ]);
+
+    const runs = await prisma.agentRun.findMany({ where: { issueId: issue.id } });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]?.status).toBe(AgentRunStatus.STALLED);
+    expect(
+      await prisma.comment.count({
+        where: {
+          issueId: issue.id,
+          authoringAgentId: agent.id,
+          body: { contains: "[dispatch · run stalled]" },
+        },
+      }),
+    ).toBe(1);
+    expect(
+      await prisma.webhookDelivery.count({
+        where: { event: { subjectType: "issue", subjectId: issue.id } },
+      }),
+    ).toBe(0);
+  });
+
+  it("keeps an incidental touch parked until resume authority is explicit", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arp-a1");
+    const issue = await createIssue(fixture);
+    const pausedAt = new Date(Date.now() - 60_000);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        lastEventAt: pausedAt,
+      },
+    });
+
+    const parked = await prisma.$transaction((tx) =>
+      openOrTouchRun(tx, {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        triggerEventId: "informational-touch",
+        triggerKind: EventKind.COMMENT_CREATED,
+      }),
+    );
+    expect(parked.run.status).toBe(AgentRunStatus.WAITING);
+    expect(parked.run.lastEventAt).toEqual(pausedAt);
+
+    const resumed = await prisma.$transaction((tx) =>
+      openOrTouchRun(tx, {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        resumeWaiting: true,
+      }),
+    );
+    expect(resumed.run.id).toBe(run.id);
+    expect(resumed.run.status).toBe(AgentRunStatus.ACTIVE);
+    expect(resumed.run.lastEventAt.getTime()).toBeGreaterThan(pausedAt.getTime());
+  });
+
   it("a fresh assignment touch re-stamps mode + source and resumes WAITING (Phase 2)", async () => {
     // A genuine AGENT_ASSIGNED (fresh assignmentEventId) is an authoritative
     // (re)dispatch: the resolved mode the inbox passes in wins. Sticky-mode
