@@ -11,6 +11,14 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+### Added
+
+- **Linked implementation PRs now self-heal after missed GitHub webhooks.** A settings-driven stale-only worker refreshes PR lifecycle and aggregate checks with bounded batches, restart-safe leases, provider-aware rate-limit backoff, and visible retry diagnostics.
+
+### Fixed
+
+- **GitHub status recovery cannot certify stale or partial evidence.** New PR heads invalidate cached checks, late check events for older heads are ignored, partial GitHub App permissions remain non-blocking, and merged PRs without confirmed checks back off instead of polling hot or closing issues.
+
 ## [2026-07-14] — v0.14.0 · Proactive completion handoff
 
 ### Added

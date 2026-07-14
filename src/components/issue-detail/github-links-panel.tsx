@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { ExternalLink, GitPullRequest, Github, Plus, RefreshCw } from "lucide-react";
+import { AlertTriangle, ExternalLink, GitPullRequest, Github, Plus, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { trpc } from "@/lib/trpc";
-import { relativeTime } from "@/lib/utils";
+import { formatDate, relativeTime } from "@/lib/utils";
 import { GitHubLinkModal } from "@/components/issue-detail/github-link-modal";
 
 function kindLabel(kind: string): string {
@@ -95,6 +95,25 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
                           <span>synced {relativeTime(resource.lastSyncedAt)}</span>
                         )}
                       </div>
+                      {resource.syncLastError && (
+                        <div
+                          className="mt-1 flex items-start gap-1 text-[0.6875rem] text-warning"
+                          title={resource.syncLastError}
+                        >
+                          <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                          <span className="line-clamp-2">
+                            GitHub refresh delayed
+                            {resource.syncRetryAt
+                              ? ` · retry ${formatDate(resource.syncRetryAt, undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                })}`
+                              : ""}
+                          </span>
+                        </div>
+                      )}
                     </div>
                     <Button
                       type="button"

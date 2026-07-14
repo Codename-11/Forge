@@ -39,11 +39,13 @@ type GitHubWebhookPayload = {
   pull_request?: GitHubPullResponse;
   review?: { state?: string | null };
   check_suite?: {
+    head_sha?: string | null;
     conclusion?: string | null;
     status?: string | null;
     pull_requests?: Array<{ number?: number | null; url?: string | null }>;
   };
   check_run?: {
+    head_sha?: string | null;
     conclusion?: string | null;
     status?: string | null;
     pull_requests?: Array<{ number?: number | null; url?: string | null }>;
@@ -384,7 +386,7 @@ async function processCheckEvent(args: {
       resourceType: "PULL_REQUEST",
       number: { in: numbers },
     },
-    select: { id: true, number: true, metadata: true },
+    select: { id: true, number: true, state: true, metadata: true },
   });
   if (resources.length === 0) return 0;
 
@@ -401,6 +403,14 @@ async function processCheckEvent(args: {
         metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
           ? (metadata.checks as Record<string, unknown>)
           : {};
+      const head =
+        metadata.head && typeof metadata.head === "object" && !Array.isArray(metadata.head)
+          ? (metadata.head as Record<string, unknown>)
+          : {};
+      const eventHeadSha = args.payload.check_suite?.head_sha ?? args.payload.check_run?.head_sha;
+      if (eventHeadSha && typeof head.sha === "string" && head.sha !== eventHeadSha) {
+        continue;
+      }
       // A check_suite conclusion is aggregate. A successful check_run only
       // proves one job passed, so it must not certify the whole PR; failures
       // remain safe to persist immediately.
@@ -421,8 +431,19 @@ async function processCheckEvent(args: {
               updatedAt: new Date().toISOString(),
               event: args.payload.check_suite ? "check_suite" : "check_run",
               ...(args.payload.check_run ? { lastRunConclusion: conclusion } : {}),
+              ...(eventHeadSha ? { headSha: eventHeadSha } : {}),
             },
           } as Prisma.InputJsonValue,
+          syncAttemptedAt: new Date(),
+          syncRetryAt: null,
+          syncFailureCount: 0,
+          syncLastError: null,
+          syncTerminalAt:
+            resource.state === "merged" &&
+            aggregateConclusion !== null &&
+            ["success", "neutral", "skipped"].includes(aggregateConclusion)
+              ? new Date()
+              : null,
         },
       });
       processed += 1;

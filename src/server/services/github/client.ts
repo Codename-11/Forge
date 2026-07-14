@@ -62,6 +62,46 @@ type GitHubListReposResponse = {
   repositories?: GitHubRepoResponse[];
 };
 
+type GitHubCheckSuite = {
+  status?: string | null;
+  conclusion?: string | null;
+};
+
+type GitHubCheckSuitesResponse = {
+  total_count?: number;
+  check_suites?: GitHubCheckSuite[];
+};
+
+type GitHubCombinedStatusResponse = {
+  state?: "error" | "failure" | "pending" | "success";
+  total_count?: number;
+};
+
+export type GitHubChecksSnapshot = {
+  status: "completed" | "pending" | "unknown";
+  conclusion: string | null;
+  suiteCount: number;
+  statusCount: number;
+  updatedAt: string;
+  source: "reconciliation";
+  partial: boolean;
+  diagnostic: string | null;
+  retryAt: string | null;
+  headSha: string;
+};
+
+export class GitHubRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly retryAt: Date | null,
+    readonly rateLimited: boolean = status === 429,
+  ) {
+    super(message);
+    this.name = "GitHubRequestError";
+  }
+}
+
 export type GitHubInstallationResponse = {
   id: number;
   account?: { login?: string | null; type?: string | null } | null;
@@ -120,7 +160,19 @@ async function githubRequest<T>(
       json && typeof json === "object" && "message" in json && typeof json.message === "string"
         ? json.message
         : `GitHub API returned HTTP ${res.status}.`;
-    throw new Error(message);
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const rateLimitReset = Number(res.headers.get("x-ratelimit-reset"));
+    const retryAt =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? new Date(Date.now() + retryAfter * 1000)
+        : Number.isFinite(rateLimitReset) && rateLimitReset > 0
+          ? new Date(rateLimitReset * 1000)
+          : null;
+    const rateLimited =
+      res.status === 429 ||
+      (res.status === 403 &&
+        (res.headers.has("retry-after") || res.headers.get("x-ratelimit-remaining") === "0"));
+    throw new GitHubRequestError(message, res.status, retryAt, rateLimited);
   }
   return json as T;
 }
@@ -138,9 +190,7 @@ function labels(labels: GitHubLabel[] | undefined): Array<{ name: string; color:
 }
 
 function assignees(users: GitHubUser[] | undefined): Array<{ login: string }> {
-  return (users ?? [])
-    .map((u) => ({ login: u.login ?? "" }))
-    .filter((u) => u.login.length > 0);
+  return (users ?? []).map((u) => ({ login: u.login ?? "" })).filter((u) => u.login.length > 0);
 }
 
 export async function getGitHubIssue(args: {
@@ -165,6 +215,88 @@ export async function getGitHubPullRequest(args: {
     args.installationId,
     `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/pulls/${args.number}`,
   );
+}
+
+/**
+ * Read both GitHub Checks and legacy commit statuses for a PR head. A passing
+ * result is only returned when every discovered signal is complete and green;
+ * zero discovered signals stays unknown and cannot certify completion.
+ */
+export async function getGitHubPullRequestChecks(args: {
+  installationId: string | number;
+  owner: string;
+  repo: string;
+  headSha: string;
+}): Promise<GitHubChecksSnapshot> {
+  const ref = encodeURIComponent(args.headSha);
+  const [suiteResult, statusResult] = await Promise.allSettled([
+    githubRequest<GitHubCheckSuitesResponse>(
+      args.installationId,
+      `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${ref}/check-suites?filter=latest&per_page=100`,
+    ),
+    githubRequest<GitHubCombinedStatusResponse>(
+      args.installationId,
+      `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${ref}/status`,
+    ),
+  ]);
+  const suites = suiteResult.status === "fulfilled" ? suiteResult.value : {};
+  const statuses = statusResult.status === "fulfilled" ? statusResult.value : {};
+  const rows = suites.check_suites ?? [];
+  const suiteCount = suites.total_count ?? rows.length;
+  const statusCount = statuses.total_count ?? 0;
+  const discovered = suiteCount + statusCount;
+  const pending =
+    rows.some((suite) => suite.status !== "completed") || statuses.state === "pending";
+  const failedSuite = rows.find(
+    (suite) =>
+      suite.status === "completed" &&
+      !!suite.conclusion &&
+      !["success", "neutral", "skipped"].includes(suite.conclusion),
+  );
+  const failedStatus = statuses.state === "failure" || statuses.state === "error";
+  const conclusion =
+    failedSuite?.conclusion ?? (failedStatus ? (statuses.state ?? "failure") : null);
+  const failures = [suiteResult, statusResult].filter(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
+  const incompleteSuites = suiteCount > rows.length;
+  const partial = failures.length > 0 || incompleteSuites;
+  const retryAt =
+    failures
+      .map((failure) =>
+        failure.reason instanceof GitHubRequestError ? failure.reason.retryAt : null,
+      )
+      .filter((value): value is Date => value instanceof Date)
+      .sort((a, b) => b.getTime() - a.getTime())[0] ?? null;
+
+  return {
+    status:
+      conclusion !== null
+        ? "completed"
+        : partial || discovered === 0
+          ? "unknown"
+          : pending
+            ? "pending"
+            : "completed",
+    conclusion: conclusion ?? (!partial && discovered > 0 && !pending ? "success" : null),
+    suiteCount,
+    statusCount,
+    updatedAt: new Date().toISOString(),
+    source: "reconciliation",
+    partial,
+    diagnostic: partial
+      ? [
+          ...failures.map((failure) =>
+            failure.reason instanceof Error ? failure.reason.message : "GitHub checks unavailable",
+          ),
+          ...(incompleteSuites ? ["More than 100 check suites require another page."] : []),
+        ]
+          .join("; ")
+          .slice(0, 2_000)
+      : null,
+    retryAt: retryAt?.toISOString() ?? null,
+    headSha: args.headSha,
+  };
 }
 
 export async function listGitHubInstallationRepos(args: {

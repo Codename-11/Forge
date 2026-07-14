@@ -16,6 +16,7 @@ import { reconcileGitHubPullRequestCompletion } from "@/server/services/completi
 import {
   getGitHubIssue,
   getGitHubPullRequest,
+  getGitHubPullRequestChecks,
   issueSnapshot,
   pullRequestSnapshot,
 } from "@/server/services/github/client";
@@ -127,7 +128,19 @@ export async function fetchGitHubSnapshotForParsed(
       repo: parsed.repo,
       number: parsed.number,
     });
-    return pullRequestSnapshot(parsed.repoFullName, pr);
+    const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
+    if (pr.head?.sha) {
+      snapshot.metadata = {
+        ...(snapshot.metadata as Record<string, unknown>),
+        checks: await getGitHubPullRequestChecks({
+          installationId,
+          owner: parsed.owner,
+          repo: parsed.repo,
+          headSha: pr.head.sha,
+        }),
+      };
+    }
+    return snapshot;
   }
   const issue = await getGitHubIssue({
     installationId,
@@ -142,7 +155,19 @@ export async function fetchGitHubSnapshotForParsed(
       repo: parsed.repo,
       number: parsed.number,
     });
-    return pullRequestSnapshot(parsed.repoFullName, pr);
+    const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
+    if (pr.head?.sha) {
+      snapshot.metadata = {
+        ...(snapshot.metadata as Record<string, unknown>),
+        checks: await getGitHubPullRequestChecks({
+          installationId,
+          owner: parsed.owner,
+          repo: parsed.repo,
+          headSha: pr.head.sha,
+        }),
+      };
+    }
+    return snapshot;
   }
   return issueSnapshot(parsed.repoFullName, issue);
 }
@@ -187,7 +212,7 @@ export async function upsertExternalResource(
         number: args.snapshot.number,
       },
     },
-    select: { metadata: true },
+    select: { metadata: true, syncFailureCount: true },
   });
   const existingMetadata =
     existing?.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata)
@@ -203,6 +228,45 @@ export async function upsertExternalResource(
     ...existingMetadata,
     ...snapshotMetadata,
   };
+  const existingHead =
+    existingMetadata.head &&
+    typeof existingMetadata.head === "object" &&
+    !Array.isArray(existingMetadata.head)
+      ? (existingMetadata.head as Record<string, unknown>)
+      : {};
+  const snapshotHead =
+    snapshotMetadata.head &&
+    typeof snapshotMetadata.head === "object" &&
+    !Array.isArray(snapshotMetadata.head)
+      ? (snapshotMetadata.head as Record<string, unknown>)
+      : {};
+  if (
+    typeof existingHead.sha === "string" &&
+    typeof snapshotHead.sha === "string" &&
+    existingHead.sha !== snapshotHead.sha &&
+    !("checks" in snapshotMetadata)
+  ) {
+    delete metadata.checks;
+  }
+  const checks =
+    metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
+      ? (metadata.checks as Record<string, unknown>)
+      : {};
+  const passingChecks =
+    checks.status === "completed" &&
+    typeof checks.conclusion === "string" &&
+    ["success", "neutral", "skipped"].includes(checks.conclusion);
+  const checksDiagnostic =
+    checks.partial === true && typeof checks.diagnostic === "string"
+      ? checks.diagnostic.slice(0, 2_000)
+      : null;
+  const checksRetryAt =
+    typeof checks.retryAt === "string" && Number.isFinite(Date.parse(checks.retryAt))
+      ? new Date(checks.retryAt)
+      : null;
+  const terminal =
+    args.snapshot.resourceType === "PULL_REQUEST" &&
+    (args.snapshot.state === "closed" || (args.snapshot.state === "merged" && passingChecks));
   const row = await db.externalResource.upsert({
     where: {
       workspaceId_provider_repoFullName_resourceType_number: {
@@ -233,6 +297,11 @@ export async function upsertExternalResource(
       externalCreatedAt: args.snapshot.externalCreatedAt ?? undefined,
       externalUpdatedAt: args.snapshot.externalUpdatedAt ?? undefined,
       lastSyncedAt: now,
+      syncAttemptedAt: now,
+      syncRetryAt: checksDiagnostic ? checksRetryAt : null,
+      syncFailureCount: checksDiagnostic ? 1 : 0,
+      syncLastError: checksDiagnostic,
+      syncTerminalAt: terminal ? now : undefined,
     },
     update: {
       connectionMappingId: args.connectionMappingId ?? undefined,
@@ -249,6 +318,11 @@ export async function upsertExternalResource(
       externalCreatedAt: args.snapshot.externalCreatedAt ?? undefined,
       externalUpdatedAt: args.snapshot.externalUpdatedAt ?? undefined,
       lastSyncedAt: now,
+      syncAttemptedAt: now,
+      syncRetryAt: checksDiagnostic ? checksRetryAt : null,
+      syncFailureCount: checksDiagnostic ? (existing?.syncFailureCount ?? 0) + 1 : 0,
+      syncLastError: checksDiagnostic,
+      syncTerminalAt: terminal ? now : null,
     },
   });
   return row;
@@ -601,13 +675,20 @@ export async function syncGitHubExternalResource(args: {
       },
     },
   });
-  if (!existing || !existing.connectionMapping) {
+  if (!existing) {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: "Linked GitHub resource with mapping not found.",
+      message: "Linked GitHub resource not found.",
     });
   }
-  const mapping = existing.connectionMapping as GitHubMappingWithConnection;
+  const mapping =
+    existing.connectionMapping?.status === "active"
+      ? (existing.connectionMapping as GitHubMappingWithConnection)
+      : await resolveGitHubRepoMapping({
+          db: args.db,
+          workspaceId: args.workspaceId,
+          repoFullName: existing.repoFullName,
+        });
   const snapshot = await fetchGitHubSnapshot({
     mapping,
     repoFullName: existing.repoFullName,

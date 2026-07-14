@@ -138,6 +138,11 @@ export const workspaceRouter = router({
         reviewStatusId: true,
         completionAutomation: true,
         completionStatusId: true,
+        githubSyncEnabled: true,
+        githubSyncStaleMinutes: true,
+        githubSyncBatchSize: true,
+        githubSyncBackoffMinutes: true,
+        githubSyncMaxBackoffMinutes: true,
         stalledThresholdDays: true,
         agentHeartbeatWarnMinutes: true,
         agentHeartbeatCriticalMinutes: true,
@@ -307,6 +312,11 @@ export const workspaceRouter = router({
         reviewStatusId: z.string().nullable().optional(),
         completionAutomation: z.nativeEnum(CompletionAutomation).optional(),
         completionStatusId: z.string().nullable().optional(),
+        githubSyncEnabled: z.boolean().optional(),
+        githubSyncStaleMinutes: z.number().int().min(0).max(10080).optional(),
+        githubSyncBatchSize: z.number().int().min(0).max(250).optional(),
+        githubSyncBackoffMinutes: z.number().int().min(1).max(1440).optional(),
+        githubSyncMaxBackoffMinutes: z.number().int().min(1).max(10080).optional(),
         assignmentEngagementMode: z.nativeEnum(EngagementMode).optional(),
         mentionEngagementPolicy: z.nativeEnum(MentionEngagementPolicy).optional(),
         mentionDefaultMode: z.nativeEnum(EngagementMode).optional(),
@@ -315,6 +325,26 @@ export const workspaceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const data = { ...input };
+      if (
+        input.githubSyncBackoffMinutes !== undefined ||
+        input.githubSyncMaxBackoffMinutes !== undefined
+      ) {
+        const current = await ctx.db.workspace.findUniqueOrThrow({
+          where: { id: ctx.workspaceId },
+          select: {
+            githubSyncBackoffMinutes: true,
+            githubSyncMaxBackoffMinutes: true,
+          },
+        });
+        const base = input.githubSyncBackoffMinutes ?? current.githubSyncBackoffMinutes;
+        const max = input.githubSyncMaxBackoffMinutes ?? current.githubSyncMaxBackoffMinutes;
+        if (max < base) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "GitHub maximum backoff must be at least the initial backoff.",
+          });
+        }
+      }
       // Validate startedStatusId belongs to this workspace and is in the
       // IN_PROGRESS category. Setting null to disable is fine.
       if (input.startedStatusId) {

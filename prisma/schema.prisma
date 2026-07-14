@@ -889,6 +889,17 @@ model Workspace {
   /// DONE-category status used by completion recommendations/automation.
   /// Null keeps completion candidates disabled until an admin chooses one.
   completionStatusId            String?
+  /// Self-heal missed GitHub webhooks by polling stale linked implementation
+  /// PRs. Webhooks remain the primary path; this only reconciles stale rows.
+  githubSyncEnabled             Boolean                  @default(true)
+  /// Minimum age of a successful GitHub snapshot before it may be polled.
+  githubSyncStaleMinutes        Int                      @default(15)
+  /// Maximum stale GitHub resources processed for this workspace per sweep.
+  githubSyncBatchSize           Int                      @default(25)
+  /// Initial retry delay for provider failures; retries grow exponentially.
+  githubSyncBackoffMinutes      Int                      @default(5)
+  /// Maximum retry delay for repeated provider failures.
+  githubSyncMaxBackoffMinutes   Int                      @default(1440)
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
@@ -2185,6 +2196,15 @@ model ExternalResource {
   externalCreatedAt   DateTime?
   externalUpdatedAt   DateTime?
   lastSyncedAt        DateTime?
+  /// Last background/manual provider request attempt, successful or not.
+  syncAttemptedAt     DateTime?
+  /// Retry gate after rate limiting, auth/mapping errors, or provider failure.
+  syncRetryAt         DateTime?
+  syncFailureCount    Int       @default(0)
+  syncLastError       String?   @db.Text
+  /// Set once this resource no longer needs background reconciliation.
+  /// Open/draft PRs and merged PRs without passing aggregate checks stay null.
+  syncTerminalAt      DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
 
@@ -2196,6 +2216,8 @@ model ExternalResource {
   @@index([workspaceId, provider, repoFullName])
   @@index([workspaceId, provider, externalNodeId])
   @@index([connectionMappingId])
+  @@index([workspaceId, provider, resourceType, syncTerminalAt, lastSyncedAt])
+  @@index([syncRetryAt])
 }
 
 /// Join between a Forge issue and an external resource. The link kind is
