@@ -2,6 +2,8 @@ import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { GitHubRequestError } from "@/server/services/github/client";
 import {
   claimGitHubManualSync,
+  gitHubPartialChecksError,
+  persistGitHubManualSyncFailure,
   upsertExternalResource,
 } from "@/server/services/github/resource-sync";
 import {
@@ -89,6 +91,39 @@ async function setupResource() {
 }
 
 describe("GitHub status reconciliation", () => {
+  it("promotes partial checks metadata into a mapping-wide manual failure", () => {
+    const retryAt = "2026-07-14T13:00:00.000Z";
+    expect(
+      gitHubPartialChecksError({
+        checks: {
+          partial: true,
+          rateLimited: true,
+          timedOut: false,
+          diagnostic: "Checks API rate limit exceeded",
+          retryAt,
+        },
+      }),
+    ).toMatchObject({
+      message: "Checks API rate limit exceeded",
+      status: 429,
+      retryAt: new Date(retryAt),
+      rateLimited: true,
+      timedOut: false,
+    });
+    expect(gitHubPartialChecksError({ checks: { partial: false } })).toBeNull();
+    expect(
+      gitHubPartialChecksError({
+        checks: {
+          partial: true,
+          rateLimited: false,
+          timedOut: false,
+          permissionDenied: false,
+          diagnostic: "Check suites require another page",
+        },
+      }),
+    ).toMatchObject({ status: 503, rateLimited: false, timedOut: false });
+  });
+
   it("polls only stale native implementation links and is a no-op once fresh", async () => {
     const { fixture, prisma, resource } = await setupResource();
     const now = new Date("2026-07-14T12:00:00.000Z");
@@ -431,6 +466,127 @@ describe("GitHub status reconciliation", () => {
         leaseUntil: new Date("2026-07-14T12:00:41.000Z"),
       }),
     ).resolves.toBe(true);
+  });
+
+  it("persists provider retry timing and diagnostics after a manual refresh failure", async () => {
+    const { fixture, prisma, resource, mapping } = await setupResource();
+    const now = new Date("2026-07-14T12:00:00.000Z");
+    const reset = new Date("2026-07-14T13:00:00.000Z");
+    const laterReset = new Date("2026-07-14T14:00:00.000Z");
+    const sibling = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 99,
+        url: "https://github.com/acme/forge/pull/99",
+        title: "Same mapping",
+        state: "open",
+        connectionMappingId: mapping.id,
+      },
+    });
+    const siblingWithLaterGate = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 100,
+        url: "https://github.com/acme/forge/pull/100",
+        title: "Same mapping with a later gate",
+        state: "open",
+        connectionMappingId: mapping.id,
+        syncRetryAt: laterReset,
+        syncLastError: "Existing longer provider reset",
+      },
+    });
+    await prisma.externalResource.update({
+      where: { id: resource.id },
+      data: { syncRetryAt: laterReset },
+    });
+
+    await expect(
+      persistGitHubManualSyncFailure({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        externalResourceId: resource.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: 0,
+        now,
+        baseMinutes: 5,
+        maxMinutes: 1440,
+        error: new GitHubRequestError("API rate limit exceeded", 429, reset, true),
+      }),
+    ).resolves.toEqual({ retryAt: laterReset, failureCount: 1, mappingWide: true });
+
+    const [failed, mappedSibling, mappedSiblingWithLaterGate] = await Promise.all([
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+      prisma.externalResource.findUniqueOrThrow({ where: { id: sibling.id } }),
+      prisma.externalResource.findUniqueOrThrow({ where: { id: siblingWithLaterGate.id } }),
+    ]);
+    expect(failed).toMatchObject({
+      syncRetryAt: laterReset,
+      syncFailureCount: 1,
+      syncLastError: "API rate limit exceeded",
+    });
+    expect(mappedSibling).toMatchObject({
+      syncRetryAt: reset,
+      syncFailureCount: 0,
+      syncLastError: "API rate limit exceeded",
+    });
+    expect(mappedSiblingWithLaterGate).toMatchObject({
+      syncRetryAt: laterReset,
+      syncFailureCount: 0,
+      syncLastError: "Existing longer provider reset",
+    });
+
+    await expect(
+      persistGitHubManualSyncFailure({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        externalResourceId: resource.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: 1,
+        now: new Date("2026-07-14T12:05:00.000Z"),
+        baseMinutes: 5,
+        maxMinutes: 1440,
+        error: new GitHubRequestError("Partial checks already counted", 403, null),
+        incrementFailureCount: false,
+      }),
+    ).resolves.toMatchObject({ failureCount: 1, mappingWide: true });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({ syncFailureCount: 1 });
+  });
+
+  it("replaces the current manual lease without shortening an older provider gate", async () => {
+    const { fixture, prisma, resource, mapping } = await setupResource();
+    const now = new Date("2026-07-14T12:00:00.000Z");
+    const retryAt = new Date("2026-07-14T12:05:00.000Z");
+    const claimedLeaseUntil = new Date("2026-07-14T12:10:00.000Z");
+    await prisma.externalResource.update({
+      where: { id: resource.id },
+      data: { syncRetryAt: claimedLeaseUntil },
+    });
+
+    await expect(
+      persistGitHubManualSyncFailure({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        externalResourceId: resource.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: 0,
+        now,
+        baseMinutes: 5,
+        maxMinutes: 1440,
+        error: new GitHubRequestError("Timed out", 408, retryAt, false, true),
+        claimedLeaseUntil,
+      }),
+    ).resolves.toMatchObject({ retryAt, failureCount: 1, mappingWide: true });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({ syncRetryAt: retryAt });
   });
 
   it("stops starting resources after the workspace sweep budget is exhausted", async () => {

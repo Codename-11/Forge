@@ -2,6 +2,51 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-14 — Manual GitHub retry persistence and release context hygiene
+
+Addressed the post-merge Codex review on PR #29 before production deployment.
+Manual and MCP-triggered GitHub refreshes now catch provider failures before
+returning them, replace the temporary collision lease with the later of the
+workspace exponential backoff or GitHub retry/reset header, persist the failure
+count and diagnostic, and open the same mapping-wide circuit used by scheduled
+reconciliation for rate limits, permissions, and timeouts. Scheduled sweeps
+retain their existing single-owner retry accounting. Resource existence is
+also checked before the manual lease so missing links still return NOT_FOUND.
+The follow-up Codex review on PR #30 identified that a long provider request
+could consume a short backoff before persistence; manual retry timing is now
+anchored after the provider call finishes.
+The second review pass found that a shorter new mapping-wide delay could
+replace a longer existing provider reset on sibling resources. Mapping circuits
+are now monotonic: only missing or earlier retry gates are extended.
+The final review pass identified the non-throwing partial-checks path: PR reads
+can succeed while Checks API calls return a settled partial snapshot. Manual
+and MCP syncs now promote that metadata into the same persisted mapping-wide
+failure circuit and return the updated diagnostic/backoff state immediately.
+Generic partial snapshots (pagination limits or transient 5xx responses) are
+now distinguished from permission failures and back off only the affected PR;
+only auth, rate-limit, and timeout partials open a mapping-wide circuit in both
+manual and scheduled reconciliation.
+The last concurrency review found that overlapping refreshes could still
+shorten the failing resource's own gate. Primary-row retry updates now use the
+same atomic extend-only predicate as sibling rows, and failure counts increment
+atomically so concurrent errors cannot lose accounting.
+Partial-check diagnostics are already counted by the snapshot upsert, so the
+subsequent mapping-circuit extension now preserves that count instead of
+incrementing it a second time and skipping an exponential-backoff step.
+Failure persistence now recognizes the exact collision lease acquired by the
+current manual refresh, allowing it to be replaced by a shorter configured
+backoff while still preserving any different, later provider gate written by
+an overlapping refresh. The Docker ignore file also explicitly re-includes
+`next-env.d.ts` for the worker stage's `COPY` contract.
+
+The first release image attempt also exposed that `.dockerignore` covered
+`.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs
+are now excluded so local verification caches cannot inflate release contexts
+or exhaust Docker storage.
+
+Verification: focused GitHub reconciliation and completion policy suite (23/23),
+lint (existing warnings only), TypeScript typecheck, and `git diff --check`.
+
 ## 2026-07-14 — Resilient linked-PR status reconciliation
 
 Added a webhook-first repair loop for native GitHub `IMPLEMENTS` links. The

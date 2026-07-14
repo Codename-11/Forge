@@ -17,6 +17,7 @@ import {
   getGitHubIssue,
   getGitHubPullRequest,
   getGitHubPullRequestChecks,
+  GitHubRequestError,
   issueSnapshot,
   pullRequestSnapshot,
 } from "@/server/services/github/client";
@@ -63,6 +64,32 @@ function assertLinkKind(kind: string): asserts kind is ExternalLinkKind {
 
 function publicResource(row: ExternalResource) {
   return row;
+}
+
+export function gitHubPartialChecksError(metadata: unknown): GitHubRequestError | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const checks = (metadata as Record<string, unknown>).checks;
+  if (!checks || typeof checks !== "object" || Array.isArray(checks)) return null;
+  const values = checks as Record<string, unknown>;
+  if (values.partial !== true) return null;
+  const retryAt =
+    typeof values.retryAt === "string" && Number.isFinite(Date.parse(values.retryAt))
+      ? new Date(values.retryAt)
+      : null;
+  const rateLimited = values.rateLimited === true;
+  const timedOut = values.timedOut === true;
+  const permissionDenied = values.permissionDenied === true;
+  const message =
+    typeof values.diagnostic === "string" && values.diagnostic.trim()
+      ? values.diagnostic
+      : "GitHub returned partial checks data.";
+  return new GitHubRequestError(
+    message,
+    rateLimited ? 429 : timedOut ? 408 : permissionDenied ? 403 : 503,
+    retryAt,
+    rateLimited,
+    timedOut,
+  );
 }
 
 export async function resolveGitHubRepoMapping(args: {
@@ -697,27 +724,13 @@ export async function syncGitHubExternalResource(args: {
     select: {
       githubRequestTimeoutSeconds: true,
       githubManualCooldownSeconds: true,
+      githubSyncBackoffMinutes: true,
+      githubSyncMaxBackoffMinutes: true,
     },
   });
   if (!workspace) throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
   const now = new Date();
-  if (!args.skipCollisionGuard) {
-    const leaseMs = workspace.githubRequestTimeoutSeconds * 12_000 + 5_000;
-    const claimed = await claimGitHubManualSync({
-      db: args.db,
-      workspaceId: args.workspaceId,
-      externalResourceId: args.externalResourceId,
-      now,
-      cooldownSeconds: workspace.githubManualCooldownSeconds,
-      leaseUntil: new Date(now.getTime() + leaseMs),
-    });
-    if (!claimed) {
-      throw new TRPCError({
-        code: "TOO_MANY_REQUESTS",
-        message: "This GitHub link was refreshed recently or is already being refreshed.",
-      });
-    }
-  }
+  let manualLeaseUntil: Date | null = null;
   const existing = await args.db.externalResource.findFirst({
     where: {
       id: args.externalResourceId,
@@ -736,6 +749,24 @@ export async function syncGitHubExternalResource(args: {
       message: "Linked GitHub resource not found.",
     });
   }
+  if (!args.skipCollisionGuard) {
+    const leaseMs = workspace.githubRequestTimeoutSeconds * 12_000 + 5_000;
+    manualLeaseUntil = new Date(now.getTime() + leaseMs);
+    const claimed = await claimGitHubManualSync({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      externalResourceId: args.externalResourceId,
+      now,
+      cooldownSeconds: workspace.githubManualCooldownSeconds,
+      leaseUntil: manualLeaseUntil,
+    });
+    if (!claimed) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "This GitHub link was refreshed recently or is already being refreshed.",
+      });
+    }
+  }
   const mapping =
     existing.connectionMapping?.status === "active"
       ? (existing.connectionMapping as GitHubMappingWithConnection)
@@ -744,15 +775,41 @@ export async function syncGitHubExternalResource(args: {
           workspaceId: args.workspaceId,
           repoFullName: existing.repoFullName,
         });
-  const snapshot = await fetchGitHubSnapshot({
-    mapping,
-    repoFullName: existing.repoFullName,
-    resourceType: existing.resourceType as GitHubResourceType,
-    number: existing.number,
-    requestTimeoutMs: workspace.githubRequestTimeoutSeconds * 1000,
-    signal: args.signal,
-  });
-  const resource = await args.db.$transaction(async (tx) => {
+  let snapshot: GitHubResourceSnapshot;
+  try {
+    snapshot = await fetchGitHubSnapshot({
+      mapping,
+      repoFullName: existing.repoFullName,
+      resourceType: existing.resourceType as GitHubResourceType,
+      number: existing.number,
+      requestTimeoutMs: workspace.githubRequestTimeoutSeconds * 1000,
+      signal: args.signal,
+    });
+  } catch (error) {
+    // Scheduled reconciliation owns its own retry accounting. Manual/MCP
+    // refreshes must persist the provider reset/backoff before returning the
+    // error so a short collision lease cannot accidentally become the retry
+    // policy and the issue panel retains the real diagnostic.
+    if (!args.skipCollisionGuard) {
+      await persistGitHubManualSyncFailure({
+        db: args.db,
+        workspaceId: args.workspaceId,
+        externalResourceId: existing.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: existing.syncFailureCount,
+        // Anchor retry timing after the provider call finishes. A request may
+        // consume the entire configured timeout, which could otherwise make a
+        // short backoff expire before the failure is persisted.
+        now: new Date(),
+        baseMinutes: workspace.githubSyncBackoffMinutes,
+        maxMinutes: workspace.githubSyncMaxBackoffMinutes,
+        error,
+        claimedLeaseUntil: manualLeaseUntil,
+      });
+    }
+    throw error;
+  }
+  let resource = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
       workspaceId: args.workspaceId,
       connectionMappingId: mapping.id,
@@ -768,6 +825,30 @@ export async function syncGitHubExternalResource(args: {
     });
     return publicResource(resource);
   });
+  const partialChecksError = gitHubPartialChecksError(snapshot.metadata);
+  if (!args.skipCollisionGuard && partialChecksError) {
+    const failureNow = new Date();
+    const failure = await persistGitHubManualSyncFailure({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      externalResourceId: existing.id,
+      connectionMappingId: mapping.id,
+      currentFailureCount: existing.syncFailureCount,
+      now: failureNow,
+      baseMinutes: workspace.githubSyncBackoffMinutes,
+      maxMinutes: workspace.githubSyncMaxBackoffMinutes,
+      error: partialChecksError,
+      incrementFailureCount: false,
+      claimedLeaseUntil: manualLeaseUntil,
+    });
+    resource = {
+      ...resource,
+      syncAttemptedAt: failureNow,
+      syncRetryAt: failure.retryAt,
+      syncFailureCount: failure.failureCount,
+      syncLastError: partialChecksError.message.slice(0, 2_000),
+    };
+  }
   if (resource.resourceType === "PULL_REQUEST") {
     await reconcileGitHubPullRequestCompletion(args.db, {
       workspaceId: args.workspaceId,
@@ -799,4 +880,87 @@ export async function claimGitHubManualSync(args: {
     data: { syncAttemptedAt: args.now, syncRetryAt: args.leaseUntil },
   });
   return claimed.count === 1;
+}
+
+export async function persistGitHubManualSyncFailure(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  externalResourceId: string;
+  connectionMappingId: string | null;
+  currentFailureCount: number;
+  now: Date;
+  baseMinutes: number;
+  maxMinutes: number;
+  error: unknown;
+  incrementFailureCount?: boolean;
+  claimedLeaseUntil?: Date | null;
+}): Promise<{ retryAt: Date; failureCount: number; mappingWide: boolean }> {
+  const failureCount = args.currentFailureCount + 1;
+  const exponentialMinutes = Math.min(
+    Math.max(1, args.maxMinutes),
+    Math.max(1, args.baseMinutes) * 2 ** Math.max(0, failureCount - 1),
+  );
+  const fallbackRetryAt = new Date(args.now.getTime() + exponentialMinutes * 60_000);
+  const providerRetryAt = args.error instanceof GitHubRequestError ? args.error.retryAt : null;
+  const retryAt =
+    providerRetryAt && providerRetryAt > fallbackRetryAt ? providerRetryAt : fallbackRetryAt;
+  const message =
+    args.error instanceof Error ? args.error.message.slice(0, 2_000) : "Unknown GitHub sync error";
+  const mappingWide =
+    args.error instanceof GitHubRequestError &&
+    (args.error.rateLimited || args.error.timedOut || [401, 403].includes(args.error.status));
+
+  await args.db.$transaction(async (tx) => {
+    await tx.externalResource.updateMany({
+      where: {
+        id: args.externalResourceId,
+        workspaceId: args.workspaceId,
+        provider: GITHUB_PROVIDER,
+      },
+      data: {
+        syncAttemptedAt: args.now,
+        ...(args.incrementFailureCount === false ? {} : { syncFailureCount: { increment: 1 } }),
+        syncLastError: message,
+      },
+    });
+    await tx.externalResource.updateMany({
+      where: {
+        id: args.externalResourceId,
+        workspaceId: args.workspaceId,
+        provider: GITHUB_PROVIDER,
+        OR: [
+          { syncRetryAt: null },
+          { syncRetryAt: { lt: retryAt } },
+          ...(args.claimedLeaseUntil ? [{ syncRetryAt: { equals: args.claimedLeaseUntil } }] : []),
+        ],
+      },
+      data: { syncRetryAt: retryAt },
+    });
+    if (mappingWide && args.connectionMappingId) {
+      await tx.externalResource.updateMany({
+        where: {
+          id: { not: args.externalResourceId },
+          workspaceId: args.workspaceId,
+          provider: GITHUB_PROVIDER,
+          connectionMappingId: args.connectionMappingId,
+          OR: [{ syncRetryAt: null }, { syncRetryAt: { lt: retryAt } }],
+        },
+        data: { syncRetryAt: retryAt, syncLastError: message },
+      });
+    }
+  });
+
+  const persisted = await args.db.externalResource.findFirst({
+    where: {
+      id: args.externalResourceId,
+      workspaceId: args.workspaceId,
+      provider: GITHUB_PROVIDER,
+    },
+    select: { syncRetryAt: true, syncFailureCount: true },
+  });
+  return {
+    retryAt: persisted?.syncRetryAt ?? retryAt,
+    failureCount: persisted?.syncFailureCount ?? failureCount,
+    mappingWide,
+  };
 }
