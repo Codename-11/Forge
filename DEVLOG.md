@@ -30,6 +30,9 @@ The last concurrency review found that overlapping refreshes could still
 shorten the failing resource's own gate. Primary-row retry updates now use the
 same atomic extend-only predicate as sibling rows, and failure counts increment
 atomically so concurrent errors cannot lose accounting.
+Partial-check diagnostics are already counted by the snapshot upsert, so the
+subsequent mapping-circuit extension now preserves that count instead of
+incrementing it a second time and skipping an exponential-backoff step.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs

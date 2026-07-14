@@ -835,6 +835,7 @@ export async function syncGitHubExternalResource(args: {
       baseMinutes: workspace.githubSyncBackoffMinutes,
       maxMinutes: workspace.githubSyncMaxBackoffMinutes,
       error: partialChecksError,
+      incrementFailureCount: false,
     });
     resource = {
       ...resource,
@@ -887,6 +888,7 @@ export async function persistGitHubManualSyncFailure(args: {
   baseMinutes: number;
   maxMinutes: number;
   error: unknown;
+  incrementFailureCount?: boolean;
 }): Promise<{ retryAt: Date; failureCount: number; mappingWide: boolean }> {
   const failureCount = args.currentFailureCount + 1;
   const exponentialMinutes = Math.min(
@@ -912,7 +914,7 @@ export async function persistGitHubManualSyncFailure(args: {
       },
       data: {
         syncAttemptedAt: args.now,
-        syncFailureCount: { increment: 1 },
+        ...(args.incrementFailureCount === false ? {} : { syncFailureCount: { increment: 1 } }),
         syncLastError: message,
       },
     });

@@ -540,6 +540,24 @@ describe("GitHub status reconciliation", () => {
       syncFailureCount: 0,
       syncLastError: "Existing longer provider reset",
     });
+
+    await expect(
+      persistGitHubManualSyncFailure({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        externalResourceId: resource.id,
+        connectionMappingId: mapping.id,
+        currentFailureCount: 1,
+        now: new Date("2026-07-14T12:05:00.000Z"),
+        baseMinutes: 5,
+        maxMinutes: 1440,
+        error: new GitHubRequestError("Partial checks already counted", 403, null),
+        incrementFailureCount: false,
+      }),
+    ).resolves.toMatchObject({ failureCount: 1, mappingWide: true });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({ syncFailureCount: 1 });
   });
 
   it("stops starting resources after the workspace sweep budget is exhausted", async () => {
