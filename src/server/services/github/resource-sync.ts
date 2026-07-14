@@ -12,6 +12,7 @@ import {
 } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
+import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
 import {
   getGitHubIssue,
   getGitHubPullRequest,
@@ -31,11 +32,7 @@ import {
   type GitHubResourceType,
   type ParsedGitHubUrl,
 } from "@/server/services/github/types";
-import {
-  parseGitHubUrl,
-  sameRepo,
-  splitRepoFullName,
-} from "@/server/services/github/url";
+import { parseGitHubUrl, sameRepo, splitRepoFullName } from "@/server/services/github/url";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -180,6 +177,32 @@ export async function upsertExternalResource(
   },
 ): Promise<ExternalResource> {
   const now = new Date();
+  const existing = await db.externalResource.findUnique({
+    where: {
+      workspaceId_provider_repoFullName_resourceType_number: {
+        workspaceId: args.workspaceId,
+        provider: args.snapshot.provider,
+        repoFullName: args.snapshot.repoFullName,
+        resourceType: args.snapshot.resourceType,
+        number: args.snapshot.number,
+      },
+    },
+    select: { metadata: true },
+  });
+  const existingMetadata =
+    existing?.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata)
+      ? (existing.metadata as Record<string, unknown>)
+      : {};
+  const snapshotMetadata =
+    args.snapshot.metadata &&
+    typeof args.snapshot.metadata === "object" &&
+    !Array.isArray(args.snapshot.metadata)
+      ? (args.snapshot.metadata as Record<string, unknown>)
+      : {};
+  const metadata = {
+    ...existingMetadata,
+    ...snapshotMetadata,
+  };
   const row = await db.externalResource.upsert({
     where: {
       workspaceId_provider_repoFullName_resourceType_number: {
@@ -206,7 +229,7 @@ export async function upsertExternalResource(
       authorLogin: args.snapshot.authorLogin ?? undefined,
       labels: jsonOrNull(args.snapshot.labels),
       assignees: jsonOrNull(args.snapshot.assignees),
-      metadata: jsonOrNull(args.snapshot.metadata),
+      metadata: jsonOrNull(metadata),
       externalCreatedAt: args.snapshot.externalCreatedAt ?? undefined,
       externalUpdatedAt: args.snapshot.externalUpdatedAt ?? undefined,
       lastSyncedAt: now,
@@ -222,7 +245,7 @@ export async function upsertExternalResource(
       authorLogin: args.snapshot.authorLogin ?? undefined,
       labels: jsonOrNull(args.snapshot.labels),
       assignees: jsonOrNull(args.snapshot.assignees),
-      metadata: jsonOrNull(args.snapshot.metadata),
+      metadata: jsonOrNull(metadata),
       externalCreatedAt: args.snapshot.externalCreatedAt ?? undefined,
       externalUpdatedAt: args.snapshot.externalUpdatedAt ?? undefined,
       lastSyncedAt: now,
@@ -249,7 +272,14 @@ export async function linkExternalResourceToIssue(
     }),
     db.externalResource.findFirst({
       where: { id: args.externalResourceId, workspaceId: args.workspaceId },
-      select: { id: true, title: true, url: true, resourceType: true, repoFullName: true, number: true },
+      select: {
+        id: true,
+        title: true,
+        url: true,
+        resourceType: true,
+        repoFullName: true,
+        number: true,
+      },
     }),
   ]);
   if (!issue) throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
@@ -324,7 +354,7 @@ export async function linkGitHubUrlToIssue(args: {
     repoFullName: parsed.repoFullName,
   });
   const snapshot = await fetchGitHubSnapshotForParsed(parsed, mapping);
-  return args.db.$transaction(async (tx) => {
+  const result = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
       workspaceId: args.workspaceId,
       connectionMappingId: mapping.id,
@@ -339,6 +369,15 @@ export async function linkGitHubUrlToIssue(args: {
     });
     return { resource, link };
   });
+  if (result.resource.resourceType === "PULL_REQUEST") {
+    await reconcileGitHubPullRequestCompletion(args.db, {
+      workspaceId: args.workspaceId,
+      externalResourceId: result.resource.id,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId,
+    });
+  }
+  return result;
 }
 
 export async function listLinkedGitHubResources(args: {
@@ -551,7 +590,11 @@ export async function syncGitHubExternalResource(args: {
   actor: ActorMeta;
 }): Promise<ExternalResource> {
   const existing = await args.db.externalResource.findFirst({
-    where: { id: args.externalResourceId, workspaceId: args.workspaceId, provider: GITHUB_PROVIDER },
+    where: {
+      id: args.externalResourceId,
+      workspaceId: args.workspaceId,
+      provider: GITHUB_PROVIDER,
+    },
     include: {
       connectionMapping: {
         include: { connection: { select: { id: true, provider: true, config: true } } },
@@ -571,7 +614,7 @@ export async function syncGitHubExternalResource(args: {
     resourceType: existing.resourceType as GitHubResourceType,
     number: existing.number,
   });
-  return args.db.$transaction(async (tx) => {
+  const resource = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
       workspaceId: args.workspaceId,
       connectionMappingId: mapping.id,
@@ -587,4 +630,13 @@ export async function syncGitHubExternalResource(args: {
     });
     return publicResource(resource);
   });
+  if (resource.resourceType === "PULL_REQUEST") {
+    await reconcileGitHubPullRequestCompletion(args.db, {
+      workspaceId: args.workspaceId,
+      externalResourceId: resource.id,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId,
+    });
+  }
+  return resource;
 }

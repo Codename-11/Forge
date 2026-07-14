@@ -203,6 +203,14 @@ enum RunBudgetAction {
   STOP
 }
 
+/// Controls how verified completion evidence affects an open issue.
+/// Project-level null inherits the workspace value.
+enum CompletionAutomation {
+  OFF
+  RECOMMEND
+  AUTO_WHEN_SAFE
+}
+
 enum ChatRole {
   USER
   AGENT
@@ -874,6 +882,13 @@ model Workspace {
   /// work should surface for review regardless of prior state. Null
   /// disables — no auto-transition on completion.
   reviewStatusId                String?
+  /// What Forge should do when an agent or linked implementation PR provides
+  /// verified completion evidence. RECOMMEND opens one shared actionable
+  /// card; AUTO_WHEN_SAFE transitions only when the central safety gate passes.
+  completionAutomation          CompletionAutomation     @default(RECOMMEND)
+  /// DONE-category status used by completion recommendations/automation.
+  /// Null keeps completion candidates disabled until an admin chooses one.
+  completionStatusId            String?
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
@@ -968,6 +983,7 @@ model Workspace {
   canvasStyles            CanvasStyle[]
   startedStatus           Status?                   @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
   reviewStatus            Status?                   @relation("WorkspaceReviewStatus", fields: [reviewStatusId], references: [id], onDelete: SetNull)
+  completionStatus        Status?                   @relation("WorkspaceCompletionStatus", fields: [completionStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
   @@index([defaultIssueAssigneeUserId])
@@ -997,22 +1013,22 @@ model Membership {
 // ----------------------------------------------------------------------------
 
 model Project {
-  id           String    @id @default(cuid())
-  workspaceId  String
-  key          String
-  name         String
-  description  String?   @db.Text
-  icon         String?
-  color        String?
-  archived     Boolean   @default(false)
-  startDate    DateTime?
-  targetDate   DateTime?
+  id                   String                @id @default(cuid())
+  workspaceId          String
+  key                  String
+  name                 String
+  description          String?               @db.Text
+  icon                 String?
+  color                String?
+  archived             Boolean               @default(false)
+  startDate            DateTime?
+  targetDate           DateTime?
   /// Optional parent initiative that groups related projects.
-  initiativeId String?
-  createdById  String
+  initiativeId         String?
+  createdById          String
   /// Backlink for a project created via `notes.promote`. Mirrors
   /// `Issue.sourceNoteId`.
-  sourceNoteId String?
+  sourceNoteId         String?
   /// Git repository this project's work lives in. When set, a runtime
   /// provisions (clone-or-pulls) it so an agent dispatched to one of this
   /// project's issues lands in the right checkout — letting one runtime serve
@@ -1020,11 +1036,14 @@ model Project {
   /// `repoBranch` null = the remote's default branch. The clone path is
   /// derived from the repo name. Auth comes from the runtime's GitHub App or
   /// secrets (see `docs/agents/runtime-credentials.md`).
-  repoUrl      String?
-  repoBranch   String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  deletedAt    DateTime?
+  repoUrl              String?
+  repoBranch           String?
+  /// Optional override for issue completion automation. Null inherits the
+  /// workspace policy so projects can opt into stricter or quieter behavior.
+  completionAutomation CompletionAutomation?
+  createdAt            DateTime              @default(now())
+  updatedAt            DateTime              @updatedAt
+  deletedAt            DateTime?
 
   workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   createdBy      User             @relation("ProjectCreator", fields: [createdById], references: [id])
@@ -1051,10 +1070,11 @@ model Status {
   position    Int
   isDefault   Boolean        @default(false)
 
-  workspace           Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issues              Issue[]
-  workspaceStartedFor Workspace[] @relation("WorkspaceStartedStatus")
-  workspaceReviewFor  Workspace[] @relation("WorkspaceReviewStatus")
+  workspace              Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issues                 Issue[]
+  workspaceStartedFor    Workspace[] @relation("WorkspaceStartedStatus")
+  workspaceReviewFor     Workspace[] @relation("WorkspaceReviewStatus")
+  workspaceCompletionFor Workspace[] @relation("WorkspaceCompletionStatus")
 
   @@unique([workspaceId, name])
   @@index([workspaceId, category])
@@ -3475,6 +3495,9 @@ model ActionRequest {
   /// Polymorphic source — chat-message, comment, agent-run, etc.
   sourceType         String?
   sourceId           String?
+  /// Stable producer-owned key for idempotent shared recommendations. A
+  /// partial unique index permits at most one OPEN request per workspace/key.
+  dedupeKey          String?
   /// Optional pointer at the issue this request relates to. Lets the
   /// inbox surface group requests under their parent issue without
   /// re-deriving from sourceType.
@@ -3507,6 +3530,7 @@ model ActionRequest {
   @@index([assignedAgentId, status])
   @@index([issueId])
   @@index([sourceType, sourceId])
+  @@index([workspaceId, dedupeKey])
   @@index([supersededById])
 }
 

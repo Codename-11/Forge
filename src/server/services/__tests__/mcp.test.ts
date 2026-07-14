@@ -3,6 +3,7 @@ import {
   AgentRunStatus,
   AgentProvider,
   ChatContextMode,
+  CompletionAutomation,
   EngagementMode,
   EventKind,
   PluginScope,
@@ -4129,6 +4130,58 @@ describe("mcp runs.complete + completion contract", () => {
     expect(after.status?.category).toBe("IN_REVIEW");
   });
 
+  it("runs.complete can recommend the verified issue for completion", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const done = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "DONE" },
+    });
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: {
+        completionAutomation: CompletionAutomation.RECOMMEND,
+        completionStatusId: done.id,
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `ccr-${Date.now()}`,
+        name: "Closer",
+      },
+    });
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        engagementMode: EngagementMode.EXECUTE,
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    const result = (await call(
+      "runs.complete",
+      {
+        runId: run.id,
+        summary: "Implemented and verified.",
+        verificationResult: [{ label: "Tests", done: true }],
+        recommendIssueCompletion: true,
+      },
+      scopedCtx,
+    )) as { completionRecommendation: { outcome: string; requestId: string } };
+
+    expect(result.completionRecommendation.outcome).toBe("RECOMMENDED");
+    const request = await prisma.actionRequest.findUniqueOrThrow({
+      where: { id: result.completionRecommendation.requestId },
+    });
+    expect(request.issueId).toBe(issue.id);
+    expect(request.payload).toMatchObject({ intent: "COMPLETE", statusId: done.id });
+  });
+
   it("runs.complete does not auto-transition RESEARCH-mode completions even with reviewStatusId set", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CC5" });
     fixtures.push(fixture);
@@ -4764,21 +4817,26 @@ describe("mcp — agent.inbox.list / agent.inbox.ack / agent.inbox.outputStarted
         title: "already answered",
       },
     });
+    const tieTimestamp = new Date("2026-07-14T12:00:00.000Z");
     const userMessage = await prisma.chatMessage.create({
       data: {
+        id: "chat-order-0001",
         workspaceId: f.workspace.id,
         threadId: thread.id,
         role: "USER",
         body: "old ping",
         dispatchedAt: new Date(),
+        createdAt: tieTimestamp,
       },
     });
     await prisma.chatMessage.create({
       data: {
+        id: "chat-order-0002",
         workspaceId: f.workspace.id,
         threadId: thread.id,
         role: "AGENT",
         body: "already handled",
+        createdAt: tieTimestamp,
       },
     });
 

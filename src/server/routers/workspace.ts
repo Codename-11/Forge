@@ -2,6 +2,7 @@ import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
+  CompletionAutomation,
   CycleStatus,
   DefaultIssueAssigneeMode,
   EngagementMode,
@@ -135,6 +136,8 @@ export const workspaceRouter = router({
         runBudgetAction: true,
         startedStatusId: true,
         reviewStatusId: true,
+        completionAutomation: true,
+        completionStatusId: true,
         stalledThresholdDays: true,
         agentHeartbeatWarnMinutes: true,
         agentHeartbeatCriticalMinutes: true,
@@ -240,6 +243,17 @@ export const workspaceRouter = router({
           },
         },
       });
+      const completionStatus = await ctx.db.status.findFirst({
+        where: { workspaceId: workspace.id, category: "DONE" },
+        orderBy: [{ position: "asc" }, { id: "asc" }],
+        select: { id: true },
+      });
+      const configuredWorkspace = completionStatus
+        ? await ctx.db.workspace.update({
+            where: { id: workspace.id },
+            data: { completionStatusId: completionStatus.id },
+          })
+        : workspace;
 
       // Best-effort bucket create. If MinIO is unavailable we still return
       // the workspace — attachments simply won't work until ops fixes it.
@@ -250,7 +264,7 @@ export const workspaceRouter = router({
         );
       });
 
-      return workspace;
+      return configuredWorkspace;
     }),
 
   // Mutations below are the minimum surface required by the workspace
@@ -291,6 +305,8 @@ export const workspaceRouter = router({
         aiModel: z.string().min(1).max(80).nullable().optional(),
         startedStatusId: z.string().nullable().optional(),
         reviewStatusId: z.string().nullable().optional(),
+        completionAutomation: z.nativeEnum(CompletionAutomation).optional(),
+        completionStatusId: z.string().nullable().optional(),
         assignmentEngagementMode: z.nativeEnum(EngagementMode).optional(),
         mentionEngagementPolicy: z.nativeEnum(MentionEngagementPolicy).optional(),
         mentionDefaultMode: z.nativeEnum(EngagementMode).optional(),
@@ -315,8 +331,7 @@ export const workspaceRouter = router({
         if (status.category !== "IN_PROGRESS") {
           throw new TRPCError({
             code: "BAD_REQUEST",
-            message:
-              "startedStatusId must point at an IN_PROGRESS-category status.",
+            message: "startedStatusId must point at an IN_PROGRESS-category status.",
           });
         }
       }
@@ -340,6 +355,24 @@ export const workspaceRouter = router({
           });
         }
       }
+      if (input.completionStatusId) {
+        const status = await ctx.db.status.findUnique({
+          where: { id: input.completionStatusId },
+          select: { workspaceId: true, category: true },
+        });
+        if (!status || status.workspaceId !== ctx.workspaceId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "completionStatusId does not belong to this workspace.",
+          });
+        }
+        if (status.category !== "DONE") {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "completionStatusId must point at a DONE-category status.",
+          });
+        }
+      }
       if (
         input.defaultIssueAssigneeMode !== undefined ||
         input.defaultIssueAssigneeUserId !== undefined
@@ -351,8 +384,7 @@ export const workspaceRouter = router({
             defaultIssueAssigneeUserId: true,
           },
         });
-        const nextMode =
-          input.defaultIssueAssigneeMode ?? current.defaultIssueAssigneeMode;
+        const nextMode = input.defaultIssueAssigneeMode ?? current.defaultIssueAssigneeMode;
         const nextUserId =
           input.defaultIssueAssigneeUserId === undefined
             ? current.defaultIssueAssigneeUserId
@@ -468,21 +500,20 @@ export const workspaceRouter = router({
    * quota snapshot. Everything scoped by `workspaceId`.
    */
   stats: workspaceProcedure.query(async ({ ctx }) => {
-    const [issueCount, projectCount, cycleCount, memberCount, storage] =
-      await Promise.all([
-        ctx.db.issue.count({
-          where: { workspaceId: ctx.workspaceId, deletedAt: null },
-        }),
-        ctx.db.project.count({
-          where: { workspaceId: ctx.workspaceId, deletedAt: null },
-        }),
-        ctx.db.cycle.count({ where: { workspaceId: ctx.workspaceId } }),
-        ctx.db.membership.count({ where: { workspaceId: ctx.workspaceId } }),
-        workspaceQuotaStats(ctx.workspaceId).catch(() => ({
-          usedBytes: 0,
-          quotaBytes: 0,
-        })),
-      ]);
+    const [issueCount, projectCount, cycleCount, memberCount, storage] = await Promise.all([
+      ctx.db.issue.count({
+        where: { workspaceId: ctx.workspaceId, deletedAt: null },
+      }),
+      ctx.db.project.count({
+        where: { workspaceId: ctx.workspaceId, deletedAt: null },
+      }),
+      ctx.db.cycle.count({ where: { workspaceId: ctx.workspaceId } }),
+      ctx.db.membership.count({ where: { workspaceId: ctx.workspaceId } }),
+      workspaceQuotaStats(ctx.workspaceId).catch(() => ({
+        usedBytes: 0,
+        quotaBytes: 0,
+      })),
+    ]);
     return {
       issueCount,
       projectCount,
@@ -747,8 +778,7 @@ export const workspaceRouter = router({
           if (adminCount <= 1) {
             throw new TRPCError({
               code: "BAD_REQUEST",
-              message:
-                "Can't demote the last admin — promote another member to admin first.",
+              message: "Can't demote the last admin — promote another member to admin first.",
             });
           }
         }

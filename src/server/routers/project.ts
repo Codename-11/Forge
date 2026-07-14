@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, type StatusCategory } from "@prisma/client";
+import { CompletionAutomation, EventKind, type StatusCategory } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 
@@ -21,7 +21,11 @@ const projectRepoUrl = z
   .trim()
   .max(500)
   .refine(
-    (v) => v === "" || /^https?:\/\//.test(v) || /^[A-Za-z0-9._-]+@[^:]+:.+/.test(v) || /^ssh:\/\//.test(v),
+    (v) =>
+      v === "" ||
+      /^https?:\/\//.test(v) ||
+      /^[A-Za-z0-9._-]+@[^:]+:.+/.test(v) ||
+      /^ssh:\/\//.test(v),
     { message: "Enter an https:// or git@host:org/repo.git URL." },
   );
 
@@ -426,6 +430,7 @@ export const projectRouter = router({
           initiativeId: project.initiativeId,
           repoUrl: project.repoUrl,
           repoBranch: project.repoBranch,
+          completionAutomation: project.completionAutomation,
           createdAt: project.createdAt,
           updatedAt: project.updatedAt,
         },
@@ -452,6 +457,7 @@ export const projectRouter = router({
         targetDate: z.date().optional(),
         repoUrl: projectRepoUrl.optional(),
         repoBranch: z.string().trim().max(200).optional(),
+        completionAutomation: z.nativeEnum(CompletionAutomation).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -504,6 +510,7 @@ export const projectRouter = router({
         targetDate: z.date().nullable().optional(),
         repoUrl: projectRepoUrl.nullable().optional(),
         repoBranch: z.string().trim().max(200).nullable().optional(),
+        completionAutomation: z.nativeEnum(CompletionAutomation).nullable().optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {

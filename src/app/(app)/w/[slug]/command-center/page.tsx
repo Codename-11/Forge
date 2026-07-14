@@ -29,6 +29,7 @@ import { Picker, useConfirm } from "@/components/ui/modal";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
 import { RunApprovalCard } from "@/components/agents/run-approval-card";
+import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -224,14 +225,24 @@ export default function CommandCenterPage() {
                         count={data.counts.actionRequests}
                         empty="No agent asks."
                       >
-                        {data.actionRequests.map((row) => (
-                          <ActionRequestDecisionCard
-                            key={row.id}
-                            request={row}
-                            slug={ws.slug}
-                            onResolved={() => dropActionRequest(row.id)}
-                          />
-                        ))}
+                        {data.actionRequests.map((row) =>
+                          completionIntent(row.payload) && row.issue ? (
+                            <ActionRequestCard
+                              key={row.id}
+                              requestId={row.id}
+                              issueId={row.issue.id}
+                              canResolve={canRecoverRuns}
+                              onResolved={() => dropActionRequest(row.id)}
+                            />
+                          ) : (
+                            <ActionRequestDecisionCard
+                              key={row.id}
+                              request={row}
+                              slug={ws.slug}
+                              onResolved={() => dropActionRequest(row.id)}
+                            />
+                          ),
+                        )}
                       </AttentionGroup>
                     ) : null}
                     {data.runtimeApprovals.length > 0 ? (
@@ -526,6 +537,7 @@ type CCActionRequest = {
   severity: string;
   /** ActionRequestKind — FREE_FORM asks need an answer, not just Accept. */
   kind: string;
+  payload: unknown;
   issue: {
     id: string;
     number: number;
@@ -539,6 +551,12 @@ type CCActionRequest = {
   } | null;
   requestedByUser: { name: string | null } | null;
 };
+
+function completionIntent(payload: unknown): "COMPLETE" | "RECOVER" | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const intent = (payload as Record<string, unknown>).intent;
+  return intent === "COMPLETE" || intent === "RECOVER" ? intent : null;
+}
 
 type CCRuntimeApproval = {
   id: string;

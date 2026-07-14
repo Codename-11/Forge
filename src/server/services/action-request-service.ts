@@ -35,6 +35,20 @@ import { agentIdSchema } from "@/server/validators";
  */
 const transitionPayload = z.object({
   statusId: z.string().cuid(),
+  intent: z.enum(["COMPLETE", "RECOVER"]).optional(),
+  sourceLabel: z.string().trim().max(300).optional(),
+  sourceUrl: z.string().url().max(2_000).optional(),
+  evidence: z
+    .array(
+      z.object({
+        label: z.string().trim().min(1).max(120),
+        value: z.string().trim().min(1).max(500),
+        tone: z.enum(["SUCCESS", "WARNING", "NEUTRAL"]).optional(),
+      }),
+    )
+    .max(12)
+    .optional(),
+  autoHeldReasons: z.array(z.string().trim().min(1).max(300)).max(12).optional(),
 });
 const setLabelsPayload = z.object({
   add: z.array(z.string().cuid()).max(50).default([]),
@@ -127,6 +141,7 @@ export interface CreateActionRequestInput {
   assignedAgentId?: string | null;
   sourceType?: string | null;
   sourceId?: string | null;
+  dedupeKey?: string | null;
   issueId?: string | null;
   dueAt?: Date | null;
 }
@@ -349,6 +364,22 @@ function isOpenDedupConflict(err: unknown): boolean {
   return err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002";
 }
 
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalJson(nested)]),
+    );
+  }
+  return value ?? null;
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(canonicalJson(left)) === JSON.stringify(canonicalJson(right));
+}
+
 export async function createActionRequest(
   db: PrismaClient,
   input: CreateActionRequestInput,
@@ -396,33 +427,119 @@ export async function createActionRequest(
   // FREE_FORM asks from the same agent on one issue never collapse into each
   // other. Mirrors the partial-unique index, which only covers scopePath rows.
   const requesterAgentId = input.actorAgentId ?? null;
+  const genericDedupeKey = input.dedupeKey?.trim() || null;
   const dedupScopePath =
     parsedPayload && typeof parsedPayload === "object" && "scopePath" in parsedPayload
       ? String((parsedPayload as { scopePath?: unknown }).scopePath ?? "") || null
       : null;
-  const dedupable = Boolean(input.issueId && requesterAgentId && dedupScopePath !== null);
+  const legacyDedupable = Boolean(input.issueId && requesterAgentId && dedupScopePath !== null);
+  const dedupable = Boolean(genericDedupeKey || legacyDedupable);
 
   const createOnce = () =>
     db.$transaction(async (tx) => {
       let supersededId: string | null = null;
       if (dedupable) {
-        const opens = await tx.actionRequest.findMany({
-          where: {
+        const match = genericDedupeKey
+          ? await tx.actionRequest.findFirst({
+              where: {
+                workspaceId: input.workspaceId,
+                dedupeKey: genericDedupeKey,
+                status: ActionRequestStatus.OPEN,
+              },
+              select: { id: true },
+            })
+          : (
+              await tx.actionRequest.findMany({
+                where: {
+                  workspaceId: input.workspaceId,
+                  issueId: input.issueId!,
+                  kind,
+                  requestedByAgentId: requesterAgentId!,
+                  status: ActionRequestStatus.OPEN,
+                },
+                select: { id: true, payload: true },
+              })
+            ).find((row) => {
+              const ps =
+                row.payload && typeof row.payload === "object" && "scopePath" in row.payload
+                  ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
+                  : "";
+              return ps === (dedupScopePath ?? "");
+            });
+        if (genericDedupeKey && match) {
+          const existing = await tx.actionRequest.findUniqueOrThrow({
+            where: { id: match.id },
+          });
+          const nextPayload =
+            parsedPayload === null ? null : (parsedPayload as Prisma.InputJsonValue);
+          const nextOptions =
+            parsedOptions === null
+              ? null
+              : (parsedOptions as unknown as Prisma.InputJsonValue);
+          const unchanged =
+            existing.title === input.title.trim() &&
+            existing.body === (input.body ?? null) &&
+            existing.severity === (input.severity ?? NotificationSeverity.INFO) &&
+            existing.kind === kind &&
+            sameJson(existing.payload, nextPayload) &&
+            sameJson(existing.options, nextOptions) &&
+            existing.requestedByUserId === (input.actorAgentId ? null : input.actorId) &&
+            existing.requestedByAgentId === (input.actorAgentId ?? null) &&
+            existing.assignedUserId === (input.assignedUserId ?? null) &&
+            existing.assignedAgentId === (input.assignedAgentId ?? null) &&
+            existing.sourceType === (input.sourceType ?? null) &&
+            existing.sourceId === (input.sourceId ?? null) &&
+            existing.issueId === (input.issueId ?? null) &&
+            existing.dueAt?.getTime() === input.dueAt?.getTime();
+          if (unchanged) return { id: existing.id };
+
+          const refreshed = await tx.actionRequest.update({
+            where: { id: match.id },
+            data: {
+              title: input.title.trim(),
+              body: input.body ?? null,
+              severity: input.severity ?? NotificationSeverity.INFO,
+              kind,
+              payload:
+                parsedPayload === null ? Prisma.JsonNull : (parsedPayload as Prisma.InputJsonValue),
+              options:
+                parsedOptions === null
+                  ? Prisma.JsonNull
+                  : (parsedOptions as unknown as Prisma.InputJsonValue),
+              requestedByUserId: input.actorAgentId ? null : input.actorId,
+              requestedByAgentId: input.actorAgentId ?? null,
+              assignedUserId: input.assignedUserId ?? null,
+              assignedAgentId: input.assignedAgentId ?? null,
+              sourceType: input.sourceType ?? null,
+              sourceId: input.sourceId ?? null,
+              issueId: input.issueId ?? null,
+              dueAt: input.dueAt ?? null,
+            },
+          });
+          await recordChange(tx, {
             workspaceId: input.workspaceId,
-            issueId: input.issueId!,
-            kind,
-            requestedByAgentId: requesterAgentId!,
-            status: ActionRequestStatus.OPEN,
-          },
-          select: { id: true, payload: true },
-        });
-        const match = opens.find((row) => {
-          const ps =
-            row.payload && typeof row.payload === "object" && "scopePath" in row.payload
-              ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
-              : "";
-          return ps === (dedupScopePath ?? "");
-        });
+            actorId: input.actorId,
+            actorAgentId: input.actorAgentId ?? null,
+            entity: "action-request",
+            entityId: refreshed.id,
+            action: "refreshed",
+            after: { title: refreshed.title, severity: refreshed.severity, kind: refreshed.kind },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "action-request",
+            subjectId: refreshed.id,
+            payload: {
+              title: refreshed.title,
+              severity: refreshed.severity,
+              kind: refreshed.kind,
+              sourceType: refreshed.sourceType,
+              sourceId: refreshed.sourceId,
+              issueId: refreshed.issueId,
+              dedupeKey: refreshed.dedupeKey,
+              refreshed: true,
+            } as Prisma.InputJsonValue,
+          });
+          return { id: refreshed.id };
+        }
         if (match) {
           // Supersede FIRST: flip the prior row out of OPEN so it leaves the
           // partial-unique index before the replacement is inserted.
@@ -458,6 +575,7 @@ export async function createActionRequest(
           assignedAgentId: input.assignedAgentId ?? null,
           sourceType: input.sourceType ?? null,
           sourceId: input.sourceId ?? null,
+          dedupeKey: genericDedupeKey,
           issueId: input.issueId ?? null,
           dueAt: input.dueAt ?? null,
         },
@@ -489,6 +607,7 @@ export async function createActionRequest(
           assignedAgentId: row.assignedAgentId,
           sourceType: row.sourceType,
           sourceId: row.sourceId,
+          dedupeKey: row.dedupeKey,
           issueId: row.issueId,
           supersededId,
         } as Prisma.InputJsonValue,

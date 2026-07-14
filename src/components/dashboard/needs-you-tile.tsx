@@ -49,6 +49,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
         handle: string | null;
         avatar: string | null;
         issueLabel: string | null;
+        completionIntent: "COMPLETE" | "RECOVER" | null;
       }
     | {
         kind: "gate";
@@ -66,9 +67,8 @@ export function NeedsYouTile({ slug }: { slug: string }) {
       title: r.title,
       handle: r.requestedByAgent?.profileKey ?? null,
       avatar: r.requestedByAgent?.avatar ?? null,
-      issueLabel: r.issue
-        ? `${r.issue.workspace.key}-${r.issue.number}`
-        : null,
+      issueLabel: r.issue ? `${r.issue.workspace.key}-${r.issue.number}` : null,
+      completionIntent: readCompletionIntent(r.payload),
     });
   }
   for (const g of reviewGates) {
@@ -94,7 +94,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
         </Badge>
         <Link
           href={commandCenterHref}
-          className="focus-ring ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-meta text-muted-foreground hover:text-foreground"
+          className="focus-ring text-meta ml-auto inline-flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
         >
           View all
           <ArrowRight className="h-3 w-3" />
@@ -107,37 +107,41 @@ export function NeedsYouTile({ slug }: { slug: string }) {
               key={`ask-${card.id}`}
               className="flex flex-wrap items-start gap-2 rounded-md border border-border bg-background p-2 sm:flex-nowrap"
             >
-              {card.avatar ? (
-                <span className="mt-0.5 text-[0.875rem] leading-none">
-                  {card.avatar}
-                </span>
+              {card.completionIntent ? (
+                <span className="mt-1 inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-ember motion-safe:animate-pulse motion-reduce:animate-none" />
+              ) : card.avatar ? (
+                <span className="mt-0.5 text-[0.875rem] leading-none">{card.avatar}</span>
               ) : (
                 <AtSign className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ember" />
               )}
               <div className="min-w-0 flex-1">
                 <div className="text-sm">
-                  {card.handle ? (
+                  {card.completionIntent ? (
                     <span className="font-medium text-foreground">
-                      @{card.handle}
+                      {card.completionIntent === "COMPLETE"
+                        ? "Ready to close"
+                        : "Needs PR recovery"}
                     </span>
+                  ) : card.handle ? (
+                    <span className="font-medium text-foreground">@{card.handle}</span>
                   ) : (
                     <span className="font-medium text-foreground">An agent</span>
                   )}{" "}
-                  asks:{" "}
-                  <span className="text-muted-foreground">
-                    &ldquo;{card.title}&rdquo;
-                  </span>
+                  {!card.completionIntent && "asks: "}
+                  <span className="text-muted-foreground">&ldquo;{card.title}&rdquo;</span>
                 </div>
-                <div className="mt-0.5 text-meta text-muted-foreground">
-                  {card.issueLabel ? (
-                    <span className="text-id">{card.issueLabel}</span>
-                  ) : null}
+                <div className="text-meta mt-0.5 text-muted-foreground">
+                  {card.issueLabel ? <span className="text-id">{card.issueLabel}</span> : null}
                   {card.issueLabel ? " · " : ""}action request
                 </div>
               </div>
               <Link href={commandCenterHref} className="ml-auto shrink-0 sm:ml-0">
                 <Button variant="ember" size="sm">
-                  Resolve
+                  {card.completionIntent === "COMPLETE"
+                    ? "Review close"
+                    : card.completionIntent === "RECOVER"
+                      ? "Recover"
+                      : "Resolve"}
                 </Button>
               </Link>
             </li>
@@ -150,11 +154,9 @@ export function NeedsYouTile({ slug }: { slug: string }) {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm">
                   Review gate ·{" "}
-                  <span className="text-muted-foreground">
-                    {card.prompt.slice(0, 80)}
-                  </span>
+                  <span className="text-muted-foreground">{card.prompt.slice(0, 80)}</span>
                 </div>
-                <div className="mt-0.5 text-meta text-muted-foreground">
+                <div className="text-meta mt-0.5 text-muted-foreground">
                   {card.targetType.replace(/-/g, " ")} · awaiting your sign-off
                 </div>
               </div>
@@ -171,16 +173,18 @@ export function NeedsYouTile({ slug }: { slug: string }) {
   );
 }
 
+function readCompletionIntent(payload: unknown): "COMPLETE" | "RECOVER" | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const intent = (payload as Record<string, unknown>).intent;
+  return intent === "COMPLETE" || intent === "RECOVER" ? intent : null;
+}
+
 /**
  * Resolve a review-gate target to a deep link where it can be acted on.
  * Mirrors the Command Center's resolver; returns null for target types we
  * can't route from id alone (those fall back to the Command Center link).
  */
-function gateTargetHref(
-  slug: string,
-  targetType: string,
-  targetId: string,
-): string | null {
+function gateTargetHref(slug: string, targetType: string, targetId: string): string | null {
   switch (targetType) {
     case "execution-plan":
       return `/w/${slug}/plans/${targetId}`;

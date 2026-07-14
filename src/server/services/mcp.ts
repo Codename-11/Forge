@@ -59,6 +59,7 @@ import {
 } from "@/server/services/run-budget";
 import { logger } from "@/server/logger";
 import { handoffCompletedRunToStep, maybeAutoJudge } from "@/server/services/orchestration-service";
+import { evaluateIssueCompletionCandidate } from "@/server/services/completion-candidate";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
 import { agentIdSchema } from "@/server/validators";
@@ -6649,7 +6650,10 @@ export const mcpTools = {
    * For EXECUTE, if the workspace has `reviewStatusId` configured, a
    * successful completion auto-transitions the issue to that IN_REVIEW
    * status (`maybeAutoTransitionOnComplete`) — completing EXECUTE work is
-   * a "ready for human review" signal, never a "mark done" signal.
+   * a "ready for human review" signal. An EXECUTE agent can separately set
+   * `recommendIssueCompletion` when its verified result is evidence that the
+   * issue itself is ready to close; the workspace completion policy decides
+   * whether that becomes a human action card or a guarded automatic transition.
    */
   "runs.complete": {
     scopes: ["WRITE_ISSUES"] as const,
@@ -6688,6 +6692,12 @@ export const mcpTools = {
         .optional(),
       confidence: z.enum(RUN_COMPLETION_CONFIDENCE_VALUES).optional(),
       verdict: z.enum(RUN_REVIEW_VERDICT_VALUES).optional(),
+      recommendIssueCompletion: z
+        .boolean()
+        .default(false)
+        .describe(
+          "EXECUTE only: signal that the verified issue outcome is ready to close. Forge still applies the workspace completion safety policy.",
+        ),
     }),
     async run(
       input: {
@@ -6705,6 +6715,7 @@ export const mcpTools = {
         followUps?: Array<{ title: string; body?: string; kind?: string }>;
         confidence?: RunCompletionConfidence;
         verdict?: RunReviewVerdict;
+        recommendIssueCompletion: boolean;
       },
       ctx: McpContext,
     ) {
@@ -6722,6 +6733,7 @@ export const mcpTools = {
           startedAt: true,
           engagementMode: true,
           executionStepId: true,
+          agent: { select: { profileKey: true, name: true } },
           issue: {
             select: {
               expectedOutput: true,
@@ -6872,7 +6884,46 @@ export const mcpTools = {
           stepId: run.executionStepId,
         });
       }
-      return completed;
+      const completionRecommendation =
+        run.engagementMode === "EXECUTE" && input.recommendIssueCompletion
+          ? await evaluateIssueCompletionCandidate(db, {
+              workspaceId: ctx.workspaceId,
+              issueId: run.issueId,
+              actorId: ctx.userId,
+              actorAgentId: linkedAgentId,
+              sourceType: "agent-run",
+              sourceId: run.id,
+              sourceLabel: `@${run.agent.profileKey || run.agent.name}`,
+              evidence: [
+                {
+                  label: "Verification",
+                  value: input.verificationResult?.length
+                    ? `${input.verificationResult.filter((item) => item.done).length}/${input.verificationResult.length} checks passed`
+                    : "Completion contract verified",
+                  tone: "SUCCESS",
+                },
+                ...(input.producedArtifactIds?.length
+                  ? [
+                      {
+                        label: "Artifacts",
+                        value: `${input.producedArtifactIds.length} produced`,
+                        tone: "SUCCESS" as const,
+                      },
+                    ]
+                  : []),
+                ...(input.confidence
+                  ? [
+                      {
+                        label: "Confidence",
+                        value: input.confidence.toLowerCase(),
+                        tone: "NEUTRAL" as const,
+                      },
+                    ]
+                  : []),
+              ],
+            })
+          : null;
+      return { ...completed, completionRecommendation };
     },
   },
 

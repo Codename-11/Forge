@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { CommentKind, Prisma, type PrismaClient } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
+import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
 import {
   issueSnapshot,
   pullRequestSnapshot,
@@ -106,7 +107,9 @@ async function activeMappingsForPayload(args: {
     if (!args.installationId) return true;
     const cfg = row.connection.config;
     if (!cfg || typeof cfg !== "object" || !("installationId" in cfg)) return true;
-    return String((cfg as { installationId?: unknown }).installationId) === String(args.installationId);
+    return (
+      String((cfg as { installationId?: unknown }).installationId) === String(args.installationId)
+    );
   });
 }
 
@@ -276,6 +279,12 @@ async function processPullRequestEvent(args: {
       statusRuleId: rule,
     }),
   );
+  await reconcileGitHubPullRequestCompletion(args.db, {
+    workspaceId,
+    externalResourceId: resource.id,
+    actorId: args.actor.actorId,
+    actorAgentId: args.actor.actorAgentId,
+  });
   return 1;
 }
 
@@ -315,11 +324,9 @@ async function processReviewEvent(args: {
   return 1;
 }
 
-function failedCheckPullRequestNumbers(payload: GitHubWebhookPayload): number[] {
+function completedCheckPullRequestNumbers(payload: GitHubWebhookPayload): number[] {
   const check = payload.check_suite ?? payload.check_run;
   if (!check || check.status !== "completed") return [];
-  const conclusion = check.conclusion ?? null;
-  if (!conclusion || ["success", "neutral", "skipped"].includes(conclusion)) return [];
 
   const out = new Set<number>();
   for (const pr of check.pull_requests ?? []) {
@@ -331,6 +338,17 @@ function failedCheckPullRequestNumbers(payload: GitHubWebhookPayload): number[] 
   return [...out];
 }
 
+export function aggregateGitHubCheckConclusion(args: {
+  event: "check_suite" | "check_run";
+  conclusion: string | null;
+  existingConclusion: unknown;
+}): string | null {
+  const successful =
+    args.conclusion !== null && ["success", "neutral", "skipped"].includes(args.conclusion);
+  if (args.event === "check_suite" || !successful) return args.conclusion;
+  return typeof args.existingConclusion === "string" ? args.existingConclusion : null;
+}
+
 async function processCheckEvent(args: {
   db: PrismaClient;
   mapping: Awaited<ReturnType<typeof activeMappingsForPayload>>[number];
@@ -338,19 +356,25 @@ async function processCheckEvent(args: {
   actor: ActorMeta;
 }): Promise<number> {
   if (!args.mapping.workspace?.id) return 0;
-  const numbers = failedCheckPullRequestNumbers(args.payload);
+  const numbers = completedCheckPullRequestNumbers(args.payload);
   if (numbers.length === 0) return 0;
 
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
-  const statusRuleId = statusRuleForGitHubEvent(config, "checksFailedStatusId");
-  if (!statusRuleId) return 0;
-
-  const status = await args.db.status.findFirst({
-    where: { id: statusRuleId, workspaceId },
-    select: { id: true, category: true },
-  });
-  if (!status) return 0;
+  const conclusion =
+    args.payload.check_suite?.conclusion ?? args.payload.check_run?.conclusion ?? null;
+  const successfulConclusion =
+    conclusion !== null && ["success", "neutral", "skipped"].includes(conclusion);
+  const failedConclusion = conclusion !== null && !successfulConclusion;
+  const statusRuleId = failedConclusion
+    ? statusRuleForGitHubEvent(config, "checksFailedStatusId")
+    : null;
+  const status = statusRuleId
+    ? await args.db.status.findFirst({
+        where: { id: statusRuleId, workspaceId },
+        select: { id: true, category: true },
+      })
+    : null;
 
   const resources = await args.db.externalResource.findMany({
     where: {
@@ -360,13 +384,49 @@ async function processCheckEvent(args: {
       resourceType: "PULL_REQUEST",
       number: { in: numbers },
     },
-    select: { id: true, number: true },
+    select: { id: true, number: true, metadata: true },
   });
   if (resources.length === 0) return 0;
 
   let processed = 0;
   await args.db.$transaction(async (tx) => {
     for (const resource of resources) {
+      const metadata =
+        resource.metadata &&
+        typeof resource.metadata === "object" &&
+        !Array.isArray(resource.metadata)
+          ? (resource.metadata as Record<string, unknown>)
+          : {};
+      const existingChecks =
+        metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
+          ? (metadata.checks as Record<string, unknown>)
+          : {};
+      // A check_suite conclusion is aggregate. A successful check_run only
+      // proves one job passed, so it must not certify the whole PR; failures
+      // remain safe to persist immediately.
+      const aggregateConclusion = aggregateGitHubCheckConclusion({
+        event: args.payload.check_suite ? "check_suite" : "check_run",
+        conclusion,
+        existingConclusion: existingChecks.conclusion,
+      });
+      await tx.externalResource.update({
+        where: { id: resource.id },
+        data: {
+          metadata: {
+            ...metadata,
+            checks: {
+              ...existingChecks,
+              status: "completed",
+              conclusion: aggregateConclusion,
+              updatedAt: new Date().toISOString(),
+              event: args.payload.check_suite ? "check_suite" : "check_run",
+              ...(args.payload.check_run ? { lastRunConclusion: conclusion } : {}),
+            },
+          } as Prisma.InputJsonValue,
+        },
+      });
+      processed += 1;
+      if (!status) continue;
       const links = await tx.externalResourceLink.findMany({
         where: { workspaceId, externalResourceId: resource.id },
         select: { issueId: true },
@@ -409,16 +469,22 @@ async function processCheckEvent(args: {
             repo: args.mapping.target,
             number: resource.number,
             event: args.payload.check_suite ? "check_suite" : "check_run",
-            conclusion:
-              args.payload.check_suite?.conclusion ?? args.payload.check_run?.conclusion ?? null,
+            conclusion,
           },
           ip: args.actor.ip ?? null,
           userAgent: args.actor.userAgent ?? null,
         });
-        processed += 1;
       }
     }
   });
+  for (const resource of resources) {
+    await reconcileGitHubPullRequestCompletion(args.db, {
+      workspaceId,
+      externalResourceId: resource.id,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId,
+    });
+  }
   return processed;
 }
 
@@ -508,10 +574,7 @@ export async function processGitHubWebhook(args: {
       },
     });
   } catch (err) {
-    if (
-      err instanceof Prisma.PrismaClientKnownRequestError &&
-      err.code === "P2002"
-    ) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
       return { ok: true, duplicate: true, processed: 0 };
     }
     throw err;
@@ -533,7 +596,11 @@ export async function processGitHubWebhook(args: {
   if (mappings.length === 0) {
     await args.db.externalWebhookEvent.update({
       where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: { status: "SKIPPED", error: "No active Forge mapping matched.", processedAt: new Date() },
+      data: {
+        status: "SKIPPED",
+        error: "No active Forge mapping matched.",
+        processedAt: new Date(),
+      },
     });
     return { ok: true, processed: 0, skipped: "no-mapping" };
   }
@@ -542,15 +609,40 @@ export async function processGitHubWebhook(args: {
   try {
     for (const mapping of mappings) {
       if (args.event === "issues") {
-        processed += await processIssueEvent({ db: args.db, mapping, payload: args.payload, actor });
+        processed += await processIssueEvent({
+          db: args.db,
+          mapping,
+          payload: args.payload,
+          actor,
+        });
       } else if (args.event === "issue_comment") {
-        processed += await processIssueComment({ db: args.db, mapping, payload: args.payload, actor });
+        processed += await processIssueComment({
+          db: args.db,
+          mapping,
+          payload: args.payload,
+          actor,
+        });
       } else if (args.event === "pull_request") {
-        processed += await processPullRequestEvent({ db: args.db, mapping, payload: args.payload, actor });
+        processed += await processPullRequestEvent({
+          db: args.db,
+          mapping,
+          payload: args.payload,
+          actor,
+        });
       } else if (args.event === "pull_request_review") {
-        processed += await processReviewEvent({ db: args.db, mapping, payload: args.payload, actor });
+        processed += await processReviewEvent({
+          db: args.db,
+          mapping,
+          payload: args.payload,
+          actor,
+        });
       } else if (args.event === "check_suite" || args.event === "check_run") {
-        processed += await processCheckEvent({ db: args.db, mapping, payload: args.payload, actor });
+        processed += await processCheckEvent({
+          db: args.db,
+          mapping,
+          payload: args.payload,
+          actor,
+        });
       }
     }
     await args.db.externalWebhookEvent.update({
@@ -583,7 +675,13 @@ export async function handleGitHubWebhookRequest(args: {
   deliveryId: string | null;
   event: string | null;
 }): Promise<GitHubWebhookResult> {
-  if (!verifyGitHubWebhookSignature({ secret: webhookSecret(), rawBody: args.rawBody, signature: args.signature })) {
+  if (
+    !verifyGitHubWebhookSignature({
+      secret: webhookSecret(),
+      rawBody: args.rawBody,
+      signature: args.signature,
+    })
+  ) {
     throw new Error("Bad GitHub webhook signature.");
   }
   if (!args.deliveryId) throw new Error("Missing X-GitHub-Delivery header.");

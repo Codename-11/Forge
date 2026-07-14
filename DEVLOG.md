@@ -12764,3 +12764,40 @@ build passed; and all 38 Playwright journeys passed serially. The canonical
 gate first encountered the known cross-suite stale-work redispatch race; that
 9-test file passed immediately in isolation and the full suite then passed
 cleanly.
+
+---
+
+## 2026-07-14 — Proactive issue completion and PR recovery
+
+Added a settings-driven completion policy with workspace OFF, RECOMMEND, and
+AUTO_WHEN_SAFE modes, a configurable DONE status, and optional project-level
+overrides. Verified EXECUTE runs may now explicitly recommend the issue itself
+for completion. Native GitHub implementation links, manual sync, PR webhooks,
+and completed check-suite outcomes converge on the same evaluator.
+
+The evaluator blocks automatic completion while live runs, review gates,
+unresolved decisions, blockers, unmerged PRs, or unconfirmed checks remain.
+It emits one durable TRANSITION ActionRequest with compact evidence and clear
+Mark done / Keep in review actions, or transitions atomically when the safety
+gate is clear. Closed unmerged PRs create a matching recovery decision to
+return review-stage work to the configured active status or link a replacement
+PR. Dashboard and shared action-request surfaces show animated completion or
+recovery state without expanding cards by default.
+
+Added producer-owned ActionRequest dedupe keys with a database partial unique
+index. Changed repeated identical refreshes into true no-ops so duplicate
+webhook deliveries cannot create activity or notification spam. A five-minute
+worker reconciliation pass repairs missed event handoffs and re-evaluates
+AUTO_WHEN_SAFE cards after held dependencies clear.
+
+CI also exposed a same-millisecond chat ordering edge case: an agent reply
+could remain in the durable inbox when its timestamp tied the preceding user
+message. Inbox suppression now uses the canonical timestamp-plus-id ordering,
+with a deterministic regression test.
+
+Verification: focused completion and MCP suites passed 133 tests; the full
+Vitest suite passed 1,244 tests with 1 intentional live-connector skip;
+typecheck and lint passed with only pre-existing repository warnings; and a
+fresh production build passed. The full serial Playwright run passed 36 of 38
+journeys; its shared-state chat and Command Center failures both passed against
+a clean disposable E2E database immediately afterward.

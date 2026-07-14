@@ -28,6 +28,7 @@ import { sweepChatCompaction } from "@/server/services/chat-compaction";
 import { ingestRunsDispatch } from "@/server/services/dispatch/run-dispatcher";
 import { purgeExpiredSessionKeys } from "@/server/services/api-key-purge";
 import { sweepIdleEphemeralAgents } from "@/server/services/ephemeral-idle";
+import { sweepCompletionCandidates } from "@/server/services/completion-candidate";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -57,6 +58,8 @@ const EXPIRED_KEY_PURGE_INTERVAL_MS = 60 * 60_000;
 const EXPIRED_KEY_PURGE_JOB_ID = "expired-key-purge-sweep";
 const EPHEMERAL_IDLE_SWEEP_INTERVAL_MS = 5 * 60_000;
 const EPHEMERAL_IDLE_SWEEP_JOB_ID = "ephemeral-idle-sweep";
+const COMPLETION_CANDIDATE_SWEEP_INTERVAL_MS = 5 * 60_000;
+const COMPLETION_CANDIDATE_SWEEP_JOB_ID = "completion-candidate-sweep";
 
 export { webhookQueue, maintenanceQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
@@ -315,6 +318,9 @@ export const maintenanceWorker = new Worker(
         const res = await sweepIdleEphemeralAgents();
         return res;
       }
+      case "completion-candidate-sweep": {
+        return sweepCompletionCandidates(db);
+      }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;
         if (!eventId) return null;
@@ -561,6 +567,20 @@ export async function registerEphemeralIdleSweepJob(): Promise<void> {
   );
 }
 
+/** Reconcile missed or newly-unblocked completion/recovery decisions. */
+export async function registerCompletionCandidateSweepJob(): Promise<void> {
+  await maintenanceQueue.add(
+    "completion-candidate-sweep",
+    {},
+    {
+      jobId: COMPLETION_CANDIDATE_SWEEP_JOB_ID,
+      repeat: { every: COMPLETION_CANDIDATE_SWEEP_INTERVAL_MS },
+      removeOnComplete: { age: 3600, count: 100 },
+      removeOnFail: { age: 86_400, count: 50 },
+    },
+  );
+}
+
 // Auto-register recurring jobs when this module loads (i.e. when
 // `pnpm worker` boots). Fire-and-forget — a Redis outage at boot should
 // not crash the worker; BullMQ will retry internally on the next op.
@@ -596,6 +616,9 @@ void registerExpiredKeyPurgeSweepJob().catch((err) => {
 });
 void registerEphemeralIdleSweepJob().catch((err) => {
   logger.warn({ err }, "failed to register ephemeral-idle-sweep job");
+});
+void registerCompletionCandidateSweepJob().catch((err) => {
+  logger.warn({ err }, "failed to register completion-candidate-sweep job");
 });
 
 if (import.meta.url === `file://${process.argv[1]}`) {
