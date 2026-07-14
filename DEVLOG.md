@@ -12646,6 +12646,12 @@ GitHub issue and pull-request URLs submitted through generic link attachment
 paths now route into Forge's native GitHub resource relation, preserving sync,
 checks, and PR state instead of creating an opaque attachment.
 
+Restored unpin compatibility for migration-0023 rows such as AXI-28. Those
+historical pins deliberately use opaque `pin_<md5>` IDs rather than CUIDs, so
+the remove/reorder API now accepts both persisted formats. Cross-workspace
+navbar chips also expose a direct per-item unpin action for issues, projects,
+initiatives, sprints, views, and agents.
+
 Unified operational alerts and notifications around `NotificationState`.
 Active stale/no-ack/plan alerts reconcile to Resolved when durable product state
 proves recovery, while a human follow-up alone does not falsely clear an agent
@@ -12658,7 +12664,7 @@ Agent attention/runroom and Inbox empty/roster language now distinguish
 verified clear states from unavailable or offline conditions.
 
 Verification: lint passed with existing repository warnings; typecheck passed;
-focused database suites passed (155 tests). The parallel full Vitest run passed
+focused database suites passed (156 tests). The parallel full Vitest run passed
 1,212 tests with 1 skip and hit the known cross-suite stale-work race once; its
 9-test file passed immediately in isolation. A fresh production build passed
 the Command Center and issue-flow Playwright specs, and the notification drawer
