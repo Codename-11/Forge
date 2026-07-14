@@ -438,6 +438,7 @@ describe("GitHub status reconciliation", () => {
     const { fixture, prisma, resource, mapping } = await setupResource();
     const now = new Date("2026-07-14T12:00:00.000Z");
     const reset = new Date("2026-07-14T13:00:00.000Z");
+    const laterReset = new Date("2026-07-14T14:00:00.000Z");
     const sibling = await prisma.externalResource.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -449,6 +450,21 @@ describe("GitHub status reconciliation", () => {
         title: "Same mapping",
         state: "open",
         connectionMappingId: mapping.id,
+      },
+    });
+    const siblingWithLaterGate = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 100,
+        url: "https://github.com/acme/forge/pull/100",
+        title: "Same mapping with a later gate",
+        state: "open",
+        connectionMappingId: mapping.id,
+        syncRetryAt: laterReset,
+        syncLastError: "Existing longer provider reset",
       },
     });
 
@@ -466,9 +482,10 @@ describe("GitHub status reconciliation", () => {
       }),
     ).resolves.toEqual({ retryAt: reset, failureCount: 1, mappingWide: true });
 
-    const [failed, mappedSibling] = await Promise.all([
+    const [failed, mappedSibling, mappedSiblingWithLaterGate] = await Promise.all([
       prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
       prisma.externalResource.findUniqueOrThrow({ where: { id: sibling.id } }),
+      prisma.externalResource.findUniqueOrThrow({ where: { id: siblingWithLaterGate.id } }),
     ]);
     expect(failed).toMatchObject({
       syncRetryAt: reset,
@@ -479,6 +496,11 @@ describe("GitHub status reconciliation", () => {
       syncRetryAt: reset,
       syncFailureCount: 0,
       syncLastError: "API rate limit exceeded",
+    });
+    expect(mappedSiblingWithLaterGate).toMatchObject({
+      syncRetryAt: laterReset,
+      syncFailureCount: 0,
+      syncLastError: "Existing longer provider reset",
     });
   });
 

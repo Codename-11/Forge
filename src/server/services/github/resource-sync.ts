@@ -876,6 +876,7 @@ export async function persistGitHubManualSyncFailure(args: {
           workspaceId: args.workspaceId,
           provider: GITHUB_PROVIDER,
           connectionMappingId: args.connectionMappingId,
+          OR: [{ syncRetryAt: null }, { syncRetryAt: { lt: retryAt } }],
         },
         data: { syncRetryAt: retryAt, syncLastError: message },
       });

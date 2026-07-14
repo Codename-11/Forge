@@ -15,6 +15,9 @@ also checked before the manual lease so missing links still return NOT_FOUND.
 The follow-up Codex review on PR #30 identified that a long provider request
 could consume a short backoff before persistence; manual retry timing is now
 anchored after the provider call finishes.
+The second review pass found that a shorter new mapping-wide delay could
+replace a longer existing provider reset on sibling resources. Mapping circuits
+are now monotonic: only missing or earlier retry gates are extended.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs
