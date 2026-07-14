@@ -111,6 +111,17 @@ describe("GitHub status reconciliation", () => {
       timedOut: false,
     });
     expect(gitHubPartialChecksError({ checks: { partial: false } })).toBeNull();
+    expect(
+      gitHubPartialChecksError({
+        checks: {
+          partial: true,
+          rateLimited: false,
+          timedOut: false,
+          permissionDenied: false,
+          diagnostic: "Check suites require another page",
+        },
+      }),
+    ).toMatchObject({ status: 503, rateLimited: false, timedOut: false });
   });
 
   it("polls only stale native implementation links and is a no-op once fresh", async () => {

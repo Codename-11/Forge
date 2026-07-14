@@ -89,6 +89,7 @@ export type GitHubChecksSnapshot = {
   partial: boolean;
   rateLimited: boolean;
   timedOut: boolean;
+  permissionDenied: boolean;
   diagnostic: string | null;
   retryAt: string | null;
   headSha: string;
@@ -331,6 +332,12 @@ export async function getGitHubPullRequestChecks(args: {
   const timedOut = failures.some(
     (failure) => failure.reason instanceof GitHubRequestError && failure.reason.timedOut,
   );
+  const permissionDenied = failures.some(
+    (failure) =>
+      failure.reason instanceof GitHubRequestError &&
+      !failure.reason.rateLimited &&
+      [401, 403].includes(failure.reason.status),
+  );
   const retryAt =
     failures
       .map((failure) =>
@@ -363,6 +370,7 @@ export async function getGitHubPullRequestChecks(args: {
     partial,
     rateLimited,
     timedOut,
+    permissionDenied,
     diagnostic:
       partial || nullConclusion || statusUnknown
         ? [

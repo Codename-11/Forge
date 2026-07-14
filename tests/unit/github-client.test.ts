@@ -35,6 +35,7 @@ describe("GitHub REST client resilience", () => {
       status: "unknown",
       conclusion: null,
       partial: true,
+      permissionDenied: true,
       statusCount: 1,
     });
     expect(checks.diagnostic).toContain("Checks permission required");
@@ -123,9 +124,7 @@ describe("GitHub REST client resilience", () => {
           { status: 200 },
         ),
       )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ total_count: 1 }), { status: 200 }),
-      );
+      .mockResolvedValueOnce(new Response(JSON.stringify({ total_count: 1 }), { status: 200 }));
 
     await expect(
       getGitHubPullRequestChecks({
@@ -167,6 +166,7 @@ describe("GitHub REST client resilience", () => {
     ).resolves.toMatchObject({
       partial: true,
       rateLimited: true,
+      permissionDenied: false,
       conclusion: null,
       retryAt: new Date(reset * 1000).toISOString(),
     });

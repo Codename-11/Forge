@@ -78,13 +78,14 @@ export function gitHubPartialChecksError(metadata: unknown): GitHubRequestError 
       : null;
   const rateLimited = values.rateLimited === true;
   const timedOut = values.timedOut === true;
+  const permissionDenied = values.permissionDenied === true;
   const message =
     typeof values.diagnostic === "string" && values.diagnostic.trim()
       ? values.diagnostic
       : "GitHub returned partial checks data.";
   return new GitHubRequestError(
     message,
-    rateLimited ? 429 : timedOut ? 408 : 403,
+    rateLimited ? 429 : timedOut ? 408 : permissionDenied ? 403 : 503,
     retryAt,
     rateLimited,
     timedOut,

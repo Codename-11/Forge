@@ -277,7 +277,11 @@ export async function sweepGitHubStatusReconciliation(
           if (checks.rateLimited === true) {
             result.rateLimited += 1;
           }
-          if (checks.partial === true) {
+          const mappingWidePartial =
+            checks.rateLimited === true ||
+            checks.timedOut === true ||
+            checks.permissionDenied === true;
+          if (mappingWidePartial) {
             // Permission, timeout, or rate-limit failures generally affect the
             // installation/mapping, not one PR. Open a persisted circuit for
             // every resource on that mapping before ending this sweep.

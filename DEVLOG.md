@@ -22,6 +22,10 @@ The final review pass identified the non-throwing partial-checks path: PR reads
 can succeed while Checks API calls return a settled partial snapshot. Manual
 and MCP syncs now promote that metadata into the same persisted mapping-wide
 failure circuit and return the updated diagnostic/backoff state immediately.
+Generic partial snapshots (pagination limits or transient 5xx responses) are
+now distinguished from permission failures and back off only the affected PR;
+only auth, rate-limit, and timeout partials open a mapping-wide circuit in both
+manual and scheduled reconciliation.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs
