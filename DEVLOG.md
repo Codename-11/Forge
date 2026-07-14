@@ -2,6 +2,32 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
+
+Closed the AXI-102 stall-comment loop introduced by approval-expiry recovery.
+The runs dispatcher was polling every provider-backed `WAITING` row even though
+ordinary `runs.setWaiting` turns are expected to finish provider-side after the
+agent parks for an operator reply. That normal completion was consequently
+reclassified as a missing `runs.complete` contract, marked STALLED, and surfaced
+as a synthetic `[dispatch · run stalled]` issue comment. Polling now covers
+ACTIVE runs plus only the WAITING rows that hold a real pending runtime
+approval; patient waits remain parked for the existing reply-based resume path.
+The generic recovery queue also excludes WAITING work so Command Center does not
+duplicate a legitimate question as a stalled run with an incorrect Abandon
+action.
+
+Added a shared compact expandable-text treatment to Command Center asks,
+runtime approvals, review prompts and summaries, recoverable-run details, and
+agent-attention items. Cards remain a consistent two-line scan by default and
+offer keyboard-accessible Show full / Show less controls only when their content
+actually overflows.
+
+Verification: focused dispatcher and operator-attention coverage passed
+(**13/13**); lint passed with existing repository warnings only; typecheck
+passed; the full Vitest suite passed (**1,211 passed; 1 skipped**); a fresh
+production build and the responsive Command Center Playwright contract passed
+(**1/1** across desktop, tablet, and mobile); and `git diff --check` passed.
+
 ## 2026-07-13 — v0.11.0 live agent operations release candidate
 
 Integrated the issue Workstream and durable realtime stream with the global

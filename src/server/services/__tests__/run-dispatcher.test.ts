@@ -101,6 +101,62 @@ describe("runs dispatcher", () => {
     expect(after.summary).toMatch(/provider no longer recognizes this run/i);
   });
 
+  it("leaves a patient WAITING run parked when its provider turn has ended", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RWP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        ownerId: fixture.user.id,
+        name: "Hermes patient wait",
+        kind: RuntimeKind.REMOTE_HTTP,
+        adapterKey: "hermes",
+        endpoint: "http://hermes.invalid/v1",
+        providersAvailable: [AgentProvider.HERMES],
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "patient runner",
+        profileKey: "patient-runner",
+        provider: AgentProvider.HERMES,
+        runEngine: RunEngine.RUNS,
+        runtimeId: runtime.id,
+        status: "ONLINE",
+      },
+    });
+    const issue = await createIssue(fixture, { title: "waiting for an operator reply" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        externalRunId: "run_patient_wait",
+        currentStep: "Waiting for the operator to choose a deployment target.",
+      },
+    });
+    const fetchMock = vi.fn(async () =>
+      Response.json({ status: "completed", output: "Waiting for user reply." }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await ingestRunsDispatch();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(after.status).toBe(AgentRunStatus.WAITING);
+    expect(after.finishedAt).toBeNull();
+    expect(after.summary).toBeNull();
+    expect(
+      await prisma.comment.count({
+        where: { issueId: issue.id, body: { contains: "[dispatch · run stalled]" } },
+      }),
+    ).toBe(0);
+  });
+
   it("starts the provider run when the durable inbox already precreated AgentRun", async () => {
     const previousE2E = process.env.FORGE_E2E;
     process.env.FORGE_E2E = "1";

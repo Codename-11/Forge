@@ -23,6 +23,7 @@ import {
 import type { Role } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { ExpandableText } from "@/components/ui/expandable-text";
 import { Picker } from "@/components/ui/modal";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
@@ -543,19 +544,20 @@ function RuntimeApprovalDecisionCard({
   const href = `/w/${run.issue.workspace.slug || slug}/i/${run.issue.workspace.key}-${run.issue.number}`;
   return (
     <div className="space-y-2 rounded-md border border-warning/35 bg-warning/[0.04] p-2">
-      <Link href={href} className="block min-w-0 hover:text-ember">
+      <div className="min-w-0">
         <div className="flex min-w-0 items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium">
+          <Link href={href} className="truncate text-sm font-medium hover:text-ember">
             {run.issue.workspace.key}-{run.issue.number} · {run.issue.title}
-          </span>
+          </Link>
           <span className="text-meta shrink-0 text-warning">@{run.agent.profileKey}</span>
         </div>
         {run.currentStep ? (
-          <p className="text-meta mt-0.5 line-clamp-2 text-muted-foreground">
-            {run.currentStep}
-          </p>
+          <ExpandableText
+            content={run.currentStep}
+            className="text-meta mt-0.5 text-muted-foreground"
+          />
         ) : null}
-      </Link>
+      </div>
       <RunApprovalCard
         runId={run.id}
         agentName={run.agent.name}
@@ -659,7 +661,7 @@ function ActionRequestDecisionCard({
         <SeverityChip severity={request.severity} />
       </div>
       {request.body ? (
-        <p className="text-meta line-clamp-2 text-muted-foreground">{request.body}</p>
+        <ExpandableText content={request.body} className="text-meta text-muted-foreground" />
       ) : null}
       {request.issue ? (
         <span className="text-meta break-words text-muted-foreground">
@@ -932,23 +934,39 @@ function ReviewGateDecisionCard({
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
       <div className="flex flex-col gap-0.5">
-        {href ? (
+        {step && href ? (
           <Link href={href} className="text-sm font-medium hover:underline">
-            {step
-              ? `${step.title} · step ${step.position + 1} of ${step.plan._count.steps}`
-              : gate.prompt.slice(0, 80)}
+            {step.title} · step {step.position + 1} of {step.plan._count.steps}
           </Link>
-        ) : (
-          <span className="text-sm font-medium">{gate.prompt.slice(0, 80)}</span>
-        )}
-        <span className="text-meta text-muted-foreground">
-          {step
-            ? `${step.plan.title}${step.issue ? ` · ${step.issue.title}` : ""}`
-            : gate.targetType.replace(/-/g, " ")}
-          {href ? "" : ` · ${gate.targetId.slice(0, 12)}…`}
-        </span>
+        ) : step ? (
+          <span className="text-sm font-medium">
+            {step.title} · step {step.position + 1} of {step.plan._count.steps}
+          </span>
+        ) : null}
+        <ExpandableText
+          content={gate.prompt}
+          className={cn(
+            step ? "text-meta text-muted-foreground" : "text-sm font-medium text-foreground",
+          )}
+        />
+        <div className="text-meta flex min-w-0 items-center gap-2 text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate">
+            {step
+              ? `${step.plan.title}${step.issue ? ` · ${step.issue.title}` : ""}`
+              : gate.targetType.replace(/-/g, " ")}
+            {href ? "" : ` · ${gate.targetId.slice(0, 12)}…`}
+          </span>
+          {!step && href ? (
+            <Link href={href} className="focus-ring shrink-0 rounded hover:text-foreground">
+              Open target
+            </Link>
+          ) : null}
+        </div>
         {step?.runs[0]?.summary ? (
-          <p className="text-meta line-clamp-2 text-muted-foreground">{step.runs[0].summary}</p>
+          <ExpandableText
+            content={step.runs[0].summary}
+            className="text-meta text-muted-foreground"
+          />
         ) : null}
       </div>
       {!canResolve ? (
@@ -1249,20 +1267,24 @@ function RunFailureCard({
   const ActionIcon = recoveryActionIcon(run.recommendedAction);
   return (
     <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
-      <Link href={`/w/${slug}/issues/${run.issue.id}`} className="min-w-0 flex-1">
+      <div className="min-w-0 flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <span className="text-sm font-medium">
+          <Link
+            href={`/w/${slug}/issues/${run.issue.id}`}
+            className="text-sm font-medium hover:underline"
+          >
             {run.issue.workspace.key}-{run.issue.number}
-          </span>
+          </Link>
           <span className="rounded bg-warning/10 px-1 py-0.5 text-[10px] uppercase text-warning">
             {run.recoveryReason.replace("-", " ")}
           </span>
         </div>
         <span className="text-meta block font-medium text-foreground/80">{run.recoveryTitle}</span>
-        <span className="text-meta line-clamp-2 text-muted-foreground">
-          @{run.agent.profileKey} · {new Date(ts).toLocaleString()} · {excerpt}
-        </span>
-      </Link>
+        <ExpandableText
+          content={`@${run.agent.profileKey} · ${new Date(ts).toLocaleString()} · ${excerpt}`}
+          className="text-meta text-muted-foreground"
+        />
+      </div>
       {canRecover ? (
         <Button
           size="sm"

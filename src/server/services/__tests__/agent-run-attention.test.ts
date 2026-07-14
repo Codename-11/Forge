@@ -32,6 +32,36 @@ async function createAgent(workspaceId: string, suffix: string) {
 }
 
 describe("agent-run operator attention", () => {
+  it("keeps a patient WAITING run out of generic stale recovery", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RW" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Waiting on a user answer" });
+    const agent = await createAgent(fixture.workspace.id, "patient");
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        currentStep: "Waiting for the user to provide the full rollout requirements.",
+      },
+    });
+    await prisma.$executeRawUnsafe(
+      `UPDATE "AgentRun" SET "lastEventAt" = $1 WHERE "id" = $2`,
+      new Date(Date.now() - 60 * 60_000),
+      run.id,
+    );
+
+    const recovery = await listRunRecoveryItems(prisma, {
+      workspaceId: fixture.workspace.id,
+      limit: 20,
+    });
+
+    expect(recovery.items.map((item) => item.id)).not.toContain(run.id);
+    expect(recovery.counts.activeStale).toBe(0);
+  });
+
   it("does not misclassify an old approval pause as generic stale recovery", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "RA" });
     fixtures.push(fixture);

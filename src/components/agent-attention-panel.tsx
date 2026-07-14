@@ -14,6 +14,7 @@ import {
 import type { inferRouterOutputs } from "@trpc/server";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { EmptyState, SkeletonList } from "@/components/ui";
+import { ExpandableText } from "@/components/ui/expandable-text";
 import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -141,10 +142,7 @@ function AgentAttentionCard({ row, slug }: { row: AgentAttentionRow; slug: strin
       <ul className="space-y-1.5">
         {row.items.map((item) => (
           <li key={item.id}>
-            <Link
-              href={item.href}
-              className="group flex min-w-0 items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 hover:border-ember/40"
-            >
+            <div className="group flex min-w-0 items-start gap-2 rounded-md border border-border bg-background px-2 py-1.5 hover:border-ember/40">
               <span
                 className={cn(
                   "mt-0.5 grid h-5 w-5 shrink-0 place-items-center rounded-full",
@@ -153,16 +151,19 @@ function AgentAttentionCard({ row, slug }: { row: AgentAttentionRow; slug: strin
               >
                 <ItemIcon item={item} />
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[0.75rem] font-medium">{item.title}</span>
-                <span className="text-meta line-clamp-2 block text-muted-foreground">
-                  {item.detail}
-                </span>
-              </span>
+              <div className="min-w-0 flex-1">
+                <Link
+                  href={item.href}
+                  className="block truncate text-[0.75rem] font-medium hover:underline"
+                >
+                  {item.title}
+                </Link>
+                <ExpandableText content={item.detail} className="text-meta text-muted-foreground" />
+              </div>
               <span className="text-meta shrink-0 pt-0.5 tabular-nums text-muted-foreground">
                 {relativeTime(item.createdAt)}
               </span>
-            </Link>
+            </div>
           </li>
         ))}
       </ul>
