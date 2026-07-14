@@ -119,6 +119,7 @@ export async function resolveGitHubRepoMapping(args: {
 export async function fetchGitHubSnapshotForParsed(
   parsed: ParsedGitHubUrl,
   mapping: GitHubMappingWithConnection,
+  options: { requestTimeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<GitHubResourceSnapshot> {
   const installationId = githubInstallationId(mapping.connection);
   if (parsed.type === "PULL_REQUEST") {
@@ -127,6 +128,8 @@ export async function fetchGitHubSnapshotForParsed(
       owner: parsed.owner,
       repo: parsed.repo,
       number: parsed.number,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
     });
     const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
     if (pr.head?.sha) {
@@ -137,6 +140,8 @@ export async function fetchGitHubSnapshotForParsed(
           owner: parsed.owner,
           repo: parsed.repo,
           headSha: pr.head.sha,
+          requestTimeoutMs: options.requestTimeoutMs,
+          signal: options.signal,
         }),
       };
     }
@@ -147,6 +152,8 @@ export async function fetchGitHubSnapshotForParsed(
     owner: parsed.owner,
     repo: parsed.repo,
     number: parsed.number,
+    requestTimeoutMs: options.requestTimeoutMs,
+    signal: options.signal,
   });
   if (issue.pull_request) {
     const pr = await getGitHubPullRequest({
@@ -154,6 +161,8 @@ export async function fetchGitHubSnapshotForParsed(
       owner: parsed.owner,
       repo: parsed.repo,
       number: parsed.number,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
     });
     const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
     if (pr.head?.sha) {
@@ -164,6 +173,8 @@ export async function fetchGitHubSnapshotForParsed(
           owner: parsed.owner,
           repo: parsed.repo,
           headSha: pr.head.sha,
+          requestTimeoutMs: options.requestTimeoutMs,
+          signal: options.signal,
         }),
       };
     }
@@ -177,6 +188,8 @@ export async function fetchGitHubSnapshot(args: {
   repoFullName: string;
   resourceType: GitHubResourceType;
   number: number;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<GitHubResourceSnapshot> {
   const repo = splitRepoFullName(args.repoFullName);
   return fetchGitHubSnapshotForParsed(
@@ -190,6 +203,7 @@ export async function fetchGitHubSnapshot(args: {
           : `https://github.com/${repo.repoFullName}/issues/${args.number}`,
     },
     args.mapping,
+    { requestTimeoutMs: args.requestTimeoutMs, signal: args.signal },
   );
 }
 
@@ -253,6 +267,7 @@ export async function upsertExternalResource(
       ? (metadata.checks as Record<string, unknown>)
       : {};
   const passingChecks =
+    checks.source === "api-aggregate" &&
     checks.status === "completed" &&
     typeof checks.conclusion === "string" &&
     ["success", "neutral", "skipped"].includes(checks.conclusion);
@@ -427,7 +442,13 @@ export async function linkGitHubUrlToIssue(args: {
     mappingId: args.mappingId,
     repoFullName: parsed.repoFullName,
   });
-  const snapshot = await fetchGitHubSnapshotForParsed(parsed, mapping);
+  const workspace = await args.db.workspace.findUniqueOrThrow({
+    where: { id: args.workspaceId },
+    select: { githubRequestTimeoutSeconds: true },
+  });
+  const snapshot = await fetchGitHubSnapshotForParsed(parsed, mapping, {
+    requestTimeoutMs: workspace.githubRequestTimeoutSeconds * 1000,
+  });
   const result = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
       workspaceId: args.workspaceId,
@@ -503,13 +524,19 @@ export async function importGitHubIssue(args: {
     mappingId: args.mappingId,
     repoFullName,
   });
+  const workspace = await args.db.workspace.findUniqueOrThrow({
+    where: { id: args.workspaceId },
+    select: { githubRequestTimeoutSeconds: true },
+  });
+  const requestTimeoutMs = workspace.githubRequestTimeoutSeconds * 1000;
   const snapshot = parsed
-    ? await fetchGitHubSnapshotForParsed(parsed, mapping)
+    ? await fetchGitHubSnapshotForParsed(parsed, mapping, { requestTimeoutMs })
     : await fetchGitHubSnapshot({
         mapping,
         repoFullName,
         resourceType: args.resourceType ?? "ISSUE",
         number,
+        requestTimeoutMs,
       });
   const resource = await upsertExternalResource(args.db, {
     workspaceId: args.workspaceId,
@@ -662,7 +689,35 @@ export async function syncGitHubExternalResource(args: {
   workspaceId: string;
   externalResourceId: string;
   actor: ActorMeta;
+  skipCollisionGuard?: boolean;
+  signal?: AbortSignal;
 }): Promise<ExternalResource> {
+  const workspace = await args.db.workspace.findFirst({
+    where: { id: args.workspaceId, deletedAt: null },
+    select: {
+      githubRequestTimeoutSeconds: true,
+      githubManualCooldownSeconds: true,
+    },
+  });
+  if (!workspace) throw new TRPCError({ code: "NOT_FOUND", message: "Workspace not found." });
+  const now = new Date();
+  if (!args.skipCollisionGuard) {
+    const leaseMs = workspace.githubRequestTimeoutSeconds * 12_000 + 5_000;
+    const claimed = await claimGitHubManualSync({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      externalResourceId: args.externalResourceId,
+      now,
+      cooldownSeconds: workspace.githubManualCooldownSeconds,
+      leaseUntil: new Date(now.getTime() + leaseMs),
+    });
+    if (!claimed) {
+      throw new TRPCError({
+        code: "TOO_MANY_REQUESTS",
+        message: "This GitHub link was refreshed recently or is already being refreshed.",
+      });
+    }
+  }
   const existing = await args.db.externalResource.findFirst({
     where: {
       id: args.externalResourceId,
@@ -694,6 +749,8 @@ export async function syncGitHubExternalResource(args: {
     repoFullName: existing.repoFullName,
     resourceType: existing.resourceType as GitHubResourceType,
     number: existing.number,
+    requestTimeoutMs: workspace.githubRequestTimeoutSeconds * 1000,
+    signal: args.signal,
   });
   const resource = await args.db.$transaction(async (tx) => {
     const resource = await upsertExternalResource(tx, {
@@ -720,4 +777,26 @@ export async function syncGitHubExternalResource(args: {
     });
   }
   return resource;
+}
+
+export async function claimGitHubManualSync(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  externalResourceId: string;
+  now: Date;
+  cooldownSeconds: number;
+  leaseUntil: Date;
+}): Promise<boolean> {
+  const cooldownBefore = new Date(args.now.getTime() - args.cooldownSeconds * 1000);
+  const claimed = await args.db.externalResource.updateMany({
+    where: {
+      id: args.externalResourceId,
+      workspaceId: args.workspaceId,
+      provider: GITHUB_PROVIDER,
+      OR: [{ syncAttemptedAt: null }, { syncAttemptedAt: { lte: cooldownBefore } }],
+      AND: [{ OR: [{ syncRetryAt: null }, { syncRetryAt: { lte: args.now } }] }],
+    },
+    data: { syncAttemptedAt: args.now, syncRetryAt: args.leaseUntil },
+  });
+  return claimed.count === 1;
 }

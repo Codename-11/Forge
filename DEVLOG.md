@@ -14,17 +14,32 @@ initial/maximum backoff from Connections settings.
 Persisted provider attempt, retry, failure, diagnostic, and terminal state on
 `ExternalResource`. GitHub rate-limit headers override exponential retry;
 missing/paused mappings are re-resolved by repository; inaccessible resources
-back off without being unlinked; closed PRs and confirmed-green merged PRs stop
-polling; reopened PRs become eligible again. Partial Checks/status permissions
-no longer prevent a readable PR from linking, but partial evidence cannot
-certify completion. Head changes clear cached checks and late check webhooks for
-an older head are ignored. Repeated unchanged refreshes produce no issue
-activity or duplicate completion cards.
+back off without being unlinked; closed PRs enter a slow configurable re-probe
+cadence so a missed reopen event self-heals; and confirmed-green merged PRs stop
+polling. Partial Checks/status permissions no longer prevent a readable PR from
+linking, but partial evidence cannot certify completion. Head changes clear
+cached checks and late check webhooks for an older head are ignored. Repeated
+unchanged refreshes produce no issue activity or duplicate completion cards.
 
-Verification: Prisma migration 0102 applied locally; lint passed with existing
-repository warnings only; typecheck passed; focused GitHub reconciliation,
-client, check aggregation, completion, and head-invalidation coverage passed
-(**13/13**); and `git diff --check` passed.
+The safety review removed webhook conclusions as aggregate completion evidence:
+check-suite and check-run deliveries now mark a resource dirty, while the repair
+loop paginates every check suite and combines legacy commit status before it can
+trust success. Completed suites without conclusions, malformed aggregates, and
+partially readable endpoints stay unresolved. Configurable request timeouts,
+shared-worker wall budgets, atomic manual-refresh cooldowns, exact stale-row
+claims, and persistent mapping-wide circuits contain permission failures,
+timeouts, and rate limits without blocking later workspaces.
+
+Verification: Prisma migrations 0102 and 0103 applied locally; lint passed with
+existing repository warnings only; typecheck passed; focused GitHub
+reconciliation, client, check aggregation, completion, timeout, circuit-breaker,
+dormant-reopen, cooldown, and lease-race coverage passed (**22/22**); the full
+Vitest suite passed **1,259 tests** with one intentional live-connector skip; a
+fresh production build passed; and the full serial Playwright suite passed
+**38/38**. The browser gate also exposed a stale dashboard assertion that
+hard-coded two rail columns despite the existing work-count threshold; the
+assertion now follows the rendered layout mode and passed both alone and in the
+full suite.
 
 ## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
 

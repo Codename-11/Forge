@@ -1,41 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { aggregateGitHubCheckConclusion } from "@/server/services/github/webhook";
+import { githubCheckWebhookHint } from "@/server/services/github/webhook";
 
-describe("aggregateGitHubCheckConclusion", () => {
-  it("accepts aggregate suite success as completion evidence", () => {
+describe("githubCheckWebhookHint", () => {
+  it("treats a successful suite as a dirty hint, never aggregate completion evidence", () => {
     expect(
-      aggregateGitHubCheckConclusion({
+      githubCheckWebhookHint({
         event: "check_suite",
         conclusion: "success",
-        existingConclusion: null,
       }),
-    ).toBe("success");
+    ).toMatchObject({
+      status: "dirty",
+      conclusion: null,
+      source: "webhook-hint",
+      observedConclusion: "success",
+    });
   });
 
-  it("does not treat one successful check run as aggregate success", () => {
+  it("also treats an individual failure as a non-terminal refresh hint", () => {
     expect(
-      aggregateGitHubCheckConclusion({
-        event: "check_run",
-        conclusion: "success",
-        existingConclusion: null,
-      }),
-    ).toBeNull();
-  });
-
-  it("keeps a known suite result across later successful jobs and records failures", () => {
-    expect(
-      aggregateGitHubCheckConclusion({
-        event: "check_run",
-        conclusion: "success",
-        existingConclusion: "success",
-      }),
-    ).toBe("success");
-    expect(
-      aggregateGitHubCheckConclusion({
+      githubCheckWebhookHint({
         event: "check_run",
         conclusion: "failure",
-        existingConclusion: "success",
+        headSha: "abc123",
       }),
-    ).toBe("failure");
+    ).toMatchObject({ conclusion: null, observedConclusion: "failure", headSha: "abc123" });
   });
 });

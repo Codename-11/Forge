@@ -900,6 +900,14 @@ model Workspace {
   githubSyncBackoffMinutes      Int                      @default(5)
   /// Maximum retry delay for repeated provider failures.
   githubSyncMaxBackoffMinutes   Int                      @default(1440)
+  /// Per-request timeout for GitHub REST calls made by the repair loop.
+  githubRequestTimeoutSeconds   Int                      @default(10)
+  /// Maximum wall time a GitHub repair sweep may occupy the shared worker.
+  githubSweepBudgetSeconds      Int                      @default(45)
+  /// Slow re-probe cadence for closed-unmerged PRs so missed reopen events heal.
+  githubClosedReprobeMinutes    Int                      @default(1440)
+  /// Minimum interval between operator/agent manual refresh requests per PR.
+  githubManualCooldownSeconds   Int                      @default(30)
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without

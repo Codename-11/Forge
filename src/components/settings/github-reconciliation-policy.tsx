@@ -17,6 +17,10 @@ export function GitHubReconciliationPolicy({ isAdmin }: { isAdmin: boolean }) {
     batchSize: 25,
     backoffMinutes: 5,
     maxBackoffMinutes: 1440,
+    requestTimeoutSeconds: 10,
+    sweepBudgetSeconds: 45,
+    closedReprobeMinutes: 1440,
+    manualCooldownSeconds: 30,
   });
 
   useEffect(() => {
@@ -27,6 +31,10 @@ export function GitHubReconciliationPolicy({ isAdmin }: { isAdmin: boolean }) {
       batchSize: workspace.githubSyncBatchSize,
       backoffMinutes: workspace.githubSyncBackoffMinutes,
       maxBackoffMinutes: workspace.githubSyncMaxBackoffMinutes,
+      requestTimeoutSeconds: workspace.githubRequestTimeoutSeconds,
+      sweepBudgetSeconds: workspace.githubSweepBudgetSeconds,
+      closedReprobeMinutes: workspace.githubClosedReprobeMinutes,
+      manualCooldownSeconds: workspace.githubManualCooldownSeconds,
     });
   }, [workspace]);
 
@@ -46,7 +54,7 @@ export function GitHubReconciliationPolicy({ isAdmin }: { isAdmin: boolean }) {
       <Card as="div" className="space-y-4 p-4">
         <ToggleRow
           label="Repair missed GitHub updates"
-          hint="Refresh stale open, draft, or merged PRs and their aggregate checks. Closed and confirmed-green merged PRs stop polling."
+          hint="Refresh stale open, draft, or merged PRs and their aggregate checks. Closed PRs recheck slowly for missed reopen events; confirmed-green merged PRs stop polling."
           checked={policy.enabled}
           onChange={(enabled) => setPolicy((value) => ({ ...value, enabled }))}
         />
@@ -86,6 +94,51 @@ export function GitHubReconciliationPolicy({ isAdmin }: { isAdmin: boolean }) {
             }
           />
         </div>
+        <details className="rounded-md border border-border/60 bg-background/40 p-3">
+          <summary className="cursor-pointer text-[0.75rem] font-medium">Safety limits</summary>
+          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <NumberField
+              label="Request timeout"
+              suffix="sec"
+              value={policy.requestTimeoutSeconds}
+              min={1}
+              max={60}
+              onChange={(requestTimeoutSeconds) =>
+                setPolicy((value) => ({ ...value, requestTimeoutSeconds }))
+              }
+            />
+            <NumberField
+              label="Sweep budget"
+              suffix="sec"
+              value={policy.sweepBudgetSeconds}
+              min={5}
+              max={300}
+              onChange={(sweepBudgetSeconds) =>
+                setPolicy((value) => ({ ...value, sweepBudgetSeconds }))
+              }
+            />
+            <NumberField
+              label="Closed recheck"
+              suffix="min"
+              value={policy.closedReprobeMinutes}
+              min={60}
+              max={43200}
+              onChange={(closedReprobeMinutes) =>
+                setPolicy((value) => ({ ...value, closedReprobeMinutes }))
+              }
+            />
+            <NumberField
+              label="Manual cooldown"
+              suffix="sec"
+              value={policy.manualCooldownSeconds}
+              min={1}
+              max={3600}
+              onChange={(manualCooldownSeconds) =>
+                setPolicy((value) => ({ ...value, manualCooldownSeconds }))
+              }
+            />
+          </div>
+        </details>
         <div className="flex items-center justify-between border-t border-border/60 pt-3">
           <p className="text-meta text-muted-foreground">
             Rate-limit reset headers override retry timing. Inaccessible PRs back off instead of
@@ -102,6 +155,10 @@ export function GitHubReconciliationPolicy({ isAdmin }: { isAdmin: boolean }) {
                 githubSyncBatchSize: policy.batchSize,
                 githubSyncBackoffMinutes: policy.backoffMinutes,
                 githubSyncMaxBackoffMinutes: policy.maxBackoffMinutes,
+                githubRequestTimeoutSeconds: policy.requestTimeoutSeconds,
+                githubSweepBudgetSeconds: policy.sweepBudgetSeconds,
+                githubClosedReprobeMinutes: policy.closedReprobeMinutes,
+                githubManualCooldownSeconds: policy.manualCooldownSeconds,
               })
             }
           >

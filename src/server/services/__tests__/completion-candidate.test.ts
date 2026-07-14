@@ -61,7 +61,9 @@ async function linkedPullRequest(
       url: "https://github.com/acme/forge/pull/42",
       title: "Complete issue",
       state,
-      metadata: conclusion ? { checks: { status: "completed", conclusion } } : {},
+      metadata: conclusion
+        ? { checks: { status: "completed", conclusion, source: "api-aggregate" } }
+        : {},
     },
   });
   await prisma.externalResourceLink.create({
