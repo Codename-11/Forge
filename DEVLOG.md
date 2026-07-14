@@ -85,6 +85,28 @@ fresh production build passed; and the full serial Playwright suite passed
 hard-coded two rail columns despite the existing work-count threshold; the
 assertion now follows the rendered layout mode and passed both alone and in the
 full suite.
+## 2026-07-14 — Settings scope and information-architecture review
+
+Mapped Forge's personal/global, workspace, Mission Control/Activity, and
+instance-admin configuration surfaces against their routes, permission gates,
+and Prisma ownership model. The review proposes one settings frame with an
+explicit Personal / Workspace / Instance scope control, preserves Mission
+Control as the cross-workspace operating home, renames the in-workspace dock to
+Activity, and reorganizes workspace configuration around work management,
+agents and automation, integrations, and governance.
+
+The code inventory also found two functional dead ends to address in the first
+implementation slice: auto-dispatch fall-through is displayed read-only and
+points to a workspace control that does not exist, and the global runtime
+inventory can link through a non-home workspace even though the runtime detail
+router requires the home `workspaceId`. The durable review records current
+ownership, naming changes, a phased migration, accessibility risks, and P0/P1/P2
+priorities under
+`docs/audits/settings-information-architecture-2026-07-14/`.
+
+The first draft was code-grounded while browser permission was pending. The
+implementation task subsequently received explicit Playwright permission and
+replaced that limitation with a fresh, inspected desktop/mobile evidence set.
 
 ## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
 
