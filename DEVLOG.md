@@ -437,6 +437,23 @@ Verification: focused dispatcher and operator-attention coverage passed
 passed; the full Vitest suite passed (**1,211 passed; 1 skipped**); a fresh
 production build and the responsive Command Center Playwright contract passed
 (**1/1** across desktop, tablet, and mobile); and `git diff --check` passed.
+## 2026-07-13 — Artifacts system research and implementation brief
+
+Created a documentation-only Artifacts audit in an isolated worktree using
+three independent research lanes: current official ChatGPT Sites/Canvas and
+Claude Artifacts product research, a static audit of Forge's schema/API/UI/
+renderer/security implementation, and an implementation blueprint with phased
+acceptance criteria. Synthesized the results into a concise enhancement and
+delivery brief covering versioning, sharing, permissions, review, images,
+Markdown, files, link cards, typed rendering, exports, discovery,
+collaboration, governance, interactive previews, and later site-class hosting.
+
+The audit found three immediate blockers before richer/public artifacts:
+narrowed API-key authorization gaps, SSRF exposure in link metadata fetching,
+and ambiguous draft/version/publication semantics. No application code,
+database schema, or runtime behavior changed. Verification was limited to
+source cross-checking, official-source link review, and git diff checks
+because the branch contains research documents only.
 
 ## 2026-07-13 — v0.11.0 live agent operations release candidate
 
