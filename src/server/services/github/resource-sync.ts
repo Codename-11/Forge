@@ -769,7 +769,10 @@ export async function syncGitHubExternalResource(args: {
         externalResourceId: existing.id,
         connectionMappingId: mapping.id,
         currentFailureCount: existing.syncFailureCount,
-        now,
+        // Anchor retry timing after the provider call finishes. A request may
+        // consume the entire configured timeout, which could otherwise make a
+        // short backoff expire before the failure is persisted.
+        now: new Date(),
         baseMinutes: workspace.githubSyncBackoffMinutes,
         maxMinutes: workspace.githubSyncMaxBackoffMinutes,
         error,

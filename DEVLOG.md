@@ -12,6 +12,9 @@ count and diagnostic, and open the same mapping-wide circuit used by scheduled
 reconciliation for rate limits, permissions, and timeouts. Scheduled sweeps
 retain their existing single-owner retry accounting. Resource existence is
 also checked before the manual lease so missing links still return NOT_FOUND.
+The follow-up Codex review on PR #30 identified that a long provider request
+could consume a short backoff before persistence; manual retry timing is now
+anchored after the provider call finishes.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs
