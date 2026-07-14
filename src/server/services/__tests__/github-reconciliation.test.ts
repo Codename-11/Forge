@@ -501,6 +501,10 @@ describe("GitHub status reconciliation", () => {
         syncLastError: "Existing longer provider reset",
       },
     });
+    await prisma.externalResource.update({
+      where: { id: resource.id },
+      data: { syncRetryAt: laterReset },
+    });
 
     await expect(
       persistGitHubManualSyncFailure({
@@ -514,7 +518,7 @@ describe("GitHub status reconciliation", () => {
         maxMinutes: 1440,
         error: new GitHubRequestError("API rate limit exceeded", 429, reset, true),
       }),
-    ).resolves.toEqual({ retryAt: reset, failureCount: 1, mappingWide: true });
+    ).resolves.toEqual({ retryAt: laterReset, failureCount: 1, mappingWide: true });
 
     const [failed, mappedSibling, mappedSiblingWithLaterGate] = await Promise.all([
       prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
@@ -522,7 +526,7 @@ describe("GitHub status reconciliation", () => {
       prisma.externalResource.findUniqueOrThrow({ where: { id: siblingWithLaterGate.id } }),
     ]);
     expect(failed).toMatchObject({
-      syncRetryAt: reset,
+      syncRetryAt: laterReset,
       syncFailureCount: 1,
       syncLastError: "API rate limit exceeded",
     });

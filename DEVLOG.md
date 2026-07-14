@@ -26,6 +26,10 @@ Generic partial snapshots (pagination limits or transient 5xx responses) are
 now distinguished from permission failures and back off only the affected PR;
 only auth, rate-limit, and timeout partials open a mapping-wide circuit in both
 manual and scheduled reconciliation.
+The last concurrency review found that overlapping refreshes could still
+shorten the failing resource's own gate. Primary-row retry updates now use the
+same atomic extend-only predicate as sibling rows, and failure counts increment
+atomically so concurrent errors cannot lose accounting.
 
 The first release image attempt also exposed that `.dockerignore` covered
 `.next` and `.next-e2e` but not `.next-lifecycle`. All named `.next-*` outputs

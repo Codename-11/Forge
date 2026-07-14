@@ -912,10 +912,18 @@ export async function persistGitHubManualSyncFailure(args: {
       },
       data: {
         syncAttemptedAt: args.now,
-        syncRetryAt: retryAt,
-        syncFailureCount: failureCount,
+        syncFailureCount: { increment: 1 },
         syncLastError: message,
       },
+    });
+    await tx.externalResource.updateMany({
+      where: {
+        id: args.externalResourceId,
+        workspaceId: args.workspaceId,
+        provider: GITHUB_PROVIDER,
+        OR: [{ syncRetryAt: null }, { syncRetryAt: { lt: retryAt } }],
+      },
+      data: { syncRetryAt: retryAt },
     });
     if (mappingWide && args.connectionMappingId) {
       await tx.externalResource.updateMany({
@@ -931,5 +939,17 @@ export async function persistGitHubManualSyncFailure(args: {
     }
   });
 
-  return { retryAt, failureCount, mappingWide };
+  const persisted = await args.db.externalResource.findFirst({
+    where: {
+      id: args.externalResourceId,
+      workspaceId: args.workspaceId,
+      provider: GITHUB_PROVIDER,
+    },
+    select: { syncRetryAt: true, syncFailureCount: true },
+  });
+  return {
+    retryAt: persisted?.syncRetryAt ?? retryAt,
+    failureCount: persisted?.syncFailureCount ?? failureCount,
+    mappingWide,
+  };
 }
