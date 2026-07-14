@@ -1,15 +1,22 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { AgentRole, AiTriageStatus, EventKind } from "@prisma/client";
+import type { EngagementMode } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { triageIssue } from "@/server/services/ai-triage";
+import { listProviders, runDescriptionDraft, runDescriptionEnhance } from "@/server/services/ai";
 import {
-  listProviders,
-  runDescriptionDraft,
-  runDescriptionEnhance,
-} from "@/server/services/ai";
+  resolveWorkspaceProviderClient,
+  workspaceChatProviderAvailability,
+} from "@/server/services/ai-providers";
+import { recordManualDispatchReason } from "@/server/services/dispatcher";
+import { resolveEngagementMode } from "@/server/services/engagement-mode";
+import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
+import { abandonRunsForAgentReassignment } from "@/server/services/agent-run";
+import { setIssueAgentWakeTarget } from "@/server/services/issue-watchers";
 import { encryptSecret } from "@/server/crypto";
+import { isAiTriagePendingStale } from "@/lib/ai-triage";
 
 /** Providers that accept a DB-backed key (hermes is a runtime, not a key). */
 const CREDENTIAL_PROVIDER_IDS = ["openai", "anthropic", "custom"] as const;
@@ -34,11 +41,16 @@ export const aiRouter = router({
       },
       select: { id: true, profileKey: true, name: true },
     });
-    const providers = listProviders();
     const ws = await ctx.db.workspace.findUniqueOrThrow({
       where: { id: ctx.workspaceId },
       select: { aiProvider: true, aiModel: true },
     });
+    const isAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
+    const providers = listProviders().map((provider) => ({
+      ...provider,
+      available: isAvailable(provider.id),
+      unavailableReason: isAvailable(provider.id) ? undefined : provider.unavailableReason,
+    }));
     const active = providers.find((p) => p.id === ws.aiProvider) ?? providers[0];
     return {
       coach,
@@ -78,9 +90,13 @@ export const aiRouter = router({
       },
       select: { id: true, profileKey: true, name: true, status: true },
     });
-    const providers = listProviders();
-    const provider =
-      providers.find((p) => p.id === (ws.aiProvider ?? "hermes")) ?? providers[0];
+    const isAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
+    const providers = listProviders().map((candidate) => ({
+      ...candidate,
+      available: isAvailable(candidate.id),
+      unavailableReason: isAvailable(candidate.id) ? undefined : candidate.unavailableReason,
+    }));
+    const provider = providers.find((p) => p.id === (ws.aiProvider ?? "hermes")) ?? providers[0];
 
     let lastFired: {
       issueId: string;
@@ -164,19 +180,34 @@ export const aiRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      // `custom` requires a base URL to be usable.
-      if (input.providerId === "custom" && input.baseUrl !== undefined && !input.baseUrl) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "A custom provider needs a base URL.",
-        });
-      }
       const enc = input.apiKey ? encryptSecret(input.apiKey) : undefined;
       const norm = (v: string | null | undefined) =>
         v === undefined ? undefined : v === "" ? null : v;
       const baseUrl = norm(input.baseUrl);
       const defaultModel = norm(input.defaultModel);
       const label = norm(input.label);
+      // An enabled custom credential is unusable without its endpoint. Check
+      // the effective value so partial edits can keep an existing base URL,
+      // while a new/cleared credential cannot be reported as available.
+      if (input.providerId === "custom") {
+        const existing = await ctx.db.providerCredential.findUnique({
+          where: {
+            workspaceId_providerId: {
+              workspaceId: ctx.workspaceId,
+              providerId: input.providerId,
+            },
+          },
+          select: { baseUrl: true, enabled: true },
+        });
+        const effectiveBaseUrl = baseUrl === undefined ? existing?.baseUrl : baseUrl;
+        const effectiveEnabled = input.enabled ?? existing?.enabled ?? true;
+        if (effectiveEnabled && !effectiveBaseUrl) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "An enabled custom provider needs a base URL.",
+          });
+        }
+      }
       const row = await ctx.db.providerCredential.upsert({
         where: {
           workspaceId_providerId: {
@@ -304,6 +335,12 @@ export const aiRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (!input.applyPriority && !input.applyLabels && !input.applyAgent) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Select at least one suggestion to apply.",
+        });
+      }
       return ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findFirst({
           where: {
@@ -328,6 +365,21 @@ export const aiRouter = router({
             message: "Triage suggestion is not ready or already decided.",
           });
         }
+        // Claim the decision before emitting side effects. Concurrent Apply
+        // requests serialize on this row; exactly one can move READY→APPLIED.
+        const claimed = await tx.issue.updateMany({
+          where: { id: issue.id, aiTriageStatus: AiTriageStatus.READY },
+          data: {
+            aiTriageStatus: AiTriageStatus.APPLIED,
+            aiTriageDecidedAt: new Date(),
+          },
+        });
+        if (claimed.count === 0) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "This triage suggestion was already decided.",
+          });
+        }
 
         const updates: {
           priority?: typeof issue.priority;
@@ -335,6 +387,13 @@ export const aiRouter = router({
         } = {};
         const previousPriority = issue.priority;
         const previousAgentId = issue.assignedAgentId;
+        let assignedAgent: {
+          id: string;
+          profileKey: string;
+          engagementMode: EngagementMode | null;
+        } | null = null;
+        let previousLabelIds: string[] = [];
+        let addedLabelIds: string[] = [];
 
         if (
           input.applyPriority &&
@@ -356,9 +415,12 @@ export const aiRouter = router({
               workspaceId: ctx.workspaceId,
               archivedAt: null,
             },
-            select: { id: true },
+            select: { id: true, profileKey: true, engagementMode: true },
           });
-          if (agent) updates.assignedAgentId = agent.id;
+          if (agent) {
+            assignedAgent = agent;
+            updates.assignedAgentId = agent.id;
+          }
         }
 
         if (Object.keys(updates).length > 0) {
@@ -383,9 +445,7 @@ export const aiRouter = router({
             select: { labelId: true },
           });
           const existingSet = new Set(existing.map((e) => e.labelId));
-          const toAdd = validLabels
-            .map((l) => l.id)
-            .filter((id) => !existingSet.has(id));
+          const toAdd = validLabels.map((l) => l.id).filter((id) => !existingSet.has(id));
           if (toAdd.length > 0) {
             await tx.issueLabel.createMany({
               data: toAdd.map((labelId) => ({
@@ -394,6 +454,8 @@ export const aiRouter = router({
               })),
               skipDuplicates: true,
             });
+            previousLabelIds = Array.from(existingSet);
+            addedLabelIds = toAdd;
           }
         }
 
@@ -420,7 +482,49 @@ export const aiRouter = router({
             userAgent: ctx.userAgent,
           });
         }
-        if (updates.assignedAgentId) {
+        if (addedLabelIds.length > 0) {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "Issue",
+            entityId: issue.id,
+            action: "ai-triage-apply-labels",
+            before: { labelIds: previousLabelIds },
+            after: { labelIds: [...previousLabelIds, ...addedLabelIds] },
+            eventKind: EventKind.ISSUE_UPDATED,
+            subjectType: "issue",
+            subjectId: issue.id,
+            payload: {
+              labelIds: addedLabelIds,
+              operation: "add",
+              source: "ai-triage",
+            },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+        }
+        if (updates.assignedAgentId && assignedAgent) {
+          const manualReason = await recordManualDispatchReason(tx, {
+            issueId: issue.id,
+            agentProfileKey: assignedAgent.profileKey,
+            actorId: ctx.session.user.id,
+          });
+          const ws = await tx.workspace.findUniqueOrThrow({
+            where: { id: ctx.workspaceId },
+            select: {
+              assignmentEngagementMode: true,
+              mentionEngagementPolicy: true,
+              mentionDefaultMode: true,
+            },
+          });
+          const resolved = resolveEngagementMode({
+            surface: "assignment",
+            workspace: {
+              ...ws,
+              assignmentAgentEngagementMode: assignedAgent.engagementMode,
+            },
+          });
           await recordChange(tx, {
             workspaceId: ctx.workspaceId,
             actorId: ctx.session.user.id,
@@ -435,20 +539,31 @@ export const aiRouter = router({
             payload: {
               agentId: updates.assignedAgentId,
               previousAgentId,
+              dispatchReason: manualReason,
+              engagementMode: resolved.mode,
+              engagementSource: resolved.source,
               source: "ai-triage",
             },
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });
+          if (previousAgentId) {
+            await abandonRunsForAgentReassignment(tx, {
+              workspaceId: ctx.workspaceId,
+              issueId: issue.id,
+              agentId: previousAgentId,
+              actorId: ctx.session.user.id,
+              actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+              summary: "Abandoned because AI triage reassigned the issue to another agent.",
+            });
+          }
+          await maybeApplyAgentTemplate(tx, issue.id, assignedAgent.id);
+          await setIssueAgentWakeTarget(tx, {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            agentId: assignedAgent.id,
+          });
         }
-
-        await tx.issue.update({
-          where: { id: issue.id },
-          data: {
-            aiTriageStatus: AiTriageStatus.APPLIED,
-            aiTriageDecidedAt: new Date(),
-          },
-        });
 
         return { ok: true };
       });
@@ -500,12 +615,21 @@ export const aiRouter = router({
           workspaceId: ctx.workspaceId,
           deletedAt: null,
         },
-        select: { id: true },
+        select: { id: true, aiTriageStatus: true, aiTriagedAt: true },
       });
       if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+      if (
+        issue.aiTriageStatus === AiTriageStatus.PENDING &&
+        !isAiTriagePendingStale(issue.aiTriagedAt)
+      ) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "AI triage is already running for this issue.",
+        });
+      }
       // Reset state so the runner doesn't short-circuit.
-      await ctx.db.issue.update({
-        where: { id: issue.id },
+      const reset = await ctx.db.issue.updateMany({
+        where: { id: issue.id, aiTriageStatus: issue.aiTriageStatus },
         data: {
           aiTriageStatus: null,
           aiTriagedAt: null,
@@ -516,6 +640,12 @@ export const aiRouter = router({
           aiTriageReasoning: null,
         },
       });
+      if (reset.count === 0) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The triage state changed. Try again.",
+        });
+      }
       void triageIssue(issue.id);
       return { ok: true };
     }),
@@ -542,15 +672,21 @@ export const aiRouter = router({
       if (!issue.workspace.aiEnabled)
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message:
-            "AI is off for this workspace. Enable it in Settings → Workspace → AI.",
+          message: "AI is off for this workspace. Enable it in Settings → Workspace → AI.",
         });
-      const markdown = await runDescriptionDraft({
-        title: issue.title,
-        description: issue.description,
-        provider: issue.workspace.aiProvider,
-        model: issue.workspace.aiModel,
-      });
+      const providerClient = await resolveWorkspaceProviderClient(
+        ctx.db,
+        ctx.workspaceId,
+        issue.workspace.aiProvider,
+      );
+      const markdown = providerClient
+        ? await runDescriptionDraft(providerClient, {
+            title: issue.title,
+            description: issue.description,
+            provider: issue.workspace.aiProvider,
+            model: issue.workspace.aiModel,
+          })
+        : null;
       if (!markdown)
         throw new TRPCError({
           code: "BAD_GATEWAY",
@@ -582,15 +718,21 @@ export const aiRouter = router({
       if (!issue.workspace.aiEnabled)
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message:
-            "AI is off for this workspace. Enable it in Settings → Workspace → AI.",
+          message: "AI is off for this workspace. Enable it in Settings → Workspace → AI.",
         });
-      const markdown = await runDescriptionEnhance({
-        title: issue.title,
-        description: issue.description,
-        provider: issue.workspace.aiProvider,
-        model: issue.workspace.aiModel,
-      });
+      const providerClient = await resolveWorkspaceProviderClient(
+        ctx.db,
+        ctx.workspaceId,
+        issue.workspace.aiProvider,
+      );
+      const markdown = providerClient
+        ? await runDescriptionEnhance(providerClient, {
+            title: issue.title,
+            description: issue.description,
+            provider: issue.workspace.aiProvider,
+            model: issue.workspace.aiModel,
+          })
+        : null;
       if (!markdown)
         throw new TRPCError({
           code: "BAD_GATEWAY",
@@ -653,10 +795,7 @@ export const aiRouter = router({
 });
 
 /** Format a Hermes gateway response into a compact markdown block. */
-function formatHermesInfo(
-  resource: "skills" | "memory" | "health",
-  data: unknown,
-): string {
+function formatHermesInfo(resource: "skills" | "memory" | "health", data: unknown): string {
   if (data == null) return `_No ${resource} data returned._`;
   if (resource === "skills") {
     const list = Array.isArray(data)

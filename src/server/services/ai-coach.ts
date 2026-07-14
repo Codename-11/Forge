@@ -3,6 +3,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { AgentRole, EventKind } from "@prisma/client";
 import { logger } from "@/server/logger";
 import { runCoachComment } from "@/server/services/ai";
+import { resolveWorkspaceProviderClient } from "@/server/services/ai-providers";
 import { recordChange } from "@/server/audit";
 
 /**
@@ -11,7 +12,8 @@ import { recordChange } from "@/server/audit";
  * diagnostic comment when:
  *   - the workspace has aiEnabled = true AND aiCoachEnabled = true
  *   - a COACH-role agent exists for the workspace
- *   - ANTHROPIC_API_KEY is set
+ *   - the selected workspace provider is available via a stored credential
+ *     or environment fallback
  *
  * Failures are swallowed and logged. The Coach is decorative — never
  * blocks the underlying event flow.
@@ -91,7 +93,14 @@ export async function coachOnEvent(
       .reverse()
       .map((c) => c.body);
 
-    const body = await runCoachComment({
+    const providerClient = await resolveWorkspaceProviderClient(
+      client,
+      params.workspaceId,
+      ws.aiProvider,
+    );
+    if (!providerClient) return;
+
+    const body = await runCoachComment(providerClient, {
       eventKind: params.eventKind,
       issue: {
         id: issue.id,

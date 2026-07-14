@@ -2,12 +2,7 @@ import "server-only";
 import { Priority } from "@prisma/client";
 import type OpenAI from "openai";
 import { logger } from "@/server/logger";
-import {
-  getClient,
-  isProviderAvailable,
-  listProviders,
-  type ResolvedProviderClient,
-} from "@/server/services/ai-providers";
+import { listProviders, type ResolvedProviderClient } from "@/server/services/ai-providers";
 
 /**
  * AI service — provider-agnostic wrapper around OpenAI's
@@ -66,20 +61,11 @@ export interface CoachInput {
   model?: string | null;
 }
 
-/** Whether the named provider has its env wired up. */
-export function aiAvailable(provider?: string | null): boolean {
-  return isProviderAvailable(provider ?? "hermes");
-}
-
 export async function runTriage(
+  ctx: ResolvedProviderClient,
   input: TriageInput,
 ): Promise<TriageSuggestion | null> {
-  const ctx = getClient(input.provider);
-  if (!ctx) return null;
-
-  const labelMenu = input.workspaceLabels
-    .map((l) => `- ${l.name} (id: ${l.id})`)
-    .join("\n");
+  const labelMenu = input.workspaceLabels.map((l) => `- ${l.name} (id: ${l.id})`).join("\n");
   const agentMenu = input.agents.length
     ? input.agents
         .map(
@@ -104,7 +90,7 @@ ${labelMenu || "(none configured)"}
 Available agents:
 ${agentMenu}${recentBlock}
 
-Suggest a priority, applicable labels (only from the list above — match by id, not name), and an agent assignment if one of the available agents is a clear fit. Skip agent assignment if no agent is a strong match. Include a 1-2 sentence reasoning the operator can read at a glance.`;
+Suggest a priority, applicable labels (only from the list above), and an agent assignment if one of the available agents is a clear fit. Return label and agent ids when possible. Skip agent assignment if no agent is a strong match. Include a 1-2 sentence reasoning the operator can read at a glance.`;
 
   const tools: OpenAI.Chat.Completions.ChatCompletionTool[] = [
     {
@@ -122,13 +108,11 @@ Suggest a priority, applicable labels (only from the list above — match by id,
             label_ids: {
               type: "array",
               items: { type: "string" },
-              description:
-                "IDs from the workspace labels list. Empty array if no labels apply.",
+              description: "IDs from the workspace labels list. Empty array if no labels apply.",
             },
             agent_id: {
               type: ["string", "null"],
-              description:
-                "Agent id from the available agents list, or null if no clear fit.",
+              description: "Agent id from the available agents list, or null if no clear fit.",
             },
             reasoning: {
               type: "string",
@@ -143,34 +127,41 @@ Suggest a priority, applicable labels (only from the list above — match by id,
 
   let completion: OpenAI.Chat.Completions.ChatCompletion;
   try {
-    completion = await ctx.client.chat.completions.create({
+    const structuredPrompt =
+      "You are a triage assistant for a project management tool. Be conservative — prefer NONE/LOW priority unless the issue clearly indicates urgency, and don't assign an agent unless one is a strong capability match. Do not invent label ids or agent ids; only use values from the provided lists.";
+    const request: OpenAI.Chat.Completions.ChatCompletionCreateParamsNonStreaming = {
       model: input.model || ctx.defaultModel,
       max_tokens: 512,
       messages: [
         {
           role: "system",
           content:
-            "You are a triage assistant for a project management tool. Make a single tool call to submit_triage. Be conservative — prefer NONE/LOW priority unless the issue clearly indicates urgency, and don't assign an agent unless one is a strong capability match. Do not invent label ids or agent ids; only use values from the provided lists.",
+            ctx.providerId === "hermes"
+              ? `${structuredPrompt} Return exactly one JSON object with keys priority, label_ids, agent_id, and reasoning. Do not call tools, add a preamble, or wrap the JSON in Markdown.`
+              : `${structuredPrompt} Make a single tool call to submit_triage.`,
         },
         { role: "user", content: userMessage },
       ],
-      tools,
-      tool_choice: { type: "function", function: { name: "submit_triage" } },
-    });
+      ...(ctx.providerId === "hermes"
+        ? {}
+        : {
+            tools,
+            tool_choice: {
+              type: "function" as const,
+              function: { name: "submit_triage" },
+            },
+          }),
+    };
+    completion = await ctx.client.chat.completions.create(request);
   } catch (err) {
-    logger.warn(
-      { err, provider: ctx.providerId },
-      "ai.triage: chat call failed",
-    );
+    logger.warn({ err, provider: ctx.providerId }, "ai.triage: chat call failed");
     return null;
   }
 
-  const validLabelIds = new Set(input.workspaceLabels.map((l) => l.id));
-  const validAgentIds = new Set(input.agents.map((a) => a.id));
   const suggestion = parseTriageMessage(
     completion.choices?.[0]?.message,
-    validLabelIds,
-    validAgentIds,
+    input.workspaceLabels,
+    input.agents,
   );
   if (!suggestion) {
     logger.warn(
@@ -199,19 +190,15 @@ const PRIORITY_PATTERN = "NONE|LOW|MEDIUM|HIGH|URGENT";
 
 export function parseTriageMessage(
   message: unknown,
-  validLabelIds: Set<string>,
-  validAgentIds: Set<string>,
+  labels: Array<{ id: string; name: string }>,
+  agents: Array<{ id: string; profileKey: string; name: string }>,
 ): TriageSuggestion | null {
   for (const payload of triagePayloadCandidates(message)) {
-    const fromPayload = suggestionFromPayload(
-      payload,
-      validLabelIds,
-      validAgentIds,
-    );
+    const fromPayload = suggestionFromPayload(payload, labels, agents);
     if (fromPayload) return fromPayload;
   }
   const text = messageTextContent(message);
-  if (text) return suggestionFromProse(text, validLabelIds, validAgentIds);
+  if (text) return suggestionFromProse(text, labels, agents);
   return null;
 }
 
@@ -268,95 +255,174 @@ function jsonRecord(value: unknown): Record<string, unknown> | null {
 
 function suggestionFromPayload(
   parsed: Record<string, unknown>,
-  validLabelIds: Set<string>,
-  validAgentIds: Set<string>,
+  labels: Array<{ id: string; name: string }>,
+  agents: Array<{ id: string; profileKey: string; name: string }>,
 ): TriageSuggestion | null {
   const reasoning =
     typeof parsed.reasoning === "string" && parsed.reasoning.trim()
-      ? parsed.reasoning.trim().slice(0, 1000)
+      ? cleanTriageReasoning(parsed.reasoning)
       : null;
   // Guard against arbitrary JSON that isn't a triage payload (e.g. a stray
   // object embedded in prose): it must carry a priority or a reasoning.
   if (!("priority" in parsed) && reasoning === null) return null;
 
-  const priority = isPriority(parsed.priority) ? parsed.priority : Priority.NONE;
+  const priority = coercePriority(parsed.priority) ?? Priority.NONE;
   const rawLabels = Array.isArray(parsed.label_ids)
     ? parsed.label_ids
     : Array.isArray(parsed.labelIds)
       ? parsed.labelIds
       : [];
-  const labelIds = rawLabels
-    .filter((x): x is string => typeof x === "string")
-    .filter((id) => validLabelIds.has(id));
+  const labelIds = Array.from(
+    new Set(
+      rawLabels
+        .filter((x): x is string => typeof x === "string")
+        .map((value) => matchLabel(value, labels))
+        .filter((id): id is string => id !== null),
+    ),
+  );
   const agentRaw = parsed.agent_id ?? parsed.agentId;
-  const agentId =
-    typeof agentRaw === "string" && validAgentIds.has(agentRaw)
-      ? agentRaw
-      : null;
+  const agentId = typeof agentRaw === "string" ? matchAgent(agentRaw, agents) : null;
 
   return {
     priority,
     labelIds,
     agentId,
-    reasoning: reasoning ?? "(no reasoning provided)",
+    reasoning: reasoning ?? "Suggested from the issue's current context.",
   };
 }
 
 function suggestionFromProse(
   text: string,
-  validLabelIds: Set<string>,
-  validAgentIds: Set<string>,
+  labels: Array<{ id: string; name: string }>,
+  agents: Array<{ id: string; profileKey: string; name: string }>,
 ): TriageSuggestion | null {
   const priority = prosePriority(text);
   if (!priority) return null; // no recognizable triage signal — let caller ERROR.
 
-  // ids are unique cuids, so a substring scan is the most format-robust match
-  // regardless of how the model formatted the prose.
-  const labelIds = [...validLabelIds].filter((id) => text.includes(id));
-  const agentId = [...validAgentIds].find((id) => text.includes(id)) ?? null;
+  // IDs are safe to match anywhere. Human-readable names are only accepted
+  // from explicit Labels/Agent clauses so a name in the rationale cannot
+  // silently assign work to somebody.
+  const labelIds = labels.filter((label) => text.includes(label.id)).map((label) => label.id);
+  const labelClause = text.match(
+    /\blabels?\b\s*(?::|-|are)?\s*([^;\n.]+?)(?=\s+(?:and\s+)?assign(?:ed|ment)?\b|[;\n.]|$)/i,
+  )?.[1];
+  if (labelClause) {
+    for (const label of labels) {
+      if (containsNormalizedPhrase(labelClause, label.name)) labelIds.push(label.id);
+    }
+  }
+
+  let agentId = agents.find((agent) => text.includes(agent.id))?.id ?? null;
+  if (!agentId) {
+    const agentClause =
+      text.match(/\b(?:agent|assignee)\s*[:\-]\s*([^;\n.]+)/i)?.[1] ??
+      text.match(/\bassign(?:ed)?(?:\s+to)?\s+([^;\n.]+)/i)?.[1];
+    if (agentClause && !/^\s*(?:none|null|n\/a)\b/i.test(agentClause)) {
+      agentId = matchAgentPhrase(agentClause, agents);
+    }
+  }
 
   const reasonMatch = text.match(/reasoning[\s*_]*[:\-]\s*([\s\S]+)/i);
-  const reasoning = (reasonMatch?.[1]?.trim() || text.trim()).slice(0, 1000);
+  const reasoning = cleanTriageReasoning(reasonMatch?.[1] ?? text);
 
-  return { priority, labelIds, agentId, reasoning };
+  return { priority, labelIds: Array.from(new Set(labelIds)), agentId, reasoning };
+}
+
+function normalizeTriageToken(value: string): string {
+  return value
+    .normalize("NFKD")
+    .toLocaleLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, " ")
+    .trim();
+}
+
+function containsNormalizedPhrase(haystack: string, needle: string): boolean {
+  const normalizedHaystack = ` ${normalizeTriageToken(haystack)} `;
+  const normalizedNeedle = normalizeTriageToken(needle);
+  return normalizedNeedle.length > 0 && normalizedHaystack.includes(` ${normalizedNeedle} `);
+}
+
+function matchLabel(value: string, labels: Array<{ id: string; name: string }>): string | null {
+  const exact = labels.find((label) => label.id === value);
+  if (exact) return exact.id;
+  const normalized = normalizeTriageToken(value);
+  const matches = labels.filter((label) => normalizeTriageToken(label.name) === normalized);
+  return new Set(matches.map((label) => label.id)).size === 1 ? matches[0]!.id : null;
+}
+
+function matchAgent(
+  value: string,
+  agents: Array<{ id: string; profileKey: string; name: string }>,
+): string | null {
+  const exact = agents.find((agent) => agent.id === value || agent.profileKey === value);
+  if (exact) return exact.id;
+  const normalized = normalizeTriageToken(value);
+  const matches = agents.filter(
+    (agent) =>
+      normalizeTriageToken(agent.profileKey) === normalized ||
+      normalizeTriageToken(agent.name) === normalized,
+  );
+  return new Set(matches.map((agent) => agent.id)).size === 1 ? matches[0]!.id : null;
+}
+
+function matchAgentPhrase(
+  value: string,
+  agents: Array<{ id: string; profileKey: string; name: string }>,
+): string | null {
+  const matches = agents.filter(
+    (agent) =>
+      value.includes(agent.id) ||
+      containsNormalizedPhrase(value, agent.profileKey) ||
+      containsNormalizedPhrase(value, agent.name),
+  );
+  return new Set(matches.map((agent) => agent.id)).size === 1 ? matches[0]!.id : null;
+}
+
+function cleanTriageReasoning(value: string): string {
+  const sentences = value
+    .trim()
+    .split(/(?<=[.!?])\s+|\r?\n+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .filter(
+      (sentence) =>
+        !/(?:submit_triage|triage submission failed)/i.test(sentence) &&
+        !/^recommended triage\b/i.test(sentence) &&
+        !/^(?:priority|labels?|agent|assignee)\s*[:\-]/i.test(sentence),
+    );
+  const cleaned = sentences.join(" ").trim();
+  return (cleaned || "Suggested from the issue's current context.").slice(0, 1000);
 }
 
 function prosePriority(text: string): Priority | null {
   const labelled = text.match(
-    new RegExp(
-      `priority[\\s*_]*[:\\-]?\\s*\\*{0,2}\\s*(${PRIORITY_PATTERN})`,
-      "i",
-    ),
+    new RegExp(`priority[\\s*_]*[:\\-]?\\s*\\*{0,2}\\s*(${PRIORITY_PATTERN})`, "i"),
   );
-  const token =
-    labelled?.[1] ??
-    text.match(new RegExp(`\\b(${PRIORITY_PATTERN})\\b`, "i"))?.[1];
+  const token = labelled?.[1] ?? text.match(new RegExp(`\\b(${PRIORITY_PATTERN})\\b`, "i"))?.[1];
   if (!token) return null;
-  const upper = token.toUpperCase();
+  return coercePriority(token);
+}
+
+function coercePriority(value: unknown): Priority | null {
+  if (typeof value !== "string") return null;
+  const upper = value.toUpperCase();
   return isPriority(upper) ? upper : null;
 }
 
 export async function runCoachComment(
+  ctx: ResolvedProviderClient,
   input: CoachInput,
 ): Promise<string | null> {
-  const ctx = getClient(input.provider);
-  if (!ctx) return null;
-
   const eventDescription = {
     ISSUE_STALLED:
       "An assigned agent has not moved this issue out of BACKLOG/TODO within the workspace SLA. The issue is stalled.",
     AGENT_NOACK:
       "The assigned agent did not comment on or transition this issue within the required acknowledgement window after assignment.",
-    ISSUE_SLA_BREACH:
-      "This issue has passed its per-issue SLA target with no resolution.",
+    ISSUE_SLA_BREACH: "This issue has passed its per-issue SLA target with no resolution.",
   }[input.eventKind];
 
-  const ageMinutes = Math.round(
-    (Date.now() - input.issue.createdAt.getTime()) / 60_000,
-  );
-  const sinceUpdateMinutes = Math.round(
-    (Date.now() - input.issue.updatedAt.getTime()) / 60_000,
-  );
+  const ageMinutes = Math.round((Date.now() - input.issue.createdAt.getTime()) / 60_000);
+  const sinceUpdateMinutes = Math.round((Date.now() - input.issue.updatedAt.getTime()) / 60_000);
 
   const commentsBlock = input.recentCommentBodies.length
     ? `\n\nRecent comments (oldest first):\n${input.recentCommentBodies
@@ -398,10 +464,7 @@ Use plain prose, no bullets, no headers. Do not address the agent directly.`;
       ],
     });
   } catch (err) {
-    logger.warn(
-      { err, provider: ctx.providerId },
-      "ai.coach: chat call failed",
-    );
+    logger.warn({ err, provider: ctx.providerId }, "ai.coach: chat call failed");
     return null;
   }
 
@@ -466,9 +529,7 @@ const DESCRIBE_SYSTEM =
  * exactly two fences, so a description with a genuine embedded code block is
  * left intact. Returns null for empty/nullish.
  */
-export function cleanDescriptionOutput(
-  content: string | null | undefined,
-): string | null {
+export function cleanDescriptionOutput(content: string | null | undefined): string | null {
   if (!content) return null;
   let text = content.trim();
   const fenceCount = (text.match(/```/g) ?? []).length;
@@ -480,10 +541,9 @@ export function cleanDescriptionOutput(
 }
 
 export async function runDescriptionDraft(
+  ctx: ResolvedProviderClient,
   input: DescriptionInput,
 ): Promise<string | null> {
-  const ctx = getClient(input.provider);
-  if (!ctx) return null;
   try {
     const completion = await ctx.client.chat.completions.create({
       model: input.model || ctx.defaultModel,
@@ -504,13 +564,12 @@ export async function runDescriptionDraft(
 }
 
 export async function runDescriptionEnhance(
+  ctx: ResolvedProviderClient,
   input: DescriptionInput,
 ): Promise<string | null> {
-  const ctx = getClient(input.provider);
-  if (!ctx) return null;
   const existing = input.description?.trim();
   // Nothing to enhance → fall back to a fresh draft.
-  if (!existing) return runDescriptionDraft(input);
+  if (!existing) return runDescriptionDraft(ctx, input);
   try {
     const completion = await ctx.client.chat.completions.create({
       model: input.model || ctx.defaultModel,
@@ -541,10 +600,10 @@ export async function runDescriptionEnhance(
 // works without dispatching to an external agent runtime. The output is mapped
 // to `AddStepInput[]` by the caller (orchestration-service.generatePlanForGoal).
 //
-// Unlike runTriage/runCoachComment (env-only via getClient), the caller passes
-// an already-resolved client from `resolveWorkspaceProviderClient` so a
-// DB-credential-only workspace works too. Returns null on any failure — the
-// caller surfaces a typed error and never persists a dead empty plan.
+// The caller passes an already-resolved workspace client, matching triage,
+// Coach, and description assist so DB-credential-only workspaces work too.
+// Returns null on any failure — the caller surfaces a typed error and never
+// persists a dead empty plan.
 // ---------------------------------------------------------------------------
 
 export interface PlanGenInput {
@@ -586,8 +645,7 @@ Decompose this goal into a short, ordered list of concrete execution steps (typi
       type: "function",
       function: {
         name: "submit_plan",
-        description:
-          "Submit the decomposed execution plan as an ordered list of steps.",
+        description: "Submit the decomposed execution plan as an ordered list of steps.",
         parameters: {
           type: "object",
           properties: {
@@ -614,8 +672,7 @@ Decompose this goal into a short, ordered list of concrete execution steps (typi
                   depends_on_step_indexes: {
                     type: "array",
                     items: { type: "integer" },
-                    description:
-                      "0-based indexes of prerequisite steps in this same list.",
+                    description: "0-based indexes of prerequisite steps in this same list.",
                   },
                   assigned_role: {
                     type: ["string", "null"],
@@ -656,10 +713,7 @@ Decompose this goal into a short, ordered list of concrete execution steps (typi
       tool_choice: { type: "function", function: { name: "submit_plan" } },
     });
   } catch (err) {
-    logger.warn(
-      { err, provider: client.providerId },
-      "ai.plan: chat call failed",
-    );
+    logger.warn({ err, provider: client.providerId }, "ai.plan: chat call failed");
     return null;
   }
 
@@ -913,7 +967,9 @@ function markdownDetails(lines: string[]): {
     const clean = cleanMarkdownInline(line.replace(/^\s*[-*+]\s+/, ""));
     if (!clean) continue;
 
-    const expected = clean.match(/^(?:expected output|expected_output|deliverable|output):\s*(.+)$/i);
+    const expected = clean.match(
+      /^(?:expected output|expected_output|deliverable|output):\s*(.+)$/i,
+    );
     if (expected?.[1]) {
       expectedOutput = expected[1].trim();
       continue;
@@ -999,9 +1055,7 @@ function coerceStringArray(value: unknown): string[] {
 
 function coerceIntegerArray(value: unknown): number[] {
   if (!Array.isArray(value)) return [];
-  return value.filter(
-    (n): n is number => typeof n === "number" && Number.isInteger(n),
-  );
+  return value.filter((n): n is number => typeof n === "number" && Number.isInteger(n));
 }
 
 function coerceRole(value: unknown): "WORKER" | "REVIEWER" | null {
@@ -1014,13 +1068,7 @@ function isPriority(value: unknown): value is Priority {
   return (
     typeof value === "string" &&
     (
-      [
-        Priority.NONE,
-        Priority.LOW,
-        Priority.MEDIUM,
-        Priority.HIGH,
-        Priority.URGENT,
-      ] as string[]
+      [Priority.NONE, Priority.LOW, Priority.MEDIUM, Priority.HIGH, Priority.URGENT] as string[]
     ).includes(value)
   );
 }
