@@ -11,6 +11,21 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-14] — v0.13.0 · Reliable lifecycle operations
+
+### Added
+
+- **A deterministic Lifecycle Lab now covers the operator journey end to end.** Eight isolated, frozen states exercise ready, assigned, active, waiting, approval, review, completed, and stalled work without touching shared development or production data.
+
+### Changed
+
+- **Requests for operator input now stay visible across the product.** Action requests and conversational agent questions share one deduplicated “Needs your input” stream in Inbox and the notification drawer, with matching unread badge behavior and less empty-section scrolling.
+- **Command Center carries four attention lanes cleanly at wide widths.** Asks, runtime approvals, stalled runs, and review gates remain visible together, while issue breadcrumbs, notification landmarks, headings, and mention autocomplete use clearer accessibility semantics.
+
+### Fixed
+
+- **AI triage no longer asks Hermes to execute an unknown `submit_triage` tool.** Hermes receives a compatible structured response contract, provider credentials resolve consistently, stale triage claims can be retried safely, and accepted suggestions follow Forge’s normal label, assignment, dispatch, audit, and wake lifecycle.
+
 ## [2026-07-14] — v0.12.0 · Calmer issue operations
 
 ### Added
