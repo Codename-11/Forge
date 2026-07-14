@@ -292,7 +292,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     return (
       <>
         <Topbar
-          title={<Breadcrumb className="font-normal" items={breadcrumbItems} />}
+          title={
+            <Breadcrumb
+              className="font-normal"
+              items={breadcrumbItems}
+              ariaLabel="Issue breadcrumb"
+            />
+          }
           subtitle={<span className="font-mono">archived</span>}
           actions={
             <Button
@@ -347,7 +353,13 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   return (
     <>
       <Topbar
-        title={<Breadcrumb className="font-normal" items={breadcrumbItems} />}
+        title={
+          <Breadcrumb
+            className="font-normal"
+            items={breadcrumbItems}
+            ariaLabel="Issue breadcrumb"
+          />
+        }
         subtitle={<span className="font-mono">{issue.status.name}</span>}
         actions={
           <>

@@ -198,6 +198,7 @@ export function Sidebar({
   return (
     <>
       <aside
+        aria-label="Primary navigation"
         data-collapsed={collapsed || undefined}
         className={cn(
           "group/sidebar hidden h-svh shrink-0 flex-col border-r border-border bg-card/40 transition-[width] duration-150 md:flex",

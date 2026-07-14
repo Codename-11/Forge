@@ -26,14 +26,16 @@ export type BreadcrumbItem = {
 export function Breadcrumb({
   items,
   className,
+  ariaLabel = "Breadcrumb",
 }: {
   items: BreadcrumbItem[];
   className?: string;
+  ariaLabel?: string;
 }) {
   if (items.length === 0) return null;
   return (
     <nav
-      aria-label="Breadcrumb"
+      aria-label={ariaLabel}
       className={cn(
         "text-meta flex min-w-0 items-center text-muted-foreground",
         className,

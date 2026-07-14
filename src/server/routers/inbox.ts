@@ -641,7 +641,7 @@ export const inboxRouter = router({
       ? { updatedAt: { gt: lastVisitAt } }
       : {};
 
-    const [assignedCount, stalledCount, candidates] = await Promise.all([
+    const [assignedCount, stalledCount, candidates, actionRequestCount] = await Promise.all([
       ctx.db.issue.count({
         where: {
           workspaceId: { in: workspaceIds },
@@ -674,15 +674,26 @@ export const inboxRouter = router({
           createdAt: lastVisitAt
             ? { gte: mentionCutoff, gt: lastVisitAt }
             : { gte: mentionCutoff },
-          authorId: { not: userId },
+          // Agent comments can carry the API-key owner's authorId. Treat
+          // authoringAgentId as authoritative so those mentions are not
+          // mistaken for self-mentions.
+          OR: [{ authoringAgentId: { not: null } }, { authorId: { not: userId } }],
         },
         select: { body: true },
         take: 100,
       }),
+      ctx.db.actionRequest.count({
+        where: {
+          workspaceId: { in: workspaceIds },
+          assignedUserId: userId,
+          status: "OPEN",
+          ...(lastVisitAt ? { createdAt: { gt: lastVisitAt } } : {}),
+        },
+      }),
     ]);
     const mentionCount = candidates.filter((c) => commentMentionsUser(c.body, tokens)).length;
     // Cap the badge count because the sidebar treatment is "1-99+".
-    const raw = assignedCount + stalledCount + mentionCount;
+    const raw = assignedCount + stalledCount + mentionCount + actionRequestCount;
     return { count: raw };
   }),
 });

@@ -12694,3 +12694,37 @@ agent templates, and a single current wake target.
 Verification: focused parser, lease, and database router suites passed 17 tests; lint
 passed with existing repository warnings; typecheck passed; and the full
 Vitest suite passed 1,223 tests with 1 skip.
+
+---
+
+## 2026-07-14 — Deterministic lifecycle lab and operator journey audit
+
+Added an isolated Lifecycle Lab for rapid, repeatable issue-lifecycle testing.
+It uses the dedicated `forge_lifecycle` database, Redis database 14, port 3300,
+and `.next-lifecycle` build output, with guarded deterministic fixtures for
+ready, assigned/unacknowledged, active, waiting for user input, runtime
+approval, review, completed, and stalled states. The lab disables its in-process
+worker so those states remain frozen for inspection and supports both dev and
+production-mode runs.
+
+Added a four-journey Playwright audit that verifies Command Center continuity,
+navigate-away/reload persistence, issue waiting and completion handoffs, the
+Inbox, the shared notifications drawer, mobile overflow, screenshots, and axe
+results. Unified ActionRequests and conversational agent waits into one
+deduplicated “Needs your input” stream in both Inbox and the notification
+drawer, included new ActionRequests in the Inbox badge, and made agent-authored
+mentions robust when an agent API key shares the owner's author ID. Empty Inbox
+buckets now stay hidden, Command Center attention cards use a four-column wide
+layout, and landmark, heading, dialog, breadcrumb, and mention-combobox
+semantics were repaired.
+
+Verification: lint passed with existing repository warnings; typecheck passed;
+the full Vitest suite passed 1,225 tests with 1 skip; a fresh production
+Lifecycle Lab build passed; all 4 lifecycle Playwright journeys passed; and all
+6 accepted desktop/mobile audit states reported zero axe violations (with
+color-contrast excluded from automation and reviewed visually). The remaining
+low-priority mobile observation is that the persistent agent-status pill can
+cover card content while scrolling. The repository-wide browser run passed 36
+of 38 tests in parallel; the two failures (shared chat state and a composer
+locator exposed by the accessibility change) both passed independently after
+the composer name was corrected.
