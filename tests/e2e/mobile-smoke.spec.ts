@@ -131,13 +131,14 @@ test.describe("Mobile smoke", () => {
       await expect(page.getByRole("heading", { name: "Activity" })).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `activity feed at ${width}px`);
 
-      await page.goto("/settings/agents");
-      await openSettingsNavigation(page);
-      await expect(page.getByPlaceholder("Search settings")).toBeVisible();
-      await expect(
-        page.locator("main").getByRole("heading", { name: "Agent Studio" }),
-      ).toBeVisible();
-      await expectNoDocumentHorizontalOverflow(page, `instance agent settings at ${width}px`);
+      await page.goto("/agents");
+      await expect(page.getByRole("heading", { name: "Agent fleet" })).toBeVisible();
+      await page.getByRole("button", { name: "Open menu" }).click();
+      const globalMenu = page.getByRole("dialog", { name: "Menu" });
+      await expect(globalMenu).toBeVisible();
+      await expect(globalMenu.getByRole("link", { name: /^Agents/ })).toBeVisible();
+      await expectNoDocumentHorizontalOverflow(page, `global agent fleet at ${width}px`);
+      await page.keyboard.press("Escape");
 
       await page.goto("/settings/runtimes");
       await openSettingsNavigation(page);

@@ -13338,9 +13338,13 @@ current guides, router integration coverage, and Playwright lifecycle/redirect
 coverage were updated to reflect Define → Bind → Operate, with Govern reserved
 for instance administrators.
 
+Follow-up coverage moved the older multi-workspace binding and mobile smoke
+contracts onto the Mission Control fleet routes. MCP-client creation is now
+shown per binding only when the caller can administer that workspace, matching
+the server-side credential authorization boundary.
+
 Verification: typecheck and lint passed (existing repository warnings only);
 the full Vitest gate passed 1,320 tests with one intentional live-connector
-skip; the production build succeeded; and both focused Playwright journeys
-passed after creating, binding, unbinding, and removing a profile through
-Mission Control while confirming workspace policy and instance governance stay
-separate.
+skip; the production build succeeded; the affected mobile and multi-workspace
+specs passed 13 journeys; and the complete serial Playwright gate passed all 47
+desktop, mobile, accessibility, and application journeys.

@@ -610,13 +610,15 @@ export function AgentDetailContent({
                           )}
                         </div>
                       </div>
-                      <Link
-                        href={`/w/${binding.workspace.slug}/settings/access?create=agent&agentId=${binding.id}`}
-                        className="focus-ring inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-border px-3 text-xs font-medium hover:bg-subtle"
-                      >
-                        <KeyRound className="mr-1.5 h-3.5 w-3.5" />
-                        Add MCP client
-                      </Link>
+                      {binding.canManage && (
+                        <Link
+                          href={`/w/${binding.workspace.slug}/settings/access?create=agent&agentId=${binding.id}`}
+                          className="focus-ring inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-border px-3 text-xs font-medium hover:bg-subtle"
+                        >
+                          <KeyRound className="mr-1.5 h-3.5 w-3.5" />
+                          Add MCP client
+                        </Link>
+                      )}
                     </div>
                   );
                 })
