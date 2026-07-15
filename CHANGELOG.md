@@ -9,6 +9,22 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.17.0 · Clear configuration ownership
+
+### Added
+
+- **Every settings shell now names its scope.** Personal settings, the active workspace, and Instance Administration have distinct navigation and overview surfaces, with a complete configuration inventory and migration plan captured alongside the release.
+- **Workspace dispatch defaults are editable where they are explained.** Automatic dispatch and fall-through mode persist from Dispatch & routing and show the effective manual value when automation is off.
+
+### Changed
+
+- **Instance identity configuration lives with instance ownership.** Identity & sign-in moved into Instance Administration while its former account URL redirects safely, and workspace API access and developer clients now use canonical workspace routes.
+- **Mission Control remains an operations surface.** The workspace overlay is named Activity, its preferences behave as an accessible dialog, and durable settings continue to live at their authoritative scope.
+
+### Fixed
+
+- **Settings remain usable at phone widths.** Navigation collapses behind a Browse control, current-page and search semantics are explicit, and runtime telemetry no longer crowds half-width cards.
+
 ## [2026-07-14] — v0.16.0 · Scannable issue discussions
 
 ### Added
