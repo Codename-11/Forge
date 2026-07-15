@@ -283,7 +283,7 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
-  it("does not regress merged state for ambiguous same-timestamp events", async () => {
+  it("does not regress merged state for same-timestamp events", async () => {
     const { fixture, prisma, mapping } = await setup();
     await upsertExternalResource(prisma, {
       workspaceId: fixture.workspace.id,
@@ -314,6 +314,18 @@ describe("GitHub webhook hardening", () => {
     });
 
     expect(result.processed).toBe(0);
+    const staleReopen = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("equal-timestamp-reopen-after-merge"),
+      event: "pull_request",
+      payload: {
+        action: "reopened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({ updated_at: "2026-07-14T13:00:00Z" }),
+      },
+    });
+    expect(staleReopen.processed).toBe(0);
     await expect(
       prisma.externalResource.findFirstOrThrow({
         where: { workspaceId: fixture.workspace.id, number: 42 },

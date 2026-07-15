@@ -12986,7 +12986,7 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught seventeen identity/bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught eighteen identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
@@ -13014,7 +13014,9 @@ issue opened/closed/reopened side effects.
 Rerequested/requested check webhooks now ignore the prior run's stale
 conclusion and only dirty the aggregate for reconciliation, preventing a rerun
 request from firing the checks-failed status rule. GitHub App setup now calls
-out the write-level Checks permission required for rerun webhook actions.
+out the write-level Checks permission required for rerun webhook actions. The
+same-second reopen exception is limited to closed/unmerged PRs, so a stale
+reopen can never regress an already merged resource.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
 52 tests; lint passed with existing repository warnings; typecheck passed; and

@@ -109,9 +109,9 @@ export async function upsertExternalResourceFromWebhook(
       const incomingTime = args.snapshot.externalUpdatedAt.getTime();
       const equalTimestampRegression =
         previousTime === incomingTime &&
-        !args.allowEqualTimestampReopen &&
         ((previous.state === "merged" && args.snapshot.state !== "merged") ||
           (previous.state === "closed" &&
+            !args.allowEqualTimestampReopen &&
             args.snapshot.state !== "closed" &&
             args.snapshot.state !== "merged"));
       if (previousTime > incomingTime || equalTimestampRegression) {
