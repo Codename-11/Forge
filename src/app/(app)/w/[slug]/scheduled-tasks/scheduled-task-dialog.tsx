@@ -9,22 +9,12 @@ import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/spinner";
 import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
+import { supportedTimezones } from "@/lib/timezones";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 export type ScheduledTaskListItem = RouterOutputs["scheduledTask"]["list"][number];
 
-const TIMEZONES = [
-  "UTC",
-  "America/New_York",
-  "America/Chicago",
-  "America/Denver",
-  "America/Los_Angeles",
-  "Europe/London",
-  "Europe/Berlin",
-  "Asia/Tokyo",
-  "Asia/Kolkata",
-  "Australia/Sydney",
-];
+const TIMEZONES = supportedTimezones();
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 

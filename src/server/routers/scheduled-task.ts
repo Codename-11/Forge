@@ -208,6 +208,7 @@ export const scheduledTaskRouter = router({
           where: {
             id: current.id,
             workspaceId: ctx.workspaceId,
+            enabled: current.enabled,
             status: { not: ScheduledTaskStatus.RUNNING },
           },
           data: {
