@@ -9,6 +9,22 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.23.0 · Mission Control agent fleet
+
+### Added
+
+- **Mission Control now manages the full agent fleet.** Define identities, choose execution runtimes, inspect MCP client readiness and recent work, and bind or unbind workspaces from one global control plane.
+
+### Changed
+
+- **Workspace agent settings are policy-only.** Capacity, capability overrides, routing eligibility, engagement, and approval stay scoped to the workspace while profile and binding lifecycle moves to Mission Control.
+- **Instance Administration is governance-only.** Approvals, instance sharing, and force-disable remain at instance scope; authorized administrators manage and safely remove profiles through Mission Control.
+- **Legacy Agent Studio links remain valid.** Former profile routes redirect to the new fleet surface, with explicit global, workspace, and instance scope labels.
+
+### Fixed
+
+- **Agent management actions match workspace authority.** Bind, unbind, and MCP client creation are shown and enforced only for workspace owners and administrators, with durable audit events and preserved history.
+
 ## [2026-07-15] — v0.22.0 · Connected agent delivery
 
 ### Added
