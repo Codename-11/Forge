@@ -1,6 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { gitHubReviewDecision } from "@/server/services/github/client";
-import { claimGitHubWebhookDelivery, processGitHubWebhook } from "@/server/services/github/webhook";
+import {
+  claimGitHubWebhookDelivery,
+  finishGitHubWebhookDelivery,
+  processGitHubWebhook,
+} from "@/server/services/github/webhook";
 import {
   gitHubResourceVersionMatches,
   recoverGenericGitHubAttachments,
@@ -902,6 +906,14 @@ describe("GitHub webhook hardening", () => {
     await expect(
       processGitHubWebhook({
         db: prisma,
+        deliveryId: delivery("older-comment-review-event"),
+        event: "pull_request_review",
+        payload: reviewPayload("commented", "2026-07-14T13:30:00Z"),
+      }),
+    ).resolves.toMatchObject({ processed: 0 });
+    await expect(
+      processGitHubWebhook({
+        db: prisma,
         deliveryId: delivery("older-review-event"),
         event: "pull_request_review",
         payload: reviewPayload("changes_requested", "2026-07-14T13:00:00Z"),
@@ -917,6 +929,61 @@ describe("GitHub webhook hardening", () => {
         },
       },
     });
+  });
+
+  it("prevents an expired webhook attempt from overwriting its replacement", async () => {
+    const prisma = getPrisma();
+    const deliveryId = delivery("lease-owner");
+    const firstLease = new Date("2026-07-14T10:00:00Z");
+    const secondLease = new Date("2026-07-14T10:06:00Z");
+    await expect(
+      claimGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId,
+        event: "pull_request",
+        action: "opened",
+        repoFullName: "acme/forge",
+        now: firstLease,
+      }),
+    ).resolves.toBe("CLAIMED");
+    await expect(
+      claimGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId,
+        event: "pull_request",
+        action: "opened",
+        repoFullName: "acme/forge",
+        now: secondLease,
+      }),
+    ).resolves.toBe("CLAIMED");
+
+    await expect(
+      finishGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId,
+        leaseStartedAt: firstLease,
+        status: "FAILED",
+        error: "late failure",
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      prisma.externalWebhookEvent.findUniqueOrThrow({
+        where: { provider_deliveryId: { provider: "GITHUB", deliveryId } },
+      }),
+    ).resolves.toMatchObject({
+      status: "RECEIVED",
+      processingStartedAt: secondLease,
+      attemptCount: 2,
+      error: null,
+    });
+    await expect(
+      finishGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId,
+        leaseStartedAt: secondLease,
+        status: "PROCESSED",
+      }),
+    ).resolves.toBe(true);
   });
 
   it("does not use a partial review read as an ordering watermark", async () => {

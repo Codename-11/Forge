@@ -12986,7 +12986,7 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught nineteen identity/bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught twenty-one identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
@@ -13019,10 +13019,14 @@ same-second reopen exception is limited to closed/unmerged PRs, so a stale
 reopen can never regress an already merged resource.
 Partial/failed review reads no longer contribute an ordering watermark, so a
 delayed decisive review webhook can recover the only available review signal
-and invalidate the aggregate normally.
+and invalidate the aggregate normally. Review ordering now also rejects stale
+non-decisive events so a late comment cannot rewind the decisive-event
+watermark. Webhook completion/failure updates are conditional on the exact
+processing lease, preventing an expired handler from overwriting a reclaimed
+attempt's result.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
-53 tests; lint passed with existing repository warnings; typecheck passed; and
+54 tests; lint passed with existing repository warnings; typecheck passed; and
 the CI-style serial Vitest gate passed 1,274 tests with one intentional live
 connector skip. The canonical parallel gate also passed 1,274 tests and the
 fresh production E2E build completed. The browser run passed 35 of 38 journeys

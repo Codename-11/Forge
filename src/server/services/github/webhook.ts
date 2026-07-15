@@ -184,6 +184,33 @@ export async function claimGitHubWebhookDelivery(args: {
   return reclaimed.count === 1 ? "CLAIMED" : "DUPLICATE";
 }
 
+/** Finish only the attempt that still owns the processing lease. */
+export async function finishGitHubWebhookDelivery(args: {
+  db: PrismaClient;
+  deliveryId: string;
+  leaseStartedAt: Date;
+  status: "PROCESSED" | "SKIPPED" | "FAILED";
+  workspaceId?: string | null;
+  error?: string | null;
+  processedAt?: Date;
+}): Promise<boolean> {
+  const updated = await args.db.externalWebhookEvent.updateMany({
+    where: {
+      provider: GITHUB_PROVIDER,
+      deliveryId: args.deliveryId,
+      status: "RECEIVED",
+      processingStartedAt: args.leaseStartedAt,
+    },
+    data: {
+      workspaceId: args.workspaceId,
+      status: args.status,
+      error: args.error ?? null,
+      processedAt: args.processedAt ?? new Date(),
+    },
+  });
+  return updated.count === 1;
+}
+
 function forgeIssueKeys(text: string | null | undefined, workspaceKey: string): number[] {
   if (!text) return [];
   const escaped = workspaceKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -492,7 +519,6 @@ async function processReviewEvent(args: {
     const existingUpdatedAt = existingTimes.length > 0 ? Math.max(...existingTimes) : NaN;
     const incomingUpdatedAt = submittedAt ? Date.parse(submittedAt) : NaN;
     if (
-      decision &&
       Number.isFinite(existingUpdatedAt) &&
       Number.isFinite(incomingUpdatedAt) &&
       existingUpdatedAt > incomingUpdatedAt
@@ -907,6 +933,7 @@ export async function processGitHubWebhook(args: {
   const repoFullName = repoFromPayload(args.payload);
   const action = args.payload.action ?? null;
   const actor = args.actor ?? { actorId: null };
+  const leaseStartedAt = new Date();
 
   const claim = await claimGitHubWebhookDelivery({
     db: args.db,
@@ -914,15 +941,19 @@ export async function processGitHubWebhook(args: {
     event: args.event,
     action,
     repoFullName,
+    now: leaseStartedAt,
   });
   if (claim === "DUPLICATE") {
     return { ok: true, duplicate: true, processed: 0 };
   }
 
   if (!repoFullName) {
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: { status: "SKIPPED", error: "Missing repository.full_name.", processedAt: new Date() },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      status: "SKIPPED",
+      error: "Missing repository.full_name.",
     });
     return { ok: true, processed: 0, skipped: "missing-repository" };
   }
@@ -933,13 +964,12 @@ export async function processGitHubWebhook(args: {
     installationId: args.payload.installation?.id ?? null,
   });
   if (mappings.length === 0) {
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: {
-        status: "SKIPPED",
-        error: "No active Forge mapping matched.",
-        processedAt: new Date(),
-      },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      status: "SKIPPED",
+      error: "No active Forge mapping matched.",
     });
     return { ok: true, processed: 0, skipped: "no-mapping" };
   }
@@ -994,24 +1024,22 @@ export async function processGitHubWebhook(args: {
         });
       }
     }
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: {
-        workspaceId: eventWorkspaceId,
-        status: processed > 0 ? "PROCESSED" : "SKIPPED",
-        processedAt: new Date(),
-      },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      workspaceId: eventWorkspaceId,
+      status: processed > 0 ? "PROCESSED" : "SKIPPED",
     });
     return { ok: true, processed };
   } catch (err) {
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: {
-        workspaceId: eventWorkspaceId,
-        status: "FAILED",
-        error: err instanceof Error ? err.message.slice(0, 2000) : "Unknown error.",
-        processedAt: new Date(),
-      },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      workspaceId: eventWorkspaceId,
+      status: "FAILED",
+      error: err instanceof Error ? err.message.slice(0, 2000) : "Unknown error.",
     });
     throw err;
   }
