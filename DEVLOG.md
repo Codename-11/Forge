@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — v0.22.0 release
+
+Merged the MCP delivery timeline contract through PR #43 and the screenshot-
+backed Agent Studio configuration refactor through PR #44. The combined feature
+release gives MCP work sessions an enforceable final PR handoff and gives
+operators one coherent configuration hierarchy for identity, execution
+runtimes, workspace binding policy, multiple MCP clients, instance governance,
+and read-only fleet operations.
+
+PR #44 passed all three GitHub CI jobs after the local release gate passed lint,
+typecheck, 1,318 serial tests, and all 45 production Playwright journeys. The
+release commit, immutable tag, deployment SHA, and live smoke evidence follow
+after the release PR lands.
+
 ## 2026-07-15 — v0.21.0 release
 
 Merged AXI-108 through PR #40 and prepared the feature release from the exact
