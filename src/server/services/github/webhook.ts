@@ -340,12 +340,11 @@ async function processPullRequestEvent(args: {
     args.payload.action === "review_requested" ||
     args.payload.action === "review_request_removed"
   ) {
-    const decision = args.payload.action === "review_requested" ? "REVIEW_REQUESTED" : null;
     snapshot.metadata = {
       ...(snapshot.metadata && typeof snapshot.metadata === "object" ? snapshot.metadata : {}),
-      reviewDecision: decision,
-      review: {
-        decision,
+      reviewHint: {
+        dirty: true,
+        event: args.payload.action,
         source: "webhook-hint",
         updatedAt: args.payload.pull_request.updated_at ?? new Date().toISOString(),
       },

@@ -578,6 +578,51 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("preserves aggregate review state when another reviewer is requested", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Approved before request",
+        state: "open",
+        metadata: {
+          reviewDecision: "APPROVED",
+          review: { decision: "APPROVED", updatedAt: "2026-07-14T13:00:00Z" },
+        },
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("review-requested"),
+      event: "pull_request",
+      payload: {
+        action: "review_requested",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({ updated_at: "2026-07-14T14:00:00Z" }),
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      lastSyncedAt: null,
+      metadata: {
+        reviewDecision: "APPROVED",
+        review: { decision: "APPROVED", updatedAt: "2026-07-14T13:00:00Z" },
+        reviewHint: { dirty: true, event: "review_requested", source: "webhook-hint" },
+      },
+    });
+  });
+
   it("keeps the decisive review state when a comment-only review arrives", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await upsertExternalResource(prisma, {
