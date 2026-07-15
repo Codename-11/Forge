@@ -12986,7 +12986,7 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught twenty-one identity/bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught twenty-two identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
@@ -13023,7 +13023,9 @@ and invalidate the aggregate normally. Review ordering now also rejects stale
 non-decisive events so a late comment cannot rewind the decisive-event
 watermark. Webhook completion/failure updates are conditional on the exact
 processing lease, preventing an expired handler from overwriting a reclaimed
-attempt's result.
+attempt's result. A redelivery that encounters a live `RECEIVED` lease now
+returns a retryable failure rather than a completed-duplicate acknowledgement;
+only terminal delivery rows are acknowledged as durable duplicates.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
 54 tests; lint passed with existing repository warnings; typecheck passed; and

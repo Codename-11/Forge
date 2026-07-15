@@ -138,7 +138,7 @@ export async function claimGitHubWebhookDelivery(args: {
   action: string | null;
   repoFullName: string | null;
   now?: Date;
-}): Promise<"CLAIMED" | "DUPLICATE"> {
+}): Promise<"CLAIMED" | "IN_FLIGHT" | "DUPLICATE"> {
   const now = args.now ?? new Date();
   const inserted = await args.db.externalWebhookEvent.createMany({
     data: [
@@ -181,7 +181,14 @@ export async function claimGitHubWebhookDelivery(args: {
       attemptCount: { increment: 1 },
     },
   });
-  return reclaimed.count === 1 ? "CLAIMED" : "DUPLICATE";
+  if (reclaimed.count === 1) return "CLAIMED";
+  const existing = await args.db.externalWebhookEvent.findUnique({
+    where: {
+      provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId },
+    },
+    select: { status: true },
+  });
+  return existing?.status === "RECEIVED" ? "IN_FLIGHT" : "DUPLICATE";
 }
 
 /** Finish only the attempt that still owns the processing lease. */
@@ -945,6 +952,12 @@ export async function processGitHubWebhook(args: {
   });
   if (claim === "DUPLICATE") {
     return { ok: true, duplicate: true, processed: 0 };
+  }
+  if (claim === "IN_FLIGHT") {
+    // There is no independent abandoned-delivery sweeper. Keep GitHub's
+    // redelivery alive until the current attempt finishes or its lease can be
+    // reclaimed instead of acknowledging potentially unprocessed work.
+    throw new Error("GitHub webhook delivery is already in progress; retry later.");
   }
 
   if (!repoFullName) {

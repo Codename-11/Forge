@@ -984,6 +984,16 @@ describe("GitHub webhook hardening", () => {
         status: "PROCESSED",
       }),
     ).resolves.toBe(true);
+    await expect(
+      claimGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId,
+        event: "pull_request",
+        action: "opened",
+        repoFullName: "acme/forge",
+        now: new Date("2026-07-14T10:07:00Z"),
+      }),
+    ).resolves.toBe("DUPLICATE");
   });
 
   it("does not use a partial review read as an ordering watermark", async () => {
@@ -1272,7 +1282,7 @@ describe("GitHub webhook hardening", () => {
         repoFullName: "acme/forge",
         now: new Date("2026-07-14T10:02:01Z"),
       }),
-    ).resolves.toBe("DUPLICATE");
+    ).resolves.toBe("IN_FLIGHT");
     await expect(
       prisma.externalWebhookEvent.findUniqueOrThrow({
         where: { provider_deliveryId: { provider: "GITHUB", deliveryId: failedId } },
