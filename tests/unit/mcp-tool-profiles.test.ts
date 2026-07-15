@@ -35,8 +35,8 @@ describe("mcp tool profiles (AXI-82)", () => {
     );
   });
 
-  it("every named profile references only real namespaces", () => {
-    const known = new Set(mcpNamespaces);
+  it("every named profile references only real namespaces or tools", () => {
+    const known = new Set([...mcpNamespaces, ...mcpToolNames]);
     for (const [name, namespaces] of Object.entries(MCP_TOOL_PROFILES)) {
       for (const ns of namespaces) {
         expect(known, `profile "${name}" → unknown namespace "${ns}"`).toContain(ns);
@@ -74,6 +74,7 @@ describe("mcp tool profiles (AXI-82)", () => {
     expect(runtime).toContain("comments.create");
     expect(runtime).toContain("runs.complete");
     expect(runtime).toContain("actionRequests.list");
+    expect(runtime).toContain("workSessions.claim");
     expect(runtime.some((n) => mcpToolNamespace(n) === "canvases")).toBe(false);
   });
 

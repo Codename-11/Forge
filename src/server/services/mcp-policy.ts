@@ -214,14 +214,32 @@ export const EXPLICIT_MCP_TOOL_POLICIES = {
     allowedModes: "ANY",
     actor: "linked-agent-required",
   },
+  "workSessions.claim": {
+    access: "write",
+    targetType: "issue",
+    mutationKind: "issue-state",
+    allowedModes: EXECUTE_ONLY,
+    actor: "linked-agent-required",
+  },
+  "workSessions.heartbeat": {
+    access: "write",
+    targetType: "issue",
+    mutationKind: "issue-state",
+    allowedModes: EXECUTE_ONLY,
+    actor: "linked-agent-required",
+  },
+  "workSessions.attachPullRequest": {
+    access: "write",
+    targetType: "issue",
+    mutationKind: "issue-state",
+    allowedModes: EXECUTE_ONLY,
+    actor: "linked-agent-required",
+  },
 } as const satisfies Record<string, McpToolPolicy>;
 
 export type ExplicitMcpPolicyToolName = keyof typeof EXPLICIT_MCP_TOOL_POLICIES;
 
-export function mcpToolPolicy(
-  name: string,
-  scopes: readonly string[] = [],
-): McpToolPolicy {
+export function mcpToolPolicy(name: string, scopes: readonly string[] = []): McpToolPolicy {
   const explicit = EXPLICIT_MCP_TOOL_POLICIES[name as ExplicitMcpPolicyToolName];
   if (explicit) return explicit;
 

@@ -21,6 +21,12 @@ function stateLabel(state: string): string {
   return state || "unknown";
 }
 
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
 export function GitHubLinksPanel({ issueId }: { issueId: string }) {
   const utils = trpc.useUtils();
   const [modalOpen, setModalOpen] = useState(false);
@@ -67,6 +73,24 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
             {links.map((link) => {
               const resource = link.externalResource;
               const isPr = resource.resourceType === "PULL_REQUEST";
+              const metadata = metadataRecord(resource.metadata);
+              const head = metadataRecord(metadata.head);
+              const checks = metadataRecord(metadata.checks);
+              const review = metadataRecord(metadata.review);
+              const reviewDecision =
+                typeof metadata.reviewDecision === "string"
+                  ? metadata.reviewDecision
+                  : typeof review.decision === "string"
+                    ? review.decision
+                    : null;
+              const checksLabel =
+                checks.partial === true
+                  ? "checks partial"
+                  : typeof checks.conclusion === "string"
+                    ? `checks ${checks.conclusion}`
+                    : typeof checks.status === "string"
+                      ? `checks ${checks.status}`
+                      : null;
               return (
                 <div key={link.id} className="rounded-md border border-border bg-background/70 p-2">
                   <div className="flex min-w-0 items-start gap-2">
@@ -95,6 +119,22 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
                           <span>synced {relativeTime(resource.lastSyncedAt)}</span>
                         )}
                       </div>
+                      {isPr && (
+                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
+                          {typeof head.ref === "string" && (
+                            <span className="max-w-full truncate font-mono" title={head.ref}>
+                              {head.ref}
+                            </span>
+                          )}
+                          {reviewDecision && (
+                            <span>{reviewDecision.toLowerCase().replaceAll("_", " ")}</span>
+                          )}
+                          {checksLabel && <span>{checksLabel}</span>}
+                          {typeof metadata.mergeableState === "string" && (
+                            <span>merge {metadata.mergeableState}</span>
+                          )}
+                        </div>
+                      )}
                       {resource.syncLastError && (
                         <div
                           className="mt-1 flex items-start gap-1 text-[0.6875rem] text-warning"

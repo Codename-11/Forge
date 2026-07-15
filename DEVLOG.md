@@ -2,6 +2,47 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — Shared code-work ownership and guarded delivery
+
+Implemented the common delivery contract for Forge agents, Codex Desktop tasks,
+and contributors. A first-class WorkSession provides one active coordination
+lease per issue with repository, branch, base, worktree path, owner, heartbeat,
+native PR, and explicit merged/released/deployed/verified milestones. Duplicate
+work is rejected with the current owner and branch; stale work remains blocking
+and raises one shared ActionRequest rather than being silently discarded.
+
+Native GitHub PR snapshots remain authoritative and advance attached sessions
+through draft/review/ready/merged states using branch, aggregate checks, review
+decision, and mergeability evidence. The issue rail adds a compact Delivery card
+and richer GitHub evidence; the dashboard adds an active Delivery work card so
+ownership and next steps survive navigation. Workspace settings now own the
+stale lease threshold. Release/deploy/verification transitions require workspace
+admin authority.
+
+Added `workSessions.*` MCP tools to the bounded runtime profile and injected the
+coordination policy into every EXECUTE run: claim before editing, never work in
+main/deployment checkouts, heartbeat after commits/phase changes, use native
+IMPLEMENTS links, and stop at operator release/deploy gates. Added a timestamped
+Prisma migration, service coverage for lease conflicts, PR-derived delivery,
+milestone ordering, and stale action-request deduplication.
+
+Production compose now accepts `FORGE_SOURCE_PATH`; a dedicated clean deployment
+clone was initialized at `/home/bailey/deploy/forge-prod`. The guarded deploy
+script serializes with `flock`, resolves an exact tag/SHA, verifies main ancestry
+and version/tag agreement, stamps the build, deploys both services, and smoke
+tests the live sign-in route. Repository policy/docs and the canonical Obsidian
+Delivery Workflows, Development Standards, Forge Release Workflow, and Hermes ↔
+Forge Integration notes were updated to the same model.
+
+Verification: lint and TypeScript passed; the focused coordination and MCP
+profile suites passed **11/11**; the complete Vitest gate passed **1,297/1,299**
+concurrently, with its one failed stale-dispatch case passing in isolation
+**9/9** (the remaining test is skipped); the production docs + Next.js build
+passed; and Playwright passed **37/39** concurrently, with the intentional
+dashboard widget expectation corrected and both affected specs passing in a
+serial follow-up **4/4**. The unrelated chat `/clear` timing case also passed in
+that serial follow-up.
+
 ## 2026-07-15 — Read-only GitHub sync health refresh
 
 Closed the post-release usability gap in workspace GitHub App settings. Added a

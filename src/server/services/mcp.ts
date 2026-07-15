@@ -20,6 +20,7 @@ import {
   RelationKind,
   RuntimeKind,
   StatusCategory,
+  WorkSessionSource,
   type CanvasStyleKind,
   type EngagementMode,
 } from "@prisma/client";
@@ -131,6 +132,12 @@ import {
   GITHUB_RESOURCE_TYPES,
   type GitHubResourceType,
 } from "@/server/services/github/types";
+import {
+  attachPullRequest,
+  claimWorkSession,
+  listIssueWorkSessions,
+  touchWorkSession,
+} from "@/server/services/work-session";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -7866,6 +7873,104 @@ export const mcpTools = {
     },
   },
 
+  // ---------------------------------------------------------- Work coordination
+  "workSessions.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ issueId: z.string().cuid() }),
+    async run(input: { issueId: string }, ctx: McpContext) {
+      return listIssueWorkSessions(db, ctx.workspaceId, input.issueId);
+    },
+  },
+
+  "workSessions.claim": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      issueId: z.string().cuid(),
+      repoFullName: z
+        .string()
+        .regex(/^[\w.-]+\/[\w.-]+$/)
+        .max(200),
+      branch: z
+        .string()
+        .regex(/^[A-Za-z0-9._/-]+$/)
+        .max(240),
+      baseBranch: z
+        .string()
+        .regex(/^[A-Za-z0-9._/-]+$/)
+        .max(240)
+        .default("main"),
+      worktreePath: z.string().max(1_000).nullable().optional(),
+    }),
+    async run(
+      input: {
+        issueId: string;
+        repoFullName: string;
+        branch: string;
+        baseBranch: string;
+        worktreePath?: string | null;
+      },
+      ctx: McpContext,
+    ) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) throw new Error("workSessions.claim requires a linked agent key.");
+      return claimWorkSession(db, {
+        workspaceId: ctx.workspaceId,
+        ...input,
+        source: WorkSessionSource.FORGE_AGENT,
+        actor: { userId: ctx.userId, agentId },
+      });
+    },
+  },
+
+  "workSessions.heartbeat": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      sessionId: z.string().cuid(),
+      headSha: z
+        .string()
+        .regex(/^[a-f0-9]{7,64}$/i)
+        .nullable()
+        .optional(),
+      worktreePath: z.string().max(1_000).nullable().optional(),
+    }),
+    async run(
+      input: { sessionId: string; headSha?: string | null; worktreePath?: string | null },
+      ctx: McpContext,
+    ) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) throw new Error("workSessions.heartbeat requires a linked agent key.");
+      const owned = await db.workSession.findFirst({
+        where: { id: input.sessionId, workspaceId: ctx.workspaceId, ownerAgentId: agentId },
+        select: { id: true },
+      });
+      if (!owned) throw new Error("Work session is not owned by this agent.");
+      return touchWorkSession(db, {
+        workspaceId: ctx.workspaceId,
+        ...input,
+        actor: { userId: ctx.userId, agentId },
+      });
+    },
+  },
+
+  "workSessions.attachPullRequest": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ sessionId: z.string().cuid(), externalResourceId: z.string().cuid() }),
+    async run(input: { sessionId: string; externalResourceId: string }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) throw new Error("workSessions.attachPullRequest requires a linked agent key.");
+      const owned = await db.workSession.findFirst({
+        where: { id: input.sessionId, workspaceId: ctx.workspaceId, ownerAgentId: agentId },
+        select: { id: true },
+      });
+      if (!owned) throw new Error("Work session is not owned by this agent.");
+      return attachPullRequest(db, {
+        workspaceId: ctx.workspaceId,
+        ...input,
+        actor: { userId: ctx.userId, agentId },
+      });
+    },
+  },
+
   // --------------------------------------------------------------------- GitHub
   "github.parseUrl": {
     scopes: ["READ_ISSUES"] as const,
@@ -14082,7 +14187,16 @@ export const MCP_DEFAULT_PROFILE = "runtime";
 export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
   // Agent runtime essentials: enough to read/act on issues, chat, runs, and
   // human approval requests while leaving budget for other MCP/native tools.
-  runtime: ["issues", "comments", "chat", "runs", "actionRequests", "workspace"],
+  runtime: [
+    "issues",
+    "comments",
+    "chat",
+    "runs",
+    "workSessions",
+    "actionRequests.list",
+    "actionRequests.create",
+    "workspace",
+  ],
   // Everyday issue tracking — the smallest useful working set.
   core: [
     "issues",
@@ -14096,6 +14210,7 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
     "workspace",
     "workspaces",
     "events",
+    "workSessions",
     "pins",
     "notes",
   ],
@@ -14119,6 +14234,7 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
     "workspace",
     "workspaces",
     "events",
+    "workSessions",
   ],
   // core + agent orchestration / runtime ops.
   agents: [
@@ -14135,6 +14251,7 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
     "workspace",
     "workspaces",
     "events",
+    "workSessions",
   ],
   // Visual canvas tooling (the largest single namespace).
   canvas: ["canvases", "artifacts", "attachments", "notes", "workspace", "workspaces"],
@@ -14167,7 +14284,7 @@ export function selectMcpToolNames(opts: {
           MCP_TOOL_PROFILES[MCP_DEFAULT_PROFILE]);
   if (nsList) {
     const allow = new Set(nsList);
-    names = names.filter((n) => allow.has(mcpToolNamespace(n)));
+    names = names.filter((n) => allow.has(n) || allow.has(mcpToolNamespace(n)));
   }
 
   if (opts.scopes) {
