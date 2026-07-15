@@ -13261,3 +13261,33 @@ repository warnings only); the focused work-session suite passed 8 tests; the
 full Vitest gate passed 1,316 tests with one intentional live skip; the fresh
 production build succeeded; and the focused settings Playwright journey
 passed.
+
+---
+
+## 2026-07-15 — Agent Studio identity, runtime, and client configuration
+
+Audited the complete agent-configuration journey from fresh desktop and mobile
+Playwright captures. Agent identity, workspace binding policy, execution
+runtimes, MCP credentials, instance governance, and operational telemetry were
+modeled correctly in data but split across ambiguous or duplicated surfaces.
+
+Renamed the global profile home to Agent Studio and made it the editable source
+of truth for identity and the single primary execution runtime. Profile detail
+now reports runtime, binding, and MCP-client readiness, aggregates every linked
+client by workspace, and deep-links into client creation with the correct
+binding selected. Profile identity/execution edits synchronize to active
+bindings without overwriting workspace-local policy.
+
+Made the workspace Agent roster explicitly policy-only, collapsed dense policy
+rows by default, and repaired the mobile action layout. Consolidated persistent
+client credentials, personal tokens, session keys, scopes, rotation, and
+revocation under Agent access; removed Developer clients from navigation and
+redirected its legacy routes. Instance Administration remains governance and
+Mission Control remains read-only operations.
+
+Verification: lint and typecheck passed; the canonical serial Vitest gate
+passed 1,318 tests with one intentional live-connector skip; and the fresh
+production Playwright build passed all 45 desktop, mobile, accessibility, and
+application journeys. Before/after evidence plus the UX health report are
+preserved under `docs/audits/agent-studio-2026-07-15/`. Production verification
+follows after tagging and deployment.

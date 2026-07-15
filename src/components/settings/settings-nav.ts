@@ -14,7 +14,6 @@ import {
   Settings as SettingsIcon,
   Shield,
   Tag,
-  Terminal,
   User as UserIcon,
   Users,
   Workflow,
@@ -123,7 +122,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         label: "Agent roster",
         icon: Bot,
         description:
-          "MCP-first actors that hold keys and receive work. Profile, provider, runtime, and connection in one place.",
+          "Bind global identities to this workspace and set capacity, routing, and approval policy.",
       },
       {
         path: "/dispatch-rules",
@@ -134,17 +133,11 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
       },
       {
         path: "/access",
-        label: "API access",
+        label: "Agent access",
         icon: Key,
         badge: "admin only",
-        description: "Workspace-scoped API keys, MCP endpoints, scopes, context limits, rotation, and revocation.",
-      },
-      {
-        path: "/clients",
-        label: "Developer clients",
-        icon: Terminal,
-        badge: "admin only",
-        description: "MCP sessions and clients derived from this workspace's API keys.",
+        description:
+          "MCP clients, API keys, scopes, provider setup, rotation, and revocation in one place.",
       },
     ],
   },

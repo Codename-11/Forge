@@ -1,9 +1,16 @@
 # Runtimes
 
 A **Runtime** is the compute environment that hosts one or more agents.
-Where `Agent` describes *who* (a profile, a webhook secret, a runtime
-mode) and `runtimeMode` describes *how* the agent stays online, `Runtime`
-describes *where the work physically happens*.
+Where `Agent` describes _who_ (a profile, a webhook secret, a runtime
+mode) and `runtimeMode` describes _how_ the agent stays online, `Runtime`
+describes _where the work physically happens_.
+
+::: info Runtime versus MCP client
+An Agent Studio profile selects **zero or one primary execution runtime**.
+Codex, Claude, Hermes, and custom MCP clients connect with separate linked
+credentials in the workspace's **Agent access** page; a binding can have many
+of those clients. Adding an MCP client never changes the profile's runtime.
+:::
 
 ::: tip Distinct from `runtimeMode`
 `Agent.runtimeMode` is `PERSISTENT | EPHEMERAL` and lives on the agent
@@ -23,11 +30,11 @@ enum RuntimeKind {
 }
 ```
 
-| Kind          | Endpoint        | Presence model                                       |
-|---------------|-----------------|------------------------------------------------------|
-| `LOCAL_DAEMON`| no `endpoint`   | Daemon subscribes to `/api/plugins/events` SSE and pulls work. |
-| `REMOTE_HTTP` | webhook URL     | Forge pushes events outbound over HTTPS with HMAC.   |
-| `CLOUD`       | reserved        | Not yet implemented.                                 |
+| Kind           | Endpoint      | Presence model                                                 |
+| -------------- | ------------- | -------------------------------------------------------------- |
+| `LOCAL_DAEMON` | no `endpoint` | Daemon subscribes to `/api/plugins/events` SSE and pulls work. |
+| `REMOTE_HTTP`  | webhook URL   | Forge pushes events outbound over HTTPS with HMAC.             |
+| `CLOUD`        | reserved      | Not yet implemented.                                           |
 
 `Runtime.heartbeatAt` is bumped by the runtime itself (not its agents) —
 an idle runtime can still be alive while none of its agents have done
@@ -53,8 +60,8 @@ columns.
   `LOCAL_DAEMON` rows. The detail page also shows whether the runtime
   declares `terminal`, `filesystem`, and `git` access, plus the latest
   sanitized runtime version/environment metadata when the host reports it.
-- **Agent detail page** — small Runtime card that click-throughs to the
-  runtime detail.
+- **Agent Studio profile detail** — readiness summary plus an editable primary
+  Runtime assignment that synchronizes to active workspace bindings.
 - **Mission Control agents tab** — compact `RuntimeChip` next to the
   runtime-mode pill.
 
@@ -182,7 +189,7 @@ reply via `chat.finalizeDraft` — no daemon crash.
 
 - **`CHAT_MESSAGE_POSTED` (role=USER)** — reads `body` + `context`
   directly from the SSE payload, calls `agent.context.bundle({
-  threadId })` for thread history + linked-issue summary +
+threadId })` for thread history + linked-issue summary +
   workspace, inlines image / PDF / text attachments via
   `attachments.getInline`, and spawns the provider adapter with the
   bundle as system prompt and the user message as a content-block
@@ -215,13 +222,14 @@ they observe `autoTransitionedTo` in the payload.
 :::
 
 ::: warning v1 limitations
+
 - Login takes URL + token directly (no OAuth device-code flow yet).
 - The AGENT_ASSIGNED loop only auto-runs for `CLAUDE` provider
   agents; other providers receive a placeholder comment.
 - If `Workspace.startedStatusId` is not configured, agents or daemons
   should use `statuses.list({ category: "IN_PROGRESS" })` and transition
   explicitly when Execute-mode work actually starts.
-:::
+  :::
 
 ## Token usage on AgentRun
 

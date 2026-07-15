@@ -5,6 +5,7 @@ import {
   AgentRole,
   AgentRuntimeMode,
   RunEngine,
+  type Prisma,
   type PrismaClient,
 } from "@prisma/client";
 import { router, globalProcedure, protectedProcedure, instanceAdminProcedure } from "@/server/trpc";
@@ -46,6 +47,29 @@ async function assertCanEdit(db: PrismaClient, userId: string, profileId: string
   });
 }
 
+async function assertRuntimeAvailable(
+  db: PrismaClient,
+  runtimeId: string | null | undefined,
+  ownerId: string,
+  actorId: string,
+) {
+  if (!runtimeId) return;
+  const runtime = await db.runtime.findFirst({
+    where: {
+      id: runtimeId,
+      archivedAt: null,
+      OR: [{ ownerId }, { ownerId: actorId }, { instanceShared: true }],
+    },
+    select: { id: true },
+  });
+  if (!runtime) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "That runtime is not available to this agent profile.",
+    });
+  }
+}
+
 export const agentProfileRouter = router({
   /** Owned + instance-shared profiles, with cross-workspace binding summary. */
   list: globalProcedure.query(async ({ ctx }) => {
@@ -62,6 +86,7 @@ export const agentProfileRouter = router({
             maxConcurrent: true,
             autoDispatchEligible: true,
             workspace: { select: { id: true, slug: true, name: true, key: true } },
+            _count: { select: { apiKeys: { where: { pluginId: null } } } },
           },
         },
       },
@@ -70,6 +95,7 @@ export const agentProfileRouter = router({
       ...p,
       ownedByMe: p.ownerId === ctx.session.user.id,
       online: p.bindings.some((b) => b.status === "ONLINE" || b.status === "BUSY"),
+      clientCount: p.bindings.reduce((total, binding) => total + binding._count.apiKeys, 0),
     }));
   }),
 
@@ -89,6 +115,21 @@ export const agentProfileRouter = router({
             engagementMode: true,
             capabilities: true,
             workspace: { select: { id: true, slug: true, name: true, key: true } },
+            apiKeys: {
+              where: { pluginId: null },
+              orderBy: { createdAt: "desc" },
+              select: {
+                id: true,
+                name: true,
+                prefix: true,
+                kind: true,
+                scopes: true,
+                lastUsedAt: true,
+                expiresAt: true,
+                revokedAt: true,
+                createdAt: true,
+              },
+            },
           },
         },
       },
@@ -227,6 +268,7 @@ export const agentProfileRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const ownerId = input.ownerId ?? ctx.session.user.id;
+      await assertRuntimeAvailable(ctx.db, input.runtimeId, ownerId, ctx.session.user.id);
       const dupe = await ctx.db.agentProfile.findUnique({
         where: { ownerId_profileKey: { ownerId, profileKey: input.profileKey } },
         select: { id: true },
@@ -261,13 +303,38 @@ export const agentProfileRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertCanEdit(ctx.db, ctx.session.user.id, input.id);
+      const current = await ctx.db.agentProfile.findUniqueOrThrow({
+        where: { id: input.id },
+        select: { ownerId: true },
+      });
+      if (Object.prototype.hasOwnProperty.call(input, "runtimeId")) {
+        await assertRuntimeAvailable(ctx.db, input.runtimeId, current.ownerId, ctx.session.user.id);
+      }
       const { id, ...data } = input;
       return ctx.db.$transaction(async (tx) => {
         const profile = await tx.agentProfile.update({ where: { id }, data });
-        if (Object.prototype.hasOwnProperty.call(data, "templateMarkdown")) {
+        const bindingData: Prisma.AgentUpdateManyMutationInput = {};
+        const syncedFields = [
+          "name",
+          "description",
+          "avatar",
+          "provider",
+          "runtimeMode",
+          "runEngine",
+          "runtimeId",
+          "role",
+          "templateMarkdown",
+          "webhookUrl",
+        ] as const;
+        for (const field of syncedFields) {
+          if (Object.prototype.hasOwnProperty.call(data, field)) {
+            Object.assign(bindingData, { [field]: data[field] ?? null });
+          }
+        }
+        if (Object.keys(bindingData).length > 0) {
           await tx.agent.updateMany({
             where: { profileId: id, archivedAt: null },
-            data: { templateMarkdown: data.templateMarkdown ?? null },
+            data: bindingData,
           });
         }
         return profile;

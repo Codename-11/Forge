@@ -1,6 +1,5 @@
 "use client";
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -143,7 +142,6 @@ type RevealKeyState = {
 
 export default function AccessPage() {
   const workspace = useMaybeWorkspace();
-  const clientsHref = workspace ? `/w/${workspace.slug}/settings/clients` : "/settings/clients";
   const searchParams = useSearchParams();
   const handledDeepLinkRef = useRef<string | null>(null);
   const { data: keys, refetch } = trpc.access.list.useQuery();
@@ -188,7 +186,7 @@ export default function AccessPage() {
   const baseUrl =
     typeof window !== "undefined"
       ? window.location.origin
-      : process.env.NEXT_PUBLIC_APP_URL ?? "https://forge.axiom-labs.dev";
+      : (process.env.NEXT_PUBLIC_APP_URL ?? "https://forge.axiom-labs.dev");
 
   // ── Scope helpers ─────────────────────────────────────────────────────────
   function applyPreset(p: Preset, setter: (s: Scope[]) => void, presetSetter: (p: Preset) => void) {
@@ -198,7 +196,12 @@ export default function AccessPage() {
     else if (p === "default") setter(DEFAULT_SCOPES);
   }
 
-  function toggleScope(s: Scope, curr: Scope[], setter: (scopes: Scope[]) => void, presetSetter: (p: Preset) => void) {
+  function toggleScope(
+    s: Scope,
+    curr: Scope[],
+    setter: (scopes: Scope[]) => void,
+    presetSetter: (p: Preset) => void,
+  ) {
     const next = curr.includes(s) ? curr.filter((x) => x !== s) : [...curr, s];
     if (setEq(next, FULL_ACCESS)) presetSetter("full");
     else if (setEq(next, READ_ONLY)) presetSetter("read");
@@ -339,7 +342,8 @@ export default function AccessPage() {
   useEffect(() => {
     const target = searchParams.get("create");
     const providerParam = searchParams.get("provider");
-    const signature = `${target ?? ""}:${providerParam ?? ""}`;
+    const requestedAgentId = searchParams.get("agentId");
+    const signature = `${target ?? ""}:${providerParam ?? ""}:${requestedAgentId ?? ""}`;
     if (!target || handledDeepLinkRef.current === signature) return;
     handledDeepLinkRef.current = signature;
 
@@ -368,7 +372,7 @@ export default function AccessPage() {
       setScopes(FULL_ACCESS);
       setPreset("full");
       setExpiresInDays("");
-      setLinkedAgentId("");
+      setLinkedAgentId(requestedAgentId ?? "");
       setStep(0);
       setCreateOpen(true);
     }
@@ -499,37 +503,40 @@ export default function AccessPage() {
   return (
     <>
       <Topbar
-        title="Developer access"
-        subtitle={workspace ? `${workspace.name} · workspace API keys and MCP access` : "API keys + MCP endpoint for the current workspace."}
+        title="Agent access"
+        subtitle={
+          workspace
+            ? `${workspace.name} · MCP clients, scoped credentials, and session keys`
+            : "MCP clients, scoped credentials, and session keys for the current workspace."
+        }
         actions={
           <Button variant="ember" size="sm" onClick={openCreate}>
-            Register agent
+            Add MCP client
           </Button>
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Intro baseUrl={baseUrl} clientsHref={clientsHref} />
+          <Intro baseUrl={baseUrl} />
 
           {/* ── Registered Agents ── */}
           <Section
-            title="Registered Agents"
-            hint="Agent keys are tied to a persistent registered agent. Full scopes, linked via the agent registry. Use the wizard to generate a provider-specific MCP config."
+            title="Agent MCP clients"
+            hint="Persistent MCP clients can attach to a workspace agent binding. Add more than one when the same identity connects from multiple trusted clients or environments."
             actions={
               <div className="flex items-center gap-3">
                 <span className="text-[0.6875rem] text-muted-foreground">
                   {agentKeys.filter((k) => !k.revokedAt).length} active
                 </span>
                 <Button variant="outline" size="sm" onClick={openCreate}>
-                  Register agent
+                  Add MCP client
                 </Button>
               </div>
             }
           >
             <Card>
               {agentKeys.map((k) => {
-                const expired =
-                  !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
+                const expired = !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
                 return (
                   <li key={k.id} className="flex items-start gap-4 px-4 py-3">
                     <div className="min-w-0 flex-1">
@@ -554,9 +561,7 @@ export default function AccessPage() {
                       <div className="mt-2 text-[0.6875rem] text-muted-foreground">
                         Created {relativeTime(k.createdAt)} .{" "}
                         {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
-                        {k.expiresAt && !k.revokedAt && (
-                          <> . expires {relativeTime(k.expiresAt)}</>
-                        )}
+                        {k.expiresAt && !k.revokedAt && <> . expires {relativeTime(k.expiresAt)}</>}
                       </div>
                     </div>
                     <KeyActions
@@ -574,8 +579,8 @@ export default function AccessPage() {
               {agentKeys.length === 0 && (
                 <EmptyState
                   icon={Bot}
-                  title="No registered agents"
-                  hint="Register an agent key to connect Hermes, Claude, Codex, or another persistent agent over MCP."
+                  title="No Agent MCP clients"
+                  hint="Add a client credential to connect Hermes, Claude, Codex, or another persistent agent over MCP."
                 />
               )}
             </Card>
@@ -598,8 +603,7 @@ export default function AccessPage() {
           >
             <Card>
               {personalKeys.map((k) => {
-                const expired =
-                  !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
+                const expired = !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
                 return (
                   <li key={k.id} className="flex items-start gap-4 px-4 py-3">
                     <div className="min-w-0 flex-1">
@@ -611,7 +615,9 @@ export default function AccessPage() {
                         {k.revokedAt && <Badge>revoked</Badge>}
                         {expired && <Badge>expired</Badge>}
                         {k.projectIds.length > 0 && (
-                          <Badge>{k.projectIds.length} project{k.projectIds.length !== 1 ? "s" : ""}</Badge>
+                          <Badge>
+                            {k.projectIds.length} project{k.projectIds.length !== 1 ? "s" : ""}
+                          </Badge>
                         )}
                       </div>
                       <div className="mt-1 flex flex-wrap gap-1">
@@ -622,9 +628,7 @@ export default function AccessPage() {
                       <div className="mt-2 text-[0.6875rem] text-muted-foreground">
                         Created {relativeTime(k.createdAt)} .{" "}
                         {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
-                        {k.expiresAt && !k.revokedAt && (
-                          <> . expires {relativeTime(k.expiresAt)}</>
-                        )}
+                        {k.expiresAt && !k.revokedAt && <> . expires {relativeTime(k.expiresAt)}</>}
                       </div>
                     </div>
                     <KeyActions
@@ -656,7 +660,12 @@ export default function AccessPage() {
             actions={
               <div className="flex items-center gap-3">
                 <span className="text-[0.6875rem] text-muted-foreground">
-                  {sessionKeys.filter((k) => !k.revokedAt && (!k.expiresAt || new Date(k.expiresAt) > new Date())).length} active
+                  {
+                    sessionKeys.filter(
+                      (k) => !k.revokedAt && (!k.expiresAt || new Date(k.expiresAt) > new Date()),
+                    ).length
+                  }{" "}
+                  active
                 </span>
                 <Button variant="outline" size="sm" onClick={openSession}>
                   Generate session key
@@ -666,8 +675,7 @@ export default function AccessPage() {
           >
             <Card>
               {sessionKeys.map((k) => {
-                const isExpired =
-                  !!k.expiresAt && new Date(k.expiresAt) < new Date();
+                const isExpired = !!k.expiresAt && new Date(k.expiresAt) < new Date();
                 const expiryLabel = formatExpiry(k.expiresAt);
                 return (
                   <li key={k.id} className="flex items-start gap-4 px-4 py-3">
@@ -678,9 +686,7 @@ export default function AccessPage() {
                           {k.prefix}...
                         </span>
                         {k.revokedAt && <Badge>revoked</Badge>}
-                        {isExpired && !k.revokedAt && (
-                          <Badge>expired</Badge>
-                        )}
+                        {isExpired && !k.revokedAt && <Badge>expired</Badge>}
                         {!isExpired && !k.revokedAt && expiryLabel && (
                           <Badge>
                             <Clock className="mr-1 h-2.5 w-2.5" />
@@ -697,7 +703,10 @@ export default function AccessPage() {
                         Created {relativeTime(k.createdAt)} .{" "}
                         {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
                         {k.expiresAt && !k.revokedAt && (
-                          <> . {isExpired ? "expired" : "expires"} {relativeTime(k.expiresAt)}</>
+                          <>
+                            {" "}
+                            . {isExpired ? "expired" : "expires"} {relativeTime(k.expiresAt)}
+                          </>
                         )}
                       </div>
                     </div>
@@ -731,8 +740,8 @@ export default function AccessPage() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         size="xl"
-        title="Register agent key"
-        description="Select the agent runtime, choose scopes, and copy a provider-specific config after the key is created."
+        title="Add agent MCP client"
+        description="Choose the client provider and scopes, then copy a provider-specific MCP config after the key is created."
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-2">
             <div className="text-[0.6875rem] text-muted-foreground">
@@ -862,8 +871,8 @@ export default function AccessPage() {
                   </select>
                   <p className="text-[0.6875rem] text-muted-foreground">
                     Linked keys let MCP tools such as{" "}
-                    <code className="font-mono">issues.assigned</code> infer the agent
-                    without a <code className="font-mono">profileKey</code> argument.
+                    <code className="font-mono">issues.assigned</code> infer the agent without a{" "}
+                    <code className="font-mono">profileKey</code> argument.
                   </p>
                 </div>
               </div>
@@ -878,14 +887,14 @@ export default function AccessPage() {
                   label="Agent link"
                   value={
                     linkedAgentId
-                      ? agents?.find((a) => a.id === linkedAgentId)?.profileKey ?? "selected"
+                      ? (agents?.find((a) => a.id === linkedAgentId)?.profileKey ?? "selected")
                       : "none"
                   }
                 />
-                <div className="md:col-span-2 rounded-lg border border-border bg-background/50 p-3 text-xs leading-relaxed text-muted-foreground">
-                  After creation, Forge will show the raw key once with Hermes, Claude,
-                  Codex, HTTP, and environment config blocks. You can run a same-origin
-                  MCP test before closing the reveal modal.
+                <div className="rounded-lg border border-border bg-background/50 p-3 text-xs leading-relaxed text-muted-foreground md:col-span-2">
+                  After creation, Forge will show the raw key once with Hermes, Claude, Codex, HTTP,
+                  and environment config blocks. You can run a same-origin MCP test before closing
+                  the reveal modal.
                 </div>
               </div>
             )}
@@ -947,7 +956,9 @@ export default function AccessPage() {
             scopes={personalScopes}
             preset={personalPreset}
             onApplyPreset={(p) => applyPreset(p, setPersonalScopes, setPersonalPreset)}
-            onToggleScope={(s) => toggleScope(s, personalScopes, setPersonalScopes, setPersonalPreset)}
+            onToggleScope={(s) =>
+              toggleScope(s, personalScopes, setPersonalScopes, setPersonalPreset)
+            }
           />
         </div>
       </CenterModal>
@@ -1125,9 +1136,7 @@ export default function AccessPage() {
               <dd>
                 {revealKey.linkedAgentId ? (
                   <span className="font-mono text-foreground">
-                    @
-                    {agents?.find((a) => a.id === revealKey.linkedAgentId)
-                      ?.profileKey ?? "agent"}
+                    @{agents?.find((a) => a.id === revealKey.linkedAgentId)?.profileKey ?? "agent"}
                   </span>
                 ) : (
                   <span className="text-muted-foreground">No linked agent</span>
@@ -1145,16 +1154,12 @@ export default function AccessPage() {
 
               <dt className="text-muted-foreground">Expires</dt>
               <dd className="text-foreground">
-                {revealKey.expiresAt
-                  ? new Date(revealKey.expiresAt).toLocaleString()
-                  : "Never"}
+                {revealKey.expiresAt ? new Date(revealKey.expiresAt).toLocaleString() : "Never"}
               </dd>
 
               <dt className="text-muted-foreground">Created</dt>
               <dd className="text-foreground">
-                {revealKey.createdAt
-                  ? new Date(revealKey.createdAt).toLocaleString()
-                  : "just now"}
+                {revealKey.createdAt ? new Date(revealKey.createdAt).toLocaleString() : "just now"}
               </dd>
             </dl>
 
@@ -1204,21 +1209,11 @@ function KeyActions({
       {!k.revokedAt && (
         <>
           {showRotate && (
-            <Button
-              variant="outline"
-              size="sm"
-              disabled={rotatePending}
-              onClick={onRotate}
-            >
+            <Button variant="outline" size="sm" disabled={rotatePending} onClick={onRotate}>
               Rotate
             </Button>
           )}
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={revokePending}
-            onClick={onRevoke}
-          >
+          <Button variant="ghost" size="sm" disabled={revokePending} onClick={onRevoke}>
             Revoke
           </Button>
         </>
@@ -1246,12 +1241,14 @@ function ScopeSelector({
       <div className="space-y-2">
         <label className="text-xs text-muted-foreground">Preset</label>
         <div className="grid grid-cols-2 gap-1 rounded-md bg-subtle p-0.5 md:grid-cols-4">
-          {([
-            { id: "full", label: "Full access" },
-            { id: "default", label: "Standard" },
-            { id: "read", label: "Read-only" },
-            { id: "custom", label: "Custom" },
-          ] as { id: Preset; label: string }[]).map((p) => (
+          {(
+            [
+              { id: "full", label: "Full access" },
+              { id: "default", label: "Standard" },
+              { id: "read", label: "Read-only" },
+              { id: "custom", label: "Custom" },
+            ] as { id: Preset; label: string }[]
+          ).map((p) => (
             <button
               key={p.id}
               type="button"
@@ -1303,7 +1300,7 @@ function ScopeSelector({
   );
 }
 
-function Intro({ baseUrl, clientsHref }: { baseUrl: string; clientsHref: string }) {
+function Intro({ baseUrl }: { baseUrl: string }) {
   return (
     <Section
       title="Connect an external agent"
@@ -1323,15 +1320,9 @@ function Intro({ baseUrl, clientsHref }: { baseUrl: string; clientsHref: string 
           Bearer token, <span className="font-mono">forge_sk_...</span>
         </div>
       </div>
-      <div className="mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
-        Use this page to issue or rotate secrets. Use{" "}
-        <Link
-          href={clientsHref}
-          className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
-        >
-          Agent Clients
-        </Link>{" "}
-        to see active client rows, status, and revocation actions.
+      <div className="text-meta mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-muted-foreground">
+        This page is the credential source of truth: create, inspect, rotate, revoke, and delete
+        every MCP client here. Primary execution runtimes stay with the identity in Agent Studio.
       </div>
     </Section>
   );
@@ -1379,18 +1370,10 @@ function Stepper({
   );
 }
 
-function ReviewItem({
-  label,
-  value,
-}: {
-  label: string;
-  value: ReactNode;
-}) {
+function ReviewItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="rounded-lg border border-border bg-background/50 p-3">
-      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-        {label}
-      </div>
+      <div className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="mt-1 text-sm text-foreground">{value}</div>
     </div>
   );

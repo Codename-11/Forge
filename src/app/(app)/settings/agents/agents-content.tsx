@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, Plus, Shield } from "lucide-react";
+import { Bot, ChevronRight, KeyRound, Plus, Server, Shield } from "lucide-react";
 import { AgentProvider, RunEngine } from "@prisma/client";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
@@ -12,6 +12,7 @@ import { CenterModal } from "@/components/ui/modal";
 import { Spinner, EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 
 /**
  * Client body for the global agent profiles list. Each card links to its
@@ -38,7 +39,7 @@ function StatusPip({ online }: { online: boolean }) {
 
 function WsChipDense({ ws }: { ws: Workspace }) {
   return (
-    <span className="inline-flex items-center gap-1 text-meta">
+    <span className="text-meta inline-flex items-center gap-1">
       <span
         aria-hidden
         className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] text-[8px] font-bold text-white"
@@ -53,12 +54,14 @@ function WsChipDense({ ws }: { ws: Workspace }) {
 
 export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean }) {
   const { data: profiles, isLoading } = trpc.agents.profiles.list.useQuery();
+  const { data: runtimes } = trpc.global.runtimes.useQuery();
   const utils = trpc.useUtils();
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
   const [profileKey, setProfileKey] = useState("");
   const [provider, setProvider] = useState<AgentProvider>(AgentProvider.HERMES);
   const [runEngine, setRunEngine] = useState<"DEFAULT" | RunEngine>("DEFAULT");
+  const [runtimeId, setRuntimeId] = useState("");
   const [description, setDescription] = useState("");
   const [avatar, setAvatar] = useState("");
   const [capsText, setCapsText] = useState("");
@@ -69,6 +72,7 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
     setProfileKey("");
     setProvider(AgentProvider.HERMES);
     setRunEngine("DEFAULT");
+    setRuntimeId("");
     setDescription("");
     setAvatar("");
     setCapsText("");
@@ -99,6 +103,7 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
       profileKey: profileKey.trim(),
       provider,
       runEngine: runEngine === "DEFAULT" ? null : runEngine,
+      runtimeId: runtimeId || null,
       description: description.trim() || undefined,
       avatar: avatar.trim() || undefined,
       baseCapabilities,
@@ -109,13 +114,13 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
   return (
     <>
       <Topbar
-        title="Agents"
-        subtitle="Profiles you've defined. Each profile is a global identity — the same agent reaches every workspace you bind it to."
+        title="Agent Studio"
+        subtitle="Define each agent once: identity, one primary execution runtime, and every workspace connection."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-5 p-6">
           {/* Create affordance / admin-gated hint */}
-          <div className="flex items-center gap-3 rounded-md border border-ember/30 bg-ember/5 p-3">
+          <div className="flex flex-col items-start gap-3 rounded-md border border-ember/30 bg-ember/5 p-3 sm:flex-row sm:items-center">
             <Shield size={14} className="shrink-0 text-ember" />
             <div className="min-w-0 flex-1 text-[0.8125rem]">
               <span className="font-medium">New agent profiles are instance-admin-gated.</span>
@@ -130,6 +135,7 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                 type="button"
                 variant="ember"
                 size="sm"
+                className="shrink-0"
                 onClick={() => setCreateOpen(true)}
               >
                 <Plus size={12} />
@@ -161,12 +167,14 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                   href={`/settings/agents/${a.id}`}
                   className="group flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-subtle"
                 >
-                  <span className="text-xl">{a.avatar ?? "🤖"}</span>
+                  <AgentAvatar agent={a} size="md" title={null} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-1.5">
                       <span className="text-[0.8125rem] font-semibold">{a.name}</span>
                       <StatusPip online={a.online} />
-                      <span className="font-mono text-[10px] text-muted-foreground">@{a.profileKey}</span>
+                      <span className="font-mono text-[10px] text-muted-foreground">
+                        @{a.profileKey}
+                      </span>
                       {a.instanceShared && (
                         <span className="rounded border border-border/70 bg-card/60 px-1 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
                           instance
@@ -179,7 +187,9 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                       )}
                     </div>
                     {a.description && (
-                      <div className="mt-0.5 truncate text-meta text-muted-foreground">{a.description}</div>
+                      <div className="text-meta mt-0.5 truncate text-muted-foreground">
+                        {a.description}
+                      </div>
                     )}
                   </div>
                   <div className="hidden w-28 shrink-0 sm:block">
@@ -193,27 +203,41 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                   <div className="hidden w-32 shrink-0 truncate md:block">
                     {a.runtime ? (
                       <>
-                        <div className="truncate text-[0.8125rem] font-medium">{a.runtime.name}</div>
+                        <div className="truncate text-[0.8125rem] font-medium">
+                          {a.runtime.name}
+                        </div>
                         <div className="text-[10px] text-muted-foreground">
                           {a.runtime.kind.toLowerCase().replace("_", " ")}
                         </div>
                       </>
                     ) : (
-                      <span className="text-[0.8125rem] italic text-muted-foreground">unassigned</span>
+                      <span className="text-[0.8125rem] italic text-muted-foreground">
+                        unassigned
+                      </span>
                     )}
                   </div>
                   <div className="hidden w-36 shrink-0 lg:block">
-                    <div className="mb-0.5 text-[10px] text-muted-foreground">
-                      {a.bindings.length} binding{a.bindings.length === 1 ? "" : "s"}
+                    <div className="mb-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                      <span>
+                        {a.bindings.length} binding{a.bindings.length === 1 ? "" : "s"}
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <KeyRound className="h-2.5 w-2.5" />
+                        {a.clientCount} MCP
+                      </span>
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {a.bindings.length === 0 ? (
                         <span className="text-[10px] italic text-muted-foreground">none</span>
                       ) : (
-                        a.bindings.slice(0, 3).map((b) => <WsChipDense key={b.id} ws={b.workspace} />)
+                        a.bindings
+                          .slice(0, 3)
+                          .map((b) => <WsChipDense key={b.id} ws={b.workspace} />)
                       )}
                       {a.bindings.length > 3 && (
-                        <span className="text-[10px] text-muted-foreground">+{a.bindings.length - 3}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          +{a.bindings.length - 3}
+                        </span>
                       )}
                     </div>
                   </div>
@@ -235,7 +259,7 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
         }}
         size="md"
         title="Create agent profile"
-        description="Define the global profile first. Bind it to workspaces and provision keys or runtime hosts after creation."
+        description="Create the identity, then choose its one primary execution runtime. Workspace bindings and MCP clients can be added afterward."
         primaryLabel="Create profile"
         onPrimary={submitCreate}
         loading={createProfile.isPending}
@@ -287,12 +311,30 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                 ))}
               </select>
             </ProfileField>
+            <ProfileField label="Primary execution runtime" hint="One per profile · optional">
+              <select
+                value={runtimeId}
+                onChange={(e) => setRuntimeId(e.target.value)}
+                aria-label="Primary execution runtime"
+                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                <option value="">Not assigned yet</option>
+                {(runtimes ?? []).map((runtime) => (
+                  <option key={runtime.id} value={runtime.id}>
+                    {runtime.name} · {runtime.health.label}
+                  </option>
+                ))}
+              </select>
+            </ProfileField>
+            <div className="text-meta rounded-md border border-border bg-background/40 px-2.5 py-2 text-muted-foreground">
+              <div className="flex items-center gap-1.5 font-medium text-foreground">
+                <Server className="h-3.5 w-3.5 text-ember" /> Execution host
+              </div>
+              Forge starts work through this runtime. MCP clients are separate and can be added per
+              workspace.
+            </div>
             <ProfileField label="Avatar" hint="Optional">
-              <Input
-                value={avatar}
-                onChange={(e) => setAvatar(e.target.value)}
-                placeholder="VI"
-              />
+              <Input value={avatar} onChange={(e) => setAvatar(e.target.value)} placeholder="VI" />
             </ProfileField>
             <ProfileField label="Capabilities" hint="Comma-separated tags">
               <Input
@@ -323,7 +365,7 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
               <span className="block font-medium text-foreground">
                 Share in every workspace catalog
               </span>
-              <span className="block text-meta text-muted-foreground">
+              <span className="text-meta block text-muted-foreground">
                 Turn this off for a private profile that only the owner can bind.
               </span>
             </span>
