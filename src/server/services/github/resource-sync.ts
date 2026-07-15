@@ -484,7 +484,7 @@ export async function fetchGitHubSnapshot(args: {
   );
 }
 
-async function canonicalizeGitHubResourceIdentity(
+export async function canonicalizeGitHubResourceIdentity(
   db: DbClient,
   args: {
     workspaceId: string;

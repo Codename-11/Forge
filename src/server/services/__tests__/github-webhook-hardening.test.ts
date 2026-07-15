@@ -521,6 +521,53 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("canonicalizes legacy identity before applying review hints", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        connectionMappingId: mapping.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "Acme/Forge",
+        number: 42,
+        url: "https://github.com/Acme/Forge/pull/42",
+        title: "Merged canonicalization target",
+        state: "merged",
+        externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("mixed-case-review"),
+      event: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({ updated_at: "2026-07-14T11:00:00Z" }),
+        review: {
+          id: 801,
+          state: "approved",
+          submitted_at: "2026-07-14T12:00:00Z",
+          user: { login: "reviewer" },
+        },
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      repoFullName: "acme/forge",
+      title: "Merged canonicalization target",
+      state: "merged",
+      externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      metadata: { reviewDecision: "APPROVED" },
+    });
+  });
+
   it("keeps PR discussion on GitHub and deduplicates mirrored issue comments", async () => {
     const { fixture, prisma, issue, mapping } = await setup({ syncComments: true });
     const issueResource = await upsertExternalResource(prisma, {

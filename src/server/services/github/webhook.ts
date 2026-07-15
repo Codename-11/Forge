@@ -18,6 +18,7 @@ import {
 import {
   applyGitHubSnapshotToLinkedIssues,
   acquireGitHubResourceOrderLock,
+  canonicalizeGitHubResourceIdentity,
   gitHubResourceVersionMatches,
   linkExternalResourceToIssue,
   recordGitHubResourceChangeToLinkedIssues,
@@ -460,6 +461,7 @@ async function processReviewEvent(args: {
       resourceType: snapshot.resourceType,
       number: snapshot.number,
     });
+    await canonicalizeGitHubResourceIdentity(tx, { workspaceId, snapshot });
     const previous = await tx.externalResource.findUnique({
       where: {
         workspaceId_provider_repoFullName_resourceType_number: {
