@@ -211,6 +211,29 @@ enum CompletionAutomation {
   AUTO_WHEN_SAFE
 }
 
+/// Canonical lifecycle for an isolated code worktree/branch attached to an issue.
+/// GitHub remains authoritative for PR/check/review facts; Forge owns coordination.
+enum WorkSessionStatus {
+  CLAIMED
+  IN_PROGRESS
+  PR_OPEN
+  IN_REVIEW
+  READY_TO_MERGE
+  MERGED
+  RELEASED
+  DEPLOYED
+  VERIFIED
+  STALE
+  ABANDONED
+}
+
+enum WorkSessionSource {
+  FORGE_AGENT
+  CODEX_DESKTOP
+  CONTRIBUTOR
+  MANUAL
+}
+
 enum ChatRole {
   USER
   AGENT
@@ -606,6 +629,7 @@ model User {
   requestedAgentProfiles AgentProfile[]         @relation("AgentProfileRequester")
   connections            Connection[]
   externalResourceLinks  ExternalResourceLink[] @relation("ExternalResourceLinkCreator")
+  ownedWorkSessions      WorkSession[]          @relation("WorkSessionOwnerUser")
 
   authoredIssues                    Issue[]                  @relation("IssueAuthor")
   assignedIssues                    IssueAssignee[]
@@ -908,6 +932,9 @@ model Workspace {
   githubClosedReprobeMinutes    Int                      @default(1440)
   /// Minimum interval between operator/agent manual refresh requests per PR.
   githubManualCooldownSeconds   Int                      @default(30)
+  /// An active code work session with no heartbeat beyond this threshold is
+  /// surfaced as stale. 0 disables automatic stale marking.
+  workSessionStaleMinutes       Int                      @default(120)
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
@@ -975,6 +1002,7 @@ model Workspace {
   externalResources       ExternalResource[]
   externalResourceLinks   ExternalResourceLink[]
   externalWebhookEvents   ExternalWebhookEvent[]
+  workSessions            WorkSession[]
   pins                    Pin[]
   recentItems             RecentItem[]
   notes                   Note[]
@@ -1221,6 +1249,7 @@ model Issue {
   goals          Goal[]
   actionRequests ActionRequest[]
   externalLinks  ExternalResourceLink[]
+  workSessions   WorkSession[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -2036,17 +2065,17 @@ model RuntimeRepo {
 /// The same row can own native issue/PR webhook sync; instance env credentials
 /// remain a legacy fallback — see `src/server/services/github/webhook.ts`.
 model GithubApp {
-  id                 String    @id @default(cuid())
-  workspaceId        String
+  id                       String    @id @default(cuid())
+  workspaceId              String
   /// Operator-facing label (e.g. "Axiom Bot").
-  name               String
+  name                     String
   /// Numeric GitHub App ID — the JWT issuer used to mint installation tokens.
-  appId              String
+  appId                    String
   /// Installation ID (the app installed on an org/account). Null until the app
   /// is installed; tokens are scoped to whatever repos the installation grants.
-  installationId     String?
+  installationId           String?
   /// AES-256-GCM ciphertext of the app's PEM private key. Write-only.
-  privateKeyEnc      String
+  privateKeyEnc            String
   /// HMAC secret for this app's native Forge webhook. Encrypted with
   /// AUTH_SECRET and never returned to clients. Keeping webhook auth beside
   /// the app removes the old requirement for a second, instance-env app.
@@ -2059,17 +2088,17 @@ model GithubApp {
   webhookLastError         String?
   /// App slug (e.g. `forge-bot`) for deep-linking to GitHub's install/settings
   /// pages. From the manifest conversion, or the first successful test.
-  slug               String?
+  slug                     String?
   /// OAuth client id from the manifest conversion (informational; nullable).
-  clientId           String?
+  clientId                 String?
   /// Created via the manifest flow (vs. manual paste). UI hint only.
-  createdViaManifest Boolean   @default(false)
+  createdViaManifest       Boolean   @default(false)
   /// Last successful token mint, for at-a-glance health in the UI.
-  lastMintedAt       DateTime?
+  lastMintedAt             DateTime?
   /// Last mint/verify error message (cleared on success). UI surfaces it.
-  lastError          String?
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  lastError                String?
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
 
   workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   runtimes  Runtime[]
@@ -2230,6 +2259,7 @@ model ExternalResource {
   workspace         Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   connectionMapping ConnectionMapping?     @relation(fields: [connectionMappingId], references: [id], onDelete: SetNull)
   links             ExternalResourceLink[]
+  workSessions      WorkSession[]
 
   @@unique([workspaceId, provider, repoFullName, resourceType, number])
   @@index([workspaceId, provider, repoFullName])
@@ -2263,27 +2293,72 @@ model ExternalResourceLink {
   @@index([createdById])
 }
 
+/// A shared coordination lease for implementation work. It prevents a Forge
+/// agent, Codex Desktop task, or contributor from silently starting a second
+/// branch for the same issue. Terminal rows remain as the issue's delivery
+/// history; a partial unique index in the migration permits one active row.
+model WorkSession {
+  id              String            @id @default(cuid())
+  workspaceId     String
+  issueId         String
+  ownerUserId     String?
+  ownerAgentId    String?
+  source          WorkSessionSource
+  status          WorkSessionStatus @default(CLAIMED)
+  repoFullName    String
+  branch          String
+  baseBranch      String            @default("main")
+  /// Local path is diagnostic only; it is never used as an execution target.
+  worktreePath    String?
+  headSha         String?
+  pullRequestId   String?
+  releasedVersion String?
+  deployedSha     String?
+  lastHeartbeatAt DateTime          @default(now())
+  staleAt         DateTime?
+  mergedAt        DateTime?
+  releasedAt      DateTime?
+  deployedAt      DateTime?
+  verifiedAt      DateTime?
+  endedAt         DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue       Issue             @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  ownerUser   User?             @relation("WorkSessionOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerAgent  Agent?            @relation("WorkSessionOwnerAgent", fields: [ownerAgentId], references: [id], onDelete: SetNull)
+  pullRequest ExternalResource? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+
+  @@unique([workspaceId, repoFullName, branch])
+  @@index([workspaceId, status, lastHeartbeatAt])
+  @@index([issueId, createdAt])
+  @@index([ownerUserId, status])
+  @@index([ownerAgentId, status])
+  @@index([pullRequestId])
+}
+
 /// Inbound external webhook idempotency and diagnostics. For GitHub this
 /// stores `X-GitHub-Delivery` plus event/action so redeliveries can be
 /// acknowledged without duplicating Forge side effects.
 model ExternalWebhookEvent {
-  id                 String    @id @default(cuid())
-  workspaceId        String?
-  provider           String
-  deliveryId         String
-  event              String
-  action             String?
-  repoFullName       String?
-  externalResourceId String?
-  status             String
-  error              String?   @db.Text
-  receivedAt         DateTime  @default(now())
+  id                  String    @id @default(cuid())
+  workspaceId         String?
+  provider            String
+  deliveryId          String
+  event               String
+  action              String?
+  repoFullName        String?
+  externalResourceId  String?
+  status              String
+  error               String?   @db.Text
+  receivedAt          DateTime  @default(now())
   /// Start of the current processing lease. Failed or abandoned deliveries
   /// can be atomically reclaimed without racing an in-flight request.
   processingStartedAt DateTime?
   /// Number of processing claims, including the initial delivery.
-  attemptCount       Int       @default(1)
-  processedAt        DateTime?
+  attemptCount        Int       @default(1)
+  processedAt         DateTime?
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 
@@ -2465,6 +2540,7 @@ model Agent {
   assignedActionRequests   ActionRequest[]   @relation("ActionRequestAssigneeAgent")
   actorAuditLogs           AuditLog[]        @relation("AuditLogActorAgent")
   actorActivityEvents      ActivityEvent[]   @relation("ActivityEventActorAgent")
+  ownedWorkSessions        WorkSession[]     @relation("WorkSessionOwnerAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])

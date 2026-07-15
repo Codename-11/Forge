@@ -31,11 +31,7 @@ export default defineConfig({
     transformItems: (items) =>
       items.map((item) => ({ ...item, url: `docs/${item.url.replace(/^\/+/, "")}` })),
   },
-  ignoreDeadLinks: [
-    /^https?:\/\/localhost/,
-    /^\/api\//,
-    /^\/w\//,
-  ],
+  ignoreDeadLinks: [/^https?:\/\/localhost/, /^\/api\//, /^\/w\//],
 
   head: [
     // Fonts — match the dashboard exactly: Inter (sans) + JetBrains
@@ -99,6 +95,11 @@ export default defineConfig({
       { text: "Agents", link: "/agents/overview.html", activeMatch: "/agents/" },
       { text: "Automation", link: "/automation/webhooks.html", activeMatch: "/automation/" },
       { text: "Reference", link: "/reference/mcp.html", activeMatch: "/reference/" },
+      {
+        text: "Engineering",
+        link: "/engineering/work-management.html",
+        activeMatch: "/engineering/",
+      },
     ],
 
     sidebar: {
@@ -196,6 +197,14 @@ export default defineConfig({
             { text: "tRPC Routers", link: "/reference/trpc.html" },
             { text: "Events", link: "/reference/events.html" },
             { text: "Environment", link: "/reference/env.html" },
+          ],
+        },
+      ],
+      "/engineering/": [
+        {
+          text: "Engineering Operations",
+          items: [
+            { text: "Work Management & Delivery", link: "/engineering/work-management.html" },
           ],
         },
       ],

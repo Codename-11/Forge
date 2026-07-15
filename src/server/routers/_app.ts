@@ -56,6 +56,7 @@ import { runtimeRouter } from "./runtime";
 import { githubAppRouter } from "./github-app";
 import { timeEntryRouter } from "./timeEntry";
 import { userRouter } from "./user";
+import { workSessionRouter } from "./work-session";
 
 export const appRouter = router({
   access: accessRouter,
@@ -117,6 +118,7 @@ export const appRouter = router({
   user: userRouter,
   view: viewRouter,
   workspace: workspaceRouter,
+  workSession: workSessionRouter,
 });
 
 export type AppRouter = typeof appRouter;

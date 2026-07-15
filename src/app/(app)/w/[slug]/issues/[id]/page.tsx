@@ -34,6 +34,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { PinButton } from "@/components/pins/pin-button";
 import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
+import { WorkCoordinationPanel } from "@/components/issue-detail/work-coordination-panel";
 import { IssueMain } from "@/components/issue-detail/issue-main";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
@@ -618,6 +619,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 activityCount={recentEvents?.length ?? 0}
                 header={
                   <div className="space-y-2">
+                    <WorkCoordinationPanel issueId={issue.id} issueKey={issueKey} />
                     <GitHubLinksPanel issueId={issue.id} />
                     <SidebarField label="Project">
                       <ProjectPickerField

@@ -40,6 +40,7 @@ export default function WorkspaceSettingsPage() {
   const [agentProgressUpdateMinutes, setAgentProgressUpdateMinutes] = useState(5);
   const [agentRunQuietMinutes, setAgentRunQuietMinutes] = useState(5);
   const [reviewStartTimeoutMinutes, setReviewStartTimeoutMinutes] = useState(5);
+  const [workSessionStaleMinutes, setWorkSessionStaleMinutes] = useState(120);
   // Per-run safety budgets. 0 = unlimited (opt-in). See run-budget.ts.
   const [runTokenBudget, setRunTokenBudget] = useState(0);
   const [runCostBudgetUsd, setRunCostBudgetUsd] = useState(0);
@@ -91,6 +92,7 @@ export default function WorkspaceSettingsPage() {
     setAgentProgressUpdateMinutes(current.agentProgressUpdateMinutes);
     setAgentRunQuietMinutes(current.agentRunQuietMinutes);
     setReviewStartTimeoutMinutes(current.reviewStartTimeoutMinutes);
+    setWorkSessionStaleMinutes(current.workSessionStaleMinutes ?? 120);
     setRunTokenBudget(current.runTokenBudget ?? 0);
     setRunCostBudgetUsd(Number(current.runCostBudgetUsd ?? 0));
     setRunMaxMinutes(current.runMaxMinutes ?? 0);
@@ -178,6 +180,10 @@ export default function WorkspaceSettingsPage() {
         "reviewStartTimeoutMinutes",
         reviewStartTimeoutMinutes !== current.reviewStartTimeoutMinutes,
       ],
+      [
+        "workSessionStaleMinutes",
+        workSessionStaleMinutes !== (current.workSessionStaleMinutes ?? 120),
+      ],
       ["runTokenBudget", runTokenBudget !== (current.runTokenBudget ?? 0)],
       ["runCostBudgetUsd", runCostBudgetUsd !== Number(current.runCostBudgetUsd ?? 0)],
       ["runMaxMinutes", runMaxMinutes !== (current.runMaxMinutes ?? 0)],
@@ -230,6 +236,7 @@ export default function WorkspaceSettingsPage() {
     agentProgressUpdateMinutes,
     agentRunQuietMinutes,
     reviewStartTimeoutMinutes,
+    workSessionStaleMinutes,
     runTokenBudget,
     runCostBudgetUsd,
     runMaxMinutes,
@@ -274,6 +281,7 @@ export default function WorkspaceSettingsPage() {
       agentProgressUpdateMinutes,
       agentRunQuietMinutes,
       reviewStartTimeoutMinutes,
+      workSessionStaleMinutes,
       // Persist unlimited as NULL (not 0) so the column matches its documented
       // null = unlimited semantics; the form treats both as "no cap".
       runTokenBudget: runTokenBudget > 0 ? runTokenBudget : null,
@@ -313,6 +321,7 @@ export default function WorkspaceSettingsPage() {
     agentProgressUpdateMinutes,
     agentRunQuietMinutes,
     reviewStartTimeoutMinutes,
+    workSessionStaleMinutes,
     runTokenBudget,
     runCostBudgetUsd,
     runMaxMinutes,
@@ -595,6 +604,19 @@ export default function WorkspaceSettingsPage() {
                     max={10080}
                     value={reviewStartTimeoutMinutes}
                     onChange={(e) => setReviewStartTimeoutMinutes(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Work session stale timeout (minutes)"
+                  hint="Flag an active branch/worktree lease when its owner stops checking in. Stale sessions continue blocking duplicate work until resumed or abandoned. 0 disables."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={43200}
+                    value={workSessionStaleMinutes}
+                    onChange={(e) => setWorkSessionStaleMinutes(Number(e.target.value) || 0)}
                     disabled={!canEdit}
                   />
                 </Field>

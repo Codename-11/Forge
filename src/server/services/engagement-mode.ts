@@ -13,7 +13,7 @@ import {
  * unit-testable.
  */
 
-export const FORGE_RUN_CONTRACT_VERSION = "2026-07-14.1";
+export const FORGE_RUN_CONTRACT_VERSION = "2026-07-15.1";
 
 export type EngagementSurface = "assignment" | "queue" | "mention" | "chat" | "plan" | "watcher";
 
@@ -187,6 +187,15 @@ const RUN_PROTOCOL_INSTRUCTIONS =
   "or let runs.complete create the final comment from summary. " +
   "For EXECUTE, set recommendIssueCompletion true only when the verified issue outcome " +
   "itself is ready to close; Forge will apply the workspace safety policy. " +
+  "CODE WORK COORDINATION: before modifying a repository, inspect `workSessions.list` and " +
+  "claim the issue with `workSessions.claim`, using a dedicated non-main branch and isolated " +
+  "worktree. If another active session exists, do not create a competing branch; continue the " +
+  "owned session or ask the operator to resolve ownership. Refresh the lease with " +
+  "`workSessions.heartbeat` at phase changes and after commits. Link implementation PRs through " +
+  "Forge's native `github.link` with kind IMPLEMENTS, then attach the returned resource using " +
+  "`workSessions.attachPullRequest`; do not add a GitHub URL as a generic attachment. Never edit " +
+  "or commit in the deployment/main checkout. PR review and CI must complete before merge, and " +
+  "release/deploy/verification milestones require explicit operator authority. " +
   "Non-EXECUTE modes are read/report/review only; Forge rejects issue-state " +
   "mutations from those runs.";
 
