@@ -476,6 +476,10 @@ async function processReviewEvent(args: {
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
   const snapshot = pullRequestSnapshot(args.mapping.target, args.payload.pull_request);
+  // pull_request.updated_at in a review payload reflects review activity, not
+  // a PR lifecycle transition. A review-first delivery may seed identity and
+  // review hints, but must not make delayed opened/synchronize events stale.
+  snapshot.externalUpdatedAt = null;
   const submittedAt = args.payload.review?.submitted_at ?? null;
   const reviewState = args.payload.review?.state?.toUpperCase() ?? null;
   const decision =

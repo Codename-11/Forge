@@ -1083,6 +1083,67 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("does not let a review-first delivery suppress PR lifecycle side effects", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const keyedTitle = `Implement ${fixture.workspace.key}-${issue.number}`;
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("review-before-pr-opened"),
+      event: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({
+          title: keyedTitle,
+          updated_at: "2026-07-14T13:00:00Z",
+        }),
+        review: {
+          id: 806,
+          state: "approved",
+          submitted_at: "2026-07-14T13:00:00Z",
+          user: { login: "reviewer" },
+        },
+      },
+    });
+
+    const opened = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("pr-opened-after-review"),
+      event: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({
+          title: keyedTitle,
+          updated_at: "2026-07-14T12:00:00Z",
+        }),
+      },
+    });
+
+    expect(opened.processed).toBe(1);
+    const resource = await prisma.externalResource.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+      },
+    });
+    expect(resource.externalUpdatedAt).toEqual(new Date("2026-07-14T12:00:00Z"));
+    await expect(
+      prisma.externalResourceLink.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          externalResourceId: resource.id,
+          kind: "IMPLEMENTS",
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("canonicalizes legacy identity before applying review hints", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await prisma.externalResource.create({

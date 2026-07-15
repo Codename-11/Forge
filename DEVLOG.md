@@ -12986,7 +12986,7 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught twenty-three identity/bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught twenty-four identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
@@ -13029,9 +13029,12 @@ only terminal delivery rows are acknowledged as durable duplicates.
 Mixed-case duplicate canonicalization now ranks rows with a provider
 `externalUpdatedAt` above internally touched/unversioned rows before comparing
 recency, preserving the authoritative lifecycle snapshot and all moved links.
+Review-first PR deliveries now seed identity/review hints without advancing the
+PR lifecycle freshness clock, so delayed opened/synchronize webhooks can still
+link issue keys and apply configured lifecycle rules.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
-54 tests; lint passed with existing repository warnings; typecheck passed; and
+55 tests; lint passed with existing repository warnings; typecheck passed; and
 the CI-style serial Vitest gate passed 1,274 tests with one intentional live
 connector skip. The canonical parallel gate also passed 1,274 tests and the
 fresh production E2E build completed. The browser run passed 35 of 38 journeys
