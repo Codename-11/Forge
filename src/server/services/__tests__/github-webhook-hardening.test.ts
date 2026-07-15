@@ -597,6 +597,15 @@ describe("GitHub webhook hardening", () => {
         },
       },
     });
+    const linkedIssue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: linkedIssue.id,
+        externalResourceId: resource.id,
+        kind: "IMPLEMENTS",
+      },
+    });
 
     const result = await processGitHubWebhook({
       db: prisma,
@@ -621,6 +630,15 @@ describe("GitHub webhook hardening", () => {
         reviewHint: { dirty: true, event: "review_requested", source: "webhook-hint" },
       },
     });
+    await expect(
+      prisma.activityEvent.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          subjectType: "issue",
+          subjectId: linkedIssue.id,
+        },
+      }),
+    ).resolves.toBeGreaterThan(0);
   });
 
   it("keeps the decisive review state when a comment-only review arrives", async () => {

@@ -12985,7 +12985,7 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught eleven identity/bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught twelve identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
@@ -13000,9 +13000,10 @@ reopen is not discarded while ambiguous open/synchronize deliveries remain
 conservative. Individual review events never replace the provider aggregate;
 they preserve the latest decisive review state and mark it dirty for provider
 refresh. Reviewer-requested/removed events use a separate dirty hint so they
-cannot clear that aggregate. SHA-only check/status events now filter by the
-JSON head SHA in the database instead of loading every PR for a repository
-into the worker.
+cannot clear that aggregate, and review dirty/hint changes participate in the
+issue activity fingerprint so open views refresh immediately. SHA-only
+check/status events now filter by the JSON head SHA in the database instead of
+loading every PR for a repository into the worker.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
 48 tests; lint passed with existing repository warnings; typecheck passed; and

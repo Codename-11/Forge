@@ -175,6 +175,7 @@ function resourceStateFingerprint(
   const metadata = metadataRecord(resource.metadata);
   const checks = metadataRecord(metadata.checks);
   const review = metadataRecord(metadata.review);
+  const reviewHint = metadataRecord(metadata.reviewHint);
   const head = metadataRecord(metadata.head);
   return JSON.stringify({
     title: resource.title,
@@ -189,6 +190,15 @@ function resourceStateFingerprint(
       changesRequestedCount: review.changesRequestedCount ?? null,
       requestedCount: review.requestedCount ?? null,
       partial: review.partial ?? null,
+      dirty: review.dirty ?? null,
+      lastEventDecision: review.lastEventDecision ?? null,
+      lastEventState: review.lastEventState ?? null,
+      lastEventAt: review.lastEventAt ?? null,
+    },
+    reviewHint: {
+      dirty: reviewHint.dirty ?? null,
+      event: reviewHint.event ?? null,
+      updatedAt: reviewHint.updatedAt ?? null,
     },
     checks: {
       status: checks.status ?? null,
