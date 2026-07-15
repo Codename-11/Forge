@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { gitHubReviewDecision } from "@/server/services/github/client";
 import { claimGitHubWebhookDelivery, processGitHubWebhook } from "@/server/services/github/webhook";
 import {
   gitHubResourceVersionMatches,
@@ -86,6 +87,23 @@ function pullRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe("GitHub webhook hardening", () => {
+  it("keeps outstanding review requests ahead of approvals", () => {
+    expect(
+      gitHubReviewDecision({
+        approvedCount: 1,
+        changesRequestedCount: 0,
+        requestedCount: 2,
+      }),
+    ).toBe("REVIEW_REQUESTED");
+    expect(
+      gitHubReviewDecision({
+        approvedCount: 1,
+        changesRequestedCount: 1,
+        requestedCount: 2,
+      }),
+    ).toBe("CHANGES_REQUESTED");
+  });
+
   it("rejects a mapping id paired with a different repository", async () => {
     const { fixture, prisma, mapping } = await setup();
     await expect(

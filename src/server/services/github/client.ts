@@ -74,6 +74,17 @@ export type GitHubReviewSummary = {
   diagnostic: string | null;
 };
 
+export function gitHubReviewDecision(args: {
+  approvedCount: number;
+  changesRequestedCount: number;
+  requestedCount: number;
+}): GitHubReviewSummary["decision"] {
+  if (args.changesRequestedCount > 0) return "CHANGES_REQUESTED";
+  if (args.requestedCount > 0) return "REVIEW_REQUESTED";
+  if (args.approvedCount > 0) return "APPROVED";
+  return null;
+}
+
 export type GitHubRepoResponse = {
   id: number;
   node_id?: string | null;
@@ -352,14 +363,7 @@ export async function getGitHubPullRequestReviewSummary(args: {
   ).length;
   const requestedCount = (args.requestedReviewers ?? 0) + (args.requestedTeams ?? 0);
   return {
-    decision:
-      changesRequestedCount > 0
-        ? "CHANGES_REQUESTED"
-        : approvedCount > 0
-          ? "APPROVED"
-          : requestedCount > 0
-            ? "REVIEW_REQUESTED"
-            : null,
+    decision: gitHubReviewDecision({ approvedCount, changesRequestedCount, requestedCount }),
     approvedCount,
     changesRequestedCount,
     requestedCount,
