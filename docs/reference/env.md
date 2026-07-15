@@ -88,9 +88,9 @@ Configure the GitHub App with:
 - Setup URL: `https://forge.example/api/connections/github/setup`
 - Webhook URL: `https://forge.example/api/ingest/github`
 - Webhook events: `issues`, `issue_comment`, `pull_request`,
-  `pull_request_review`, `check_suite`, `check_run`
-- Read permissions for issues and pull requests. Repository metadata access is
-  needed for repository selection/listing.
+  `pull_request_review`, `check_suite`, `check_run`, `status`
+- Read permissions for issues, pull requests, checks, and commit statuses.
+  Repository metadata access is needed for repository selection/listing.
 
 ## Storage (MinIO / S3)
 

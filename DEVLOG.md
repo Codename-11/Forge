@@ -12911,3 +12911,30 @@ repository warnings; the focused comment router suite passed 15 tests; the
 isolated stale-work suite passed 9 tests after a known full-suite concurrency
 failure; the fresh E2E production build passed; and the existing issue-flow
 Playwright journey passed.
+
+---
+
+## 2026-07-14 — Native GitHub state hardening
+
+Audited native link creation, webhook ingestion, provider refresh, stale
+reconciliation, checks/status aggregation, completion/recovery policy, and the
+GitHub-discussion boundary. Closed repo/installation mismatches, casing-based
+resource duplication, permanent failed-delivery dedupe, concurrent and
+out-of-order regressions, same-SHA rerun gaps, missing legacy status-webhook
+invalidation, comment duplication, and missing issue-scoped realtime events.
+
+Pull refreshes now aggregate the latest decisive review per reviewer and
+outstanding review requests while leaving PR comments and review bodies on
+GitHub. The worker promotes recoverable legacy generic GitHub attachments into
+native relations without provider calls. Native sync no longer substitutes a
+separate runtime-auth GitHub App, and the documented instance-app permissions
+now include checks, commit statuses, and the `status` webhook event.
+
+Verification: the focused GitHub/client/reconciliation/completion suites passed
+40 tests; lint passed with existing repository warnings; typecheck passed; and
+the CI-style serial Vitest gate passed 1,274 tests with one intentional live
+connector skip. The canonical parallel gate also passed 1,274 tests and the
+fresh production E2E build completed. The browser run passed 35 of 38 journeys
+before Chromium crashed on a memory-saturated host; each of the three reported
+journeys passed immediately in a fresh isolated browser process. Release,
+deployment, and production smoke results follow after the pull request lands.

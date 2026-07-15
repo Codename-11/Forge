@@ -6,6 +6,7 @@ import type { GitHubResourceSnapshot } from "@/server/services/github/types";
 const GITHUB_API_BASE = "https://api.github.com";
 const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 const MAX_CHECK_SUITE_PAGES = 10;
+const MAX_REVIEW_PAGES = 10;
 
 type GitHubUser = { login?: string | null };
 type GitHubLabel = { name?: string | null; color?: string | null };
@@ -46,10 +47,31 @@ export type GitHubPullResponse = {
   mergeable_state?: string | null;
   head?: { ref?: string | null; sha?: string | null; repo?: { full_name?: string | null } | null };
   base?: { ref?: string | null; sha?: string | null; repo?: { full_name?: string | null } | null };
+  requested_reviewers?: GitHubUser[];
+  requested_teams?: Array<{ slug?: string | null }>;
   created_at?: string | null;
   updated_at?: string | null;
   closed_at?: string | null;
   merged_at?: string | null;
+};
+
+type GitHubPullReviewResponse = {
+  id: number;
+  state?: string | null;
+  submitted_at?: string | null;
+  user?: GitHubUser | null;
+};
+
+export type GitHubReviewSummary = {
+  decision: "CHANGES_REQUESTED" | "APPROVED" | "REVIEW_REQUESTED" | null;
+  approvedCount: number;
+  changesRequestedCount: number;
+  requestedCount: number;
+  reviewCount: number;
+  updatedAt: string;
+  source: "api-aggregate";
+  partial: boolean;
+  diagnostic: string | null;
 };
 
 export type GitHubRepoResponse = {
@@ -276,6 +298,79 @@ export async function getGitHubPullRequest(args: {
     { signal: args.signal },
     args.requestTimeoutMs,
   );
+}
+
+/**
+ * Aggregate the latest decisive review from each reviewer. GitHub's pull REST
+ * payload does not expose a review decision, and a single review webhook is
+ * not an aggregate: a later approval from the same reviewer supersedes their
+ * earlier changes request, while COMMENTED reviews do not erase approvals.
+ */
+export async function getGitHubPullRequestReviewSummary(args: {
+  installationId: string | number;
+  owner: string;
+  repo: string;
+  number: number;
+  requestedReviewers?: number;
+  requestedTeams?: number;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<GitHubReviewSummary> {
+  const reviews: GitHubPullReviewResponse[] = [];
+  let truncated = false;
+  for (let page = 1; page <= MAX_REVIEW_PAGES; page += 1) {
+    const rows = await githubRequest<GitHubPullReviewResponse[]>(
+      args.installationId,
+      `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/pulls/${args.number}/reviews?per_page=100&page=${page}`,
+      { signal: args.signal },
+      args.requestTimeoutMs,
+    );
+    reviews.push(...rows);
+    if (rows.length < 100) break;
+    if (page === MAX_REVIEW_PAGES) truncated = true;
+  }
+
+  const ordered = [...reviews].sort((a, b) => {
+    const at = a.submitted_at ? Date.parse(a.submitted_at) : 0;
+    const bt = b.submitted_at ? Date.parse(b.submitted_at) : 0;
+    return at === bt ? a.id - b.id : at - bt;
+  });
+  const latest = new Map<string, "APPROVED" | "CHANGES_REQUESTED">();
+  for (const review of ordered) {
+    const login = review.user?.login?.toLowerCase();
+    if (!login) continue;
+    const state = review.state?.toUpperCase();
+    if (state === "APPROVED" || state === "CHANGES_REQUESTED") {
+      latest.set(login, state);
+    } else if (state === "DISMISSED") {
+      latest.delete(login);
+    }
+  }
+  const approvedCount = [...latest.values()].filter((state) => state === "APPROVED").length;
+  const changesRequestedCount = [...latest.values()].filter(
+    (state) => state === "CHANGES_REQUESTED",
+  ).length;
+  const requestedCount = (args.requestedReviewers ?? 0) + (args.requestedTeams ?? 0);
+  return {
+    decision:
+      changesRequestedCount > 0
+        ? "CHANGES_REQUESTED"
+        : approvedCount > 0
+          ? "APPROVED"
+          : requestedCount > 0
+            ? "REVIEW_REQUESTED"
+            : null,
+    approvedCount,
+    changesRequestedCount,
+    requestedCount,
+    reviewCount: reviews.length,
+    updatedAt: new Date().toISOString(),
+    source: "api-aggregate",
+    partial: truncated,
+    diagnostic: truncated
+      ? `More than ${MAX_REVIEW_PAGES * 100} pull-request reviews require another page.`
+      : null,
+  };
 }
 
 /**
@@ -520,6 +615,10 @@ export function pullRequestSnapshot(
       mergedAt: pr.merged_at ?? null,
       closedAt: pr.closed_at ?? null,
       mergeableState: pr.mergeable_state ?? null,
+      requestedReviewers: (pr.requested_reviewers ?? [])
+        .map((reviewer) => reviewer.login ?? "")
+        .filter(Boolean),
+      requestedTeams: (pr.requested_teams ?? []).map((team) => team.slug ?? "").filter(Boolean),
       head: {
         ref: pr.head?.ref ?? null,
         sha: pr.head?.sha ?? null,

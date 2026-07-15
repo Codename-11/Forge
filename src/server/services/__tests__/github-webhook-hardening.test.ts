@@ -1,0 +1,563 @@
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { claimGitHubWebhookDelivery, processGitHubWebhook } from "@/server/services/github/webhook";
+import {
+  recoverGenericGitHubAttachments,
+  resolveGitHubRepoMapping,
+  upsertExternalResource,
+  upsertExternalResourceFromWebhook,
+} from "@/server/services/github/resource-sync";
+import {
+  createIssue,
+  createWorkspaceFixture,
+  disconnectPrisma,
+  getPrisma,
+  type TestFixture,
+} from "@/server/routers/__tests__/helpers";
+
+const fixtures: TestFixture[] = [];
+const deliveryIds: string[] = [];
+
+function delivery(label: string): string {
+  const id = `gh-hardening-${label}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  deliveryIds.push(id);
+  return id;
+}
+
+afterEach(async () => {
+  const prisma = getPrisma();
+  if (deliveryIds.length) {
+    await prisma.externalWebhookEvent.deleteMany({
+      where: { deliveryId: { in: deliveryIds.splice(0) } },
+    });
+  }
+  while (fixtures.length) await fixtures.pop()!.cleanup();
+});
+
+afterAll(async () => {
+  await disconnectPrisma();
+});
+
+async function setup(options: { syncComments?: boolean } = {}) {
+  const fixture = await createWorkspaceFixture({ keyPrefix: "GH" });
+  fixtures.push(fixture);
+  const prisma = getPrisma();
+  const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+  const connection = await prisma.connection.create({
+    data: {
+      ownerId: fixture.user.id,
+      provider: "GITHUB",
+      label: "GitHub webhook test",
+      status: "CONNECTED",
+      config: { installationId: "101" },
+    },
+  });
+  const mapping = await prisma.connectionMapping.create({
+    data: {
+      workspaceId: fixture.workspace.id,
+      connectionId: connection.id,
+      kind: "repo",
+      target: "acme/forge",
+      config: options.syncComments ? { github: { syncComments: true } } : undefined,
+    },
+  });
+  return { fixture, prisma, issue, mapping };
+}
+
+function pullRequest(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 4200,
+    node_id: "PR_node_42",
+    number: 42,
+    title: "Ship GitHub hardening",
+    body: null,
+    state: "open" as const,
+    html_url: "https://github.com/acme/forge/pull/42",
+    url: "https://api.github.com/repos/acme/forge/pulls/42",
+    draft: false,
+    merged: false,
+    mergeable_state: "clean",
+    head: { ref: "hardening", sha: "head-new", repo: { full_name: "acme/forge" } },
+    base: { ref: "main", sha: "base", repo: { full_name: "acme/forge" } },
+    created_at: "2026-07-14T09:00:00Z",
+    updated_at: "2026-07-14T12:00:00Z",
+    ...overrides,
+  };
+}
+
+describe("GitHub webhook hardening", () => {
+  it("rejects a mapping id paired with a different repository", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    await expect(
+      resolveGitHubRepoMapping({
+        db: prisma,
+        workspaceId: fixture.workspace.id,
+        mappingId: mapping.id,
+        repoFullName: "other/repository",
+      }),
+    ).rejects.toThrow(/does not match/i);
+  });
+
+  it("requires the payload installation to match the mapped connection", async () => {
+    const { prisma } = await setup();
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("wrong-installation"),
+      event: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 202 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest(),
+      },
+    });
+    expect(result).toMatchObject({ processed: 0, skipped: "no-mapping" });
+  });
+
+  it("does not let an older PR webhook regress a newer merged snapshot", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Merged title",
+        state: "merged",
+        metadata: { merged: true, head: { sha: "head-new" } },
+        externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+    await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        externalResourceId: resource.id,
+        kind: "IMPLEMENTS",
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("out-of-order"),
+      event: "pull_request",
+      payload: {
+        action: "reopened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({ updated_at: "2026-07-14T11:00:00Z" }),
+      },
+    });
+    expect(result.processed).toBe(0);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      state: "merged",
+      title: "Merged title",
+      externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+    });
+  });
+
+  it("does not regress merged state when GitHub events share a timestamp", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Merged title",
+        state: "merged",
+        metadata: { merged: true },
+        externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("equal-timestamp"),
+      event: "pull_request",
+      payload: {
+        action: "reopened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({ updated_at: "2026-07-14T13:00:00Z" }),
+      },
+    });
+
+    expect(result.processed).toBe(0);
+    await expect(
+      prisma.externalResource.findFirstOrThrow({
+        where: { workspaceId: fixture.workspace.id, number: 42 },
+      }),
+    ).resolves.toMatchObject({ state: "merged", title: "Merged title" });
+  });
+
+  it("serializes concurrent snapshots so the newest provider state wins", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const base = {
+      provider: "GITHUB" as const,
+      resourceType: "PULL_REQUEST" as const,
+      repoFullName: "acme/forge",
+      number: 42,
+      url: "https://github.com/acme/forge/pull/42",
+    };
+
+    await Promise.all([
+      upsertExternalResourceFromWebhook(prisma, {
+        workspaceId: fixture.workspace.id,
+        connectionMappingId: mapping.id,
+        snapshot: {
+          ...base,
+          title: "Stale open title",
+          state: "open",
+          metadata: { merged: false },
+          externalUpdatedAt: new Date("2026-07-14T11:00:00Z"),
+        },
+      }),
+      upsertExternalResourceFromWebhook(prisma, {
+        workspaceId: fixture.workspace.id,
+        connectionMappingId: mapping.id,
+        snapshot: {
+          ...base,
+          title: "Newest merged title",
+          state: "merged",
+          metadata: { merged: true },
+          externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+        },
+      }),
+    ]);
+
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({
+        where: {
+          workspaceId_provider_repoFullName_resourceType_number: {
+            workspaceId: fixture.workspace.id,
+            provider: "GITHUB",
+            repoFullName: "acme/forge",
+            resourceType: "PULL_REQUEST",
+            number: 42,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({
+      title: "Newest merged title",
+      state: "merged",
+      externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+    });
+  });
+
+  it("invalidates trusted checks when a same-SHA rerun starts and emits issue activity", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Checks rerun",
+        state: "open",
+        metadata: {
+          head: { sha: "head-new" },
+          checks: {
+            status: "completed",
+            conclusion: "success",
+            source: "api-aggregate",
+            headSha: "head-new",
+          },
+        },
+      },
+    });
+    await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        externalResourceId: resource.id,
+        kind: "IMPLEMENTS",
+      },
+    });
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("check-rerun"),
+      event: "check_suite",
+      payload: {
+        action: "rerequested",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        check_suite: {
+          head_sha: "head-new",
+          status: "queued",
+          conclusion: null,
+          pull_requests: [],
+        },
+      },
+    });
+
+    const refreshed = await prisma.externalResource.findUniqueOrThrow({
+      where: { id: resource.id },
+    });
+    expect(refreshed.lastSyncedAt).toBeNull();
+    expect(refreshed.metadata).toMatchObject({
+      checks: { status: "dirty", source: "webhook-hint", headSha: "head-new" },
+    });
+    const events = await prisma.activityEvent.findMany({
+      where: { workspaceId: fixture.workspace.id, subjectType: "issue", subjectId: issue.id },
+    });
+    expect(
+      events.some(
+        (event) => (event.payload as { change?: string }).change === "external-resource-state",
+      ),
+    ).toBe(true);
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("commit-status"),
+      event: "status",
+      payload: {
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        sha: "head-new",
+        state: "success",
+      },
+    });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      metadata: {
+        checks: {
+          status: "dirty",
+          source: "webhook-hint",
+          event: "status",
+          lastStatusState: "success",
+        },
+      },
+    });
+  });
+
+  it("ignores an older review hint instead of replacing a newer decision", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Reviewed PR",
+        state: "open",
+        metadata: {
+          reviewDecision: "APPROVED",
+          review: { decision: "APPROVED", updatedAt: "2026-07-14T13:00:00Z" },
+        },
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("stale-review"),
+      event: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest(),
+        review: {
+          id: 800,
+          state: "changes_requested",
+          submitted_at: "2026-07-14T12:00:00Z",
+          user: { login: "reviewer" },
+        },
+      },
+    });
+
+    expect(result.processed).toBe(0);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      metadata: {
+        reviewDecision: "APPROVED",
+        review: { decision: "APPROVED", updatedAt: "2026-07-14T13:00:00Z" },
+      },
+    });
+  });
+
+  it("keeps PR discussion on GitHub and deduplicates mirrored issue comments", async () => {
+    const { fixture, prisma, issue, mapping } = await setup({ syncComments: true });
+    const issueResource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "ISSUE",
+        repoFullName: "acme/forge",
+        number: 7,
+        url: "https://github.com/acme/forge/issues/7",
+        title: "Issue discussion",
+        state: "open",
+      },
+    });
+    await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        externalResourceId: issueResource.id,
+        kind: "SOURCE",
+      },
+    });
+    const issuePayload = {
+      action: "created",
+      installation: { id: 101 },
+      repository: { full_name: "acme/forge" },
+      issue: {
+        id: 700,
+        number: 7,
+        title: "Issue discussion",
+        state: "open" as const,
+        html_url: "https://github.com/acme/forge/issues/7",
+        url: "https://api.github.com/repos/acme/forge/issues/7",
+      },
+      comment: {
+        id: 9001,
+        html_url: "https://github.com/acme/forge/issues/7#issuecomment-9001",
+        body: "One durable comment",
+        user: { login: "octocat" },
+      },
+    };
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("comment-a"),
+      event: "issue_comment",
+      payload: issuePayload,
+    });
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("comment-b"),
+      event: "issue_comment",
+      payload: issuePayload,
+    });
+    expect(
+      await prisma.comment.count({
+        where: { workspaceId: fixture.workspace.id, issueId: issue.id },
+      }),
+    ).toBe(1);
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("pr-comment"),
+      event: "issue_comment",
+      payload: {
+        ...issuePayload,
+        issue: {
+          ...issuePayload.issue,
+          number: 42,
+          pull_request: { url: "https://api.github.com/repos/acme/forge/pulls/42" },
+        },
+        comment: { ...issuePayload.comment, id: 9002 },
+      },
+    });
+    expect(
+      await prisma.externalResource.count({
+        where: { workspaceId: fixture.workspace.id, resourceType: "ISSUE", number: 42 },
+      }),
+    ).toBe(0);
+  });
+
+  it("reclaims failed deliveries once and promotes legacy GitHub link attachments", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const failedId = delivery("failed");
+    await prisma.externalWebhookEvent.create({
+      data: {
+        provider: "GITHUB",
+        deliveryId: failedId,
+        event: "pull_request",
+        status: "FAILED",
+        processingStartedAt: new Date("2026-07-14T10:00:00Z"),
+        processedAt: new Date("2026-07-14T10:01:00Z"),
+        error: "transient",
+      },
+    });
+    await expect(
+      claimGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId: failedId,
+        event: "pull_request",
+        action: "opened",
+        repoFullName: "acme/forge",
+        now: new Date("2026-07-14T10:02:00Z"),
+      }),
+    ).resolves.toBe("CLAIMED");
+    await expect(
+      claimGitHubWebhookDelivery({
+        db: prisma,
+        deliveryId: failedId,
+        event: "pull_request",
+        action: "opened",
+        repoFullName: "acme/forge",
+        now: new Date("2026-07-14T10:02:01Z"),
+      }),
+    ).resolves.toBe("DUPLICATE");
+    await expect(
+      prisma.externalWebhookEvent.findUniqueOrThrow({
+        where: { provider_deliveryId: { provider: "GITHUB", deliveryId: failedId } },
+      }),
+    ).resolves.toMatchObject({ status: "RECEIVED", attemptCount: 2, error: null });
+
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Legacy generic attachment",
+        state: "open",
+      },
+    });
+    const attachment = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        targetType: "issue",
+        targetId: issue.id,
+        kind: "LINK",
+        filename: "GitHub PR",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://github.com/ACME/Forge/pull/42?diff=split",
+        externalUrl: "https://github.com/ACME/Forge/pull/42?diff=split",
+      },
+    });
+    await expect(
+      recoverGenericGitHubAttachments(prisma, { workspaceId: fixture.workspace.id }),
+    ).resolves.toMatchObject({
+      inspected: 1,
+      recovered: 1,
+      unmatched: 0,
+    });
+    expect(await prisma.attachment.findUnique({ where: { id: attachment.id } })).toBeNull();
+    await expect(
+      prisma.externalResourceLink.findUnique({
+        where: {
+          issueId_externalResourceId_kind: {
+            issueId: issue.id,
+            externalResourceId: resource.id,
+            kind: "RELATES_TO",
+          },
+        },
+      }),
+    ).resolves.toBeTruthy();
+  });
+});

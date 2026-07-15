@@ -30,6 +30,7 @@ import { purgeExpiredSessionKeys } from "@/server/services/api-key-purge";
 import { sweepIdleEphemeralAgents } from "@/server/services/ephemeral-idle";
 import { sweepCompletionCandidates } from "@/server/services/completion-candidate";
 import { sweepGitHubStatusReconciliation } from "@/server/services/github/reconciliation";
+import { recoverGenericGitHubAttachments } from "@/server/services/github/resource-sync";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -325,7 +326,9 @@ export const maintenanceWorker = new Worker(
         return sweepCompletionCandidates(db);
       }
       case "github-reconciliation-sweep": {
-        return sweepGitHubStatusReconciliation(db);
+        const recoveredAttachments = await recoverGenericGitHubAttachments(db);
+        const reconciliation = await sweepGitHubStatusReconciliation(db);
+        return { recoveredAttachments, reconciliation };
       }
       case "required-ack-check": {
         const eventId = job.data?.agentAssignedEventId as string | undefined;

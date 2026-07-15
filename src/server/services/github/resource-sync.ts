@@ -17,9 +17,11 @@ import {
   getGitHubIssue,
   getGitHubPullRequest,
   getGitHubPullRequestChecks,
+  getGitHubPullRequestReviewSummary,
   GitHubRequestError,
   issueSnapshot,
   pullRequestSnapshot,
+  type GitHubPullResponse,
 } from "@/server/services/github/client";
 import {
   githubInstallationId,
@@ -64,6 +66,200 @@ function assertLinkKind(kind: string): asserts kind is ExternalLinkKind {
 
 function publicResource(row: ExternalResource) {
   return row;
+}
+
+/**
+ * Webhook snapshots are not guaranteed to arrive in order. Ignore a payload
+ * whose provider updated_at predates the row already stored, so an old opened,
+ * synchronize, or reopened delivery cannot regress a closed/merged resource.
+ */
+export async function upsertExternalResourceFromWebhook(
+  db: PrismaClient,
+  args: {
+    workspaceId: string;
+    connectionMappingId?: string | null;
+    snapshot: GitHubResourceSnapshot;
+    invalidateSync?: boolean;
+  },
+): Promise<{ resource: ExternalResource; previous: ExternalResource | null; applied: boolean }> {
+  return db.$transaction(async (tx) => {
+    await acquireGitHubResourceOrderLock(tx, {
+      workspaceId: args.workspaceId,
+      repoFullName: args.snapshot.repoFullName,
+      resourceType: args.snapshot.resourceType,
+      number: args.snapshot.number,
+    });
+    const key = {
+      workspaceId: args.workspaceId,
+      provider: args.snapshot.provider,
+      repoFullName: args.snapshot.repoFullName,
+      resourceType: args.snapshot.resourceType,
+      number: args.snapshot.number,
+    };
+    const previous = await tx.externalResource.findUnique({
+      where: { workspaceId_provider_repoFullName_resourceType_number: key },
+    });
+    if (previous?.externalUpdatedAt && !args.snapshot.externalUpdatedAt) {
+      return { resource: previous, previous, applied: false };
+    }
+    if (previous?.externalUpdatedAt && args.snapshot.externalUpdatedAt) {
+      const previousTime = previous.externalUpdatedAt.getTime();
+      const incomingTime = args.snapshot.externalUpdatedAt.getTime();
+      const equalTimestampRegression =
+        previousTime === incomingTime &&
+        ((previous.state === "merged" && args.snapshot.state !== "merged") ||
+          (previous.state === "closed" &&
+            args.snapshot.state !== "closed" &&
+            args.snapshot.state !== "merged"));
+      if (previousTime > incomingTime || equalTimestampRegression) {
+        return { resource: previous, previous, applied: false };
+      }
+    }
+    let resource = await upsertExternalResource(tx, args);
+    if (args.invalidateSync && resource.syncTerminalAt === null) {
+      resource = await tx.externalResource.update({
+        where: { id: resource.id },
+        data: { lastSyncedAt: null },
+      });
+    }
+    return { resource, previous, applied: true };
+  });
+}
+
+export async function acquireGitHubResourceOrderLock(
+  db: DbClient,
+  resource: {
+    workspaceId: string;
+    repoFullName: string;
+    resourceType: string;
+    number: number;
+  },
+): Promise<void> {
+  const key = [
+    resource.workspaceId,
+    GITHUB_PROVIDER,
+    resource.repoFullName.toLowerCase(),
+    resource.resourceType,
+    resource.number,
+  ].join(":");
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
+export function gitHubResourceVersionMatches(
+  current: Pick<ExternalResource, "updatedAt" | "externalUpdatedAt" | "state" | "metadata">,
+  expected: Pick<ExternalResource, "updatedAt" | "externalUpdatedAt" | "state" | "metadata">,
+): boolean {
+  return (
+    current.updatedAt.getTime() === expected.updatedAt.getTime() &&
+    current.externalUpdatedAt?.getTime() === expected.externalUpdatedAt?.getTime() &&
+    current.state === expected.state &&
+    JSON.stringify(current.metadata) === JSON.stringify(expected.metadata)
+  );
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** State that should wake issue subscribers; excludes polling timestamps. */
+function resourceStateFingerprint(
+  resource: Pick<ExternalResource, "title" | "state" | "metadata">,
+) {
+  const metadata = metadataRecord(resource.metadata);
+  const checks = metadataRecord(metadata.checks);
+  const review = metadataRecord(metadata.review);
+  const head = metadataRecord(metadata.head);
+  return JSON.stringify({
+    title: resource.title,
+    state: resource.state,
+    draft: metadata.draft ?? null,
+    merged: metadata.merged ?? null,
+    mergeableState: metadata.mergeableState ?? null,
+    headSha: head.sha ?? null,
+    reviewDecision: metadata.reviewDecision ?? review.decision ?? null,
+    review: {
+      approvedCount: review.approvedCount ?? null,
+      changesRequestedCount: review.changesRequestedCount ?? null,
+      requestedCount: review.requestedCount ?? null,
+      partial: review.partial ?? null,
+    },
+    checks: {
+      status: checks.status ?? null,
+      conclusion: checks.conclusion ?? null,
+      source: checks.source ?? null,
+      partial: checks.partial ?? null,
+      headSha: checks.headSha ?? null,
+      observedConclusion: checks.observedConclusion ?? null,
+    },
+  });
+}
+
+function resourceAuditState(resource: Pick<ExternalResource, "title" | "state" | "metadata">) {
+  return JSON.parse(resourceStateFingerprint(resource)) as Prisma.InputJsonObject;
+}
+
+export function gitHubResourceStateChanged(
+  before: Pick<ExternalResource, "title" | "state" | "metadata"> | null,
+  after: Pick<ExternalResource, "title" | "state" | "metadata">,
+): boolean {
+  return before !== null && resourceStateFingerprint(before) !== resourceStateFingerprint(after);
+}
+
+/**
+ * Publish one issue-scoped activity event when GitHub state changed without a
+ * Forge field patch. This is the SSE/cache-invalidation bridge for checks,
+ * draft/review state, mergeability, and head-SHA changes.
+ */
+export async function recordGitHubResourceChangeToLinkedIssues(args: {
+  db: DbClient;
+  workspaceId: string;
+  before: Pick<ExternalResource, "id" | "title" | "state" | "metadata"> | null;
+  after: Pick<
+    ExternalResource,
+    "id" | "title" | "state" | "metadata" | "resourceType" | "repoFullName" | "number" | "url"
+  >;
+  actor: ActorMeta;
+  source: "github-webhook" | "github-manual" | "github-reconciliation";
+  skipIssueIds?: Set<string>;
+}): Promise<number> {
+  if (!gitHubResourceStateChanged(args.before, args.after)) return 0;
+  const links = await args.db.externalResourceLink.findMany({
+    where: { workspaceId: args.workspaceId, externalResourceId: args.after.id },
+    select: { issueId: true },
+  });
+  let recorded = 0;
+  for (const link of links) {
+    if (args.skipIssueIds?.has(link.issueId)) continue;
+    await recordChange(args.db, {
+      workspaceId: args.workspaceId,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId ?? null,
+      entity: "ExternalResource",
+      entityId: args.after.id,
+      action: "github-state-sync",
+      before: args.before ? resourceAuditState(args.before) : undefined,
+      after: resourceAuditState(args.after),
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "issue",
+      subjectId: link.issueId,
+      payload: {
+        source: args.source,
+        change: "external-resource-state",
+        externalResourceId: args.after.id,
+        resourceType: args.after.resourceType,
+        repo: args.after.repoFullName,
+        number: args.after.number,
+        state: args.after.state,
+        url: args.after.url,
+      },
+      ip: args.actor.ip ?? null,
+      userAgent: args.actor.userAgent ?? null,
+    });
+    recorded += 1;
+  }
+  return recorded;
 }
 
 export function gitHubPartialChecksError(metadata: unknown): GitHubRequestError | null {
@@ -114,6 +310,12 @@ export async function resolveGitHubRepoMapping(args: {
     if (!mapping) {
       throw new TRPCError({ code: "NOT_FOUND", message: "GitHub repo mapping not found." });
     }
+    if (repoFullName && !sameRepo(mapping.target, repoFullName)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "GitHub mapping does not match the requested repository.",
+      });
+    }
     return mapping;
   }
 
@@ -143,6 +345,59 @@ export async function resolveGitHubRepoMapping(args: {
   return mapping;
 }
 
+async function enrichPullRequestSnapshot(args: {
+  snapshot: GitHubResourceSnapshot;
+  pullRequest: GitHubPullResponse;
+  installationId: string;
+  owner: string;
+  repo: string;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<GitHubResourceSnapshot> {
+  const metadata = metadataRecord(args.snapshot.metadata);
+  try {
+    const review = await getGitHubPullRequestReviewSummary({
+      installationId: args.installationId,
+      owner: args.owner,
+      repo: args.repo,
+      number: args.pullRequest.number,
+      requestedReviewers: args.pullRequest.requested_reviewers?.length ?? 0,
+      requestedTeams: args.pullRequest.requested_teams?.length ?? 0,
+      requestTimeoutMs: args.requestTimeoutMs,
+      signal: args.signal,
+    });
+    args.snapshot.metadata = { ...metadata, review, reviewDecision: review.decision };
+  } catch (error) {
+    // Review visibility should not prevent PR/check reconciliation. Preserve a
+    // previously trusted decision during the metadata merge and expose the
+    // partial read diagnostically instead.
+    args.snapshot.metadata = {
+      ...metadata,
+      review: {
+        source: "api-aggregate",
+        partial: true,
+        diagnostic:
+          error instanceof Error ? error.message.slice(0, 2_000) : "GitHub reviews unavailable",
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+  if (args.pullRequest.head?.sha) {
+    args.snapshot.metadata = {
+      ...metadataRecord(args.snapshot.metadata),
+      checks: await getGitHubPullRequestChecks({
+        installationId: args.installationId,
+        owner: args.owner,
+        repo: args.repo,
+        headSha: args.pullRequest.head.sha,
+        requestTimeoutMs: args.requestTimeoutMs,
+        signal: args.signal,
+      }),
+    };
+  }
+  return args.snapshot;
+}
+
 export async function fetchGitHubSnapshotForParsed(
   parsed: ParsedGitHubUrl,
   mapping: GitHubMappingWithConnection,
@@ -158,21 +413,18 @@ export async function fetchGitHubSnapshotForParsed(
       requestTimeoutMs: options.requestTimeoutMs,
       signal: options.signal,
     });
-    const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
-    if (pr.head?.sha) {
-      snapshot.metadata = {
-        ...(snapshot.metadata as Record<string, unknown>),
-        checks: await getGitHubPullRequestChecks({
-          installationId,
-          owner: parsed.owner,
-          repo: parsed.repo,
-          headSha: pr.head.sha,
-          requestTimeoutMs: options.requestTimeoutMs,
-          signal: options.signal,
-        }),
-      };
-    }
-    return snapshot;
+    // Persist the mapping's canonical repo spelling, not the caller's URL
+    // casing. GitHub repo identity is case-insensitive while the DB key is not.
+    const snapshot = pullRequestSnapshot(mapping.target, pr);
+    return enrichPullRequestSnapshot({
+      snapshot,
+      pullRequest: pr,
+      installationId,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
+    });
   }
   const issue = await getGitHubIssue({
     installationId,
@@ -191,23 +443,18 @@ export async function fetchGitHubSnapshotForParsed(
       requestTimeoutMs: options.requestTimeoutMs,
       signal: options.signal,
     });
-    const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
-    if (pr.head?.sha) {
-      snapshot.metadata = {
-        ...(snapshot.metadata as Record<string, unknown>),
-        checks: await getGitHubPullRequestChecks({
-          installationId,
-          owner: parsed.owner,
-          repo: parsed.repo,
-          headSha: pr.head.sha,
-          requestTimeoutMs: options.requestTimeoutMs,
-          signal: options.signal,
-        }),
-      };
-    }
-    return snapshot;
+    const snapshot = pullRequestSnapshot(mapping.target, pr);
+    return enrichPullRequestSnapshot({
+      snapshot,
+      pullRequest: pr,
+      installationId,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
+    });
   }
-  return issueSnapshot(parsed.repoFullName, issue);
+  return issueSnapshot(mapping.target, issue);
 }
 
 export async function fetchGitHubSnapshot(args: {
@@ -403,6 +650,17 @@ export async function linkExternalResourceToIssue(
     throw new TRPCError({ code: "NOT_FOUND", message: "External resource not found." });
   }
 
+  const existingLink = await db.externalResourceLink.findUnique({
+    where: {
+      issueId_externalResourceId_kind: {
+        issueId: args.issueId,
+        externalResourceId: args.externalResourceId,
+        kind: args.kind,
+      },
+    },
+  });
+  if (existingLink) return existingLink;
+
   const link = await db.externalResourceLink.upsert({
     where: {
       issueId_externalResourceId_kind: {
@@ -518,6 +776,72 @@ export async function listLinkedGitHubResources(args: {
   });
 }
 
+/**
+ * Promote legacy generic GitHub link attachments when the corresponding
+ * native resource already exists. New attachment writes route natively; this
+ * bounded repair pass handles rows created before that routing fix without
+ * making provider requests or inventing state from an opaque URL.
+ */
+export async function recoverGenericGitHubAttachments(
+  db: PrismaClient,
+  options: { workspaceId?: string; limit?: number } = {},
+): Promise<{ inspected: number; recovered: number; unmatched: number }> {
+  const limit = Math.max(1, Math.min(options.limit ?? 500, 2_000));
+  const candidates = await db.attachment.findMany({
+    where: {
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      kind: "LINK",
+      targetType: "issue",
+      targetId: { not: null },
+      OR: [
+        { externalUrl: { contains: "github.com", mode: "insensitive" } },
+        { url: { contains: "github.com", mode: "insensitive" } },
+      ],
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+    select: { id: true, workspaceId: true, targetId: true, externalUrl: true, url: true },
+  });
+  let recovered = 0;
+  let unmatched = 0;
+  for (const attachment of candidates) {
+    let parsed: ParsedGitHubUrl;
+    try {
+      parsed = parseGitHubUrl(attachment.externalUrl ?? attachment.url);
+    } catch {
+      unmatched += 1;
+      continue;
+    }
+    const resources = await db.externalResource.findMany({
+      where: {
+        workspaceId: attachment.workspaceId,
+        provider: GITHUB_PROVIDER,
+        resourceType: parsed.type,
+        number: parsed.number,
+      },
+    });
+    const resource = resources.find((row) => sameRepo(row.repoFullName, parsed.repoFullName));
+    if (!resource || !attachment.targetId) {
+      unmatched += 1;
+      continue;
+    }
+    await db.$transaction(async (tx) => {
+      await linkExternalResourceToIssue(tx, {
+        workspaceId: attachment.workspaceId,
+        issueId: attachment.targetId!,
+        externalResourceId: resource.id,
+        kind: "RELATES_TO",
+        actor: { actorId: null },
+      });
+      await tx.attachment.deleteMany({
+        where: { id: attachment.id, workspaceId: attachment.workspaceId, kind: "LINK" },
+      });
+    });
+    recovered += 1;
+  }
+  return { inspected: candidates.length, recovered, unmatched };
+}
+
 export async function importGitHubIssue(args: {
   db: PrismaClient;
   workspaceId: string;
@@ -625,12 +949,12 @@ async function applyIssuePatchFromGitHub(args: {
   statusId?: string | null;
   actor: ActorMeta;
   payload: Prisma.InputJsonObject;
-}): Promise<void> {
+}): Promise<boolean> {
   const before = await args.tx.issue.findFirst({
     where: { id: args.issueId, workspaceId: args.workspaceId, deletedAt: null },
     include: { status: true },
   });
-  if (!before) return;
+  if (!before) return false;
 
   const patch: Prisma.IssueUpdateInput = {};
   if (args.title && args.title !== before.title) patch.title = args.title;
@@ -641,7 +965,7 @@ async function applyIssuePatchFromGitHub(args: {
       where: { id: args.statusId, workspaceId: args.workspaceId },
       select: { id: true, category: true },
     });
-    if (!status) return;
+    if (!status) return false;
     patch.status = { connect: { id: status.id } };
     nextCategory = status.category;
     if (status.category === "IN_PROGRESS" && !before.startedAt) patch.startedAt = new Date();
@@ -651,7 +975,7 @@ async function applyIssuePatchFromGitHub(args: {
     if (status.category !== "CANCELED") patch.canceledAt = null;
   }
 
-  if (Object.keys(patch).length === 0) return;
+  if (Object.keys(patch).length === 0) return false;
 
   const after = await args.tx.issue.update({
     where: { id: before.id },
@@ -674,6 +998,7 @@ async function applyIssuePatchFromGitHub(args: {
     ip: args.actor.ip ?? null,
     userAgent: args.actor.userAgent ?? null,
   });
+  return true;
 }
 
 export async function applyGitHubSnapshotToLinkedIssues(args: {
@@ -684,14 +1009,15 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
   snapshot: GitHubResourceSnapshot;
   actor: ActorMeta;
   statusRuleId?: string | null;
-}): Promise<void> {
+}): Promise<Set<string>> {
   const config = readGitHubMappingConfig(args.mapping.config);
   const links = await args.tx.externalResourceLink.findMany({
     where: { workspaceId: args.workspaceId, externalResourceId: args.resourceId },
     select: { issueId: true, kind: true },
   });
+  const changedIssueIds = new Set<string>();
   for (const link of links) {
-    await applyIssuePatchFromGitHub({
+    const changed = await applyIssuePatchFromGitHub({
       tx: args.tx,
       workspaceId: args.workspaceId,
       issueId: link.issueId,
@@ -708,7 +1034,9 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
         state: args.snapshot.state,
       },
     });
+    if (changed) changedIssueIds.add(link.issueId);
   }
+  return changedIssueIds;
 }
 
 export async function syncGitHubExternalResource(args: {
@@ -815,13 +1143,22 @@ export async function syncGitHubExternalResource(args: {
       connectionMappingId: mapping.id,
       snapshot,
     });
-    await applyGitHubSnapshotToLinkedIssues({
+    const changedIssueIds = await applyGitHubSnapshotToLinkedIssues({
       tx,
       workspaceId: args.workspaceId,
       resourceId: resource.id,
       mapping,
       snapshot,
       actor: args.actor,
+    });
+    await recordGitHubResourceChangeToLinkedIssues({
+      db: tx,
+      workspaceId: args.workspaceId,
+      before: existing,
+      after: resource,
+      actor: args.actor,
+      source: args.skipCollisionGuard ? "github-reconciliation" : "github-manual",
+      skipIssueIds: changedIssueIds,
     });
     return publicResource(resource);
   });
