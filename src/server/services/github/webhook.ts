@@ -481,7 +481,11 @@ async function processReviewEvent(args: {
       !Array.isArray(existingMetadata.review)
         ? (existingMetadata.review as Record<string, unknown>)
         : {};
-    const existingTimes = [existingReview.updatedAt, existingReview.lastEventAt]
+    // A partial provider aggregate timestamps the failed/truncated read, not a
+    // trusted review decision. It must not suppress a delayed decisive webhook.
+    const trustedAggregateUpdatedAt =
+      existingReview.partial === true ? null : existingReview.updatedAt;
+    const existingTimes = [trustedAggregateUpdatedAt, existingReview.lastEventAt]
       .filter((value): value is string => typeof value === "string")
       .map((value) => Date.parse(value))
       .filter(Number.isFinite);

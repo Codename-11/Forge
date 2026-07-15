@@ -919,6 +919,66 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("does not use a partial review read as an ordering watermark", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Partial review read",
+        state: "open",
+        metadata: {
+          reviewDecision: null,
+          review: {
+            source: "api-aggregate",
+            partial: true,
+            diagnostic: "GitHub reviews unavailable",
+            updatedAt: "2026-07-14T15:00:00Z",
+          },
+        },
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("review-after-partial-read"),
+      event: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest(),
+        review: {
+          id: 804,
+          state: "changes_requested",
+          submitted_at: "2026-07-14T14:00:00Z",
+          user: { login: "recovering-reviewer" },
+        },
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      lastSyncedAt: null,
+      metadata: {
+        reviewDecision: null,
+        review: {
+          partial: true,
+          dirty: true,
+          lastEventDecision: "CHANGES_REQUESTED",
+          lastEventAt: "2026-07-14T14:00:00Z",
+        },
+      },
+    });
+  });
+
   it("canonicalizes legacy identity before applying review hints", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await prisma.externalResource.create({
