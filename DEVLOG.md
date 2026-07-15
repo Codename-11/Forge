@@ -12,9 +12,16 @@ runtimes, workspace binding policy, multiple MCP clients, instance governance,
 and read-only fleet operations.
 
 PR #44 passed all three GitHub CI jobs after the local release gate passed lint,
-typecheck, 1,318 serial tests, and all 45 production Playwright journeys. The
-release commit, immutable tag, deployment SHA, and live smoke evidence follow
-after the release PR lands.
+typecheck, 1,318 serial tests, and all 45 production Playwright journeys.
+Release PR #45 passed the same three required jobs and merged as
+`34ebadec880e39c7a1c2d713f712c1935ac27539`; immutable tag `v0.22.0` and its
+GitHub Release point to that exact `main` commit.
+
+Production built app and worker images from the dedicated clean checkout under
+the deployment lock, applied `20260715193000_delivery_timeline_policy`, and
+restarted both containers. Live verification returned HTTP 200 for `/signin`;
+MCP initialization reported version `0.22.0`, SHA `34ebade`, and build time
+`2026-07-15T21:00:30Z`; app and worker remained up with clean startup logs.
 
 ## 2026-07-15 — v0.21.0 release
 
