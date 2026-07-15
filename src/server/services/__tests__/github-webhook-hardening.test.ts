@@ -199,7 +199,7 @@ describe("GitHub webhook hardening", () => {
   });
 
   it("applies webhook freshness guards across repository casing", async () => {
-    const { fixture, prisma, mapping } = await setup();
+    const { fixture, prisma, issue, mapping } = await setup();
     const merged = await prisma.externalResource.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -212,6 +212,27 @@ describe("GitHub webhook hardening", () => {
         title: "Newest merged state",
         state: "merged",
         externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+    const internallyNewerButUnversioned = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        connectionMappingId: mapping.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Internally touched stale state",
+        state: "open",
+      },
+    });
+    const staleLink = await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        externalResourceId: internallyNewerButUnversioned.id,
+        kind: "IMPLEMENTS",
       },
     });
 
@@ -239,6 +260,12 @@ describe("GitHub webhook hardening", () => {
       state: "merged",
       externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
     });
+    await expect(
+      prisma.externalResource.findUnique({ where: { id: internallyNewerButUnversioned.id } }),
+    ).resolves.toBeNull();
+    await expect(
+      prisma.externalResourceLink.findUniqueOrThrow({ where: { id: staleLink.id } }),
+    ).resolves.toMatchObject({ externalResourceId: merged.id });
   });
 
   it("does not let an older PR webhook regress a newer merged snapshot", async () => {

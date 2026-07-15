@@ -520,8 +520,13 @@ export async function canonicalizeGitHubResourceIdentity(
 
   const stateRank = (state: string) => (state === "merged" ? 2 : state === "closed" ? 1 : 0);
   const canonical = equivalent.reduce((newest, row) => {
-    const newestAt = newest.externalUpdatedAt?.getTime() ?? newest.updatedAt.getTime();
-    const rowAt = row.externalUpdatedAt?.getTime() ?? row.updatedAt.getTime();
+    const newestHasProviderVersion = newest.externalUpdatedAt !== null;
+    const rowHasProviderVersion = row.externalUpdatedAt !== null;
+    if (rowHasProviderVersion !== newestHasProviderVersion) {
+      return rowHasProviderVersion ? row : newest;
+    }
+    const newestAt = (newest.externalUpdatedAt ?? newest.updatedAt).getTime();
+    const rowAt = (row.externalUpdatedAt ?? row.updatedAt).getTime();
     if (rowAt !== newestAt) return rowAt > newestAt ? row : newest;
     return stateRank(row.state) > stateRank(newest.state) ? row : newest;
   });
