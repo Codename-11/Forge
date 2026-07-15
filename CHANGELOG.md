@@ -9,6 +9,20 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.19.1 · Refreshable GitHub sync health
+
+### Added
+
+- **GitHub sync status can be refreshed without changing credentials.** Workspace settings now recheck the webhook URL, required events, App permissions, and permissions accepted by the installation, with a visible last-checked time and an automatic silent check after returning from GitHub.
+
+### Changed
+
+- **Webhook rotation is a separate security action.** The settings card distinguishes read-only status refresh from explicit secret rotation and reports pending installation approval independently from App registration readiness.
+
+### Fixed
+
+- **Accepted GitHub permission changes clear stale warnings.** A successful end-to-end refresh persists the ready state immediately, while incomplete installation approval remains actionable instead of being mistaken for a healthy App.
+
 ## [2026-07-15] — v0.19.0 · Unified GitHub realtime sync
 
 ### Added
@@ -263,14 +277,14 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
-- **A redesigned dashboard cockpit — less scrolling, no gaps.** The dashboard is now a two-column cockpit: a wide work column on the left (*Focus today*, *Pick up where you left off*, and a compact **Pipeline** card) beside an always-visible rail on the right (agent activity, attention, standup, what's new) — instead of one long stacked column. The "Suggestions" strip (unassigned + stalled) stays in the work column, below Pipeline.
+- **A redesigned dashboard cockpit — less scrolling, no gaps.** The dashboard is now a two-column cockpit: a wide work column on the left (_Focus today_, _Pick up where you left off_, and a compact **Pipeline** card) beside an always-visible rail on the right (agent activity, attention, standup, what's new) — instead of one long stacked column. The "Suggestions" strip (unassigned + stalled) stays in the work column, below Pipeline.
 - **Richer issue cards on the dashboard.** Focus and Pick-up cards now show who's on it (assignee + agent avatars with a presence dot), sub-issue progress, a live agent-run status (running / waiting / stalled), project / label / due / SLA context, and a one-line description when the title is short — each shown only when it applies. Cards size to their own content, so the empty gaps between sparse cards are gone.
 - **Set a per-issue SLA target — and let the Coach react to breaches.** Each issue's detail rail now has an **SLA target** field: pick a preset (1 hour, 4 hours, 1 day, 1 week…) or a custom number of minutes, or clear it. When **Enforce per-issue SLA** is on (Settings → Workspace → Agent SLA), an issue that ages past its target raises an SLA breach — which posts a Coach diagnostic comment and shows in your activity feed. Issues with no target are never breached, so turning enforcement on is safe.
-- **See your Coach agent's health at a glance.** Settings → Workspace → AI now shows whether the Coach is *armed*, whether it can reach a model, whether the Coach agent exists, which events trigger it (issue stalled / missed ack / SLA breach — and which are turned off), and when it last fired. No more guessing why it is or isn't commenting.
+- **See your Coach agent's health at a glance.** Settings → Workspace → AI now shows whether the Coach is _armed_, whether it can reach a model, whether the Coach agent exists, which events trigger it (issue stalled / missed ack / SLA breach — and which are turned off), and when it last fired. No more guessing why it is or isn't commenting.
 - **A built-in calendar for every date field.** Due dates, sprint and initiative dates, roadmap dates, the time-log range, and snooze now open Forge's own themed calendar instead of the browser's native date box — same look on every browser and OS, with month navigation and a clear button.
 - **Draft or improve an issue description with AI.** Next to the Description heading there's now an AI button — **Draft with AI** writes a description from the issue title when there's none yet, and **Enhance** rewrites an existing one for clarity and structure. You see the suggestion (with a current-vs-suggested view for an enhance) and choose **Apply** or **Discard** — nothing changes until you accept it. Appears only when AI is enabled for the workspace.
 - **Create a label without leaving the issue.** The label picker on an issue now has a search box — type to filter, and (if you're a workspace admin) pick **Create "&lt;name&gt;"** to make a new label with a name and color right there and apply it in one step. No more detour to Settings → Labels first.
-- **Move issues between workspaces (instance admin).** A new **Admin → Move issues** page re-homes issues into another workspace: pick source and target, paste the issue ids, and **Preview** shows exactly what will happen — the new keys (issues are renumbered into the target), how each status and label maps, which labels get dropped, and which issues are *blocked* (anything with agent runs, plans, or artifacts is refused so nothing is corrupted). Confirm to move; a record is written in both workspaces' audit logs.
+- **Move issues between workspaces (instance admin).** A new **Admin → Move issues** page re-homes issues into another workspace: pick source and target, paste the issue ids, and **Preview** shows exactly what will happen — the new keys (issues are renumbered into the target), how each status and label maps, which labels get dropped, and which issues are _blocked_ (anything with agent runs, plans, or artifacts is refused so nothing is corrupted). Confirm to move; a record is written in both workspaces' audit logs.
 - **Cap self-service workspace creation.** Operators can set `MAX_WORKSPACES_PER_USER` to limit how many workspaces a single (non-admin) user can create; the default is unlimited, so nothing changes unless you set it.
 - **Approve or reject a paused agent run right where you see it.** When an agent pauses for permission (a Codex/Hermes run flagged a command or file change), the run row in Mission Control's Live tab now shows **Approve** / **Reject** inline — no detour to the Command Center.
 - **See a plan's wall-clock burn.** The plan cockpit's budget meter now shows elapsed time vs. the wall-time cap alongside cost, so a plan approaching its time budget is visible at a glance (matching the goal cockpit).
@@ -287,7 +301,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Fixed
 
 - **The Coach stops posting junk or duplicate comments.** It now discards empty or meta AI responses (e.g. "Posted the diagnostic comment…") instead of posting them, and won't comment on the same issue more than once in 24 hours — so a stuck issue gets one useful diagnostic, not an hourly pile-up.
-- **AI triage works again — and tells you what's wrong when it can't.** The "AI triage suggestion" card on an issue could get stuck showing a bare *"AI triage unavailable."* with only a Retry, because some AI providers reply in plain text instead of the structured format Forge expected — so every suggestion was thrown away. Forge now reads those plain-text replies too, so triage produces a real priority / label / agent suggestion. When triage genuinely can't run, the card now explains why and links straight to **Settings → Workspace → AI** to fix it, instead of leaving you guessing.
+- **AI triage works again — and tells you what's wrong when it can't.** The "AI triage suggestion" card on an issue could get stuck showing a bare _"AI triage unavailable."_ with only a Retry, because some AI providers reply in plain text instead of the structured format Forge expected — so every suggestion was thrown away. Forge now reads those plain-text replies too, so triage produces a real priority / label / agent suggestion. When triage genuinely can't run, the card now explains why and links straight to **Settings → Workspace → AI** to fix it, instead of leaving you guessing.
 - **A goal or plan that hits its budget actually stops spending.** When a plan reaches its cost or time cap (or you abandon its goal), its remaining steps stop dispatching immediately — previously a blocked plan could keep launching agents and spend the very budget you were asked to approve.
 - **Finished work stays finished.** A late or duplicate reviewer verdict can no longer knock a completed step back into "to-do" and re-run it.
 - **Agent runs aren't falsely marked "stalled" after a deploy or restart.** A run whose runtime briefly can't report status — or that's quietly mid-work on a long step — now stays running, and is only marked stalled when it's genuinely idle.
@@ -299,13 +313,13 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Changed
 
 - **The audit log and webhook deliveries name what they touched.** Both used to identify the subject by a raw id fragment (`issue/a1b2c3d4`). They now resolve it to the real thing — the issue (with its key), project, agent (`@handle`), goal, plan, sprint, artifact, and more — so you can scan the system audit log and delivery history without decoding cuids. The full id is still there on hover.
-- **Create overlay catches fields as you type.** The quick-create bar (`⇧C`) now autocompletes real **projects, assignees, labels, priorities, and due dates** — type `/` (or click a **+ field** chip), pick from the live list, and **Tab** drops it in as a coloured badge right in the title box; Backspace removes the last one. The mode and field legends now show only while the bar is empty, so they stop competing with what you're typing. And the field menus no longer get clipped by the overlay — the Project picker, which used to open *inside* the card and stay invisible, now renders cleanly. Same `⏎ create` / `⌘⏎ create + open` keys.
+- **Create overlay catches fields as you type.** The quick-create bar (`⇧C`) now autocompletes real **projects, assignees, labels, priorities, and due dates** — type `/` (or click a **+ field** chip), pick from the live list, and **Tab** drops it in as a coloured badge right in the title box; Backspace removes the last one. The mode and field legends now show only while the bar is empty, so they stop competing with what you're typing. And the field menus no longer get clipped by the overlay — the Project picker, which used to open _inside_ the card and stay invisible, now renders cleanly. Same `⏎ create` / `⌘⏎ create + open` keys.
 - **Comments and descriptions autocomplete people, projects, and labels.** Typing a slash command in a comment or the description editor now suggests the real thing as you go — `/assign` lists your agents (with avatars), `/project` your projects, `/label` your labels, plus priority and due-date options — so you pick from a list and press **Tab** instead of remembering a key. Same `/status`, `/blocked`, `/handoff` templates as before.
 - **Cleaner pickers for crew, time tracking, and relations.** The crew picker, the time-tracker's issue picker, and the relation-type picker are now themed to match the rest of Forge. The time-tracker's issue field is now **searchable** — find any issue by key or title instead of scrolling a short recent list.
 - **The Review page shows what you're approving.** Review gates used to identify their target by a raw id (`a1b2c3d4…`). They now show the issue (with its key), plan, or goal name, so you know what you're gating before you approve or reject.
-- **Browse *any* repo your GitHub App can reach — no manual mapping first.** The link dialog's **Browse a repo** tab used to list only repositories an admin had already connected, so right after installing the App it dead-ended at "install the GitHub App" even though the App was working. It now lists every repo the App's installation can see; pick one, start typing, and Forge connects it automatically on first search. Non-admins still see only already-connected repos.
+- **Browse _any_ repo your GitHub App can reach — no manual mapping first.** The link dialog's **Browse a repo** tab used to list only repositories an admin had already connected, so right after installing the App it dead-ended at "install the GitHub App" even though the App was working. It now lists every repo the App's installation can see; pick one, start typing, and Forge connects it automatically on first search. Non-admins still see only already-connected repos.
 - **The claim holder shows who actually claimed it.** An issue's sidebar used to read "Claimed by `a1b2c3d4`". It now shows a proper badge — and when an **agent** claimed (via its key), it attributes the claim to that agent (avatar + name + `@handle`) instead of the human account that owns the key. Human claims still show the person. The short id stays as quiet subtext.
-- **The GitHub App you set up now powers PR/issue linking too — one app, no env vars.** Linking used to need a *separate* global env app (`GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY`) plus a Connection, wholly disjoint from the GitHub App configured in Settings → GitHub Apps (which only did runtime `GH_TOKEN` auth) — so "Test connection" could be green while issue-page linking still said "install the app." Forge now mints linking tokens from that same `GithubApp`, and when no connection exists yet the link dialog offers a one-click **"Use your GitHub App"** that wires it up (and maps the repo) with no GitHub reinstall and no env config.
+- **The GitHub App you set up now powers PR/issue linking too — one app, no env vars.** Linking used to need a _separate_ global env app (`GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY`) plus a Connection, wholly disjoint from the GitHub App configured in Settings → GitHub Apps (which only did runtime `GH_TOKEN` auth) — so "Test connection" could be green while issue-page linking still said "install the app." Forge now mints linking tokens from that same `GithubApp`, and when no connection exists yet the link dialog offers a one-click **"Use your GitHub App"** that wires it up (and maps the repo) with no GitHub reinstall and no env config.
 - **Orchestrated runs now show their engine.** Runs opened by the Goal/plan loop (execution steps) now carry their engagement mode + run engine like assignment and grant runs, so the engine chip and "why" tooltip render on them too instead of staying blank.
 
 ### Fixed
@@ -315,11 +329,11 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Added
 
 - **Filter the issues list by project — including "No project".** The global issues view gains a first-class Project filter alongside Sprint/Initiative, with a **No project** option for unfiled work, plus a **Done** quick filter. Filtering by a Done/Canceled status now actually shows those issues instead of silently returning nothing, and agents see the same semantics via MCP `issues.list` (which also stops dropping Canceled issues).
-- **Link GitHub issues & PRs from the issue page — with a way out of "no mapping".** The issue's GitHub panel now opens a proper dialog: paste a URL or `owner/repo#123` and see a live preview before linking (a PR pasted as an `/issues/` URL is recognized as a PR), or **browse a connected repo's** open issues and pull requests and link them in place. When a repository isn't wired up yet, the dialog explains exactly *why* and offers the one-click fix — **connect the repository** (admins), **resume a paused** connection, or **install the GitHub App** — instead of the old dead-end "No active GitHub mapping for this repository" error. Agents get a new `github.listMappings` tool so they can discover which repos are linkable before searching or linking.
-- **Run rows show the engagement mode, engine, and *why*.** Every agent run now displays its engagement mode (including **Execute**, which used to be hidden) and its run engine (**Runs** / **Streaming**) as chips, with a tooltip explaining how the mode was decided (surface default, mention policy, carried from the active run, an explicit marker, …). The mode/engine/source are frozen on the run at dispatch, so they stay truthful even after you later change an agent's settings.
-- **See how a dispatch will run before you commit.** The assign popover now previews how the assigned agent will dispatch at the chosen mode ("runs as Research on Hermes Runs"), and the agent detail page shows the agent's *resolved* engine (honoring an attached runs-runtime, not just the raw preference).
+- **Link GitHub issues & PRs from the issue page — with a way out of "no mapping".** The issue's GitHub panel now opens a proper dialog: paste a URL or `owner/repo#123` and see a live preview before linking (a PR pasted as an `/issues/` URL is recognized as a PR), or **browse a connected repo's** open issues and pull requests and link them in place. When a repository isn't wired up yet, the dialog explains exactly _why_ and offers the one-click fix — **connect the repository** (admins), **resume a paused** connection, or **install the GitHub App** — instead of the old dead-end "No active GitHub mapping for this repository" error. Agents get a new `github.listMappings` tool so they can discover which repos are linkable before searching or linking.
+- **Run rows show the engagement mode, engine, and _why_.** Every agent run now displays its engagement mode (including **Execute**, which used to be hidden) and its run engine (**Runs** / **Streaming**) as chips, with a tooltip explaining how the mode was decided (surface default, mention policy, carried from the active run, an explicit marker, …). The mode/engine/source are frozen on the run at dispatch, so they stay truthful even after you later change an agent's settings.
+- **See how a dispatch will run before you commit.** The assign popover now previews how the assigned agent will dispatch at the chosen mode ("runs as Research on Hermes Runs"), and the agent detail page shows the agent's _resolved_ engine (honoring an attached runs-runtime, not just the raw preference).
 - **Command Center & Inbox group repeated asks per issue.** Multiple open requests on the same issue now collapse into one card with a "+N more" count instead of stacking near-duplicates.
-- **Per-run safety budgets.** A workspace can now cap each agent run by tokens, cost (USD), and/or wall-clock minutes (Settings → Workspace → Run safety budgets; `0` = no cap, opt-in). When a run crosses a configurable warn threshold you get a one-time heads-up; when it breaches a cap, Forge stops the provider run and either **pauses** it — parked with a clear reason and a "raise the budget & resume, or abandon" notification — or **stops** it outright. The idle watchdog only caught *quiet* runs; this catches a *busy-but-looping* one before it burns unbounded spend. No run is left in a silent dangling state.
+- **Per-run safety budgets.** A workspace can now cap each agent run by tokens, cost (USD), and/or wall-clock minutes (Settings → Workspace → Run safety budgets; `0` = no cap, opt-in). When a run crosses a configurable warn threshold you get a one-time heads-up; when it breaches a cap, Forge stops the provider run and either **pauses** it — parked with a clear reason and a "raise the budget & resume, or abandon" notification — or **stops** it outright. The idle watchdog only caught _quiet_ runs; this catches a _busy-but-looping_ one before it burns unbounded spend. No run is left in a silent dangling state.
 - **Slimmer MCP tool list for providers with tool-count caps.** The MCP endpoint now accepts `?profile=core|planning|agents|canvas` (or `?tools=issues,comments,…`) to advertise a focused subset of Forge's ~200 tools — so models that cap the tool list (e.g. xAI/Grok at 200) stop rejecting sessions. `tools/list` is also pruned to the key's scopes. Full capability stays callable regardless. Point a capped runtime's Forge MCP URL at `?profile=core`.
 - **Generate a plan with Forge — no agent required.** A goal now offers two ways to draft its plan: **Generate with Forge** builds the steps directly using your workspace's AI model, and **Dispatch to crew planner** hands it to an agent as before. Pick whichever fits; Generate works even with no agents online.
 - **The dashboard Customize mode is now a fluid grid.** Tiles live on a 2-column grid you can drag to reorder — the board reflows with smooth motion as you drag instead of snapping. Drag a tile's right edge (or hit the size button) to snap it between half and full width, and the layout animates into place. Your order, widths, and hidden tiles save automatically. Respects reduced-motion.
@@ -338,9 +352,9 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **"Install GitHub App" / Connect-GitHub works behind a reverse proxy and without extra env setup.** The Connect-GitHub flow used to redirect to an internal `https://0.0.0.0:3000/...` URL on a proxied deployment (so the button looked broken on the public site), and it dead-ended with "GITHUB_APP_SLUG is not configured" unless that env var was set by hand. It now builds redirects from the real public origin (honoring `X-Forwarded-Host`/`-Proto`) and, when the env var is unset, falls back to a GitHub App you've already set up in Settings → GitHub Apps — so connecting a repo to link PRs/issues works out of the box.
 - **Assigning a non-Execute agent via `/assign` no longer auto-starts the issue.** A slash-command assignment now carries the resolved engagement mode, so a Research/Review/Discuss agent assigned that way is no longer wrongly flipped into in-progress.
 - **Repeated stalled agent runs collapse into one card.** When a piece of work was re-dispatched, each attempt left its own stalled run behind, so one issue could show three or four identical "stalled run" cards in Command Center (e.g. AXI-75). A fresh run now supersedes its earlier attempts and they collapse into a single thread — the head run, with the history preserved underneath — instead of piling up.
-- **Duplicate permission/grant requests no longer pile up.** A second runtime-tool-grant request for the same issue (e.g. escalating read-only → full) now *replaces* the earlier open one instead of leaving two competing cards in the queue. Generally, a newer request for the same issue + kind + agent supersedes the prior open one.
+- **Duplicate permission/grant requests no longer pile up.** A second runtime-tool-grant request for the same issue (e.g. escalating read-only → full) now _replaces_ the earlier open one instead of leaving two competing cards in the queue. Generally, a newer request for the same issue + kind + agent supersedes the prior open one.
 - **Mission Control finally fits a phone.** The cross-workspace pages (Mission Control, Inbox, Activity, What's New) used to stack the whole sidebar above the page on mobile — eating the top third of the screen before any content. The sidebar now lives behind a hamburger menu (a bottom sheet), tap targets on the top-bar buttons are bigger, the app extends correctly under the notch (safe-area), and desktop-only keyboard hints are hidden on mobile.
-- **Clicking "Plan" no longer leaves you with a silent empty plan.** If the crew's planner can't be reached (no planner assigned, offline, or not wired up), the goal now says so clearly and points you to generate the plan with Forge or add steps yourself — instead of a blank plan with no explanation. When a planner *is* reachable, you see it was dispatched and that steps are on the way.
+- **Clicking "Plan" no longer leaves you with a silent empty plan.** If the crew's planner can't be reached (no planner assigned, offline, or not wired up), the goal now says so clearly and points you to generate the plan with Forge or add steps yourself — instead of a blank plan with no explanation. When a planner _is_ reachable, you see it was dispatched and that steps are on the way.
 - **Unused dashboard widgets no longer show as blank tiles.** Widgets with nothing to show (no agents, no recent items, etc.) collapse and take no space; in Customize mode they stay visible, flagged "not in use," so you can hide them.
 - **Dashboard customize drag feels smoother.** You can now grab a tile anywhere (not just the small grip), reordering no longer jitters while tiles animate, and the resize edge is a larger, easier target.
 - **Filtering the issues list by a "Done" (or "Cancelled") status now shows those issues.** Previously the list hid completed work by default, so explicitly selecting a Done status from the Status filter returned nothing. The list now includes done issues whenever your filter explicitly asks for a completed status.
@@ -570,7 +584,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   on children, and an **Epics** quick-filter on the issues list. Sub-issues reuse the
   same parent/child tree the relations graph already draws.
 - **Engagement modes for agent work.** When you assign or mention an agent you can
-  now say *what* you want — **Execute** (take it to done), **Research** (investigate
+  now say _what_ you want — **Execute** (take it to done), **Research** (investigate
   & report, no changes), **Review** (critique only), or **Discuss** (just weigh in).
   Only Execute moves the issue or runs the completion gates, so a research or review
   pass can't accidentally start work or deploy. Defaults per surface are configurable
@@ -584,7 +598,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **Goals can sit under an initiative**, and a hand-authored plan can be linked to a
   goal (and built with step dependencies) in one step.
 - **Dependency graph on issues.** The Relations tab now has a **Graph** view (toggle
-  next to List) that maps the issue's place in its blocks/blocked-by chain *and*
+  next to List) that maps the issue's place in its blocks/blocked-by chain _and_
   parent/child sub-issue tree — an animated, themed DAG with the current issue
   flagged "here". Click any node to jump to it.
 - **Move issues between projects and sprints in bulk.** The issues list and inbox
@@ -602,12 +616,12 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Changed
 
 - **Workspace Agents & Connections are now bindings, not definitions.** A workspace's
-  **Settings → Agents** is a catalog of globally-defined profiles you *bind* with
+  **Settings → Agents** is a catalog of globally-defined profiles you _bind_ with
   per-workspace policy (capacity, capability overrides, auto-dispatch eligibility);
-  **Settings → Connections** *maps* your global identities to repos / channels /
+  **Settings → Connections** _maps_ your global identities to repos / channels /
   webhooks. Dispatch rules can only target agents bound to the workspace.
 - **"Mission Control" overlay is now "Activity."** The chord-`G 5` live-runs + chat dock
-  is renamed **Activity**; the name *Mission Control* now refers to the new
+  is renamed **Activity**; the name _Mission Control_ now refers to the new
   cross-workspace home at `/`.
 - **Removed the per-workspace "Personal" view** — its cross-workspace successor is
   Mission Control at `/`.
@@ -618,7 +632,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Changed
 
 - **The notifications bell no longer wipes unread state the instant you open it.**
-  It now marks notifications read when you *close* the panel, so you can open it to
+  It now marks notifications read when you _close_ the panel, so you can open it to
   glance, read individual items, and use the per-row Ack/Dismiss/Resolve controls
   without the badge clearing out from under you.
 - **The bell/inbox badge is now a true "unread" count** — items new since you last
@@ -742,7 +756,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 ### Added
 
 - **Connections** (Settings → Connections) — a focused page for systems that
-  talk *to* Forge or receive events *from* it: GitHub, Slack, email-to-issue,
+  talk _to_ Forge or receive events _from_ it: GitHub, Slack, email-to-issue,
   custom webhooks, split into Inbound and Outbound. Replaces the old
   Integrations page.
 - **Add-an-agent gallery + provider matrix** on Settings → Agents — pick a
@@ -770,7 +784,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ### Added
 
-- **Codex as a first-class agent** — connect a Codex *app server* as a
+- **Codex as a first-class agent** — connect a Codex _app server_ as a
   managed runtime and chat with a Codex agent that answers as itself, the
   same way Hermes agents do.
 - **Local agent sessions over ACP** — drive a local CLI (Claude Code,
@@ -1046,7 +1060,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
   token-usage columns on `AgentRun` and a unified agent-activity
   timeline.
 - `forge` CLI + local daemon (`forge login / daemon / runtimes /
-  agents / issues`) with a real Claude Code adapter.
+agents / issues`) with a real Claude Code adapter.
 
 ## [2026-04-27] — Mission Control notifications
 

@@ -3,6 +3,7 @@ import { createVerify, generateKeyPairSync } from "node:crypto";
 import {
   buildAppJwt,
   mintInstallationToken,
+  readGithubAppSyncReadiness,
   verifyGithubApp,
 } from "@/server/services/github-app";
 
@@ -83,6 +84,68 @@ describe("mintInstallationToken", () => {
     await expect(
       mintInstallationToken({ appId: "1", installationId: "999", privateKeyPem: privateKey }),
     ).rejects.toThrow(/installation not found/i);
+  });
+});
+
+describe("readGithubAppSyncReadiness", () => {
+  it("separates registered permissions from permissions accepted by the installation", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/app")) {
+          return Response.json({
+            events: [
+              "issues",
+              "issue_comment",
+              "pull_request",
+              "pull_request_review",
+              "check_suite",
+              "check_run",
+              "status",
+            ],
+            permissions: {
+              issues: "read",
+              pull_requests: "write",
+              checks: "write",
+              statuses: "read",
+              metadata: "read",
+            },
+          });
+        }
+        if (url.endsWith("/app/hook/config")) {
+          return Response.json({
+            url: "https://forge.example/api/ingest/github",
+            active: true,
+          });
+        }
+        if (url.endsWith("/access_tokens")) {
+          return Response.json(
+            {
+              token: "ghs_pending",
+              expires_at: "2026-06-14T18:00:00Z",
+              permissions: { pull_requests: "write", metadata: "read" },
+            },
+            { status: 201 },
+          );
+        }
+        throw new Error(`unexpected url ${url}`);
+      }),
+    );
+
+    const result = await readGithubAppSyncReadiness({
+      appId: "123456",
+      installationId: "42",
+      privateKeyPem: privateKey,
+      expectedWebhookUrl: "https://forge.example/api/ingest/github",
+    });
+    expect(result).toEqual({
+      ready: false,
+      webhookActive: true,
+      webhookUrlMatches: true,
+      missingEvents: [],
+      missingPermissions: [],
+      missingInstallationPermissions: ["issues:read", "checks:write", "statuses:read"],
+    });
   });
 });
 

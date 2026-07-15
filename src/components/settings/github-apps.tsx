@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Loader2,
   Pencil,
+  RefreshCw,
   Webhook,
 } from "lucide-react";
 import { Section } from "@/components/ui";
@@ -85,14 +86,14 @@ export function GithubAppsManager() {
         <span className="flex items-center gap-2">
           <Github className="h-3.5 w-3.5 text-muted-foreground" />
           GitHub Apps
-          <span className="font-mono text-meta text-muted-foreground">{apps?.length ?? 0}</span>
+          <span className="text-meta font-mono text-muted-foreground">{apps?.length ?? 0}</span>
         </span>
       }
       hint="One workspace GitHub App for realtime issue/PR sync and runtime git auth. Forge verifies signed webhooks and mints short-lived GH_TOKEN credentials without per-repo keys."
     >
       <Card as="div" className="divide-y-0 p-0">
         {isLoading ? (
-          <div className="px-4 py-6 text-meta text-muted-foreground">Loading…</div>
+          <div className="text-meta px-4 py-6 text-muted-foreground">Loading…</div>
         ) : apps && apps.length > 0 ? (
           <ul className="divide-y divide-border">
             {apps.map((a) => (
@@ -106,7 +107,7 @@ export function GithubAppsManager() {
             ))}
           </ul>
         ) : (
-          <div className="px-4 py-6 text-meta text-muted-foreground">
+          <div className="text-meta px-4 py-6 text-muted-foreground">
             No GitHub Apps yet. Create one with GitHub (recommended — no key to paste) or add an
             existing app&apos;s credentials manually.
           </div>
@@ -117,12 +118,7 @@ export function GithubAppsManager() {
             <Github className="h-3.5 w-3.5" />
             Create with GitHub
           </Button>
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={() => setShowManual((v) => !v)}
-          >
+          <Button type="button" size="sm" variant="ghost" onClick={() => setShowManual((v) => !v)}>
             <Plus className="h-3.5 w-3.5" />
             Add manually
           </Button>
@@ -131,7 +127,14 @@ export function GithubAppsManager() {
           </span>
         </div>
 
-        {showManual && <ManualForm onDone={() => { setShowManual(false); invalidate(); }} />}
+        {showManual && (
+          <ManualForm
+            onDone={() => {
+              setShowManual(false);
+              invalidate();
+            }}
+          />
+        )}
       </Card>
 
       <QuickForm
@@ -177,6 +180,7 @@ type AppListItem = {
   lastMintedAt: Date | string | null;
   lastError: string | null;
   webhookConfiguredAt: Date | string | null;
+  webhookLastCheckedAt: Date | string | null;
   webhookLastError: string | null;
   runtimeCount: number;
   installed: boolean;
@@ -195,6 +199,9 @@ function AppRow({
 }) {
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [editing, setEditing] = useState(false);
+  const silentRefresh = useRef(false);
+  const leftSettingsAt = useRef<number | null>(null);
+  const lastAutoRefreshAt = useRef(0);
 
   const test = trpc.githubApp.test.useMutation({
     onSuccess: (r) => {
@@ -228,10 +235,58 @@ function AppRow({
     },
     onError: (e) => toast.error(e.message),
   });
+  const refreshSyncStatus = trpc.githubApp.refreshSyncStatus.useMutation({
+    onSuccess: (result) => {
+      onChanged();
+      if (!silentRefresh.current) {
+        if (result.ready) toast.success("GitHub realtime sync is ready");
+        else toast.warning("GitHub sync still needs attention");
+      }
+      silentRefresh.current = false;
+    },
+    onError: (e) => {
+      if (!silentRefresh.current) toast.error(e.message);
+      silentRefresh.current = false;
+      onChanged();
+    },
+  });
 
-  const installHref = app.slug
-    ? `https://github.com/apps/${app.slug}/installations/new`
-    : null;
+  const refreshStatus = (silent = false) => {
+    if (refreshSyncStatus.isPending || !app.installed || !app.webhookConfiguredAt) return;
+    silentRefresh.current = silent;
+    refreshSyncStatus.mutate({ id: app.id });
+  };
+
+  // GitHub opens in another tab. Recheck once when the operator returns so an
+  // accepted permission request updates this card without a manual reload.
+  useEffect(() => {
+    const markAway = () => {
+      leftSettingsAt.current = Date.now();
+    };
+    const refreshOnReturn = () => {
+      const leftAt = leftSettingsAt.current;
+      if (
+        leftAt === null ||
+        Date.now() - leftAt < 1_000 ||
+        Date.now() - lastAutoRefreshAt.current < 10_000
+      ) {
+        return;
+      }
+      leftSettingsAt.current = null;
+      lastAutoRefreshAt.current = Date.now();
+      refreshStatus(true);
+    };
+    window.addEventListener("blur", markAway);
+    window.addEventListener("focus", refreshOnReturn);
+    return () => {
+      window.removeEventListener("blur", markAway);
+      window.removeEventListener("focus", refreshOnReturn);
+    };
+    // Mutation state is intentionally read at the moment focus returns.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.id, app.installed, app.webhookConfiguredAt]);
+
+  const installHref = app.slug ? `https://github.com/apps/${app.slug}/installations/new` : null;
 
   return (
     <li className="space-y-2 px-4 py-3">
@@ -262,12 +317,12 @@ function AppRow({
             polling only
           </span>
         )}
-        <span className="ml-auto text-meta text-muted-foreground/70">
+        <span className="text-meta ml-auto text-muted-foreground/70">
           {app.runtimeCount} runtime{app.runtimeCount === 1 ? "" : "s"}
         </span>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-meta text-muted-foreground/80">
+      <div className="text-meta flex flex-wrap items-center gap-x-4 gap-y-1 text-muted-foreground/80">
         <span>
           App ID <span className="font-mono text-foreground">{app.appId}</span>
         </span>
@@ -277,6 +332,9 @@ function AppRow({
           </span>
         )}
         {app.slug && <span className="font-mono">{app.slug}</span>}
+        {app.webhookLastCheckedAt && (
+          <span>Sync checked {relativeTime(app.webhookLastCheckedAt)}</span>
+        )}
       </div>
 
       <HealthLine
@@ -285,7 +343,7 @@ function AppRow({
         testResult={testResult}
       />
       {app.webhookLastError && (
-        <div className="flex flex-wrap items-start gap-2 text-meta text-amber-700 dark:text-amber-500">
+        <div className="text-meta flex flex-wrap items-start gap-2 text-amber-700 dark:text-amber-500">
           <p className="inline-flex items-start gap-1.5">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             Webhook: {app.webhookLastError}
@@ -309,6 +367,23 @@ function AppRow({
           type="button"
           size="sm"
           variant="outline"
+          onClick={() => refreshStatus()}
+          disabled={refreshSyncStatus.isPending || !app.installed || !app.webhookConfiguredAt}
+          title={
+            app.webhookConfiguredAt
+              ? "Recheck webhook events and accepted installation permissions without changing credentials"
+              : "Enable realtime sync first"
+          }
+        >
+          <RefreshCw
+            className={`h-3.5 w-3.5 ${refreshSyncStatus.isPending ? "animate-spin" : ""}`}
+          />
+          Refresh status
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
           onClick={() => test.mutate({ id: app.id })}
           disabled={test.isPending || !app.installed}
           title={app.installed ? "Test connection" : "Install the app first"}
@@ -328,7 +403,9 @@ function AppRow({
           disabled={configureWebhook.isPending || !app.installed}
           title={
             app.installed
-              ? "Configure Forge as this app's signed webhook endpoint"
+              ? app.webhookConfiguredAt
+                ? "Rotate the signed webhook secret used by GitHub and Forge"
+                : "Configure Forge as this app's signed webhook endpoint"
               : "Install the app first"
           }
         >
@@ -337,14 +414,14 @@ function AppRow({
           ) : (
             <Webhook className="h-3.5 w-3.5" />
           )}
-          {app.webhookConfiguredAt ? "Rotate webhook secret" : "Enable realtime sync"}
+          {app.webhookConfiguredAt ? "Rotate secret" : "Enable realtime sync"}
         </Button>
         {installHref && (
           <a
             href={installHref}
             target="_blank"
             rel="noreferrer"
-            className="inline-flex items-center gap-1 text-meta text-muted-foreground hover:text-foreground"
+            className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
           >
             {app.installed ? "Manage repos on GitHub" : "Install on GitHub"}
             <ExternalLink className="h-3 w-3" />
@@ -353,7 +430,7 @@ function AppRow({
         <button
           type="button"
           onClick={() => setEditing((v) => !v)}
-          className="inline-flex items-center gap-1 text-meta text-muted-foreground hover:text-foreground"
+          className="text-meta inline-flex items-center gap-1 text-muted-foreground hover:text-foreground"
         >
           <Pencil className="h-3 w-3" />
           Edit
@@ -361,7 +438,7 @@ function AppRow({
         <button
           type="button"
           onClick={() => setConfirmRemove(true)}
-          className="ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-meta text-muted-foreground hover:bg-subtle hover:text-destructive"
+          className="text-meta hover:text-destructive ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-muted-foreground hover:bg-subtle"
         >
           <Trash2 className="h-3.5 w-3.5" />
           Remove
@@ -408,15 +485,16 @@ function HealthLine({
           ? "all repos"
           : "selected repos";
     return (
-      <p className="inline-flex items-center gap-1.5 text-meta text-emerald-700 dark:text-emerald-400">
+      <p className="text-meta inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        Connected{testResult.account ? ` for ${testResult.account}` : ""} — {repos}, token valid ~1h.
+        Connected{testResult.account ? ` for ${testResult.account}` : ""} — {repos}, token valid
+        ~1h.
       </p>
     );
   }
   if (lastError) {
     return (
-      <p className="inline-flex items-start gap-1.5 text-meta text-destructive">
+      <p className="text-meta text-destructive inline-flex items-start gap-1.5">
         <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         {lastError}
       </p>
@@ -549,10 +627,17 @@ function EditForm({ app, onDone }: { app: AppListItem; onDone: () => void }) {
           onChange={setInstallationId}
           mono
         />
-        <LabeledInput label="App slug" value={slug} onChange={(v) => setSlug(v.toLowerCase())} mono />
+        <LabeledInput
+          label="App slug"
+          value={slug}
+          onChange={(v) => setSlug(v.toLowerCase())}
+          mono
+        />
       </div>
       <label className="block space-y-1">
-        <span className="text-meta text-muted-foreground">Private key (PEM) — blank keeps current</span>
+        <span className="text-meta text-muted-foreground">
+          Private key (PEM) — blank keeps current
+        </span>
         <textarea
           value={privateKey}
           onChange={(e) => setPrivateKey(e.target.value)}

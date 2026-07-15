@@ -2,6 +2,33 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — Read-only GitHub sync health refresh
+
+Closed the post-release usability gap in workspace GitHub App settings. Added a
+dedicated read-only refresh path that verifies the configured Forge webhook URL,
+required event subscriptions and App permissions, then mints a fresh
+installation token to distinguish requested permissions from permissions the
+installation owner has actually accepted. The result persists a dedicated
+last-checked timestamp and clears or replaces the settings warning without
+rotating credentials. Secret rotation remains a separate, explicitly named
+security action.
+
+The GitHub App card now provides Refresh status, displays when sync was last
+checked, and silently rechecks after the operator returns from GitHub settings.
+Focused service and tenant-isolated router coverage exercises pending approval,
+successful approval, persistence, and proof that refresh leaves the encrypted
+webhook secret unchanged. A live API probe also confirmed that this existing
+App omits hook metadata from `/app`; URL verification therefore uses the
+dedicated webhook-config endpoint rather than treating absent metadata as a
+failure.
+
+Verification: lint and TypeScript passed; the focused GitHub service/router
+suite passed **17/17**; the complete serial Vitest run passed **1,291** tests
+outside four transient MinIO object races, and both affected storage files then
+passed **11/11** in isolation; the production docs + Next.js build passed; and
+Playwright passed **38/39** concurrently with the known `/clear` timing case
+passing immediately in isolation (**1/1**).
+
 ## 2026-07-14 — Configuration scope hierarchy and safety fixes
 
 Completed a screenshot-first Product Design audit of Mission Control,

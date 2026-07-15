@@ -120,6 +120,16 @@ describe("workspace GitHub App router", () => {
     });
     vi.stubEnv("AUTH_URL", "https://forge.example");
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "https://api.github.com/app/hook/config") {
+        if (init?.method === "PATCH") {
+          const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+          expect(body.url).toBe("https://forge.example/api/ingest/github");
+          expect(body.secret).toEqual(expect.any(String));
+          expect(String(body.secret)).toHaveLength(43);
+          return new Response("{}", { status: 200 });
+        }
+        return Response.json({ url: "https://forge.example/api/ingest/github" });
+      }
       if (url === "https://api.github.com/app") {
         return Response.json({
           events: [
@@ -140,13 +150,23 @@ describe("workspace GitHub App router", () => {
           },
         });
       }
-      expect(url).toBe("https://api.github.com/app/hook/config");
-      expect(init?.method).toBe("PATCH");
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(body.url).toBe("https://forge.example/api/ingest/github");
-      expect(body.secret).toEqual(expect.any(String));
-      expect(String(body.secret)).toHaveLength(43);
-      return new Response("{}", { status: 200 });
+      if (url.endsWith("/access_tokens")) {
+        return Response.json(
+          {
+            token: "ghs_sync",
+            expires_at: "2026-06-14T18:00:00Z",
+            permissions: {
+              issues: "read",
+              pull_requests: "write",
+              checks: "write",
+              statuses: "read",
+              metadata: "read",
+            },
+          },
+          { status: 201 },
+        );
+      }
+      throw new Error(`unexpected url ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -165,7 +185,10 @@ describe("workspace GitHub App router", () => {
     expect(listed[0]).not.toHaveProperty("webhookSecretPreviousEnc");
 
     const beforeFailedRotation = row.webhookSecretEnc;
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("nope", { status: 500 })),
+    );
     await expect(apps.configureWebhook({ id: created.id })).rejects.toThrow(/GitHub API error/i);
     const afterFailedRotation = await prisma.githubApp.findUniqueOrThrow({
       where: { id: created.id },
@@ -173,6 +196,88 @@ describe("workspace GitHub App router", () => {
     expect(afterFailedRotation.webhookSecretEnc).toBe(beforeFailedRotation);
     expect(afterFailedRotation.webhookSecretPreviousEnc).toBeNull();
     expect(afterFailedRotation.webhookLastError).toMatch(/GitHub API error/i);
+  });
+
+  it("refreshes end-to-end sync status without rotating the webhook secret", async () => {
+    const { apps } = await setup("GHR");
+    const prisma = getPrisma();
+    const created = await apps.createManual({
+      name: "Refresh App",
+      appId: "1234567",
+      installationId: "7654321",
+      privateKey: PEM,
+    });
+    vi.stubEnv("AUTH_URL", "https://forge.example");
+    await prisma.githubApp.update({
+      where: { id: created.id },
+      data: {
+        webhookConfiguredAt: new Date(),
+        webhookSecretEnc: "unchanged-ciphertext",
+        webhookLastError: "stale warning",
+      },
+    });
+
+    const appResponse = {
+      events: [
+        "issues",
+        "issue_comment",
+        "pull_request",
+        "pull_request_review",
+        "check_suite",
+        "check_run",
+        "status",
+      ],
+      permissions: {
+        issues: "read",
+        pull_requests: "write",
+        checks: "write",
+        statuses: "read",
+        metadata: "read",
+      },
+    };
+    let installationPermissions: Record<string, string> = {
+      pull_requests: "write",
+      metadata: "read",
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/app")) return Response.json(appResponse);
+        if (url.endsWith("/app/hook/config")) {
+          return Response.json({ url: "https://forge.example/api/ingest/github" });
+        }
+        if (url.endsWith("/access_tokens")) {
+          return Response.json(
+            {
+              token: "ghs_refresh",
+              expires_at: "2026-06-14T18:00:00Z",
+              permissions: installationPermissions,
+            },
+            { status: 201 },
+          );
+        }
+        throw new Error(`unexpected url ${url}`);
+      }),
+    );
+
+    const pending = await apps.refreshSyncStatus({ id: created.id });
+    expect(pending.ready).toBe(false);
+    expect(pending.missingInstallationPermissions).toEqual([
+      "issues:read",
+      "checks:write",
+      "statuses:read",
+    ]);
+    let row = await prisma.githubApp.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.webhookLastError).toMatch(/installation approval/i);
+    expect(row.webhookLastCheckedAt).not.toBeNull();
+    expect(row.webhookSecretEnc).toBe("unchanged-ciphertext");
+
+    installationPermissions = appResponse.permissions;
+    const ready = await apps.refreshSyncStatus({ id: created.id });
+    expect(ready.ready).toBe(true);
+    row = await prisma.githubApp.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.webhookLastError).toBeNull();
+    expect(row.webhookSecretEnc).toBe("unchanged-ciphertext");
   });
 
   it("rejects a non-PEM key and a non-numeric app id", async () => {
@@ -214,7 +319,11 @@ describe("workspace GitHub App router", () => {
           return new Response(JSON.stringify({ slug: "discovered-slug" }), { status: 200 });
         if (url.endsWith("/access_tokens"))
           return new Response(
-            JSON.stringify({ token: "ghs_x", expires_at: "2026-06-14T18:00:00Z", repository_selection: "all" }),
+            JSON.stringify({
+              token: "ghs_x",
+              expires_at: "2026-06-14T18:00:00Z",
+              repository_selection: "all",
+            }),
             { status: 201 },
           );
         if (url.includes("/installation/repositories"))
