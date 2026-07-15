@@ -9,6 +9,20 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.18.0 · Reliable GitHub state detection
+
+### Added
+
+- **Pull-request review state is aggregated from GitHub.** Forge records the latest decisive review per reviewer together with outstanding reviewer and team requests, without copying PR discussion into issue comments.
+- **Legacy GitHub link attachments recover into native relations.** A bounded worker repair promotes old issue/PR links when their native resource already exists, restoring normal state sync without provider calls.
+
+### Fixed
+
+- **Webhook delivery is retryable and ordered.** Failed or abandoned deliveries use atomic processing leases, concurrent and out-of-order updates cannot regress newer PR state, and repository mappings must match both the requested repo and installation.
+- **Checks and commit statuses invalidate immediately.** Queued/rerun checks, SHA-only check events, and legacy `status` webhooks mark aggregate evidence dirty; provider refresh remains the only source trusted for safe automatic completion.
+- **Linked GitHub changes reach live issue views.** Meaningful checks, review, draft, mergeability, head-SHA, title, and lifecycle changes publish issue-scoped activity while duplicate links and mirrored GitHub issue comments remain idempotent.
+- **Native GitHub installation cannot borrow a runtime-auth app.** Issue/PR sync now requires the configured instance GitHub App with the documented read permissions and active webhook events.
+
 ## [2026-07-15] — v0.17.0 · Clear configuration ownership
 
 ### Added

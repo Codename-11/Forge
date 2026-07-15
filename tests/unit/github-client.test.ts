@@ -7,6 +7,7 @@ vi.mock("@/server/services/github/installation-token", () => ({
 import {
   getGitHubPullRequest,
   getGitHubPullRequestChecks,
+  getGitHubPullRequestReviewSummary,
   GitHubRequestError,
 } from "@/server/services/github/client";
 
@@ -39,6 +40,84 @@ describe("GitHub REST client resilience", () => {
       statusCount: 1,
     });
     expect(checks.diagnostic).toContain("Checks permission required");
+  });
+
+  it("aggregates the latest decisive review per reviewer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(
+        JSON.stringify([
+          {
+            id: 1,
+            state: "CHANGES_REQUESTED",
+            submitted_at: "2026-07-14T10:00:00Z",
+            user: { login: "alice" },
+          },
+          {
+            id: 2,
+            state: "APPROVED",
+            submitted_at: "2026-07-14T11:00:00Z",
+            user: { login: "alice" },
+          },
+          {
+            id: 3,
+            state: "APPROVED",
+            submitted_at: "2026-07-14T10:30:00Z",
+            user: { login: "bob" },
+          },
+          {
+            id: 4,
+            state: "COMMENTED",
+            submitted_at: "2026-07-14T11:30:00Z",
+            user: { login: "bob" },
+          },
+          {
+            id: 5,
+            state: "CHANGES_REQUESTED",
+            submitted_at: "2026-07-14T12:00:00Z",
+            user: { login: "carol" },
+          },
+        ]),
+        { status: 200 },
+      ),
+    );
+
+    await expect(
+      getGitHubPullRequestReviewSummary({
+        installationId: 1,
+        owner: "acme",
+        repo: "forge",
+        number: 42,
+        requestedReviewers: 1,
+      }),
+    ).resolves.toMatchObject({
+      decision: "CHANGES_REQUESTED",
+      approvedCount: 2,
+      changesRequestedCount: 1,
+      requestedCount: 1,
+      reviewCount: 5,
+      source: "api-aggregate",
+      partial: false,
+    });
+  });
+
+  it("reports review requested when no decisive review exists", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify([]), { status: 200 }),
+    );
+    await expect(
+      getGitHubPullRequestReviewSummary({
+        installationId: 1,
+        owner: "acme",
+        repo: "forge",
+        number: 42,
+        requestedTeams: 1,
+      }),
+    ).resolves.toMatchObject({
+      decision: "REVIEW_REQUESTED",
+      approvedCount: 0,
+      changesRequestedCount: 0,
+      requestedCount: 1,
+    });
   });
 
   it("aggregates every check-suite page and ignores empty legacy status pending", async () => {

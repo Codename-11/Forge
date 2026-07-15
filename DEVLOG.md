@@ -118,6 +118,7 @@ fresh production build passed; and the full serial Playwright suite passed
 hard-coded two rail columns despite the existing work-count threshold; the
 assertion now follows the rendered layout mode and passed both alone and in the
 full suite.
+
 ## 2026-07-14 — Settings scope and information-architecture review
 
 Mapped Forge's personal/global, workspace, Mission Control/Activity, and
@@ -12966,3 +12967,83 @@ repository warnings; the focused comment router suite passed 15 tests; the
 isolated stale-work suite passed 9 tests after a known full-suite concurrency
 failure; the fresh E2E production build passed; and the existing issue-flow
 Playwright journey passed.
+
+---
+
+## 2026-07-14 — Native GitHub state hardening
+
+Audited native link creation, webhook ingestion, provider refresh, stale
+reconciliation, checks/status aggregation, completion/recovery policy, and the
+GitHub-discussion boundary. Closed repo/installation mismatches, casing-based
+resource duplication, permanent failed-delivery dedupe, concurrent and
+out-of-order regressions, same-SHA rerun gaps, missing legacy status-webhook
+invalidation, comment duplication, and missing issue-scoped realtime events.
+
+Pull refreshes now aggregate the latest decisive review per reviewer and
+outstanding review requests while leaving PR comments and review bodies on
+GitHub. The worker promotes recoverable legacy generic GitHub attachments into
+native relations without provider calls. Native sync no longer substitutes a
+separate runtime-auth GitHub App, and the documented instance-app permissions
+now include checks, commit statuses, and the `status` webhook event.
+
+PR review caught twenty-six identity/bounded-prefix/race edge cases before merge. Lifecycle
+rules now compare the provider's lifecycle version rather than volatile check
+metadata, so a concurrent check hint cannot suppress a merged/closed action.
+Legacy-link recovery selects only attachments with an existing matching native
+resource and a live target issue, so permanently unmatched or soft-deleted
+links cannot starve or abort recoverable rows.
+Canonical repo casing now rekeys the existing resource and preserves or merges
+its issue relations instead of creating a new unlinked canonical row, while
+case-insensitive lifecycle and review-webhook lookups still reject delayed
+provider state without regressing a newer terminal resource. Equal-second
+terminal tie-breaks now admit only an explicit `reopened` action, so a genuine
+reopen is not discarded while ambiguous open/synchronize deliveries remain
+conservative. Individual review events never replace the provider aggregate;
+they preserve the latest decisive review state and mark it dirty for provider
+refresh. Reviewer-requested/removed events use a separate dirty hint so they
+cannot clear that aggregate, and review dirty/hint changes participate in the
+issue activity fingerprint so open views refresh immediately. Review-event
+ordering compares both provider-aggregate and prior webhook timestamps so a
+late changes-requested event cannot fire after a newer approval hint. SHA-only
+check/status events now filter by the JSON head SHA in the database instead of
+loading every PR for a repository into the worker. Provider review aggregation
+prioritizes changes requested, then outstanding reviewer/team requests, then
+approvals. Mirrored issue comments no longer advance the native resource's
+lifecycle freshness clock, so a newer comment delivery cannot suppress later
+issue opened/closed/reopened side effects.
+Rerequested/requested check webhooks now ignore the prior run's stale
+conclusion and only dirty the aggregate for reconciliation, preventing a rerun
+request from firing the checks-failed status rule. GitHub App setup now calls
+out the write-level Checks permission required for rerun webhook actions. The
+same-second reopen exception is limited to closed/unmerged PRs, so a stale
+reopen can never regress an already merged resource.
+Partial/failed review reads no longer contribute an ordering watermark, so a
+delayed decisive review webhook can recover the only available review signal
+and invalidate the aggregate normally. Review ordering now also rejects stale
+non-decisive events so a late comment cannot rewind the decisive-event
+watermark. Webhook completion/failure updates are conditional on the exact
+processing lease, preventing an expired handler from overwriting a reclaimed
+attempt's result. A redelivery that encounters a live `RECEIVED` lease now
+returns a retryable failure rather than a completed-duplicate acknowledgement;
+only terminal delivery rows are acknowledged as durable duplicates.
+Mixed-case duplicate canonicalization now ranks rows with a provider
+`externalUpdatedAt` above internally touched/unversioned rows before comparing
+recency, preserving the authoritative lifecycle snapshot and all moved links.
+Review-first PR deliveries now seed identity/review hints without advancing the
+PR lifecycle freshness clock, so delayed opened/synchronize webhooks can still
+link issue keys and apply configured lifecycle rules.
+Legacy attachment recovery compares captured GitHub numbers as normalized text
+rather than casting untrusted URL digits to `int4`, so an oversized malformed
+link cannot abort a reconciliation sweep or starve valid recovery candidates.
+Review-dismissed webhooks bypass submission-time staleness because GitHub
+retains the original review timestamp; they dirty the provider aggregate while
+preserving any newer webhook watermark instead of rewinding it.
+
+Verification: the focused GitHub/client/reconciliation/completion suites passed
+56 tests; lint passed with existing repository warnings; typecheck passed; and
+the CI-style serial Vitest gate passed 1,274 tests with one intentional live
+connector skip. The canonical parallel gate also passed 1,274 tests and the
+fresh production E2E build completed. The browser run passed 35 of 38 journeys
+before Chromium crashed on a memory-saturated host; each of the three reported
+journeys passed immediately in a fresh isolated browser process. Release,
+deployment, and production smoke results follow after the pull request lands.

@@ -2267,6 +2267,11 @@ model ExternalWebhookEvent {
   status             String
   error              String?   @db.Text
   receivedAt         DateTime  @default(now())
+  /// Start of the current processing lease. Failed or abandoned deliveries
+  /// can be atomically reclaimed without racing an in-flight request.
+  processingStartedAt DateTime?
+  /// Number of processing claims, including the initial delivery.
+  attemptCount       Int       @default(1)
   processedAt        DateTime?
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)

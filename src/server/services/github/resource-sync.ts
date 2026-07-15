@@ -17,9 +17,11 @@ import {
   getGitHubIssue,
   getGitHubPullRequest,
   getGitHubPullRequestChecks,
+  getGitHubPullRequestReviewSummary,
   GitHubRequestError,
   issueSnapshot,
   pullRequestSnapshot,
+  type GitHubPullResponse,
 } from "@/server/services/github/client";
 import {
   githubInstallationId,
@@ -64,6 +66,215 @@ function assertLinkKind(kind: string): asserts kind is ExternalLinkKind {
 
 function publicResource(row: ExternalResource) {
   return row;
+}
+
+/**
+ * Webhook snapshots are not guaranteed to arrive in order. Ignore a payload
+ * whose provider updated_at predates the row already stored, so an old opened,
+ * synchronize, or reopened delivery cannot regress a closed/merged resource.
+ */
+export async function upsertExternalResourceFromWebhook(
+  db: PrismaClient,
+  args: {
+    workspaceId: string;
+    connectionMappingId?: string | null;
+    snapshot: GitHubResourceSnapshot;
+    invalidateSync?: boolean;
+    allowEqualTimestampReopen?: boolean;
+  },
+): Promise<{ resource: ExternalResource; previous: ExternalResource | null; applied: boolean }> {
+  return db.$transaction(async (tx) => {
+    await acquireGitHubResourceOrderLock(tx, {
+      workspaceId: args.workspaceId,
+      repoFullName: args.snapshot.repoFullName,
+      resourceType: args.snapshot.resourceType,
+      number: args.snapshot.number,
+    });
+    await canonicalizeGitHubResourceIdentity(tx, args);
+    const key = {
+      workspaceId: args.workspaceId,
+      provider: args.snapshot.provider,
+      repoFullName: args.snapshot.repoFullName,
+      resourceType: args.snapshot.resourceType,
+      number: args.snapshot.number,
+    };
+    const previous = await tx.externalResource.findUnique({
+      where: { workspaceId_provider_repoFullName_resourceType_number: key },
+    });
+    if (previous?.externalUpdatedAt && !args.snapshot.externalUpdatedAt) {
+      return { resource: previous, previous, applied: false };
+    }
+    if (previous?.externalUpdatedAt && args.snapshot.externalUpdatedAt) {
+      const previousTime = previous.externalUpdatedAt.getTime();
+      const incomingTime = args.snapshot.externalUpdatedAt.getTime();
+      const equalTimestampRegression =
+        previousTime === incomingTime &&
+        ((previous.state === "merged" && args.snapshot.state !== "merged") ||
+          (previous.state === "closed" &&
+            !args.allowEqualTimestampReopen &&
+            args.snapshot.state !== "closed" &&
+            args.snapshot.state !== "merged"));
+      if (previousTime > incomingTime || equalTimestampRegression) {
+        return { resource: previous, previous, applied: false };
+      }
+    }
+    let resource = await upsertExternalResource(tx, args);
+    if (args.invalidateSync && resource.syncTerminalAt === null) {
+      resource = await tx.externalResource.update({
+        where: { id: resource.id },
+        data: { lastSyncedAt: null },
+      });
+    }
+    return { resource, previous, applied: true };
+  });
+}
+
+export async function acquireGitHubResourceOrderLock(
+  db: DbClient,
+  resource: {
+    workspaceId: string;
+    repoFullName: string;
+    resourceType: string;
+    number: number;
+  },
+): Promise<void> {
+  const key = [
+    resource.workspaceId,
+    GITHUB_PROVIDER,
+    resource.repoFullName.toLowerCase(),
+    resource.resourceType,
+    resource.number,
+  ].join(":");
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
+export function gitHubResourceVersionMatches(
+  current: Pick<ExternalResource, "externalUpdatedAt" | "title" | "state" | "metadata">,
+  expected: Pick<ExternalResource, "externalUpdatedAt" | "title" | "state" | "metadata">,
+): boolean {
+  const currentHead = metadataRecord(metadataRecord(current.metadata).head).sha;
+  const expectedHead = metadataRecord(metadataRecord(expected.metadata).head).sha;
+  return (
+    current.externalUpdatedAt?.getTime() === expected.externalUpdatedAt?.getTime() &&
+    current.title === expected.title &&
+    current.state === expected.state &&
+    currentHead === expectedHead
+  );
+}
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+/** State that should wake issue subscribers; excludes polling timestamps. */
+function resourceStateFingerprint(
+  resource: Pick<ExternalResource, "title" | "state" | "metadata">,
+) {
+  const metadata = metadataRecord(resource.metadata);
+  const checks = metadataRecord(metadata.checks);
+  const review = metadataRecord(metadata.review);
+  const reviewHint = metadataRecord(metadata.reviewHint);
+  const head = metadataRecord(metadata.head);
+  return JSON.stringify({
+    title: resource.title,
+    state: resource.state,
+    draft: metadata.draft ?? null,
+    merged: metadata.merged ?? null,
+    mergeableState: metadata.mergeableState ?? null,
+    headSha: head.sha ?? null,
+    reviewDecision: metadata.reviewDecision ?? review.decision ?? null,
+    review: {
+      approvedCount: review.approvedCount ?? null,
+      changesRequestedCount: review.changesRequestedCount ?? null,
+      requestedCount: review.requestedCount ?? null,
+      partial: review.partial ?? null,
+      dirty: review.dirty ?? null,
+      lastEventDecision: review.lastEventDecision ?? null,
+      lastEventState: review.lastEventState ?? null,
+      lastEventAt: review.lastEventAt ?? null,
+    },
+    reviewHint: {
+      dirty: reviewHint.dirty ?? null,
+      event: reviewHint.event ?? null,
+      updatedAt: reviewHint.updatedAt ?? null,
+    },
+    checks: {
+      status: checks.status ?? null,
+      conclusion: checks.conclusion ?? null,
+      source: checks.source ?? null,
+      partial: checks.partial ?? null,
+      headSha: checks.headSha ?? null,
+      observedConclusion: checks.observedConclusion ?? null,
+    },
+  });
+}
+
+function resourceAuditState(resource: Pick<ExternalResource, "title" | "state" | "metadata">) {
+  return JSON.parse(resourceStateFingerprint(resource)) as Prisma.InputJsonObject;
+}
+
+export function gitHubResourceStateChanged(
+  before: Pick<ExternalResource, "title" | "state" | "metadata"> | null,
+  after: Pick<ExternalResource, "title" | "state" | "metadata">,
+): boolean {
+  return before !== null && resourceStateFingerprint(before) !== resourceStateFingerprint(after);
+}
+
+/**
+ * Publish one issue-scoped activity event when GitHub state changed without a
+ * Forge field patch. This is the SSE/cache-invalidation bridge for checks,
+ * draft/review state, mergeability, and head-SHA changes.
+ */
+export async function recordGitHubResourceChangeToLinkedIssues(args: {
+  db: DbClient;
+  workspaceId: string;
+  before: Pick<ExternalResource, "id" | "title" | "state" | "metadata"> | null;
+  after: Pick<
+    ExternalResource,
+    "id" | "title" | "state" | "metadata" | "resourceType" | "repoFullName" | "number" | "url"
+  >;
+  actor: ActorMeta;
+  source: "github-webhook" | "github-manual" | "github-reconciliation";
+  skipIssueIds?: Set<string>;
+}): Promise<number> {
+  if (!gitHubResourceStateChanged(args.before, args.after)) return 0;
+  const links = await args.db.externalResourceLink.findMany({
+    where: { workspaceId: args.workspaceId, externalResourceId: args.after.id },
+    select: { issueId: true },
+  });
+  let recorded = 0;
+  for (const link of links) {
+    if (args.skipIssueIds?.has(link.issueId)) continue;
+    await recordChange(args.db, {
+      workspaceId: args.workspaceId,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId ?? null,
+      entity: "ExternalResource",
+      entityId: args.after.id,
+      action: "github-state-sync",
+      before: args.before ? resourceAuditState(args.before) : undefined,
+      after: resourceAuditState(args.after),
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "issue",
+      subjectId: link.issueId,
+      payload: {
+        source: args.source,
+        change: "external-resource-state",
+        externalResourceId: args.after.id,
+        resourceType: args.after.resourceType,
+        repo: args.after.repoFullName,
+        number: args.after.number,
+        state: args.after.state,
+        url: args.after.url,
+      },
+      ip: args.actor.ip ?? null,
+      userAgent: args.actor.userAgent ?? null,
+    });
+    recorded += 1;
+  }
+  return recorded;
 }
 
 export function gitHubPartialChecksError(metadata: unknown): GitHubRequestError | null {
@@ -114,6 +325,12 @@ export async function resolveGitHubRepoMapping(args: {
     if (!mapping) {
       throw new TRPCError({ code: "NOT_FOUND", message: "GitHub repo mapping not found." });
     }
+    if (repoFullName && !sameRepo(mapping.target, repoFullName)) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "GitHub mapping does not match the requested repository.",
+      });
+    }
     return mapping;
   }
 
@@ -143,6 +360,59 @@ export async function resolveGitHubRepoMapping(args: {
   return mapping;
 }
 
+async function enrichPullRequestSnapshot(args: {
+  snapshot: GitHubResourceSnapshot;
+  pullRequest: GitHubPullResponse;
+  installationId: string;
+  owner: string;
+  repo: string;
+  requestTimeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<GitHubResourceSnapshot> {
+  const metadata = metadataRecord(args.snapshot.metadata);
+  try {
+    const review = await getGitHubPullRequestReviewSummary({
+      installationId: args.installationId,
+      owner: args.owner,
+      repo: args.repo,
+      number: args.pullRequest.number,
+      requestedReviewers: args.pullRequest.requested_reviewers?.length ?? 0,
+      requestedTeams: args.pullRequest.requested_teams?.length ?? 0,
+      requestTimeoutMs: args.requestTimeoutMs,
+      signal: args.signal,
+    });
+    args.snapshot.metadata = { ...metadata, review, reviewDecision: review.decision };
+  } catch (error) {
+    // Review visibility should not prevent PR/check reconciliation. Preserve a
+    // previously trusted decision during the metadata merge and expose the
+    // partial read diagnostically instead.
+    args.snapshot.metadata = {
+      ...metadata,
+      review: {
+        source: "api-aggregate",
+        partial: true,
+        diagnostic:
+          error instanceof Error ? error.message.slice(0, 2_000) : "GitHub reviews unavailable",
+        updatedAt: new Date().toISOString(),
+      },
+    };
+  }
+  if (args.pullRequest.head?.sha) {
+    args.snapshot.metadata = {
+      ...metadataRecord(args.snapshot.metadata),
+      checks: await getGitHubPullRequestChecks({
+        installationId: args.installationId,
+        owner: args.owner,
+        repo: args.repo,
+        headSha: args.pullRequest.head.sha,
+        requestTimeoutMs: args.requestTimeoutMs,
+        signal: args.signal,
+      }),
+    };
+  }
+  return args.snapshot;
+}
+
 export async function fetchGitHubSnapshotForParsed(
   parsed: ParsedGitHubUrl,
   mapping: GitHubMappingWithConnection,
@@ -158,21 +428,18 @@ export async function fetchGitHubSnapshotForParsed(
       requestTimeoutMs: options.requestTimeoutMs,
       signal: options.signal,
     });
-    const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
-    if (pr.head?.sha) {
-      snapshot.metadata = {
-        ...(snapshot.metadata as Record<string, unknown>),
-        checks: await getGitHubPullRequestChecks({
-          installationId,
-          owner: parsed.owner,
-          repo: parsed.repo,
-          headSha: pr.head.sha,
-          requestTimeoutMs: options.requestTimeoutMs,
-          signal: options.signal,
-        }),
-      };
-    }
-    return snapshot;
+    // Persist the mapping's canonical repo spelling, not the caller's URL
+    // casing. GitHub repo identity is case-insensitive while the DB key is not.
+    const snapshot = pullRequestSnapshot(mapping.target, pr);
+    return enrichPullRequestSnapshot({
+      snapshot,
+      pullRequest: pr,
+      installationId,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
+    });
   }
   const issue = await getGitHubIssue({
     installationId,
@@ -191,23 +458,18 @@ export async function fetchGitHubSnapshotForParsed(
       requestTimeoutMs: options.requestTimeoutMs,
       signal: options.signal,
     });
-    const snapshot = pullRequestSnapshot(parsed.repoFullName, pr);
-    if (pr.head?.sha) {
-      snapshot.metadata = {
-        ...(snapshot.metadata as Record<string, unknown>),
-        checks: await getGitHubPullRequestChecks({
-          installationId,
-          owner: parsed.owner,
-          repo: parsed.repo,
-          headSha: pr.head.sha,
-          requestTimeoutMs: options.requestTimeoutMs,
-          signal: options.signal,
-        }),
-      };
-    }
-    return snapshot;
+    const snapshot = pullRequestSnapshot(mapping.target, pr);
+    return enrichPullRequestSnapshot({
+      snapshot,
+      pullRequest: pr,
+      installationId,
+      owner: parsed.owner,
+      repo: parsed.repo,
+      requestTimeoutMs: options.requestTimeoutMs,
+      signal: options.signal,
+    });
   }
-  return issueSnapshot(parsed.repoFullName, issue);
+  return issueSnapshot(mapping.target, issue);
 }
 
 export async function fetchGitHubSnapshot(args: {
@@ -234,7 +496,77 @@ export async function fetchGitHubSnapshot(args: {
   );
 }
 
-export async function upsertExternalResource(
+export async function canonicalizeGitHubResourceIdentity(
+  db: DbClient,
+  args: {
+    workspaceId: string;
+    snapshot: GitHubResourceSnapshot;
+  },
+): Promise<void> {
+  const candidates = await db.externalResource.findMany({
+    where: {
+      workspaceId: args.workspaceId,
+      provider: args.snapshot.provider,
+      resourceType: args.snapshot.resourceType,
+      number: args.snapshot.number,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    include: { links: true },
+  });
+  const equivalent = candidates.filter((row) =>
+    sameRepo(row.repoFullName, args.snapshot.repoFullName),
+  );
+  if (equivalent.length === 0) return;
+
+  const stateRank = (state: string) => (state === "merged" ? 2 : state === "closed" ? 1 : 0);
+  const canonical = equivalent.reduce((newest, row) => {
+    const newestHasProviderVersion = newest.externalUpdatedAt !== null;
+    const rowHasProviderVersion = row.externalUpdatedAt !== null;
+    if (rowHasProviderVersion !== newestHasProviderVersion) {
+      return rowHasProviderVersion ? row : newest;
+    }
+    const newestAt = (newest.externalUpdatedAt ?? newest.updatedAt).getTime();
+    const rowAt = (row.externalUpdatedAt ?? row.updatedAt).getTime();
+    if (rowAt !== newestAt) return rowAt > newestAt ? row : newest;
+    return stateRank(row.state) > stateRank(newest.state) ? row : newest;
+  });
+
+  // Older builds could create one row per repository spelling. Preserve every
+  // issue relation on the canonical row, keeping the original link id unless
+  // the same issue/kind relation already exists there.
+  for (const duplicate of equivalent) {
+    if (duplicate.id === canonical.id) continue;
+    for (const link of duplicate.links) {
+      const collision = await db.externalResourceLink.findUnique({
+        where: {
+          issueId_externalResourceId_kind: {
+            issueId: link.issueId,
+            externalResourceId: canonical.id,
+            kind: link.kind,
+          },
+        },
+        select: { id: true },
+      });
+      if (collision) {
+        await db.externalResourceLink.delete({ where: { id: link.id } });
+      } else {
+        await db.externalResourceLink.update({
+          where: { id: link.id },
+          data: { externalResourceId: canonical.id },
+        });
+      }
+    }
+    await db.externalResource.delete({ where: { id: duplicate.id } });
+  }
+  if (canonical.repoFullName !== args.snapshot.repoFullName) {
+    await db.externalResource.update({
+      where: { id: canonical.id },
+      data: { repoFullName: args.snapshot.repoFullName },
+    });
+  }
+}
+
+async function upsertExternalResourceInTransaction(
   db: DbClient,
   args: {
     workspaceId: string;
@@ -243,6 +575,13 @@ export async function upsertExternalResource(
   },
 ): Promise<ExternalResource> {
   const now = new Date();
+  await acquireGitHubResourceOrderLock(db, {
+    workspaceId: args.workspaceId,
+    repoFullName: args.snapshot.repoFullName,
+    resourceType: args.snapshot.resourceType,
+    number: args.snapshot.number,
+  });
+  await canonicalizeGitHubResourceIdentity(db, args);
   const existing = await db.externalResource.findUnique({
     where: {
       workspaceId_provider_repoFullName_resourceType_number: {
@@ -370,6 +709,20 @@ export async function upsertExternalResource(
   return row;
 }
 
+export async function upsertExternalResource(
+  db: DbClient,
+  args: {
+    workspaceId: string;
+    connectionMappingId?: string | null;
+    snapshot: GitHubResourceSnapshot;
+  },
+): Promise<ExternalResource> {
+  if ("$transaction" in db) {
+    return db.$transaction((tx) => upsertExternalResourceInTransaction(tx, args));
+  }
+  return upsertExternalResourceInTransaction(db, args);
+}
+
 export async function linkExternalResourceToIssue(
   db: DbClient,
   args: {
@@ -402,6 +755,17 @@ export async function linkExternalResourceToIssue(
   if (!resource) {
     throw new TRPCError({ code: "NOT_FOUND", message: "External resource not found." });
   }
+
+  const existingLink = await db.externalResourceLink.findUnique({
+    where: {
+      issueId_externalResourceId_kind: {
+        issueId: args.issueId,
+        externalResourceId: args.externalResourceId,
+        kind: args.kind,
+      },
+    },
+  });
+  if (existingLink) return existingLink;
 
   const link = await db.externalResourceLink.upsert({
     where: {
@@ -518,6 +882,84 @@ export async function listLinkedGitHubResources(args: {
   });
 }
 
+/**
+ * Promote legacy generic GitHub link attachments when the corresponding
+ * native resource already exists. New attachment writes route natively; this
+ * bounded repair pass handles rows created before that routing fix without
+ * making provider requests or inventing state from an opaque URL.
+ */
+export async function recoverGenericGitHubAttachments(
+  db: PrismaClient,
+  options: { workspaceId?: string; limit?: number } = {},
+): Promise<{ inspected: number; recovered: number; unmatched: number }> {
+  const limit = Math.max(1, Math.min(options.limit ?? 500, 2_000));
+  // Filter to rows that already have a matching native resource in SQL. If
+  // unmatched legacy links occupied the oldest bounded prefix, an ordinary
+  // attachment query would inspect that same prefix forever and starve every
+  // recoverable row behind it.
+  const urlPattern =
+    "^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)/(issues|pull)/([0-9]+)(?:[/?#].*)?$";
+  const workspaceFilter = options.workspaceId
+    ? Prisma.sql`AND a."workspaceId" = ${options.workspaceId}`
+    : Prisma.empty;
+  const candidates = await db.$queryRaw<
+    Array<{
+      id: string;
+      workspaceId: string;
+      targetId: string;
+      resourceId: string;
+    }>
+  >(Prisma.sql`
+    SELECT
+      a."id",
+      a."workspaceId",
+      a."targetId",
+      r."id" AS "resourceId"
+    FROM "Attachment" a
+    CROSS JOIN LATERAL regexp_match(
+      COALESCE(NULLIF(a."externalUrl", ''), a."url"),
+      ${urlPattern},
+      'i'
+    ) AS matched(parts)
+    JOIN "Issue" i
+      ON i."id" = a."targetId"
+     AND i."workspaceId" = a."workspaceId"
+     AND i."deletedAt" IS NULL
+    JOIN "ExternalResource" r
+      ON r."workspaceId" = a."workspaceId"
+     AND r."provider" = ${GITHUB_PROVIDER}
+     AND lower(r."repoFullName") = lower((matched.parts)[1] || '/' || (matched.parts)[2])
+     AND r."resourceType" = CASE
+       WHEN lower((matched.parts)[3]) = 'pull' THEN 'PULL_REQUEST'
+       ELSE 'ISSUE'
+     END
+     AND r."number"::text = COALESCE(NULLIF(ltrim((matched.parts)[4], '0'), ''), '0')
+    WHERE a."kind" = 'LINK'
+      AND a."targetType" = 'issue'
+      AND a."targetId" IS NOT NULL
+      ${workspaceFilter}
+    ORDER BY a."createdAt" ASC, a."id" ASC
+    LIMIT ${limit}
+  `);
+  let recovered = 0;
+  for (const attachment of candidates) {
+    await db.$transaction(async (tx) => {
+      await linkExternalResourceToIssue(tx, {
+        workspaceId: attachment.workspaceId,
+        issueId: attachment.targetId,
+        externalResourceId: attachment.resourceId,
+        kind: "RELATES_TO",
+        actor: { actorId: null },
+      });
+      await tx.attachment.deleteMany({
+        where: { id: attachment.id, workspaceId: attachment.workspaceId, kind: "LINK" },
+      });
+    });
+    recovered += 1;
+  }
+  return { inspected: candidates.length, recovered, unmatched: 0 };
+}
+
 export async function importGitHubIssue(args: {
   db: PrismaClient;
   workspaceId: string;
@@ -625,12 +1067,12 @@ async function applyIssuePatchFromGitHub(args: {
   statusId?: string | null;
   actor: ActorMeta;
   payload: Prisma.InputJsonObject;
-}): Promise<void> {
+}): Promise<boolean> {
   const before = await args.tx.issue.findFirst({
     where: { id: args.issueId, workspaceId: args.workspaceId, deletedAt: null },
     include: { status: true },
   });
-  if (!before) return;
+  if (!before) return false;
 
   const patch: Prisma.IssueUpdateInput = {};
   if (args.title && args.title !== before.title) patch.title = args.title;
@@ -641,7 +1083,7 @@ async function applyIssuePatchFromGitHub(args: {
       where: { id: args.statusId, workspaceId: args.workspaceId },
       select: { id: true, category: true },
     });
-    if (!status) return;
+    if (!status) return false;
     patch.status = { connect: { id: status.id } };
     nextCategory = status.category;
     if (status.category === "IN_PROGRESS" && !before.startedAt) patch.startedAt = new Date();
@@ -651,7 +1093,7 @@ async function applyIssuePatchFromGitHub(args: {
     if (status.category !== "CANCELED") patch.canceledAt = null;
   }
 
-  if (Object.keys(patch).length === 0) return;
+  if (Object.keys(patch).length === 0) return false;
 
   const after = await args.tx.issue.update({
     where: { id: before.id },
@@ -674,6 +1116,7 @@ async function applyIssuePatchFromGitHub(args: {
     ip: args.actor.ip ?? null,
     userAgent: args.actor.userAgent ?? null,
   });
+  return true;
 }
 
 export async function applyGitHubSnapshotToLinkedIssues(args: {
@@ -684,14 +1127,15 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
   snapshot: GitHubResourceSnapshot;
   actor: ActorMeta;
   statusRuleId?: string | null;
-}): Promise<void> {
+}): Promise<Set<string>> {
   const config = readGitHubMappingConfig(args.mapping.config);
   const links = await args.tx.externalResourceLink.findMany({
     where: { workspaceId: args.workspaceId, externalResourceId: args.resourceId },
     select: { issueId: true, kind: true },
   });
+  const changedIssueIds = new Set<string>();
   for (const link of links) {
-    await applyIssuePatchFromGitHub({
+    const changed = await applyIssuePatchFromGitHub({
       tx: args.tx,
       workspaceId: args.workspaceId,
       issueId: link.issueId,
@@ -708,7 +1152,9 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
         state: args.snapshot.state,
       },
     });
+    if (changed) changedIssueIds.add(link.issueId);
   }
+  return changedIssueIds;
 }
 
 export async function syncGitHubExternalResource(args: {
@@ -815,13 +1261,22 @@ export async function syncGitHubExternalResource(args: {
       connectionMappingId: mapping.id,
       snapshot,
     });
-    await applyGitHubSnapshotToLinkedIssues({
+    const changedIssueIds = await applyGitHubSnapshotToLinkedIssues({
       tx,
       workspaceId: args.workspaceId,
       resourceId: resource.id,
       mapping,
       snapshot,
       actor: args.actor,
+    });
+    await recordGitHubResourceChangeToLinkedIssues({
+      db: tx,
+      workspaceId: args.workspaceId,
+      before: existing,
+      after: resource,
+      actor: args.actor,
+      source: args.skipCollisionGuard ? "github-reconciliation" : "github-manual",
+      skipIssueIds: changedIssueIds,
     });
     return publicResource(resource);
   });

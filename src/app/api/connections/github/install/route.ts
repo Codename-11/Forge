@@ -2,7 +2,6 @@ import "server-only";
 import { createHmac, randomBytes } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { auth } from "@/server/auth";
-import { db } from "@/server/db";
 import { publicOrigin } from "@/server/integrations/public-origin";
 
 const COOKIE = "forge_github_app_install";
@@ -31,32 +30,6 @@ function signState(state: string, returnTo: string): string {
   return `${state}.${encodedReturnTo}.${sig}`;
 }
 
-/**
- * Resolve the GitHub App slug to deep-link the install flow at. Prefer the
- * `GITHUB_APP_SLUG` env, but fall back to a GitHub App the user already
- * configured (e.g. via Settings → GitHub Apps "Create with GitHub") so a
- * single-tenant deploy that never set the env var still works. Scopes to the
- * caller's workspaces; prefers the workspace in `returnTo` when present.
- */
-async function resolveAppSlug(userId: string, returnTo: string): Promise<string | null> {
-  const fromEnv = process.env.GITHUB_APP_SLUG?.trim();
-  if (fromEnv) return fromEnv;
-
-  const wsSlug = returnTo.match(/^\/w\/([^/]+)(?:\/|$)/)?.[1];
-  const memberOf = { memberships: { some: { userId } } };
-  const pick = async (workspaceWhere: Record<string, unknown>) =>
-    db.githubApp.findFirst({
-      where: { slug: { not: null }, workspace: workspaceWhere },
-      orderBy: [{ lastMintedAt: "desc" }, { createdAt: "desc" }],
-      select: { slug: true },
-    });
-
-  // Prefer the workspace the operator came from, then any workspace they belong to.
-  const scoped = wsSlug ? await pick({ ...memberOf, slug: wsSlug }) : null;
-  const app = scoped ?? (await pick(memberOf));
-  return app?.slug ?? null;
-}
-
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -64,11 +37,14 @@ export async function GET(req: NextRequest) {
   }
 
   const returnTo = safeReturnTo(req);
-  const appSlug = await resolveAppSlug(session.user.id, returnTo);
+  // Native issue/PR sync uses the instance GitHub App credentials. Workspace
+  // runtime-auth apps deliberately have different permissions, keys, and an
+  // inactive webhook, so their slug must never be substituted here.
+  const appSlug = process.env.GITHUB_APP_SLUG?.trim() || null;
   if (!appSlug) {
     return settingsRedirect(
       req,
-      "No GitHub App is configured. Create one in Settings → GitHub Apps (Create with GitHub), or set GITHUB_APP_SLUG.",
+      "Native GitHub sync is not configured. Set GITHUB_APP_SLUG and the matching instance GitHub App credentials.",
     );
   }
 

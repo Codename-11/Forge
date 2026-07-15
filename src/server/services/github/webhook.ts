@@ -1,6 +1,6 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
-import { CommentKind, Prisma, type PrismaClient } from "@prisma/client";
+import { CommentKind, type ExternalResource, type Prisma, type PrismaClient } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
 import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
@@ -17,8 +17,13 @@ import {
 } from "@/server/services/github/mapping-policy";
 import {
   applyGitHubSnapshotToLinkedIssues,
+  acquireGitHubResourceOrderLock,
+  canonicalizeGitHubResourceIdentity,
+  gitHubResourceVersionMatches,
   linkExternalResourceToIssue,
+  recordGitHubResourceChangeToLinkedIssues,
   upsertExternalResource,
+  upsertExternalResourceFromWebhook,
   type ActorMeta,
 } from "@/server/services/github/resource-sync";
 import { GITHUB_PROVIDER, type GitHubResourceSnapshot } from "@/server/services/github/types";
@@ -33,11 +38,18 @@ type GitHubWebhookInstallation = {
 
 type GitHubWebhookPayload = {
   action?: string;
+  sha?: string | null;
+  state?: string | null;
   installation?: GitHubWebhookInstallation;
   repository?: GitHubWebhookRepository;
   issue?: GitHubIssueResponse;
   pull_request?: GitHubPullResponse;
-  review?: { state?: string | null };
+  review?: {
+    id?: number | null;
+    state?: string | null;
+    submitted_at?: string | null;
+    user?: { login?: string | null } | null;
+  };
   check_suite?: {
     head_sha?: string | null;
     conclusion?: string | null;
@@ -51,11 +63,14 @@ type GitHubWebhookPayload = {
     pull_requests?: Array<{ number?: number | null; url?: string | null }>;
   };
   comment?: {
+    id?: number | null;
     html_url?: string | null;
     body?: string | null;
     user?: { login?: string | null } | null;
   };
 };
+
+const WEBHOOK_PROCESSING_LEASE_MS = 5 * 60_000;
 
 export type GitHubWebhookResult = {
   ok: true;
@@ -108,11 +123,99 @@ async function activeMappingsForPayload(args: {
     if (row.target.toLowerCase() !== args.repoFullName.toLowerCase()) return false;
     if (!args.installationId) return true;
     const cfg = row.connection.config;
-    if (!cfg || typeof cfg !== "object" || !("installationId" in cfg)) return true;
+    if (!cfg || typeof cfg !== "object" || !("installationId" in cfg)) return false;
     return (
       String((cfg as { installationId?: unknown }).installationId) === String(args.installationId)
     );
   });
+}
+
+/** Claim a new, failed, or abandoned delivery without racing an in-flight request. */
+export async function claimGitHubWebhookDelivery(args: {
+  db: PrismaClient;
+  deliveryId: string;
+  event: string;
+  action: string | null;
+  repoFullName: string | null;
+  now?: Date;
+}): Promise<"CLAIMED" | "IN_FLIGHT" | "DUPLICATE"> {
+  const now = args.now ?? new Date();
+  const inserted = await args.db.externalWebhookEvent.createMany({
+    data: [
+      {
+        provider: GITHUB_PROVIDER,
+        deliveryId: args.deliveryId,
+        event: args.event,
+        action: args.action,
+        repoFullName: args.repoFullName,
+        status: "RECEIVED",
+        processingStartedAt: now,
+        attemptCount: 1,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  if (inserted.count === 1) return "CLAIMED";
+
+  const staleBefore = new Date(now.getTime() - WEBHOOK_PROCESSING_LEASE_MS);
+  const reclaimed = await args.db.externalWebhookEvent.updateMany({
+    where: {
+      provider: GITHUB_PROVIDER,
+      deliveryId: args.deliveryId,
+      OR: [
+        { status: "FAILED" },
+        {
+          status: "RECEIVED",
+          OR: [{ processingStartedAt: null }, { processingStartedAt: { lte: staleBefore } }],
+        },
+      ],
+    },
+    data: {
+      event: args.event,
+      action: args.action,
+      repoFullName: args.repoFullName,
+      status: "RECEIVED",
+      error: null,
+      processedAt: null,
+      processingStartedAt: now,
+      attemptCount: { increment: 1 },
+    },
+  });
+  if (reclaimed.count === 1) return "CLAIMED";
+  const existing = await args.db.externalWebhookEvent.findUnique({
+    where: {
+      provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId },
+    },
+    select: { status: true },
+  });
+  return existing?.status === "RECEIVED" ? "IN_FLIGHT" : "DUPLICATE";
+}
+
+/** Finish only the attempt that still owns the processing lease. */
+export async function finishGitHubWebhookDelivery(args: {
+  db: PrismaClient;
+  deliveryId: string;
+  leaseStartedAt: Date;
+  status: "PROCESSED" | "SKIPPED" | "FAILED";
+  workspaceId?: string | null;
+  error?: string | null;
+  processedAt?: Date;
+}): Promise<boolean> {
+  const updated = await args.db.externalWebhookEvent.updateMany({
+    where: {
+      provider: GITHUB_PROVIDER,
+      deliveryId: args.deliveryId,
+      status: "RECEIVED",
+      processingStartedAt: args.leaseStartedAt,
+    },
+    data: {
+      workspaceId: args.workspaceId,
+      status: args.status,
+      error: args.error ?? null,
+      processedAt: args.processedAt ?? new Date(),
+    },
+  });
+  return updated.count === 1;
 }
 
 function forgeIssueKeys(text: string | null | undefined, workspaceKey: string): number[] {
@@ -133,13 +236,10 @@ async function ensureSourceIssueForSnapshot(args: {
   workspaceId: string;
   mapping: Parameters<typeof issueCreateInputFromGitHub>[0]["mapping"] & { id: string };
   snapshot: GitHubResourceSnapshot;
+  resource: ExternalResource;
   actor: ActorMeta;
 }) {
-  const resource = await upsertExternalResource(args.db, {
-    workspaceId: args.workspaceId,
-    connectionMappingId: args.mapping.id,
-    snapshot: args.snapshot,
-  });
+  const resource = args.resource;
   const existing = await args.db.externalResourceLink.findFirst({
     where: {
       workspaceId: args.workspaceId,
@@ -185,11 +285,14 @@ async function processIssueEvent(args: {
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
   const snapshot = issueSnapshot(args.mapping.target, args.payload.issue);
-  let resource = await upsertExternalResource(args.db, {
+  const persisted = await upsertExternalResourceFromWebhook(args.db, {
     workspaceId,
     connectionMappingId: args.mapping.id,
     snapshot,
+    allowEqualTimestampReopen: args.payload.action === "reopened",
   });
+  if (!persisted.applied) return 0;
+  let resource = persisted.resource;
 
   if (args.payload.action === "opened" && config.autoCreateIssues) {
     const created = await ensureSourceIssueForSnapshot({
@@ -197,6 +300,7 @@ async function processIssueEvent(args: {
       workspaceId,
       mapping: args.mapping,
       snapshot,
+      resource,
       actor: args.actor,
     });
     resource = created.resource;
@@ -209,17 +313,40 @@ async function processIssueEvent(args: {
         ? statusRuleForGitHubEvent(config, "issueReopenedStatusId")
         : null;
 
-  await args.db.$transaction((tx) =>
-    applyGitHubSnapshotToLinkedIssues({
+  await args.db.$transaction(async (tx) => {
+    await acquireGitHubResourceOrderLock(tx, {
+      workspaceId,
+      repoFullName: resource.repoFullName,
+      resourceType: resource.resourceType,
+      number: resource.number,
+    });
+    const current = await tx.externalResource.findUnique({ where: { id: resource.id } });
+    if (!current || !gitHubResourceVersionMatches(current, resource)) return;
+    const appliedSnapshot = {
+      ...snapshot,
+      title: current.title,
+      state: current.state,
+      metadata: current.metadata,
+    };
+    const changedIssueIds = await applyGitHubSnapshotToLinkedIssues({
       tx,
       workspaceId,
       resourceId: resource.id,
       mapping: args.mapping,
-      snapshot,
+      snapshot: appliedSnapshot,
       actor: args.actor,
       statusRuleId: rule,
-    }),
-  );
+    });
+    await recordGitHubResourceChangeToLinkedIssues({
+      db: tx,
+      workspaceId,
+      before: persisted.previous,
+      after: current,
+      actor: args.actor,
+      source: "github-webhook",
+      skipIssueIds: changedIssueIds,
+    });
+  });
   return 1;
 }
 
@@ -233,33 +360,51 @@ async function processPullRequestEvent(args: {
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
   const snapshot = pullRequestSnapshot(args.mapping.target, args.payload.pull_request);
-  const resource = await upsertExternalResource(args.db, {
+  const actionNeedsAggregateRefresh = [
+    "opened",
+    "reopened",
+    "synchronize",
+    "ready_for_review",
+    "converted_to_draft",
+    "review_requested",
+    "review_request_removed",
+    "closed",
+  ].includes(args.payload.action ?? "");
+  if (
+    args.payload.action === "review_requested" ||
+    args.payload.action === "review_request_removed"
+  ) {
+    snapshot.metadata = {
+      ...(snapshot.metadata && typeof snapshot.metadata === "object" ? snapshot.metadata : {}),
+      reviewHint: {
+        dirty: true,
+        event: args.payload.action,
+        source: "webhook-hint",
+        updatedAt: args.payload.pull_request.updated_at ?? new Date().toISOString(),
+      },
+    };
+  }
+  const persisted = await upsertExternalResourceFromWebhook(args.db, {
     workspaceId,
     connectionMappingId: args.mapping.id,
     snapshot,
+    invalidateSync: actionNeedsAggregateRefresh,
+    allowEqualTimestampReopen: args.payload.action === "reopened",
   });
+  if (!persisted.applied) return 0;
+  const resource = persisted.resource;
 
   const keyNumbers = [
     ...forgeIssueKeys(args.payload.pull_request.title, args.mapping.workspace.key),
     ...forgeIssueKeys(args.payload.pull_request.body, args.mapping.workspace.key),
   ];
-  if (keyNumbers.length > 0) {
-    const issues = await args.db.issue.findMany({
-      where: { workspaceId, number: { in: keyNumbers }, deletedAt: null },
-      select: { id: true },
-    });
-    await args.db.$transaction(async (tx) => {
-      for (const issue of issues) {
-        await linkExternalResourceToIssue(tx, {
-          workspaceId,
-          issueId: issue.id,
-          externalResourceId: resource.id,
-          kind: "IMPLEMENTS",
-          actor: args.actor,
-        });
-      }
-    });
-  }
+  const issues =
+    keyNumbers.length > 0
+      ? await args.db.issue.findMany({
+          where: { workspaceId, number: { in: keyNumbers }, deletedAt: null },
+          select: { id: true },
+        })
+      : [];
 
   const rule =
     args.payload.action === "opened"
@@ -270,17 +415,48 @@ async function processPullRequestEvent(args: {
           ? statusRuleForGitHubEvent(config, "prMergedStatusId")
           : null;
 
-  await args.db.$transaction((tx) =>
-    applyGitHubSnapshotToLinkedIssues({
+  await args.db.$transaction(async (tx) => {
+    await acquireGitHubResourceOrderLock(tx, {
+      workspaceId,
+      repoFullName: resource.repoFullName,
+      resourceType: resource.resourceType,
+      number: resource.number,
+    });
+    const current = await tx.externalResource.findUnique({ where: { id: resource.id } });
+    if (!current || !gitHubResourceVersionMatches(current, resource)) return;
+    for (const issue of issues) {
+      await linkExternalResourceToIssue(tx, {
+        workspaceId,
+        issueId: issue.id,
+        externalResourceId: resource.id,
+        kind: "IMPLEMENTS",
+        actor: args.actor,
+      });
+    }
+    const changedIssueIds = await applyGitHubSnapshotToLinkedIssues({
       tx,
       workspaceId,
       resourceId: resource.id,
       mapping: args.mapping,
-      snapshot,
+      snapshot: {
+        ...snapshot,
+        title: current.title,
+        state: current.state,
+        metadata: current.metadata,
+      },
       actor: args.actor,
       statusRuleId: rule,
-    }),
-  );
+    });
+    await recordGitHubResourceChangeToLinkedIssues({
+      db: tx,
+      workspaceId,
+      before: persisted.previous,
+      after: current,
+      actor: args.actor,
+      source: "github-webhook",
+      skipIssueIds: changedIssueIds,
+    });
+  });
   await reconcileGitHubPullRequestCompletion(args.db, {
     workspaceId,
     externalResourceId: resource.id,
@@ -297,38 +473,158 @@ async function processReviewEvent(args: {
   actor: ActorMeta;
 }): Promise<number> {
   if (!args.payload.pull_request || !args.mapping.workspace?.id) return 0;
+  const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
   const snapshot = pullRequestSnapshot(args.mapping.target, args.payload.pull_request);
-  snapshot.metadata = {
-    ...(snapshot.metadata && typeof snapshot.metadata === "object" ? snapshot.metadata : {}),
-    reviewDecision: args.payload.review?.state?.toUpperCase() ?? null,
-  };
-  const resource = await upsertExternalResource(args.db, {
-    workspaceId: args.mapping.workspace.id,
-    connectionMappingId: args.mapping.id,
-    snapshot,
-  });
+  // pull_request.updated_at in a review payload reflects review activity, not
+  // a PR lifecycle transition. A review-first delivery may seed identity and
+  // review hints, but must not make delayed opened/synchronize events stale.
+  snapshot.externalUpdatedAt = null;
+  const reviewAction = args.payload.action ?? null;
+  const submittedAt = args.payload.review?.submitted_at ?? null;
+  const reviewState = args.payload.review?.state?.toUpperCase() ?? null;
+  const decision =
+    reviewState === "APPROVED" || reviewState === "CHANGES_REQUESTED" ? reviewState : null;
   const rule =
-    args.payload.review?.state === "changes_requested"
+    decision === "CHANGES_REQUESTED"
       ? statusRuleForGitHubEvent(config, "prChangesRequestedStatusId")
       : null;
-  await args.db.$transaction((tx) =>
-    applyGitHubSnapshotToLinkedIssues({
+  const persisted = await args.db.$transaction(async (tx) => {
+    await acquireGitHubResourceOrderLock(tx, {
+      workspaceId,
+      repoFullName: snapshot.repoFullName,
+      resourceType: snapshot.resourceType,
+      number: snapshot.number,
+    });
+    await canonicalizeGitHubResourceIdentity(tx, { workspaceId, snapshot });
+    const previous = await tx.externalResource.findUnique({
+      where: {
+        workspaceId_provider_repoFullName_resourceType_number: {
+          workspaceId,
+          provider: GITHUB_PROVIDER,
+          repoFullName: snapshot.repoFullName,
+          resourceType: "PULL_REQUEST",
+          number: snapshot.number,
+        },
+      },
+    });
+    const existingMetadata =
+      previous?.metadata &&
+      typeof previous.metadata === "object" &&
+      !Array.isArray(previous.metadata)
+        ? (previous.metadata as Record<string, unknown>)
+        : {};
+    const existingReview =
+      existingMetadata.review &&
+      typeof existingMetadata.review === "object" &&
+      !Array.isArray(existingMetadata.review)
+        ? (existingMetadata.review as Record<string, unknown>)
+        : {};
+    // A partial provider aggregate timestamps the failed/truncated read, not a
+    // trusted review decision. It must not suppress a delayed decisive webhook.
+    const trustedAggregateUpdatedAt =
+      existingReview.partial === true ? null : existingReview.updatedAt;
+    const existingTimes = [trustedAggregateUpdatedAt, existingReview.lastEventAt]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => Date.parse(value))
+      .filter(Number.isFinite);
+    const existingUpdatedAt = existingTimes.length > 0 ? Math.max(...existingTimes) : NaN;
+    const incomingUpdatedAt = submittedAt ? Date.parse(submittedAt) : NaN;
+    if (
+      reviewAction !== "dismissed" &&
+      Number.isFinite(existingUpdatedAt) &&
+      Number.isFinite(incomingUpdatedAt) &&
+      existingUpdatedAt > incomingUpdatedAt
+    ) {
+      return null;
+    }
+    // One review webhook is never the repository-wide decision: another
+    // reviewer may still have changes requested. Preserve the last provider
+    // aggregate and make every individual event a refresh hint.
+    const persistedDecision =
+      typeof existingMetadata.reviewDecision === "string" ? existingMetadata.reviewDecision : null;
+    // GitHub's dismissed payload retains the original review submitted_at;
+    // it does not timestamp the dismissal. Accept the invalidation without
+    // rewinding a newer webhook watermark.
+    const lastEventAt =
+      reviewAction === "dismissed" && typeof existingReview.lastEventAt === "string"
+        ? existingReview.lastEventAt
+        : (submittedAt ?? new Date().toISOString());
+    const review = {
+      ...existingReview,
+      source: "webhook-hint",
+      dirty: true,
+      lastEventDecision: decision,
+      lastEventState: reviewState,
+      lastEventAt,
+      lastReviewId: args.payload.review?.id ?? null,
+      lastReviewer: args.payload.review?.user?.login ?? null,
+    };
+    let resource;
+    if (previous) {
+      resource = await tx.externalResource.update({
+        where: { id: previous.id },
+        data: {
+          connectionMappingId: args.mapping.id,
+          lastSyncedAt: null,
+          metadata: {
+            ...existingMetadata,
+            reviewDecision: persistedDecision,
+            review,
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } else {
+      snapshot.metadata = {
+        ...(snapshot.metadata && typeof snapshot.metadata === "object" ? snapshot.metadata : {}),
+        reviewDecision: persistedDecision,
+        review,
+      };
+      resource = await upsertExternalResource(tx, {
+        workspaceId,
+        connectionMappingId: args.mapping.id,
+        snapshot,
+      });
+      if (resource.syncTerminalAt === null) {
+        resource = await tx.externalResource.update({
+          where: { id: resource.id },
+          data: { lastSyncedAt: null },
+        });
+      }
+    }
+    const appliedSnapshot = {
+      ...snapshot,
+      title: resource.title,
+      state: resource.state,
+      metadata: resource.metadata,
+    };
+    const changedIssueIds = await applyGitHubSnapshotToLinkedIssues({
       tx,
-      workspaceId: args.mapping.workspace.id,
+      workspaceId,
       resourceId: resource.id,
       mapping: args.mapping,
-      snapshot,
+      snapshot: appliedSnapshot,
       actor: args.actor,
       statusRuleId: rule,
-    }),
-  );
+    });
+    await recordGitHubResourceChangeToLinkedIssues({
+      db: tx,
+      workspaceId,
+      before: previous,
+      after: resource,
+      actor: args.actor,
+      source: "github-webhook",
+      skipIssueIds: changedIssueIds,
+    });
+    return resource;
+  });
+  if (!persisted) return 0;
   return 1;
 }
 
-function completedCheckPullRequestNumbers(payload: GitHubWebhookPayload): number[] {
+function checkPullRequestNumbers(payload: GitHubWebhookPayload): number[] {
   const check = payload.check_suite ?? payload.check_run;
-  if (!check || check.status !== "completed") return [];
+  if (!check) return [];
 
   const out = new Set<number>();
   for (const pr of check.pull_requests ?? []) {
@@ -341,7 +637,7 @@ function completedCheckPullRequestNumbers(payload: GitHubWebhookPayload): number
 }
 
 export function githubCheckWebhookHint(args: {
-  event: "check_suite" | "check_run";
+  event: "check_suite" | "check_run" | "status";
   conclusion: string | null;
   headSha?: string | null;
 }) {
@@ -363,16 +659,32 @@ async function processCheckEvent(args: {
   actor: ActorMeta;
 }): Promise<number> {
   if (!args.mapping.workspace?.id) return 0;
-  const numbers = completedCheckPullRequestNumbers(args.payload);
-  if (numbers.length === 0) return 0;
+  const numbers = checkPullRequestNumbers(args.payload);
+  const eventHeadSha =
+    args.payload.check_suite?.head_sha ?? args.payload.check_run?.head_sha ?? args.payload.sha;
+  if (numbers.length === 0 && !eventHeadSha) return 0;
 
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
-  const conclusion =
-    args.payload.check_suite?.conclusion ?? args.payload.check_run?.conclusion ?? null;
+  // GitHub sends rerequested (and check-suite requested) before the check run
+  // itself is reset, so those payloads can still carry the previous failure.
+  // They are cache-invalidation signals only; reconciliation will fetch the
+  // new aggregate once GitHub has advanced it.
+  const resetsChecks = ["requested", "rerequested"].includes(args.payload.action ?? "");
+  const conclusion = resetsChecks
+    ? null
+    : (args.payload.check_suite?.conclusion ??
+      args.payload.check_run?.conclusion ??
+      args.payload.state ??
+      null);
   const successfulConclusion =
     conclusion !== null && ["success", "neutral", "skipped"].includes(conclusion);
-  const failedConclusion = conclusion !== null && !successfulConclusion;
+  const checkStatus =
+    args.payload.check_suite?.status ??
+    args.payload.check_run?.status ??
+    (args.payload.state ? (args.payload.state === "pending" ? "pending" : "completed") : null);
+  const failedConclusion =
+    checkStatus === "completed" && conclusion !== null && !successfulConclusion;
   const statusRuleId = failedConclusion
     ? statusRuleForGitHubEvent(config, "checksFailedStatusId")
     : null;
@@ -383,21 +695,32 @@ async function processCheckEvent(args: {
       })
     : null;
 
-  const resources = await args.db.externalResource.findMany({
+  const candidates = await args.db.externalResource.findMany({
     where: {
       workspaceId,
       provider: GITHUB_PROVIDER,
-      repoFullName: args.mapping.target,
+      repoFullName: { equals: args.mapping.target, mode: "insensitive" },
       resourceType: "PULL_REQUEST",
-      number: { in: numbers },
+      ...(numbers.length > 0
+        ? { number: { in: numbers } }
+        : { metadata: { path: ["head", "sha"], equals: eventHeadSha! } }),
     },
-    select: { id: true, number: true, state: true, metadata: true },
   });
+  const resources = candidates;
   if (resources.length === 0) return 0;
 
   let processed = 0;
+  const processedResourceIds: string[] = [];
   await args.db.$transaction(async (tx) => {
-    for (const resource of resources) {
+    for (const candidate of resources) {
+      await acquireGitHubResourceOrderLock(tx, {
+        workspaceId,
+        repoFullName: candidate.repoFullName,
+        resourceType: candidate.resourceType,
+        number: candidate.number,
+      });
+      const resource = await tx.externalResource.findUnique({ where: { id: candidate.id } });
+      if (!resource) continue;
       const metadata =
         resource.metadata &&
         typeof resource.metadata === "object" &&
@@ -412,7 +735,6 @@ async function processCheckEvent(args: {
         metadata.head && typeof metadata.head === "object" && !Array.isArray(metadata.head)
           ? (metadata.head as Record<string, unknown>)
           : {};
-      const eventHeadSha = args.payload.check_suite?.head_sha ?? args.payload.check_run?.head_sha;
       if (eventHeadSha && typeof head.sha === "string" && head.sha !== eventHeadSha) {
         continue;
       }
@@ -420,11 +742,15 @@ async function processCheckEvent(args: {
       // Persist it as a dirty hint; the worker must fetch every suite plus the
       // combined commit status before completion can trust a conclusion.
       const webhookHint = githubCheckWebhookHint({
-        event: args.payload.check_suite ? "check_suite" : "check_run",
+        event: args.payload.check_suite
+          ? "check_suite"
+          : args.payload.check_run
+            ? "check_run"
+            : "status",
         conclusion,
         headSha: eventHeadSha,
       });
-      await tx.externalResource.update({
+      const after = await tx.externalResource.update({
         where: { id: resource.id },
         data: {
           metadata: {
@@ -433,6 +759,7 @@ async function processCheckEvent(args: {
               ...existingChecks,
               ...webhookHint,
               ...(args.payload.check_run ? { lastRunConclusion: conclusion } : {}),
+              ...(args.payload.state ? { lastStatusState: args.payload.state } : {}),
             },
           } as Prisma.InputJsonValue,
           lastSyncedAt: null,
@@ -440,61 +767,78 @@ async function processCheckEvent(args: {
         },
       });
       processed += 1;
-      if (!status) continue;
-      const links = await tx.externalResourceLink.findMany({
-        where: { workspaceId, externalResourceId: resource.id },
-        select: { issueId: true },
-      });
-      for (const link of links) {
-        const before = await tx.issue.findFirst({
-          where: { id: link.issueId, workspaceId, deletedAt: null },
-          include: { status: true },
+      processedResourceIds.push(resource.id);
+      const changedIssueIds = new Set<string>();
+      if (status) {
+        const links = await tx.externalResourceLink.findMany({
+          where: { workspaceId, externalResourceId: resource.id },
+          select: { issueId: true },
         });
-        if (!before || before.statusId === status.id) continue;
+        for (const link of links) {
+          const before = await tx.issue.findFirst({
+            where: { id: link.issueId, workspaceId, deletedAt: null },
+            include: { status: true },
+          });
+          if (!before || before.statusId === status.id) continue;
 
-        const after = await tx.issue.update({
-          where: { id: before.id },
-          data: {
-            status: { connect: { id: status.id } },
-            ...(status.category === "IN_PROGRESS" && !before.startedAt
-              ? { startedAt: new Date() }
-              : {}),
-            completedAt: status.category === "DONE" ? new Date() : null,
-            canceledAt: status.category === "CANCELED" ? new Date() : null,
-          },
-          include: { status: true },
-        });
-        await recordChange(tx, {
-          workspaceId,
-          actorId: args.actor.actorId,
-          actorAgentId: args.actor.actorAgentId ?? null,
-          entity: "Issue",
-          entityId: before.id,
-          action: "github-checks-failed",
-          before,
-          after,
-          eventKind: "ISSUE_STATUS_CHANGED",
-          subjectType: "issue",
-          subjectId: before.id,
-          payload: {
-            source: "github",
-            change: "checks-failed",
-            externalResourceId: resource.id,
-            repo: args.mapping.target,
-            number: resource.number,
-            event: args.payload.check_suite ? "check_suite" : "check_run",
-            conclusion,
-          },
-          ip: args.actor.ip ?? null,
-          userAgent: args.actor.userAgent ?? null,
-        });
+          const issueAfter = await tx.issue.update({
+            where: { id: before.id },
+            data: {
+              status: { connect: { id: status.id } },
+              ...(status.category === "IN_PROGRESS" && !before.startedAt
+                ? { startedAt: new Date() }
+                : {}),
+              completedAt: status.category === "DONE" ? new Date() : null,
+              canceledAt: status.category === "CANCELED" ? new Date() : null,
+            },
+            include: { status: true },
+          });
+          await recordChange(tx, {
+            workspaceId,
+            actorId: args.actor.actorId,
+            actorAgentId: args.actor.actorAgentId ?? null,
+            entity: "Issue",
+            entityId: before.id,
+            action: "github-checks-failed",
+            before,
+            after: issueAfter,
+            eventKind: "ISSUE_STATUS_CHANGED",
+            subjectType: "issue",
+            subjectId: before.id,
+            payload: {
+              source: "github",
+              change: "checks-failed",
+              externalResourceId: resource.id,
+              repo: args.mapping.target,
+              number: resource.number,
+              event: args.payload.check_suite
+                ? "check_suite"
+                : args.payload.check_run
+                  ? "check_run"
+                  : "status",
+              conclusion,
+            },
+            ip: args.actor.ip ?? null,
+            userAgent: args.actor.userAgent ?? null,
+          });
+          changedIssueIds.add(before.id);
+        }
       }
+      await recordGitHubResourceChangeToLinkedIssues({
+        db: tx,
+        workspaceId,
+        before: resource,
+        after,
+        actor: args.actor,
+        source: "github-webhook",
+        skipIssueIds: changedIssueIds,
+      });
     }
   });
-  for (const resource of resources) {
+  for (const externalResourceId of processedResourceIds) {
     await reconcileGitHubPullRequestCompletion(args.db, {
       workspaceId,
-      externalResourceId: resource.id,
+      externalResourceId,
       actorId: args.actor.actorId,
       actorAgentId: args.actor.actorAgentId,
     });
@@ -507,24 +851,55 @@ async function processIssueComment(args: {
   mapping: Awaited<ReturnType<typeof activeMappingsForPayload>>[number];
   payload: GitHubWebhookPayload;
   actor: ActorMeta;
+  deliveryId: string;
 }): Promise<number> {
   if (args.payload.action !== "created" || !args.payload.issue || !args.payload.comment) return 0;
+  // PR conversation comments and review bodies remain on GitHub. Forge only
+  // mirrors issue discussion when syncComments is explicitly enabled; review
+  // webhooks update bounded state metadata, never Forge BODY comments.
+  if (args.payload.issue.pull_request) return 0;
   if (!args.mapping.workspace?.id) return 0;
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
   if (!config.syncComments) return 0;
   const snapshot = issueSnapshot(args.mapping.target, args.payload.issue);
-  const resource = await upsertExternalResource(args.db, {
+  // issue.updated_at on an issue_comment payload reflects the comment, not an
+  // issue lifecycle transition. Persisting it as the resource version could
+  // make a later opened/closed/reopened delivery look stale and suppress its
+  // Forge side effects. A comment may seed the native resource identity, but
+  // lifecycle webhooks (or provider reconciliation) own its freshness clock.
+  snapshot.externalUpdatedAt = null;
+  const persisted = await upsertExternalResourceFromWebhook(args.db, {
     workspaceId,
     connectionMappingId: args.mapping.id,
     snapshot,
   });
+  const resource = persisted.resource;
   const links = await args.db.externalResourceLink.findMany({
     where: { workspaceId, externalResourceId: resource.id, kind: "SOURCE" },
     select: { issueId: true },
   });
   for (const link of links) {
     await args.db.$transaction(async (tx) => {
+      await acquireGitHubResourceOrderLock(tx, {
+        workspaceId,
+        repoFullName: resource.repoFullName,
+        resourceType: resource.resourceType,
+        number: resource.number,
+      });
+      const sourceCommentId = args.payload.comment?.id
+        ? String(args.payload.comment.id)
+        : args.deliveryId;
+      const dedupeKey = `${sourceCommentId}:${link.issueId}`;
+      const duplicate = await tx.activityEvent.findFirst({
+        where: {
+          workspaceId,
+          kind: "COMMENT_CREATED",
+          payload: { path: ["githubCommentDedupeKey"], equals: dedupeKey },
+        },
+        select: { id: true },
+      });
+      if (duplicate) return;
       const comment = await tx.comment.create({
         data: {
           workspaceId,
@@ -556,6 +931,9 @@ async function processIssueComment(args: {
           source: "github",
           externalResourceId: resource.id,
           commentUrl: args.payload.comment?.html_url ?? null,
+          githubCommentId: args.payload.comment?.id ?? null,
+          githubDeliveryId: args.deliveryId,
+          githubCommentDedupeKey: dedupeKey,
         },
         ip: args.actor.ip ?? null,
         userAgent: args.actor.userAgent ?? null,
@@ -575,29 +953,33 @@ export async function processGitHubWebhook(args: {
   const repoFullName = repoFromPayload(args.payload);
   const action = args.payload.action ?? null;
   const actor = args.actor ?? { actorId: null };
+  const leaseStartedAt = new Date();
 
-  try {
-    await args.db.externalWebhookEvent.create({
-      data: {
-        provider: GITHUB_PROVIDER,
-        deliveryId: args.deliveryId,
-        event: args.event,
-        action,
-        repoFullName,
-        status: "RECEIVED",
-      },
-    });
-  } catch (err) {
-    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === "P2002") {
-      return { ok: true, duplicate: true, processed: 0 };
-    }
-    throw err;
+  const claim = await claimGitHubWebhookDelivery({
+    db: args.db,
+    deliveryId: args.deliveryId,
+    event: args.event,
+    action,
+    repoFullName,
+    now: leaseStartedAt,
+  });
+  if (claim === "DUPLICATE") {
+    return { ok: true, duplicate: true, processed: 0 };
+  }
+  if (claim === "IN_FLIGHT") {
+    // There is no independent abandoned-delivery sweeper. Keep GitHub's
+    // redelivery alive until the current attempt finishes or its lease can be
+    // reclaimed instead of acknowledging potentially unprocessed work.
+    throw new Error("GitHub webhook delivery is already in progress; retry later.");
   }
 
   if (!repoFullName) {
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: { status: "SKIPPED", error: "Missing repository.full_name.", processedAt: new Date() },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      status: "SKIPPED",
+      error: "Missing repository.full_name.",
     });
     return { ok: true, processed: 0, skipped: "missing-repository" };
   }
@@ -608,16 +990,20 @@ export async function processGitHubWebhook(args: {
     installationId: args.payload.installation?.id ?? null,
   });
   if (mappings.length === 0) {
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: {
-        status: "SKIPPED",
-        error: "No active Forge mapping matched.",
-        processedAt: new Date(),
-      },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      status: "SKIPPED",
+      error: "No active Forge mapping matched.",
     });
     return { ok: true, processed: 0, skipped: "no-mapping" };
   }
+  const mappedWorkspaceIds = [...new Set(mappings.map((mapping) => mapping.workspaceId))];
+  // A delivery can fan into several tenants. Keep the provider-global dedupe
+  // row unowned in that case so deleting one workspace cannot erase replay
+  // protection for the others.
+  const eventWorkspaceId = mappedWorkspaceIds.length === 1 ? mappedWorkspaceIds[0] : null;
 
   let processed = 0;
   try {
@@ -635,6 +1021,7 @@ export async function processGitHubWebhook(args: {
           mapping,
           payload: args.payload,
           actor,
+          deliveryId: args.deliveryId,
         });
       } else if (args.event === "pull_request") {
         processed += await processPullRequestEvent({
@@ -650,7 +1037,11 @@ export async function processGitHubWebhook(args: {
           payload: args.payload,
           actor,
         });
-      } else if (args.event === "check_suite" || args.event === "check_run") {
+      } else if (
+        args.event === "check_suite" ||
+        args.event === "check_run" ||
+        args.event === "status"
+      ) {
         processed += await processCheckEvent({
           db: args.db,
           mapping,
@@ -659,24 +1050,22 @@ export async function processGitHubWebhook(args: {
         });
       }
     }
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: {
-        workspaceId: mappings[0]?.workspaceId ?? null,
-        status: processed > 0 ? "PROCESSED" : "SKIPPED",
-        processedAt: new Date(),
-      },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      workspaceId: eventWorkspaceId,
+      status: processed > 0 ? "PROCESSED" : "SKIPPED",
     });
     return { ok: true, processed };
   } catch (err) {
-    await args.db.externalWebhookEvent.update({
-      where: { provider_deliveryId: { provider: GITHUB_PROVIDER, deliveryId: args.deliveryId } },
-      data: {
-        workspaceId: mappings[0]?.workspaceId ?? null,
-        status: "FAILED",
-        error: err instanceof Error ? err.message.slice(0, 2000) : "Unknown error.",
-        processedAt: new Date(),
-      },
+    await finishGitHubWebhookDelivery({
+      db: args.db,
+      deliveryId: args.deliveryId,
+      leaseStartedAt,
+      workspaceId: eventWorkspaceId,
+      status: "FAILED",
+      error: err instanceof Error ? err.message.slice(0, 2000) : "Unknown error.",
     });
     throw err;
   }
