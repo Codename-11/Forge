@@ -7,8 +7,15 @@
 Merged AXI-108 through PR #40 and prepared the feature release from the exact
 merged `main` commit. The release records the unified Open/All issue lifecycle
 scope, clearer issue filtering, improved project creation guidance, and
-accessible project progress presentation. Release validation, deployment, and
-live smoke evidence are recorded with the tagged release.
+accessible project progress presentation.
+
+Release PR #41 passed all three GitHub CI jobs and merged as
+`38dcaf9aec8055e1c6d4e7bf7bee24db64c34afb`; immutable tag `v0.21.0` and its
+GitHub Release point to that exact `main` commit. Production built from the
+dedicated clean checkout under the deployment lock and restarted both app and
+worker images. Live verification returned HTTP 200 for `/signin`; MCP
+initialization reported version `0.21.0`, SHA `38dcaf9`, and the stamped build
+time; app and worker containers remained up with no unexpected startup errors.
 
 ## 2026-07-15 — Scheduled Tasks review follow-up
 
