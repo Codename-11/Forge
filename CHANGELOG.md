@@ -9,6 +9,19 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.22.0 · Connected agent delivery
+
+### Added
+
+- **Agent Studio makes identity, execution, and access readiness explicit.** Each profile owns one primary execution runtime, aggregates every workspace binding and linked MCP client, and deep-links into client creation with the correct binding selected.
+- **PR delivery can require a durable issue handoff.** Workspace policy can recommend, require, or automatically publish one concise implementation, pull-request, and validation update when an MCP work session attaches its native PR.
+
+### Changed
+
+- **Workspace agent configuration is policy-only and progressive.** Binding rows open compactly and reveal capacity, routing, engagement, approval, and capability overrides only when an operator chooses Configure.
+- **Agent credentials have one lifecycle surface.** Agent access now owns MCP clients, scopes, provider setup, rotation, revocation, personal tokens, and session keys; the duplicate client inventory redirects there.
+- **Profile edits stay coherent across workspaces.** Identity and execution changes synchronize to active bindings while workspace-local policy remains untouched; Instance Administration stays governance and Mission Control stays read-only operations.
+
 ## [2026-07-15] — v0.21.0 · Clear project and issue scope
 
 ### Added
