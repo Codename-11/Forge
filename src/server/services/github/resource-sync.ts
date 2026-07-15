@@ -80,6 +80,7 @@ export async function upsertExternalResourceFromWebhook(
     connectionMappingId?: string | null;
     snapshot: GitHubResourceSnapshot;
     invalidateSync?: boolean;
+    allowEqualTimestampReopen?: boolean;
   },
 ): Promise<{ resource: ExternalResource; previous: ExternalResource | null; applied: boolean }> {
   return db.$transaction(async (tx) => {
@@ -108,6 +109,7 @@ export async function upsertExternalResourceFromWebhook(
       const incomingTime = args.snapshot.externalUpdatedAt.getTime();
       const equalTimestampRegression =
         previousTime === incomingTime &&
+        !args.allowEqualTimestampReopen &&
         ((previous.state === "merged" && args.snapshot.state !== "merged") ||
           (previous.state === "closed" &&
             args.snapshot.state !== "closed" &&

@@ -255,6 +255,7 @@ async function processIssueEvent(args: {
     workspaceId,
     connectionMappingId: args.mapping.id,
     snapshot,
+    allowEqualTimestampReopen: args.payload.action === "reopened",
   });
   if (!persisted.applied) return 0;
   let resource = persisted.resource;
@@ -355,6 +356,7 @@ async function processPullRequestEvent(args: {
     connectionMappingId: args.mapping.id,
     snapshot,
     invalidateSync: actionNeedsAggregateRefresh,
+    allowEqualTimestampReopen: args.payload.action === "reopened",
   });
   if (!persisted.applied) return 0;
   const resource = persisted.resource;

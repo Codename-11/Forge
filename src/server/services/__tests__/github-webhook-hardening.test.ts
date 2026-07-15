@@ -258,7 +258,7 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
-  it("does not regress merged state when GitHub events share a timestamp", async () => {
+  it("does not regress merged state for ambiguous same-timestamp events", async () => {
     const { fixture, prisma, mapping } = await setup();
     await upsertExternalResource(prisma, {
       workspaceId: fixture.workspace.id,
@@ -281,7 +281,7 @@ describe("GitHub webhook hardening", () => {
       deliveryId: delivery("equal-timestamp"),
       event: "pull_request",
       payload: {
-        action: "reopened",
+        action: "synchronize",
         installation: { id: 101 },
         repository: { full_name: "acme/forge" },
         pull_request: pullRequest({ updated_at: "2026-07-14T13:00:00Z" }),
@@ -294,6 +294,42 @@ describe("GitHub webhook hardening", () => {
         where: { workspaceId: fixture.workspace.id, number: 42 },
       }),
     ).resolves.toMatchObject({ state: "merged", title: "Merged title" });
+  });
+
+  it("accepts an explicit reopen when GitHub timestamps share a second", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Closed title",
+        state: "closed",
+        metadata: { merged: false },
+        externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("same-second-reopen"),
+      event: "pull_request",
+      payload: {
+        action: "reopened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({ updated_at: "2026-07-14T13:00:00Z" }),
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({ state: "open", title: "Ship GitHub hardening" });
   });
 
   it("serializes concurrent snapshots so the newest provider state wins", async () => {
