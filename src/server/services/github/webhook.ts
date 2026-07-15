@@ -286,12 +286,18 @@ async function processIssueEvent(args: {
     });
     const current = await tx.externalResource.findUnique({ where: { id: resource.id } });
     if (!current || !gitHubResourceVersionMatches(current, resource)) return;
+    const appliedSnapshot = {
+      ...snapshot,
+      title: current.title,
+      state: current.state,
+      metadata: current.metadata,
+    };
     const changedIssueIds = await applyGitHubSnapshotToLinkedIssues({
       tx,
       workspaceId,
       resourceId: resource.id,
       mapping: args.mapping,
-      snapshot,
+      snapshot: appliedSnapshot,
       actor: args.actor,
       statusRuleId: rule,
     });
@@ -299,7 +305,7 @@ async function processIssueEvent(args: {
       db: tx,
       workspaceId,
       before: persisted.previous,
-      after: resource,
+      after: current,
       actor: args.actor,
       source: "github-webhook",
       skipIssueIds: changedIssueIds,
@@ -396,7 +402,12 @@ async function processPullRequestEvent(args: {
       workspaceId,
       resourceId: resource.id,
       mapping: args.mapping,
-      snapshot,
+      snapshot: {
+        ...snapshot,
+        title: current.title,
+        state: current.state,
+        metadata: current.metadata,
+      },
       actor: args.actor,
       statusRuleId: rule,
     });
@@ -404,7 +415,7 @@ async function processPullRequestEvent(args: {
       db: tx,
       workspaceId,
       before: persisted.previous,
-      after: resource,
+      after: current,
       actor: args.actor,
       source: "github-webhook",
       skipIssueIds: changedIssueIds,

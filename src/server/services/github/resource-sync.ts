@@ -146,14 +146,16 @@ export async function acquireGitHubResourceOrderLock(
 }
 
 export function gitHubResourceVersionMatches(
-  current: Pick<ExternalResource, "updatedAt" | "externalUpdatedAt" | "state" | "metadata">,
-  expected: Pick<ExternalResource, "updatedAt" | "externalUpdatedAt" | "state" | "metadata">,
+  current: Pick<ExternalResource, "externalUpdatedAt" | "title" | "state" | "metadata">,
+  expected: Pick<ExternalResource, "externalUpdatedAt" | "title" | "state" | "metadata">,
 ): boolean {
+  const currentHead = metadataRecord(metadataRecord(current.metadata).head).sha;
+  const expectedHead = metadataRecord(metadataRecord(expected.metadata).head).sha;
   return (
-    current.updatedAt.getTime() === expected.updatedAt.getTime() &&
     current.externalUpdatedAt?.getTime() === expected.externalUpdatedAt?.getTime() &&
+    current.title === expected.title &&
     current.state === expected.state &&
-    JSON.stringify(current.metadata) === JSON.stringify(expected.metadata)
+    currentHead === expectedHead
   );
 }
 
@@ -787,49 +789,57 @@ export async function recoverGenericGitHubAttachments(
   options: { workspaceId?: string; limit?: number } = {},
 ): Promise<{ inspected: number; recovered: number; unmatched: number }> {
   const limit = Math.max(1, Math.min(options.limit ?? 500, 2_000));
-  const candidates = await db.attachment.findMany({
-    where: {
-      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
-      kind: "LINK",
-      targetType: "issue",
-      targetId: { not: null },
-      OR: [
-        { externalUrl: { contains: "github.com", mode: "insensitive" } },
-        { url: { contains: "github.com", mode: "insensitive" } },
-      ],
-    },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    take: limit,
-    select: { id: true, workspaceId: true, targetId: true, externalUrl: true, url: true },
-  });
+  // Filter to rows that already have a matching native resource in SQL. If
+  // unmatched legacy links occupied the oldest bounded prefix, an ordinary
+  // attachment query would inspect that same prefix forever and starve every
+  // recoverable row behind it.
+  const urlPattern =
+    "^https?://(?:www\\.)?github\\.com/([^/]+)/([^/]+)/(issues|pull)/([0-9]+)(?:[/?#].*)?$";
+  const workspaceFilter = options.workspaceId
+    ? Prisma.sql`AND a."workspaceId" = ${options.workspaceId}`
+    : Prisma.empty;
+  const candidates = await db.$queryRaw<
+    Array<{
+      id: string;
+      workspaceId: string;
+      targetId: string;
+      resourceId: string;
+    }>
+  >(Prisma.sql`
+    SELECT
+      a."id",
+      a."workspaceId",
+      a."targetId",
+      r."id" AS "resourceId"
+    FROM "Attachment" a
+    CROSS JOIN LATERAL regexp_match(
+      COALESCE(NULLIF(a."externalUrl", ''), a."url"),
+      ${urlPattern},
+      'i'
+    ) AS matched(parts)
+    JOIN "ExternalResource" r
+      ON r."workspaceId" = a."workspaceId"
+     AND r."provider" = ${GITHUB_PROVIDER}
+     AND lower(r."repoFullName") = lower((matched.parts)[1] || '/' || (matched.parts)[2])
+     AND r."resourceType" = CASE
+       WHEN lower((matched.parts)[3]) = 'pull' THEN 'PULL_REQUEST'
+       ELSE 'ISSUE'
+     END
+     AND r."number" = ((matched.parts)[4])::integer
+    WHERE a."kind" = 'LINK'
+      AND a."targetType" = 'issue'
+      AND a."targetId" IS NOT NULL
+      ${workspaceFilter}
+    ORDER BY a."createdAt" ASC, a."id" ASC
+    LIMIT ${limit}
+  `);
   let recovered = 0;
-  let unmatched = 0;
   for (const attachment of candidates) {
-    let parsed: ParsedGitHubUrl;
-    try {
-      parsed = parseGitHubUrl(attachment.externalUrl ?? attachment.url);
-    } catch {
-      unmatched += 1;
-      continue;
-    }
-    const resources = await db.externalResource.findMany({
-      where: {
-        workspaceId: attachment.workspaceId,
-        provider: GITHUB_PROVIDER,
-        resourceType: parsed.type,
-        number: parsed.number,
-      },
-    });
-    const resource = resources.find((row) => sameRepo(row.repoFullName, parsed.repoFullName));
-    if (!resource || !attachment.targetId) {
-      unmatched += 1;
-      continue;
-    }
     await db.$transaction(async (tx) => {
       await linkExternalResourceToIssue(tx, {
         workspaceId: attachment.workspaceId,
-        issueId: attachment.targetId!,
-        externalResourceId: resource.id,
+        issueId: attachment.targetId,
+        externalResourceId: attachment.resourceId,
         kind: "RELATES_TO",
         actor: { actorId: null },
       });
@@ -839,7 +849,7 @@ export async function recoverGenericGitHubAttachments(
     });
     recovered += 1;
   }
-  return { inspected: candidates.length, recovered, unmatched };
+  return { inspected: candidates.length, recovered, unmatched: 0 };
 }
 
 export async function importGitHubIssue(args: {

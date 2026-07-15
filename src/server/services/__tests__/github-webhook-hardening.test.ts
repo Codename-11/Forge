@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { claimGitHubWebhookDelivery, processGitHubWebhook } from "@/server/services/github/webhook";
 import {
+  gitHubResourceVersionMatches,
   recoverGenericGitHubAttachments,
   resolveGitHubRepoMapping,
   upsertExternalResource,
@@ -250,6 +251,37 @@ describe("GitHub webhook hardening", () => {
       state: "merged",
       externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
     });
+  });
+
+  it("keeps lifecycle side effects eligible across metadata-only check races", async () => {
+    const expected = {
+      externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      title: "Merged PR",
+      state: "merged",
+      metadata: { merged: true, head: { sha: "head-new" }, checks: { status: "completed" } },
+    };
+    expect(
+      gitHubResourceVersionMatches(
+        {
+          ...expected,
+          metadata: {
+            merged: true,
+            head: { sha: "head-new" },
+            checks: { status: "dirty", source: "webhook-hint" },
+          },
+        },
+        expected,
+      ),
+    ).toBe(true);
+    expect(
+      gitHubResourceVersionMatches(
+        {
+          ...expected,
+          metadata: { merged: true, head: { sha: "different-head" } },
+        },
+        expected,
+      ),
+    ).toBe(false);
   });
 
   it("invalidates trusted checks when a same-SHA rerun starts and emits issue activity", async () => {
@@ -513,6 +545,21 @@ describe("GitHub webhook hardening", () => {
       }),
     ).resolves.toMatchObject({ status: "RECEIVED", attemptCount: 2, error: null });
 
+    const unmatched = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        targetType: "issue",
+        targetId: issue.id,
+        kind: "LINK",
+        filename: "Unmatched GitHub PR",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://github.com/acme/forge/pull/999",
+        externalUrl: "https://github.com/acme/forge/pull/999",
+        createdAt: new Date("2026-07-14T09:00:00Z"),
+      },
+    });
     const resource = await upsertExternalResource(prisma, {
       workspaceId: fixture.workspace.id,
       connectionMappingId: mapping.id,
@@ -541,13 +588,16 @@ describe("GitHub webhook hardening", () => {
       },
     });
     await expect(
-      recoverGenericGitHubAttachments(prisma, { workspaceId: fixture.workspace.id }),
+      recoverGenericGitHubAttachments(prisma, { workspaceId: fixture.workspace.id, limit: 1 }),
     ).resolves.toMatchObject({
       inspected: 1,
       recovered: 1,
       unmatched: 0,
     });
     expect(await prisma.attachment.findUnique({ where: { id: attachment.id } })).toBeNull();
+    await expect(
+      prisma.attachment.findUnique({ where: { id: unmatched.id } }),
+    ).resolves.toBeTruthy();
     await expect(
       prisma.externalResourceLink.findUnique({
         where: {
