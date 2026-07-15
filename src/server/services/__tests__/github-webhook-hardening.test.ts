@@ -39,7 +39,7 @@ afterAll(async () => {
   await disconnectPrisma();
 });
 
-async function setup(options: { syncComments?: boolean } = {}) {
+async function setup(options: { syncComments?: boolean; autoCreateIssues?: boolean } = {}) {
   const fixture = await createWorkspaceFixture({ keyPrefix: "GH" });
   fixtures.push(fixture);
   const prisma = getPrisma();
@@ -59,7 +59,15 @@ async function setup(options: { syncComments?: boolean } = {}) {
       connectionId: connection.id,
       kind: "repo",
       target: "acme/forge",
-      config: options.syncComments ? { github: { syncComments: true } } : undefined,
+      config:
+        options.syncComments || options.autoCreateIssues
+          ? {
+              github: {
+                syncComments: options.syncComments ?? false,
+                autoCreateIssues: options.autoCreateIssues ?? false,
+              },
+            }
+          : undefined,
     },
   });
   return { fixture, prisma, issue, mapping };
@@ -955,6 +963,68 @@ describe("GitHub webhook hardening", () => {
         where: { workspaceId: fixture.workspace.id, resourceType: "ISSUE", number: 42 },
       }),
     ).toBe(0);
+  });
+
+  it("does not let a newer issue comment suppress issue lifecycle side effects", async () => {
+    const { fixture, prisma } = await setup({ syncComments: true, autoCreateIssues: true });
+    const issue = {
+      id: 700,
+      number: 7,
+      title: "Lifecycle after comment",
+      state: "open" as const,
+      html_url: "https://github.com/acme/forge/issues/7",
+      url: "https://api.github.com/repos/acme/forge/issues/7",
+      created_at: "2026-07-14T09:00:00Z",
+      updated_at: "2026-07-14T13:00:00Z",
+    };
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("comment-before-opened"),
+      event: "issue_comment",
+      payload: {
+        action: "created",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        issue,
+        comment: {
+          id: 9003,
+          html_url: "https://github.com/acme/forge/issues/7#issuecomment-9003",
+          body: "Comment arrived first",
+          user: { login: "octocat" },
+        },
+      },
+    });
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("opened-after-comment"),
+      event: "issues",
+      payload: {
+        action: "opened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        issue: { ...issue, updated_at: "2026-07-14T12:00:00Z" },
+      },
+    });
+
+    const resource = await prisma.externalResource.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        resourceType: "ISSUE",
+        repoFullName: "acme/forge",
+        number: 7,
+      },
+    });
+    expect(resource.externalUpdatedAt).toEqual(new Date("2026-07-14T12:00:00Z"));
+    await expect(
+      prisma.externalResourceLink.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          externalResourceId: resource.id,
+          kind: "SOURCE",
+        },
+      }),
+    ).resolves.toBe(1);
   });
 
   it("reclaims failed deliveries once and promotes legacy GitHub link attachments", async () => {

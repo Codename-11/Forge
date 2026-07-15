@@ -807,6 +807,12 @@ async function processIssueComment(args: {
   const config = readGitHubMappingConfig(args.mapping.config);
   if (!config.syncComments) return 0;
   const snapshot = issueSnapshot(args.mapping.target, args.payload.issue);
+  // issue.updated_at on an issue_comment payload reflects the comment, not an
+  // issue lifecycle transition. Persisting it as the resource version could
+  // make a later opened/closed/reopened delivery look stale and suppress its
+  // Forge side effects. A comment may seed the native resource identity, but
+  // lifecycle webhooks (or provider reconciliation) own its freshness clock.
+  snapshot.externalUpdatedAt = null;
   const persisted = await upsertExternalResourceFromWebhook(args.db, {
     workspaceId,
     connectionMappingId: args.mapping.id,
