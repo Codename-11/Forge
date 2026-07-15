@@ -236,7 +236,6 @@ describe("GitHub webhook hardening", () => {
         kind: "IMPLEMENTS",
       },
     });
-
     const result = await processGitHubWebhook({
       db: prisma,
       deliveryId: delivery("out-of-order"),
@@ -449,6 +448,23 @@ describe("GitHub webhook hardening", () => {
         kind: "IMPLEMENTS",
       },
     });
+    const unrelated = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 43,
+        url: "https://github.com/acme/forge/pull/43",
+        title: "Other head",
+        state: "open",
+        metadata: {
+          head: { sha: "head-other" },
+          checks: { status: "completed", conclusion: "success", source: "api-aggregate" },
+        },
+      },
+    });
 
     await processGitHubWebhook({
       db: prisma,
@@ -473,6 +489,11 @@ describe("GitHub webhook hardening", () => {
     expect(refreshed.lastSyncedAt).toBeNull();
     expect(refreshed.metadata).toMatchObject({
       checks: { status: "dirty", source: "webhook-hint", headSha: "head-new" },
+    });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: unrelated.id } }),
+    ).resolves.toMatchObject({
+      metadata: { checks: { status: "completed", source: "api-aggregate" } },
     });
     const events = await prisma.activityEvent.findMany({
       where: { workspaceId: fixture.workspace.id, subjectType: "issue", subjectId: issue.id },
@@ -613,6 +634,61 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("does not treat one reviewer approval as the aggregate decision", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Multiple reviewers",
+        state: "open",
+        metadata: {
+          reviewDecision: "CHANGES_REQUESTED",
+          review: { decision: "CHANGES_REQUESTED", updatedAt: "2026-07-14T13:00:00Z" },
+        },
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("single-approval-review"),
+      event: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest(),
+        review: {
+          id: 803,
+          state: "approved",
+          submitted_at: "2026-07-14T14:00:00Z",
+          user: { login: "second-reviewer" },
+        },
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      lastSyncedAt: null,
+      metadata: {
+        reviewDecision: "CHANGES_REQUESTED",
+        review: {
+          decision: "CHANGES_REQUESTED",
+          dirty: true,
+          lastEventDecision: "APPROVED",
+          lastReviewer: "second-reviewer",
+        },
+      },
+    });
+  });
+
   it("canonicalizes legacy identity before applying review hints", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await prisma.externalResource.create({
@@ -656,7 +732,10 @@ describe("GitHub webhook hardening", () => {
       title: "Merged canonicalization target",
       state: "merged",
       externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
-      metadata: { reviewDecision: "APPROVED" },
+      metadata: {
+        reviewDecision: null,
+        review: { dirty: true, lastEventDecision: "APPROVED" },
+      },
     });
   });
 

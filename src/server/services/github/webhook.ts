@@ -447,14 +447,6 @@ async function processReviewEvent(args: {
   const reviewState = args.payload.review?.state?.toUpperCase() ?? null;
   const decision =
     reviewState === "APPROVED" || reviewState === "CHANGES_REQUESTED" ? reviewState : null;
-  const decisiveReview = {
-    decision,
-    source: "webhook-hint",
-    reviewId: args.payload.review?.id ?? null,
-    reviewer: args.payload.review?.user?.login ?? null,
-    updatedAt: submittedAt ?? new Date().toISOString(),
-    dirty: false,
-  };
   const rule =
     decision === "CHANGES_REQUESTED"
       ? statusRuleForGitHubEvent(config, "prChangesRequestedStatusId")
@@ -501,20 +493,21 @@ async function processReviewEvent(args: {
     ) {
       return null;
     }
+    // One review webhook is never the repository-wide decision: another
+    // reviewer may still have changes requested. Preserve the last provider
+    // aggregate and make every individual event a refresh hint.
     const persistedDecision =
-      decision ??
-      (typeof existingMetadata.reviewDecision === "string"
-        ? existingMetadata.reviewDecision
-        : null);
-    const review = decision
-      ? decisiveReview
-      : {
-          ...existingReview,
-          source: "webhook-hint",
-          dirty: true,
-          lastEventState: reviewState,
-          lastEventAt: submittedAt ?? new Date().toISOString(),
-        };
+      typeof existingMetadata.reviewDecision === "string" ? existingMetadata.reviewDecision : null;
+    const review = {
+      ...existingReview,
+      source: "webhook-hint",
+      dirty: true,
+      lastEventDecision: decision,
+      lastEventState: reviewState,
+      lastEventAt: submittedAt ?? new Date().toISOString(),
+      lastReviewId: args.payload.review?.id ?? null,
+      lastReviewer: args.payload.review?.user?.login ?? null,
+    };
     let resource;
     if (previous) {
       resource = await tx.externalResource.update({
@@ -648,27 +641,14 @@ async function processCheckEvent(args: {
     where: {
       workspaceId,
       provider: GITHUB_PROVIDER,
-      repoFullName: args.mapping.target,
+      repoFullName: { equals: args.mapping.target, mode: "insensitive" },
       resourceType: "PULL_REQUEST",
-      ...(numbers.length > 0 ? { number: { in: numbers } } : {}),
+      ...(numbers.length > 0
+        ? { number: { in: numbers } }
+        : { metadata: { path: ["head", "sha"], equals: eventHeadSha! } }),
     },
   });
-  const resources =
-    numbers.length > 0
-      ? candidates
-      : candidates.filter((resource) => {
-          const metadata =
-            resource.metadata &&
-            typeof resource.metadata === "object" &&
-            !Array.isArray(resource.metadata)
-              ? (resource.metadata as Record<string, unknown>)
-              : {};
-          const head =
-            metadata.head && typeof metadata.head === "object" && !Array.isArray(metadata.head)
-              ? (metadata.head as Record<string, unknown>)
-              : {};
-          return typeof head.sha === "string" && head.sha === eventHeadSha;
-        });
+  const resources = candidates;
   if (resources.length === 0) return 0;
 
   let processed = 0;
