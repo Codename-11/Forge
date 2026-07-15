@@ -446,7 +446,7 @@ export function MissionControlHome() {
           eyebrow="Coverage"
           title="Agent presence"
           count={agents.data ? `${onlineAgents} online · ${agentsList.length} total` : undefined}
-          action={<HeaderLink href="/settings/agents">Configure</HeaderLink>}
+          action={<HeaderLink href="/agents">Manage fleet</HeaderLink>}
           className="lg:col-span-5"
         >
           {agents.isLoading ? (
@@ -468,7 +468,7 @@ export function MissionControlHome() {
               {agentsList.slice(0, 6).map((agent) => (
                 <Link
                   key={agent.id}
-                  href={`/settings/agents/${agent.id}`}
+                  href={`/agents/${agent.id}`}
                   className="focus-ring flex min-h-12 items-center gap-2.5 px-3.5 py-2 hover:bg-subtle"
                 >
                   <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border bg-background text-xs font-semibold">

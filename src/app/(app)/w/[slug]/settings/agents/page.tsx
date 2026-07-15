@@ -9,11 +9,7 @@ import {
   ChevronDown,
   CircleDot,
   Clock,
-  KeyRound,
   MessageSquare,
-  Plus,
-  Terminal,
-  Trash2,
   X,
 } from "lucide-react";
 import type { EngagementMode } from "@prisma/client";
@@ -23,14 +19,12 @@ import { Topbar } from "@/components/topbar";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Confirm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { Section } from "@/components/ui";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { trpc } from "@/lib/trpc";
-import { RequestProfileDialog } from "./request-profile-dialog";
 
 /**
  * Workspace · Agents — the **binding** surface.
@@ -58,21 +52,9 @@ export default function AgentsBindingPage() {
   const isAdmin = ws.role === "OWNER" || ws.role === "ADMIN";
 
   const { data: bound, isLoading: boundLoading } = trpc.agents.bindings.list.useQuery();
-  const { data: catalog, isLoading: catalogLoading } = trpc.agents.bindings.catalog.useQuery();
-
-  const [unbindTarget, setUnbindTarget] = useState<{
-    agentId: string;
-    name: string;
-  } | null>(null);
-  const [removeTarget, setRemoveTarget] = useState<{
-    agentId: string;
-    name: string;
-  } | null>(null);
-  const [requestOpen, setRequestOpen] = useState(false);
 
   function invalidate() {
     void utils.agents.bindings.list.invalidate();
-    void utils.agents.bindings.catalog.invalidate();
   }
 
   const setPolicy = trpc.agents.bindings.setPolicy.useMutation({
@@ -83,47 +65,18 @@ export default function AgentsBindingPage() {
     onError: (e) => toast.error(e.message),
   });
 
-  const bind = trpc.agents.bindings.bind.useMutation({
-    onSuccess: () => {
-      toast.success("Agent bound to this workspace.");
-      invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const unbind = trpc.agents.bindings.unbind.useMutation({
-    onSuccess: () => {
-      toast.success("Agent unbound. History is preserved.");
-      invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
-  const remove = trpc.agent.remove.useMutation({
-    onSuccess: (res) => {
-      toast.success(
-        res.action === "deleted"
-          ? `Deleted ${res.name}.`
-          : `Archived ${res.name} — it has history, so it was hidden instead of deleted.`,
-      );
-      invalidate();
-    },
-    onError: (e) => toast.error(e.message),
-  });
-
   const boundRows = bound ?? [];
-  const catalogRows = catalog ?? [];
 
   return (
     <>
       <Topbar
-        title="Agents"
-        subtitle="Workspace bindings only: capacity, routing, engagement, and approval policy."
+        title="Agent policy"
+        subtitle={`Workspace · ${ws.name} · capacity, routing, engagement, and approvals.`}
         actions={
-          <Link href="/settings/agents">
+          <Link href={`/agents?workspace=${ws.id}`}>
             <Button size="sm" variant="ghost">
               <ArrowRight className="h-3.5 w-3.5" />
-              Open Agent Studio
+              Manage fleet
             </Button>
           </Link>
         }
@@ -135,21 +88,26 @@ export default function AgentsBindingPage() {
               <Bot className="h-4 w-4" />
             </span>
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold">Workspace binding policy</div>
+              <div className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                Workspace agent policy
+                <span className="rounded border border-border/70 bg-background px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Workspace · {ws.name}
+                </span>
+              </div>
               <p className="text-meta mt-0.5 text-muted-foreground">
-                Identity and the primary execution runtime live in Agent Studio. This page only
-                changes how an agent works inside {ws.name}.
+                Profiles and bindings live in Mission Control. This page only changes how a bound
+                agent works inside {ws.name}.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Link href="/settings/agents">
+              <Link href={`/agents?workspace=${ws.id}`}>
                 <Button size="sm" variant="outline">
-                  Agent Studio
+                  Manage profiles & bindings
                 </Button>
               </Link>
               <Link href={`/w/${ws.slug}/settings/access`}>
                 <Button size="sm" variant="outline">
-                  <KeyRound className="h-3.5 w-3.5" /> Agent access
+                  Agent access & permissions
                 </Button>
               </Link>
             </div>
@@ -158,7 +116,7 @@ export default function AgentsBindingPage() {
           {/* Bound agents */}
           <Section
             title="Bound agents"
-            hint="Profiles currently configured for this workspace. Each row's controls only affect Forge."
+            hint="Policy for profiles already bound to this workspace. Binding and identity management live in Mission Control."
             actions={
               boundRows.length > 0 ? (
                 <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
@@ -172,7 +130,7 @@ export default function AgentsBindingPage() {
                 as="div"
                 icon={Bot}
                 title="No agents bound yet"
-                hint="Bind a globally-defined profile below to give this workspace an agent. Binding copies the definition and lets you set per-workspace policy without touching the global profile."
+                hint="Bind a global profile from Mission Control. Workspace-specific capacity, routing, and approval controls will appear here afterward."
               />
             ) : (
               <Card as="div" className="divide-y-0">
@@ -185,160 +143,13 @@ export default function AgentsBindingPage() {
                     isAdmin={isAdmin}
                     saving={setPolicy.isPending}
                     onSavePolicy={(patch) => setPolicy.mutate({ agentId: a.id, ...patch })}
-                    onUnbind={() => setUnbindTarget({ agentId: a.id, name: a.name })}
-                    onDelete={() => setRemoveTarget({ agentId: a.id, name: a.name })}
                   />
                 ))}
               </Card>
             )}
           </Section>
-
-          {/* Available to bind — catalog */}
-          <Section
-            title="Available to bind"
-            hint="Profiles you've defined globally (or that the instance admin has shared) that aren't yet bound here."
-          >
-            <Card as="div">
-              {catalogRows.map((p, i) => (
-                <div
-                  key={p.id}
-                  className={
-                    "flex items-center gap-3 p-3 " + (i > 0 ? "border-t border-border/60" : "")
-                  }
-                >
-                  <AgentAvatar agent={p} size="md" title={null} />
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[0.8125rem] font-semibold">{p.name}</span>
-                      <span className="text-id text-muted-foreground">@{p.profileKey}</span>
-                      {p.instanceShared && (
-                        <span className="rounded border border-border/70 bg-card/60 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                          instance-shared
-                        </span>
-                      )}
-                      {p.ownedByMe && (
-                        <span className="rounded border border-border/70 bg-card/60 px-1 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                          yours
-                        </span>
-                      )}
-                    </div>
-                    {p.description && (
-                      <div className="text-meta mt-0.5 text-muted-foreground">{p.description}</div>
-                    )}
-                    {p.baseCapabilities.length > 0 && (
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {p.baseCapabilities.slice(0, 4).map((c) => (
-                          <span
-                            key={c}
-                            className="rounded border border-border/70 bg-background px-1 py-0.5 font-mono text-[10px] text-muted-foreground"
-                          >
-                            {c}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                  <Button
-                    size="sm"
-                    variant="ember"
-                    disabled={!isAdmin || bind.isPending}
-                    title={!isAdmin ? "Admins only." : undefined}
-                    onClick={() => bind.mutate({ profileId: p.id })}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Bind
-                  </Button>
-                </div>
-              ))}
-              {!catalogLoading && catalogRows.length === 0 && (
-                <div className="text-meta p-6 text-center text-muted-foreground">
-                  No unbound profiles available. Define a new profile globally from{" "}
-                  <Link
-                    href="/settings/agents"
-                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  >
-                    your agent definitions
-                  </Link>
-                  , or connect an ephemeral CLI from{" "}
-                  <Link
-                    href={`/w/${ws.slug}/settings/access?create=session`}
-                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-                  >
-                    Agent access
-                  </Link>
-                  .
-                </div>
-              )}
-              {isAdmin ? (
-                <Link
-                  href="/settings/agents"
-                  className="flex items-center gap-2 border-t border-border/60 p-3 text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
-                >
-                  <Plus className="h-3 w-3" />
-                  Define a new profile globally
-                  <span className="ml-auto rounded border border-ember/30 bg-ember/10 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-ember">
-                    requires instance admin
-                  </span>
-                </Link>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setRequestOpen(true)}
-                  className="flex w-full items-center gap-2 border-t border-border/60 p-3 text-left text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
-                >
-                  <Plus className="h-3 w-3" />
-                  Request a profile
-                  <span className="ml-auto rounded border border-border/70 bg-card/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                    needs admin approval
-                  </span>
-                </button>
-              )}
-              <Link
-                href={`/w/${ws.slug}/settings/access`}
-                className="flex items-center gap-2 border-t border-border/60 p-3 text-[0.8125rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
-              >
-                <Terminal className="h-3 w-3" />
-                Connect Claude Code, Codex CLI, or a session client
-                <span className="ml-auto rounded border border-border/70 bg-card/60 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                  MCP
-                </span>
-              </Link>
-            </Card>
-          </Section>
         </div>
       </div>
-
-      <RequestProfileDialog open={requestOpen} onOpenChange={setRequestOpen} />
-
-      <Confirm
-        open={!!unbindTarget}
-        onOpenChange={(v) => !v && setUnbindTarget(null)}
-        variant="destructive"
-        title={`Unbind ${unbindTarget?.name}?`}
-        description="The agent stops being available in this workspace. Runs, chats, and history are preserved — re-bind any time to restore it."
-        primaryLabel="Unbind"
-        loading={unbind.isPending}
-        onConfirm={async () => {
-          if (!unbindTarget) return;
-          await unbind.mutateAsync({ agentId: unbindTarget.agentId });
-          setUnbindTarget(null);
-        }}
-      />
-
-      <Confirm
-        open={!!removeTarget}
-        onOpenChange={(v) => !v && setRemoveTarget(null)}
-        variant="destructive"
-        title={`Delete ${removeTarget?.name}?`}
-        description="Permanently deletes the agent when it has no history. If it has runs, comments, keys, or past assignments, it's archived instead (hidden, history kept) — the same result as Unbind, but not reversible by re-binding once deleted."
-        primaryLabel="Delete"
-        loading={remove.isPending}
-        onConfirm={async () => {
-          if (!removeTarget) return;
-          await remove.mutateAsync({ id: removeTarget.agentId });
-          setRemoveTarget(null);
-        }}
-      />
     </>
   );
 }
@@ -353,8 +164,6 @@ function BoundAgentRow({
   isAdmin,
   saving,
   onSavePolicy,
-  onUnbind,
-  onDelete,
 }: {
   agent: BoundAgent;
   first: boolean;
@@ -368,8 +177,6 @@ function BoundAgentRow({
     requireApprovalBeforeStart?: boolean;
     capabilities?: string[];
   }) => void;
-  onUnbind: () => void;
-  onDelete: () => void;
 }) {
   // Local mirror of max-concurrent so the input is editable, committed on blur.
   const [maxConcurrent, setMaxConcurrent] = useState(String(agent.maxConcurrent));
@@ -425,12 +232,10 @@ function BoundAgentRow({
               )}{" "}
               ·{" "}
               <Link
-                href={
-                  agent.profile?.id ? `/settings/agents/${agent.profile.id}` : "/settings/agents"
-                }
+                href={agent.profile?.id ? `/agents/${agent.profile.id}` : "/agents"}
                 className="underline decoration-dotted underline-offset-2 hover:text-foreground"
               >
-                edit definition →
+                open global profile →
               </Link>
             </div>
           </div>
@@ -453,28 +258,6 @@ function BoundAgentRow({
               Chat
             </Button>
           </Link>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!isAdmin}
-            title={
-              !isAdmin ? "Admins only." : "Remove from this workspace — reversible, history kept"
-            }
-            onClick={onUnbind}
-          >
-            <X className="h-3.5 w-3.5" />
-            Unbind
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!isAdmin}
-            title={!isAdmin ? "Admins only." : "Delete permanently if unused, otherwise archive"}
-            onClick={onDelete}
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete
-          </Button>
         </div>
       </header>
 

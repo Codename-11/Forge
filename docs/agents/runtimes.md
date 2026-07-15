@@ -6,7 +6,7 @@ mode) and `runtimeMode` describes _how_ the agent stays online, `Runtime`
 describes _where the work physically happens_.
 
 ::: info Runtime versus MCP client
-An Agent Studio profile selects **zero or one primary execution runtime**.
+A Mission Control agent profile selects **zero or one primary execution runtime**.
 Codex, Claude, Hermes, and custom MCP clients connect with separate linked
 credentials in the workspace's **Agent access** page; a binding can have many
 of those clients. Adding an MCP client never changes the profile's runtime.
@@ -60,7 +60,7 @@ columns.
   `LOCAL_DAEMON` rows. The detail page also shows whether the runtime
   declares `terminal`, `filesystem`, and `git` access, plus the latest
   sanitized runtime version/environment metadata when the host reports it.
-- **Agent Studio profile detail** — readiness summary plus an editable primary
+- **Mission Control agent profile detail** — readiness summary plus an editable primary
   Runtime assignment that synchronizes to active workspace bindings.
 - **Mission Control agents tab** — compact `RuntimeChip` next to the
   runtime-mode pill.

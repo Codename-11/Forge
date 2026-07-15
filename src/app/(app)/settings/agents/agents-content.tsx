@@ -2,17 +2,18 @@
 
 import Link from "next/link";
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, KeyRound, Plus, Server, Shield } from "lucide-react";
+import { Bot, ChevronRight, KeyRound, Link2, Plus, Server, Shield } from "lucide-react";
 import { AgentProvider, RunEngine } from "@prisma/client";
 import { toast } from "sonner";
-import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { CenterModal } from "@/components/ui/modal";
 import { Spinner, EmptyState } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { RequestProfileDialog } from "@/app/(app)/w/[slug]/settings/agents/request-profile-dialog";
 
 /**
  * Client body for the global agent profiles list. Each card links to its
@@ -20,7 +21,13 @@ import { AgentAvatar } from "@/components/agents/agent-avatar";
  * `trpc.agents.profiles.*`).
  */
 
-type Workspace = { id: string; slug: string; name: string; key: string };
+type Workspace = {
+  id: string;
+  slug: string;
+  name: string;
+  key: string;
+  role?: "OWNER" | "ADMIN" | "MEMBER" | "GUEST";
+};
 
 function StatusPip({ online }: { online: boolean }) {
   return (
@@ -52,7 +59,15 @@ function WsChipDense({ ws }: { ws: Workspace }) {
   );
 }
 
-export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean }) {
+export function AgentsContent({
+  isInstanceAdmin,
+  workspaces,
+  initialWorkspaceId,
+}: {
+  isInstanceAdmin: boolean;
+  workspaces: Workspace[];
+  initialWorkspaceId?: string;
+}) {
   const { data: profiles, isLoading } = trpc.agents.profiles.list.useQuery();
   const { data: runtimes } = trpc.global.runtimes.useQuery();
   const utils = trpc.useUtils();
@@ -66,6 +81,20 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
   const [avatar, setAvatar] = useState("");
   const [capsText, setCapsText] = useState("");
   const [instanceShared, setInstanceShared] = useState(true);
+  const [requestOpen, setRequestOpen] = useState(false);
+  const [workspaceId, setWorkspaceId] = useState(
+    initialWorkspaceId && workspaces.some((workspace) => workspace.id === initialWorkspaceId)
+      ? initialWorkspaceId
+      : "all",
+  );
+
+  const visibleProfiles = (profiles ?? []).filter(
+    (profile) =>
+      workspaceId === "all" ||
+      (workspaceId === "unbound"
+        ? profile.bindings.length === 0
+        : profile.bindings.some((binding) => binding.workspace.id === workspaceId)),
+  );
 
   function resetCreate() {
     setName("");
@@ -113,12 +142,25 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
 
   return (
     <>
-      <Topbar
-        title="Agent Studio"
-        subtitle="Define each agent once: identity, one primary execution runtime, and every workspace connection."
-      />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-5 p-6">
+          <div className="grid gap-2 sm:grid-cols-4" aria-label="Agent lifecycle">
+            {[
+              ["Define", "Identity & runtime"],
+              ["Bind", "Workspace adoption"],
+              ["Operate", "Runs & connections"],
+              ["Govern", isInstanceAdmin ? "Instance policy" : "Admin controlled"],
+            ].map(([step, detail], index) => (
+              <div key={step} className="rounded-md border border-border bg-card/40 px-3 py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-[10px] text-ember">0{index + 1}</span>
+                  <span className="text-xs font-semibold">{step}</span>
+                </div>
+                <p className="text-meta mt-1 text-muted-foreground">{detail}</p>
+              </div>
+            ))}
+          </div>
+
           {/* Create affordance / admin-gated hint */}
           <div className="flex flex-col items-start gap-3 rounded-md border border-ember/30 bg-ember/5 p-3 sm:flex-row sm:items-center">
             <Shield size={14} className="shrink-0 text-ember" />
@@ -142,10 +184,49 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                 New profile
               </Button>
             ) : (
-              <span className="rounded border border-border/70 bg-card/60 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-                requires instance admin
-              </span>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="shrink-0"
+                onClick={() => setRequestOpen(true)}
+              >
+                <Plus size={12} /> Request profile
+              </Button>
             )}
+          </div>
+
+          <div className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-3 sm:flex-row sm:items-center">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <Link2 className="h-4 w-4 text-ember" /> Fleet scope
+                <span className="rounded border border-border/70 bg-background px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                  Global profiles
+                </span>
+              </div>
+              <p className="text-meta mt-1 text-muted-foreground">
+                Filter by workspace binding without leaving Mission Control.
+              </p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+              <span>Workspace</span>
+              <Combobox
+                ariaLabel="Filter agents by workspace"
+                value={workspaceId}
+                onChange={(value) => setWorkspaceId(value ?? "all")}
+                options={[
+                  { value: "all", label: "All workspaces" },
+                  { value: "unbound", label: "Not bound" },
+                  ...workspaces.map((workspace) => ({
+                    value: workspace.id,
+                    label: workspace.name,
+                    secondary: workspace.key,
+                  })),
+                ]}
+                className="h-9 min-w-48 text-foreground"
+                popoverClassName="min-w-56"
+              />
+            </div>
           </div>
 
           {isLoading ? (
@@ -159,12 +240,19 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
               title="No agent profiles yet"
               description="Agent profiles are global identities you bind into workspaces."
             />
+          ) : visibleProfiles.length === 0 ? (
+            <EmptyState
+              variant="section"
+              icon={<Bot />}
+              title="No profiles in this fleet view"
+              description="Choose another workspace filter or bind a profile from its Mission Control detail page."
+            />
           ) : (
             <div className="overflow-hidden rounded-lg border border-border bg-card/40">
-              {profiles!.map((a) => (
+              {visibleProfiles.map((a) => (
                 <Link
                   key={a.id}
-                  href={`/settings/agents/${a.id}`}
+                  href={`/agents/${a.id}`}
                   className="group flex items-center gap-3 border-b border-border/60 px-4 py-3 last:border-b-0 hover:bg-subtle"
                 >
                   <AgentAvatar agent={a} size="md" title={null} />
@@ -185,6 +273,9 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
                           shared
                         </span>
                       )}
+                      <span className="rounded border border-border/70 bg-background px-1 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
+                        global profile
+                      </span>
                     </div>
                     {a.description && (
                       <div className="text-meta mt-0.5 truncate text-muted-foreground">
@@ -372,6 +463,7 @@ export function AgentsContent({ isInstanceAdmin }: { isInstanceAdmin: boolean })
           </label>
         </div>
       </CenterModal>
+      <RequestProfileDialog open={requestOpen} onOpenChange={setRequestOpen} />
     </>
   );
 }

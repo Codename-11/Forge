@@ -19,7 +19,8 @@ test.describe.serial("Agent Studio audit evidence", () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
 
     await page.goto("/settings/agents", { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("heading", { name: "Agent Studio" })).toBeVisible();
+    await expect(page).toHaveURL(/\/agents$/);
+    await expect(page.getByRole("heading", { name: "Agent fleet" })).toBeVisible();
     await expect(page.getByText("Victor").first()).toBeVisible();
     await capture(page, "01-global-agent-profiles.png");
 
@@ -67,7 +68,7 @@ test.describe.serial("Agent Studio audit evidence", () => {
     await capture(page, "09-agent-access.png");
 
     await page.goto("/admin/agents", { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("heading", { name: "Agent policy" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Agent governance" })).toBeVisible();
     await expect(page.getByText("Victor", { exact: true }).first()).toBeVisible();
     await capture(page, "10-instance-agent-policy.png");
 

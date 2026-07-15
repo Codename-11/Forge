@@ -32,8 +32,13 @@ const ADMIN_NAV: { href: string; icon: LucideIcon; label: string; hint: string }
   { href: "/admin/tenants", icon: Layers, label: "Workspaces", hint: "All tenants" },
   { href: "/admin/move-issues", icon: MoveRight, label: "Move issues", hint: "Between workspaces" },
   { href: "/admin/users", icon: Users, label: "Users", hint: "Across instance" },
-  { href: "/admin/auth", icon: KeyRound, label: "Identity & sign-in", hint: "Instance authentication" },
-  { href: "/admin/agents", icon: Bot, label: "Agent policy", hint: "Shared & disabled" },
+  {
+    href: "/admin/auth",
+    icon: KeyRound,
+    label: "Identity & sign-in",
+    hint: "Instance authentication",
+  },
+  { href: "/admin/agents", icon: Bot, label: "Agent governance", hint: "Approve, share, disable" },
   { href: "/admin/runtimes", icon: Server, label: "Runtimes", hint: "Instance-wide" },
   { href: "/admin/audit", icon: FileText, label: "Audit log", hint: "Cross-tenant" },
   { href: "/admin/system", icon: Settings, label: "System", hint: "Build, regions" },
@@ -44,13 +49,16 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
     <aside
       className="flex max-h-64 min-h-0 w-full shrink-0 flex-col overflow-hidden border-b md:h-full md:max-h-none md:w-60 md:border-b-0 md:border-r"
       style={{
-        background: "linear-gradient(180deg, hsl(var(--admin-surface)) 0%, hsl(var(--admin-bg)) 100%)",
+        background:
+          "linear-gradient(180deg, hsl(var(--admin-surface)) 0%, hsl(var(--admin-bg)) 100%)",
         color: "hsl(var(--admin-text-hi))",
         borderColor: "var(--admin-border-strong)",
-
       }}
     >
-      <div className="px-3 pb-3 pt-3" style={{ borderBottom: "1px solid var(--admin-border-strong)" }}>
+      <div
+        className="px-3 pb-3 pt-3"
+        style={{ borderBottom: "1px solid var(--admin-border-strong)" }}
+      >
         <div className="flex items-center gap-2">
           <span
             aria-hidden
@@ -60,7 +68,10 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
             <Shield size={14} />
           </span>
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold tracking-tight" style={{ color: "hsl(var(--admin-text))" }}>
+            <div
+              className="truncate text-sm font-semibold tracking-tight"
+              style={{ color: "hsl(var(--admin-text))" }}
+            >
               Instance admin
             </div>
             <div className="truncate text-[10px]" style={{ color: "hsl(var(--admin-text-muted))" }}>
@@ -88,7 +99,10 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
               <Ico size={13} style={{ color: active ? "hsl(var(--ember))" : "currentColor" }} />
               <span className="min-w-0 flex-1">
                 <span className="block font-medium leading-tight">{it.label}</span>
-                <span className="block text-[10px] leading-tight" style={{ color: "hsl(var(--admin-text-dim))" }}>
+                <span
+                  className="block text-[10px] leading-tight"
+                  style={{ color: "hsl(var(--admin-text-dim))" }}
+                >
                   {it.hint}
                 </span>
               </span>
@@ -140,23 +154,41 @@ export function AdminPage({
   const pathname = usePathname();
   const active = activePath ?? pathname ?? "/admin";
   return (
-    <div className="flex h-svh w-full flex-col overflow-hidden md:flex-row" style={{ background: "hsl(var(--admin-bg))", color: "hsl(var(--admin-text-hi))" }}>
+    <div
+      className="flex h-svh w-full flex-col overflow-hidden md:flex-row"
+      style={{ background: "hsl(var(--admin-bg))", color: "hsl(var(--admin-text-hi))" }}
+    >
       <AdminSidebar activePath={active} instanceUrl={instanceUrl} />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col" style={{ background: "hsl(var(--admin-surface))" }}>
+      <main
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        style={{ background: "hsl(var(--admin-surface))" }}
+      >
         <header
           className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-0"
-          style={{ background: "hsl(var(--admin-topbar))", borderColor: "var(--admin-border-strong)", color: "hsl(var(--admin-text-hi))" }}
+          style={{
+            background: "hsl(var(--admin-topbar))",
+            borderColor: "var(--admin-border-strong)",
+            color: "hsl(var(--admin-text-hi))",
+          }}
         >
-          <nav className="flex min-w-0 items-center gap-1 text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
+          <nav
+            className="text-meta flex min-w-0 items-center gap-1"
+            style={{ color: "hsl(var(--admin-text-muted))" }}
+          >
             {crumbs.map((c, i) => (
               <span key={i} className="flex min-w-0 items-center gap-1">
                 {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-                <span className="truncate" style={i === crumbs.length - 1 ? { color: "hsl(var(--admin-text))" } : undefined}>{c}</span>
+                <span
+                  className="truncate"
+                  style={i === crumbs.length - 1 ? { color: "hsl(var(--admin-text))" } : undefined}
+                >
+                  {c}
+                </span>
               </span>
             ))}
           </nav>
           <span
-            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta sm:ml-2"
+            className="text-meta inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 sm:ml-2"
             style={{ background: "rgba(217,119,87,0.16)", color: "hsl(var(--ember))" }}
           >
             <Shield size={10} />
@@ -174,22 +206,36 @@ export function AdminPage({
         {title && (
           <header
             className="flex shrink-0 flex-col items-stretch gap-3 border-b px-4 pb-4 pt-4 sm:flex-row sm:items-end sm:gap-4 sm:px-8 sm:pb-5 sm:pt-5"
-            style={{ background: "hsl(var(--admin-tile))", borderColor: "var(--admin-border-strong)", color: "hsl(var(--admin-text))" }}
+            style={{
+              background: "hsl(var(--admin-tile))",
+              borderColor: "var(--admin-border-strong)",
+              color: "hsl(var(--admin-text))",
+            }}
           >
             <div className="min-w-0 flex-1">
               {eyebrow && (
-                <div className="text-[10px] font-semibold uppercase tracking-[0.16em]" style={{ color: "hsl(var(--admin-text-dim))" }}>
+                <div
+                  className="text-[10px] font-semibold uppercase tracking-[0.16em]"
+                  style={{ color: "hsl(var(--admin-text-dim))" }}
+                >
                   {eyebrow}
                 </div>
               )}
               <h1 className="mt-0.5 truncate text-xl font-semibold tracking-tight">{title}</h1>
               {subtitle && (
-                <p className="mt-1 line-clamp-2 text-sm sm:truncate" style={{ color: "hsl(var(--admin-text-soft))" }}>
+                <p
+                  className="mt-1 line-clamp-2 text-sm sm:truncate"
+                  style={{ color: "hsl(var(--admin-text-soft))" }}
+                >
                   {subtitle}
                 </p>
               )}
             </div>
-            {actions && <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-nowrap">{actions}</div>}
+            {actions && (
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-nowrap">
+                {actions}
+              </div>
+            )}
           </header>
         )}
 

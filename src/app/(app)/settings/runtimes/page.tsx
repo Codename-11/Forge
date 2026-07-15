@@ -237,8 +237,8 @@ export default function RuntimesPage() {
 
           <div className="text-meta text-muted-foreground">
             Runtimes are global to your account, not a workspace concern.{" "}
-            <Link href="/settings/agents" className="underline hover:text-foreground">
-              Bind agents
+            <Link href="/agents" className="underline hover:text-foreground">
+              Manage the agent fleet
             </Link>{" "}
             to put them to work.
           </div>

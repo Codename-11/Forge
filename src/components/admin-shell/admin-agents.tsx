@@ -1,9 +1,9 @@
 "use client";
 import { useState } from "react";
-import { Check, Globe, GlobeLock, Power, PowerOff, Trash2, UserPlus, X } from "lucide-react";
+import Link from "next/link";
+import { Check, ExternalLink, Globe, GlobeLock, Power, PowerOff, UserPlus, X } from "lucide-react";
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
-import { useConfirm } from "@/components/ui/modal";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } from "./admin-ui";
 
 /**
@@ -16,7 +16,6 @@ import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } fro
  */
 export function AdminAgents() {
   const utils = trpc.useUtils();
-  const { confirm, confirmElement } = useConfirm();
   const profiles = trpc.agents.profiles.list.useQuery();
   const pending = trpc.agents.profiles.listPending.useQuery();
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -66,25 +65,17 @@ export function AdminAgents() {
     onError: (e) => toast.error(e.message),
     onSettled: () => setPendingId(null),
   });
-  const removeProfile = trpc.agents.profiles.remove.useMutation({
-    onMutate: (v) => setPendingId(v.id),
-    onSuccess: async (res) => {
-      await invalidateAll();
-      toast.success(
-        res.action === "deleted"
-          ? `Removed ${res.name}.`
-          : `Archived ${res.name} — ${res.boundAgents} workspace binding${res.boundAgents === 1 ? "" : "s"} still reference it, so it was hidden instead of deleted.`,
-      );
-    },
-    onError: (e) => toast.error(e.message),
-    onSettled: () => setPendingId(null),
-  });
-
   return (
     <div className="mx-auto w-full max-w-[1280px] px-8 py-6">
-      <div className="mb-4 text-meta" style={{ color: ADMIN.textMuted }}>
-        Agent definitions are owned globally; instance admins decide which are shared to every workspace&apos;s
-        bind-catalog and which are force-disabled across the instance.
+      <div className="text-meta mb-4" style={{ color: ADMIN.textMuted }}>
+        <span
+          className="mr-1 rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider"
+          style={{ background: "var(--admin-border-soft)", color: ADMIN.textSoft }}
+        >
+          Instance policy
+        </span>
+        Approve requests, control instance sharing, and force-disable profiles. Routine identity,
+        binding, archive, and removal work lives in Mission Control.
       </div>
       {/* Pending profile requests — members request, admins approve/reject. */}
       {(pending.isLoading || (pending.data?.length ?? 0) > 0) && (
@@ -105,22 +96,33 @@ export function AdminAgents() {
                   <div
                     key={p.id}
                     className="grid grid-cols-[1.6fr_1fr_0.6fr_1fr] items-center gap-2 px-4 py-2.5"
-                    style={{ borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}` }}
+                    style={{
+                      borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}`,
+                    }}
                   >
                     <span className="flex min-w-0 items-center gap-2">
                       <span aria-hidden className="text-lg leading-none">
                         {p.avatar ?? "🤖"}
                       </span>
                       <span className="min-w-0">
-                        <span className="truncate text-[0.8125rem] font-medium" style={{ color: ADMIN.text }}>
+                        <span
+                          className="truncate text-[0.8125rem] font-medium"
+                          style={{ color: ADMIN.text }}
+                        >
                           {p.name}
                         </span>
-                        <span className="block text-[10px] font-mono" style={{ color: ADMIN.textDim }}>
+                        <span
+                          className="block font-mono text-[10px]"
+                          style={{ color: ADMIN.textDim }}
+                        >
                           @{p.profileKey}
                         </span>
                       </span>
                     </span>
-                    <span className="flex min-w-0 items-center gap-1.5 text-meta" style={{ color: ADMIN.textSoft }}>
+                    <span
+                      className="text-meta flex min-w-0 items-center gap-1.5"
+                      style={{ color: ADMIN.textSoft }}
+                    >
                       <UserPlus size={11} />
                       <span className="truncate">{requester}</span>
                       <span style={{ color: ADMIN.textDim }}>· {relTime(p.requestedAt)}</span>
@@ -135,7 +137,10 @@ export function AdminAgents() {
                           <span
                             key={c}
                             className="rounded px-1 py-0.5 font-mono text-[10px]"
-                            style={{ background: "var(--admin-border-soft)", color: ADMIN.textSoft }}
+                            style={{
+                              background: "var(--admin-border-soft)",
+                              color: ADMIN.textSoft,
+                            }}
                           >
                             {c}
                           </span>
@@ -168,16 +173,19 @@ export function AdminAgents() {
         </div>
       )}
 
-      <AdminPanel title="Agent profiles" hint={profiles.data ? `${profiles.data.length} global` : undefined}>
+      <AdminPanel
+        title="Agent profiles"
+        hint={profiles.data ? `${profiles.data.length} global` : undefined}
+      >
         <div
-          className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.5fr_1.2fr] items-center gap-2 px-4 py-2 text-meta"
+          className="text-meta grid grid-cols-[1.6fr_0.7fr_0.6fr_0.5fr_1.2fr] items-center gap-2 px-4 py-2"
           style={{ color: ADMIN.textMuted, borderBottom: `1px solid ${ADMIN.border}` }}
         >
           <span>Profile</span>
           <span>Provider</span>
           <span>Runtime</span>
           <span className="text-right">Bindings</span>
-          <span className="text-right">Instance policy</span>
+          <span className="text-right">Governance</span>
         </div>
         {profiles.isLoading ? (
           <AdminLoading />
@@ -191,7 +199,9 @@ export function AdminAgents() {
               <div
                 key={p.id}
                 className="grid grid-cols-[1.6fr_0.7fr_0.6fr_0.5fr_1.2fr] items-center gap-2 px-4 py-2.5"
-                style={{ borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}` }}
+                style={{
+                  borderBottom: i === arr.length - 1 ? "none" : `1px solid ${ADMIN.borderRow}`,
+                }}
               >
                 <span className="flex min-w-0 items-center gap-2">
                   <span aria-hidden className="text-lg leading-none">
@@ -199,13 +209,19 @@ export function AdminAgents() {
                   </span>
                   <span className="min-w-0">
                     <span className="flex items-center gap-1.5">
-                      <span className="truncate text-[0.8125rem] font-medium" style={{ color: ADMIN.text }}>
+                      <span
+                        className="truncate text-[0.8125rem] font-medium"
+                        style={{ color: ADMIN.text }}
+                      >
                         {p.name}
                       </span>
                       {disabled && (
                         <span
                           className="rounded px-1 text-[9px] font-bold uppercase tracking-wider"
-                          style={{ background: "rgba(239,68,68,0.18)", color: "hsl(var(--danger))" }}
+                          style={{
+                            background: "rgba(239,68,68,0.18)",
+                            color: "hsl(var(--danger))",
+                          }}
                         >
                           disabled
                         </span>
@@ -219,18 +235,21 @@ export function AdminAgents() {
                         </span>
                       )}
                     </span>
-                    <span className="block text-[10px] font-mono" style={{ color: ADMIN.textDim }}>
+                    <span className="block font-mono text-[10px]" style={{ color: ADMIN.textDim }}>
                       @{p.profileKey}
                     </span>
                   </span>
                 </span>
-                <span className="truncate text-meta" style={{ color: ADMIN.textSoft }}>
+                <span className="text-meta truncate" style={{ color: ADMIN.textSoft }}>
                   {p.provider.toLowerCase()}
                 </span>
-                <span className="truncate text-meta font-mono" style={{ color: ADMIN.textSoft }}>
+                <span className="text-meta truncate font-mono" style={{ color: ADMIN.textSoft }}>
                   {p.runtime?.name ?? "—"}
                 </span>
-                <span className="text-right font-mono text-[0.8125rem] tabular-nums" style={{ color: ADMIN.text }}>
+                <span
+                  className="text-right font-mono text-[0.8125rem] tabular-nums"
+                  style={{ color: ADMIN.text }}
+                >
                   {p.bindings.length}
                 </span>
                 <span className="flex justify-end gap-1.5">
@@ -238,7 +257,9 @@ export function AdminAgents() {
                     icon={p.instanceShared ? GlobeLock : Globe}
                     tone={p.instanceShared ? "default" : "ember"}
                     disabled={busy}
-                    onClick={() => setShared.mutate({ id: p.id, instanceShared: !p.instanceShared })}
+                    onClick={() =>
+                      setShared.mutate({ id: p.id, instanceShared: !p.instanceShared })
+                    }
                   >
                     {p.instanceShared ? "Unshare" : "Share"}
                   </AdminButton>
@@ -250,33 +271,23 @@ export function AdminAgents() {
                   >
                     {disabled ? "Enable" : "Disable"}
                   </AdminButton>
-                  <AdminButton
-                    icon={Trash2}
-                    tone="danger"
-                    disabled={busy}
-                    onClick={async () => {
-                      if (
-                        await confirm({
-                          title: `Remove ${p.name}?`,
-                          description:
-                            "If any workspace still has this profile bound, it's archived (hidden, bindings kept intact). If nothing references it, it's permanently deleted. You can re-create a profile with the same key later.",
-                          primaryLabel: "Remove",
-                          variant: "destructive",
-                        })
-                      ) {
-                        removeProfile.mutate({ id: p.id });
-                      }
+                  <Link
+                    href={`/agents/${p.id}`}
+                    className="inline-flex h-7 items-center gap-1.5 rounded px-2 text-[0.6875rem] font-medium"
+                    style={{
+                      background: "var(--admin-border-soft)",
+                      color: ADMIN.textSoft,
+                      border: `1px solid ${ADMIN.border}`,
                     }}
                   >
-                    Remove
-                  </AdminButton>
+                    <ExternalLink size={11} /> Manage
+                  </Link>
                 </span>
               </div>
             );
           })
         )}
       </AdminPanel>
-      {confirmElement}
     </div>
   );
 }

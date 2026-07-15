@@ -6,11 +6,12 @@ import { test, expect } from "@playwright/test";
  *   - cross-workspace surfaces are read-only
  *   - the workspace switcher navigates into a workspace
  *   - the /admin shell is reachable for an INSTANCE_ADMIN
- *   - an agent profile can be bound to / unbound from a workspace
+ *   - Mission Control can bind / unbind a profile while workspace settings
+ *     remain policy-only
  *
  * Auth is the seeded owner (owner@forge.local, instanceRole INSTANCE_ADMIN)
  * via the shared storageState. Seed adds profiles victor/mizu (bound) +
- * atlas (unbound, instance-shared) so the bind catalog has an entry.
+ * atlas (unbound, instance-shared) so Mission Control can adopt it.
  */
 
 test.describe("multi-workspace restructure", () => {
@@ -46,7 +47,8 @@ test.describe("multi-workspace restructure", () => {
   });
 
   test("global agents page lists profiles", async ({ page }) => {
-    await page.goto("/settings/agents", { waitUntil: "domcontentloaded" });
+    await page.goto("/agents", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("heading", { name: "Agent fleet" })).toBeVisible();
     // Seeded profiles are owned by the signed-in owner.
     await expect(page.getByText("Victor").first()).toBeVisible();
     await expect(page.getByText("Atlas").first()).toBeVisible();
@@ -74,34 +76,32 @@ test.describe("multi-workspace restructure", () => {
 
   test("an agent profile can be bound to a workspace and unbound", async ({ page }) => {
     await page.goto("/w/forge/settings/agents", { waitUntil: "domcontentloaded" });
-    // Workspace policy stays separate from the global Agent Studio definition.
-    await expect(page.getByText("Available to bind")).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Agent policy" })).toBeVisible();
+    await expect(page.getByText("Available to bind", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^Bind$/ })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Unbind" })).toHaveCount(0);
 
-    // A bound Atlas card carries links to /w/forge/agents/atlas (Chat,
-    // "Open in Activity →"). Their presence (count > 0) means "bound".
-    const atlasLinks = page.locator('a[href="/w/forge/agents/atlas"]');
+    await page.goto("/agents", { waitUntil: "domcontentloaded" });
+    await page.locator('a[href^="/agents/"]', { hasText: "Atlas" }).first().click();
+    await expect(page.getByText("Global profile", { exact: true }).first()).toBeVisible();
 
-    // Seed leaves Atlas unbound (instance-shared) → it's in the catalog with
-    // a "Bind" button (only catalog rows expose one). Bind it.
-    const bindButtons = page.getByRole("button", { name: /^Bind$/ });
-    await expect(bindButtons.first()).toBeVisible();
-    await bindButtons.first().click();
+    // Seed leaves Atlas unbound. Mission Control owns adoption into Forge.
+    await page.getByRole("combobox", { name: "Workspace to bind" }).click();
+    await page.getByRole("option", { name: /Forge\s+FRG/ }).click();
+    await page.getByRole("button", { name: /^Bind$/ }).click();
 
-    // It is now bound: its detail links appear in the bound list.
-    await expect(atlasLinks.first()).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByRole("link", { name: "Workspace policy" })).toBeVisible({
+      timeout: 15_000,
+    });
+    await expect(page.getByRole("link", { name: "Add MCP client" })).toBeVisible();
 
-    // Reload for a clean, fully-rendered bound list, then unbind via the
-    // confirm dialog. (Unbind is the last assertion, so it only depends on
-    // the bound-list refetch — not the catalog.)
-    await page.reload({ waitUntil: "domcontentloaded" });
-    const atlasCard = atlasLinks
-      .first()
-      .locator('xpath=ancestor::*[.//button[normalize-space()="Unbind"]][1]');
-    await atlasCard.getByRole("button", { name: "Unbind" }).click();
+    await page.getByRole("button", { name: "Unbind" }).click();
     await page
-      .getByRole("alertdialog")
-      .getByRole("button", { name: /Unbind/ })
+      .getByRole("alertdialog", { name: /Unbind from Forge/ })
+      .getByRole("button", { name: /^Unbind/ })
       .click();
-    await expect(atlasLinks).toHaveCount(0, { timeout: 15_000 });
+    await expect(page.getByText("Not bound to any workspace", { exact: true })).toBeVisible({
+      timeout: 15_000,
+    });
   });
 });

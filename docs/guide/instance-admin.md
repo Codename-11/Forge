@@ -1,7 +1,7 @@
 # Instance Admin
 
 `/admin` is the instance-operator surface — the controls that span
-*every* tenant on a Forge instance, rather than one workspace. It renders
+_every_ tenant on a Forge instance, rather than one workspace. It renders
 in its own graphite shell (distinct from the warm-paper workspace shell)
 to make it obvious you've stepped up a level.
 
@@ -10,10 +10,10 @@ to make it obvious you've stepped up a level.
 The `/admin` area is gated on `User.instanceRole === INSTANCE_ADMIN`.
 There are exactly two instance roles:
 
-| `InstanceRole` | Grants |
-|---|---|
+| `InstanceRole`   | Grants                                                 |
+| ---------------- | ------------------------------------------------------ |
 | `INSTANCE_ADMIN` | The `/admin` shell + every `instanceAdmin.*` procedure |
-| `MEMBER` | Default; no instance-level access |
+| `MEMBER`         | Default; no instance-level access                      |
 
 This is **orthogonal to workspace roles**. Being `OWNER` of a workspace
 doesn't make you an instance admin, and an instance admin isn't
@@ -79,10 +79,16 @@ instance admin can approve or reject (`agentProfile.listPending` →
 `instanceShared` or force-disable one. See
 [Agent profiles & bindings](/agents/profiles-and-bindings.html#requesting-a-profile).
 
+Routine profile management does not live in the graphite admin shell. Each
+governance row links to **Mission Control → Agents**, where authorized instance
+admins can edit and safely remove a profile. Removal permanently deletes only
+an unreferenced profile; otherwise it archives the definition and preserves
+workspace bindings and history.
+
 ## Where to next
 
-- [Mission Control](/guide/mission-control.html) — the cross-workspace
-  *user* home (read-only), separate from this operator surface.
+- [Mission Control](/guide/mission-control.html) — cross-workspace operations
+  plus the agent fleet control plane, separate from instance governance.
 - [Agent profiles & bindings](/agents/profiles-and-bindings.html) — the
   approval + instance-sharing flow admins govern.
 - [Runtimes](/agents/runtimes.html) — the compute hosts the instance

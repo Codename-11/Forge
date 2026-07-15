@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, Bot, ChevronDown, PlugZap, Search, Server } from "lucide-react";
+import { ArrowLeft, ChevronDown, PlugZap, Search, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   ACCOUNT_SETTINGS_GROUP,
@@ -233,13 +233,6 @@ function workspaceGroups(slug: string): RailGroup[] {
  */
 const GLOBAL_RAIL_ITEMS: RailItem[] = [
   {
-    href: "/settings/agents",
-    label: "Agent Studio",
-    icon: Bot,
-    hint: "Identity, runtime & workspace clients",
-    adminOnly: false,
-  },
-  {
     href: "/settings/runtimes",
     label: "Runtime inventory",
     icon: Server,
@@ -272,8 +265,8 @@ function accountGroups(): RailGroup[] {
     },
     {
       id: "resources",
-      label: "Agent Studio",
-      hint: "Definitions and execution resources you own.",
+      label: "Resources",
+      hint: "Execution resources and connected identities you own.",
       items: GLOBAL_RAIL_ITEMS,
     },
   ];

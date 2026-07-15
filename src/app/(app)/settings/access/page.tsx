@@ -1322,7 +1322,8 @@ function Intro({ baseUrl }: { baseUrl: string }) {
       </div>
       <div className="text-meta mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-muted-foreground">
         This page is the credential source of truth: create, inspect, rotate, revoke, and delete
-        every MCP client here. Primary execution runtimes stay with the identity in Agent Studio.
+        every MCP client here. Primary execution runtimes stay with the identity in Mission Control
+        → Agents.
       </div>
     </Section>
   );

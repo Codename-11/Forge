@@ -9,10 +9,10 @@ export default function AdminAgentsPage() {
   return (
     <AdminPage
       activePath="/admin/agents"
-      crumbs={["Instance", "Agent policy"]}
+      crumbs={["Instance", "Agent governance"]}
       eyebrow="Instance"
-      title="Agent policy"
-      subtitle="Share profiles to every workspace · force-disable across the instance"
+      title="Agent governance"
+      subtitle="Approve requests · control instance sharing · force-disable across every workspace"
     >
       <AdminAgents />
     </AdminPage>

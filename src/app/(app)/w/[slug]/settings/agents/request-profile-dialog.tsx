@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 
 /**
- * Member-facing "Request a profile" form on the workspace binding page.
+ * Member-facing "Request a profile" form launched from Mission Control.
  * Non-admins can't define profiles globally, so this collects the
  * definition essentials and calls `agents.profiles.request` to create a
  * PENDING profile. An instance admin approves/rejects it from
@@ -133,11 +133,7 @@ export function RequestProfileDialog({
             </select>
           </Field>
           <Field label="Avatar" hint="Optional emoji">
-            <Input
-              value={avatar}
-              onChange={(e) => setAvatar(e.target.value)}
-              placeholder="🤖"
-            />
+            <Input value={avatar} onChange={(e) => setAvatar(e.target.value)} placeholder="🤖" />
           </Field>
           <Field label="Capabilities" hint="Comma-separated tags">
             <Input
