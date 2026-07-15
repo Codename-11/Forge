@@ -9,7 +9,7 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
-## [2026-07-14] — v0.17.0 · Reliable GitHub state detection
+## [2026-07-15] — v0.18.0 · Reliable GitHub state detection
 
 ### Added
 
@@ -22,6 +22,22 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 - **Checks and commit statuses invalidate immediately.** Queued/rerun checks, SHA-only check events, and legacy `status` webhooks mark aggregate evidence dirty; provider refresh remains the only source trusted for safe automatic completion.
 - **Linked GitHub changes reach live issue views.** Meaningful checks, review, draft, mergeability, head-SHA, title, and lifecycle changes publish issue-scoped activity while duplicate links and mirrored GitHub issue comments remain idempotent.
 - **Native GitHub installation cannot borrow a runtime-auth app.** Issue/PR sync now requires the configured instance GitHub App with the documented read permissions and active webhook events.
+
+## [2026-07-15] — v0.17.0 · Clear configuration ownership
+
+### Added
+
+- **Every settings shell now names its scope.** Personal settings, the active workspace, and Instance Administration have distinct navigation and overview surfaces, with a complete configuration inventory and migration plan captured alongside the release.
+- **Workspace dispatch defaults are editable where they are explained.** Automatic dispatch and fall-through mode persist from Dispatch & routing and show the effective manual value when automation is off.
+
+### Changed
+
+- **Instance identity configuration lives with instance ownership.** Identity & sign-in moved into Instance Administration while its former account URL redirects safely, and workspace API access and developer clients now use canonical workspace routes.
+- **Mission Control remains an operations surface.** The workspace overlay is named Activity, its preferences behave as an accessible dialog, and durable settings continue to live at their authoritative scope.
+
+### Fixed
+
+- **Settings remain usable at phone widths.** Navigation collapses behind a Browse control, current-page and search semantics are explicit, and runtime telemetry no longer crowds half-width cards.
 
 ## [2026-07-14] — v0.16.0 · Scannable issue discussions
 

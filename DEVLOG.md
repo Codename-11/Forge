@@ -2,6 +2,39 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-14 — Configuration scope hierarchy and safety fixes
+
+Completed a screenshot-first Product Design audit of Mission Control,
+Personal/global settings, named Workspace settings, and Instance Admin at
+desktop and mobile viewports. The durable audit now inventories every route and
+control family by authoritative scope, audience, risk, prerequisites,
+inheritance/default source, duplication, and navigation; it also records the
+target sitemap, role model, ownership rules, redirects, deep links, and a
+P0/P1/P2 backlog with acceptance criteria.
+
+Implemented the highest-confidence safety and navigation slice without changing
+Forge's design language. Global Settings now opens a Personal overview with an
+explicit scope header and coherent Personal/Resources groups. Workspace
+settings name the tenant, collapse navigation behind a mobile Browse control,
+expose current-page semantics and a labeled search, and own canonical API access
+and developer-client routes. Instance authentication moved to
+`/admin/auth` as Identity & sign-in, with `/settings/auth` preserved as a
+redirect. The workspace dispatch page now persists its master toggle and
+fall-through mode at the point of explanation; runtime cards use the
+authoritative home workspace and no longer crowd four telemetry columns into a
+half-width card. The workspace operations shelf is now Activity, and its
+preferences control exposes dialog/expanded semantics, Escape close, and focus
+return.
+
+Verification: current-state and implemented-state screenshots were captured
+and inspected; TypeScript typecheck and production build passed; lint passed
+with existing native-select/type-import warnings; focused workspace router
+coverage passed **21/21**; the complete serial Vitest gate passed **1,264/1,264**
+with one skipped test; and the complete Playwright gate passed **39/39**. The
+browser run also exposed a pre-existing `/clear` race that could issue the
+command before its mock response stream finished; the test now waits for the
+completed stream and agent reply and passes with the full suite.
+
 ## 2026-07-14 — Manual GitHub retry persistence and release context hygiene
 
 Addressed the post-merge Codex review on PR #29 before production deployment.
@@ -85,6 +118,28 @@ fresh production build passed; and the full serial Playwright suite passed
 hard-coded two rail columns despite the existing work-count threshold; the
 assertion now follows the rendered layout mode and passed both alone and in the
 full suite.
+## 2026-07-14 — Settings scope and information-architecture review
+
+Mapped Forge's personal/global, workspace, Mission Control/Activity, and
+instance-admin configuration surfaces against their routes, permission gates,
+and Prisma ownership model. The review proposes one settings frame with an
+explicit Personal / Workspace / Instance scope control, preserves Mission
+Control as the cross-workspace operating home, renames the in-workspace dock to
+Activity, and reorganizes workspace configuration around work management,
+agents and automation, integrations, and governance.
+
+The code inventory also found two functional dead ends to address in the first
+implementation slice: auto-dispatch fall-through is displayed read-only and
+points to a workspace control that does not exist, and the global runtime
+inventory can link through a non-home workspace even though the runtime detail
+router requires the home `workspaceId`. The durable review records current
+ownership, naming changes, a phased migration, accessibility risks, and P0/P1/P2
+priorities under
+`docs/audits/settings-information-architecture-2026-07-14/`.
+
+The first draft was code-grounded while browser permission was pending. The
+implementation task subsequently received explicit Playwright permission and
+replaced that limitation with a fresh, inspected desktop/mobile evidence set.
 
 ## 2026-07-13 — AXI-102 patient-wait spam + expandable Command Center cards
 

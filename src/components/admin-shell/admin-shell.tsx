@@ -9,6 +9,7 @@ import {
   Server,
   FileText,
   Settings,
+  KeyRound,
   Shield,
   MoveRight,
   ChevronRight,
@@ -31,6 +32,7 @@ const ADMIN_NAV: { href: string; icon: LucideIcon; label: string; hint: string }
   { href: "/admin/tenants", icon: Layers, label: "Workspaces", hint: "All tenants" },
   { href: "/admin/move-issues", icon: MoveRight, label: "Move issues", hint: "Between workspaces" },
   { href: "/admin/users", icon: Users, label: "Users", hint: "Across instance" },
+  { href: "/admin/auth", icon: KeyRound, label: "Identity & sign-in", hint: "Instance authentication" },
   { href: "/admin/agents", icon: Bot, label: "Agent policy", hint: "Shared & disabled" },
   { href: "/admin/runtimes", icon: Server, label: "Runtimes", hint: "Instance-wide" },
   { href: "/admin/audit", icon: FileText, label: "Audit log", hint: "Cross-tenant" },
@@ -76,6 +78,7 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
             <Link
               key={it.href}
               href={it.href}
+              aria-current={active ? "page" : undefined}
               className="group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors"
               style={{
                 background: active ? "rgba(217,119,87,0.16)" : "transparent",

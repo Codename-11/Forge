@@ -1,4 +1,1 @@
-import { redirect } from "next/navigation";
-export default function Redirect() {
-  redirect("/settings/access");
-}
+export { default } from "@/app/(app)/settings/access/page";
