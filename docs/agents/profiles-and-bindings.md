@@ -25,11 +25,11 @@ template. It's owned by a user and lives outside any workspace.
 `profileKey` is **unique per owner**, so two different users can each
 own a `victor` without colliding.
 
-Manage profiles in **Agent Studio** at **`/settings/agents`** (the global,
-account-level agents page). Its detail view reports runtime, workspace-binding,
-and MCP-client readiness and is the only place identity/execution fields are
-edited. This is also where your profiles surface on
-[Mission Control](/guide/mission-control.html#my-agents).
+Manage profiles in **Mission Control → Agents** at **`/agents`**. Its detail
+view reports runtime, workspace-binding, MCP-client readiness, and recent work;
+it is the primary place to create, edit, connect, bind, archive, or safely
+remove an identity. The former `/settings/agents` and
+`/settings/agents/[id]` routes redirect here so bookmarks remain valid.
 
 Updating a profile synchronizes its identity and execution fields into every
 active workspace binding. Binding policy such as capacity and capability
@@ -49,19 +49,17 @@ workspace, then layers per-workspace **policy** on top:
 | Engagement mode           | `engagementMode`             | Per-binding default; null = inherit `Workspace.assignmentEngagementMode`                 |
 | Approval gate             | `requireApprovalBeforeStart` | Per-binding override of the workspace approval gate                                      |
 
-Bind, set policy, and unbind from the workspace agents page at
-**`/w/[slug]/settings/agents`**. The **catalog** there lists the
-profiles available to bind (ones you own, plus instance-shared ones)
-that aren't already bound. The actions — `bind`, `setPolicy`, `unbind`,
-and `remove` — are workspace-admin-gated.
+Bind and unbind from a profile's **Workspace bindings** section in Mission
+Control. The workspace selector only offers workspaces where the caller is an
+owner or admin, and the server repeats that authorization check before every
+write. Workspace settings at **`/w/[slug]/settings/agents`** retain only
+workspace policy: capacity, capability overrides, routing eligibility,
+engagement mode, and approval gates.
 
 ::: tip Unbind vs Delete
 **Unbind** archives the binding (reversible) — runs, chats, and history are
-preserved, and re-binding the same profile reuses the archived row.
-**Delete** (the trash action beside Unbind) is a _smart remove_: it
-hard-deletes a genuinely unused agent (no runs, comments, keys, or
-assignments) and otherwise archives it — so a deletion can never cascade
-away an agent's run history.
+preserved, and re-binding the same profile reuses the archived row. Workspace
+admins can unbind but cannot delete the global identity.
 :::
 
 ## Tier 3 — Instance policy
@@ -75,19 +73,22 @@ Two governance levers belong to the instance admin (see
 - **`disabledAt`** — a force-disable. A disabled profile (and all its
   bindings) refuses dispatch and chat. Distinct from `archivedAt`
   (deletion).
-- **Remove** — Instance Admin → Agents has a **Remove** action
-  (`agents.profiles.remove`) beside Enable/Disable: it deletes a profile no
-  workspace has bound, and archives one that still has bindings (so those
-  agents aren't orphaned). Archived profiles drop out of the admin list and
-  the bind-catalog.
+- **Approve or reject** — pending profile requests remain instance-governed.
+
+Instance Admin → Agent governance intentionally does not duplicate routine
+profile management. Each row links to Mission Control, where an instance admin
+gets the safe **Remove profile** action (`agents.profiles.remove`): it deletes a
+profile no workspace has bound, and archives one that still has bindings so
+agents and history are not orphaned. Profile owners who are not instance admins
+get **Archive profile** instead.
 
 ## Requesting a profile
 
 Defining a _new_ profile from scratch is instance-admin-only — but any
 member can **request** one:
 
-1. A member calls `agentProfile.request` (the **Request a profile**
-   action on the workspace agents page) with a `profileKey`, name, and
+1. A member calls `agentProfile.request` (the **Request profile** action in
+   Mission Control → Agents) with a `profileKey`, name, and
    base capabilities. This creates a **pending** profile
    (`requestedById` = the requester, `approvedAt` = null).
 2. A pending profile is **not bindable** — it's hidden from every
@@ -106,7 +107,7 @@ runtime, while each workspace binding may have any number of linked `ApiKey`
 credentials for Codex, Claude, Hermes, or other trusted MCP clients.
 
 Create, inspect, rotate, revoke, and remove those credentials at
-**`/w/[slug]/settings/access`**. Agent Studio aggregates the linked clients by
+**`/w/[slug]/settings/access`**. Mission Control aggregates the linked clients by
 binding and deep-links into Agent access with the correct workspace agent
 preselected. The former `/settings/clients` and
 `/w/[slug]/settings/clients` inventory routes redirect to Agent access.

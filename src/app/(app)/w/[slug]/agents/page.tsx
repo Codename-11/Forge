@@ -11,7 +11,7 @@ import { trpc } from "@/lib/trpc";
 /**
  * Agents operational dashboard. The runroom component composes the live
  * presence, pipeline, runtime, failed-run, dispatch, and activity queries into
- * one operator surface. CRUD lives in `/settings/agents` and is reachable from
+ * one operator surface. Fleet CRUD lives in `/agents` and is reachable from
  * the topbar action.
  */
 export default function AgentsPage() {

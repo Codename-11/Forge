@@ -1,10 +1,9 @@
 # Mission Control
 
-Mission Control is the cross-workspace home — the screen at `/` when you
-sign in. Where a workspace shows you one tenant's world, Mission Control
-shows you *all of them at once*: your assigned work, your agents, your
-runtimes, and live activity, each row stamped with the workspace it
-belongs to.
+Mission Control is Forge's cross-workspace operating layer. The overview at
+`/` shows every workspace at once; **Agents** at `/agents` is the global fleet
+control plane for defining identities, binding them into workspaces, and
+monitoring live use.
 
 ::: tip Chord
 <kbd>g</kbd> <kbd>h</kbd> brings you home to Mission Control from
@@ -20,15 +19,17 @@ three global destinations, the workspace switcher, and links into
 account-level settings:
 
 - **Mission Control** (`/`) — this page.
+- **Agents** (`/agents`) — global profiles, execution connections, workspace
+  bindings, recent runs, and safe archive/removal controls.
 - **Inbox** (`/inbox`) — your mentions and assignments, aggregated
   across workspaces.
 - **Activity** (`/activity`) — the live cross-workspace run + event feed.
 
-Everything in the concourse is **read-only**. The cards show you what's
-happening and link you *into* the right workspace; the actual
-writes — transitioning an issue, replying to a comment, dispatching an
-agent — happen once you've clicked through into that workspace's shell.
-This is deliberate: a single mutation always has one unambiguous tenant.
+The overview, Inbox, and Activity remain **read-only across workspaces**. The
+Agents destination is the deliberate exception and carries a **Global control
+plane** scope label. Its binding writes always name one workspace explicitly
+and require an owner/admin membership there; workspace policy edits still
+happen inside that workspace's settings.
 
 ## The cards
 
@@ -39,12 +40,12 @@ client-side from the `global.*` tRPC routers.
 
 Four tiles across the top:
 
-| Tile | Shows |
-|---|---|
-| **Assigned to me** | Count of issues assigned to you, across every workspace |
-| **Open issues** | Open-issue count summed across all your workspaces |
+| Tile                  | Shows                                                    |
+| --------------------- | -------------------------------------------------------- |
+| **Assigned to me**    | Count of issues assigned to you, across every workspace  |
+| **Open issues**       | Open-issue count summed across all your workspaces       |
 | **Agent runs · live** | Active `AgentRun` count, plus how many agents are online |
-| **Runtimes online** | `online / total` runtimes you've registered |
+| **Runtimes online**   | `online / total` runtimes you've registered              |
 
 ### My work
 
@@ -62,7 +63,7 @@ rollup (`open · live · members`). Click to enter the workspace. The
 
 Your agent **profiles** (global definitions you own), each with an
 online pip, `@profileKey`, the workspaces it's bound into, and its
-provider. Click through to the profile detail under `/settings/agents`.
+provider. Click through to the profile detail under `/agents`.
 See [Agent profiles & bindings](/agents/profiles-and-bindings.html) for
 the profile → binding model.
 

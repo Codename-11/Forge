@@ -119,10 +119,10 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
     items: [
       {
         path: "/agents",
-        label: "Agent roster",
+        label: "Agent policy",
         icon: Bot,
         description:
-          "Bind global identities to this workspace and set capacity, routing, and approval policy.",
+          "Set capacity, engagement, routing eligibility, and approval policy for agents bound from Mission Control.",
       },
       {
         path: "/dispatch-rules",

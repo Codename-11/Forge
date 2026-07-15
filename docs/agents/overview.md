@@ -8,10 +8,11 @@ lifecycle of an agent, the implicit heartbeat that comes from webhook delivery,
 and where to find each piece of the surface in the app.
 
 ::: info Configuration map
-Use **Agent Studio** for identity, prompt, and the single primary execution
-runtime; **Workspace → Agent roster** for binding policy; **Workspace → Agent
-access** for one or more MCP client credentials; **Instance Administration**
-for global governance; and **Mission Control** for read-only operations.
+Use **Mission Control → Agents** to define identities, choose the single primary
+execution runtime, bind workspaces, and monitor recent work; **Workspace → Agent
+policy** for local capacity/routing/engagement/approval; **Workspace → Agent
+access** for one or more MCP client credentials; and **Instance Administration**
+for approval, sharing, force-disable, audit, and recovery.
 :::
 
 ## Two ways to run agent work
@@ -163,13 +164,14 @@ opening each agent's detail page.
 
 A typical onboarding sequence:
 
-1. **Define the identity.** Agent Studio → New profile starts with Hermes,
+1. **Define the identity.** Mission Control → Agents → New profile starts with Hermes,
    Claude, Codex, or custom. Set `name`, `profileKey`, description, avatar,
    provider, and execution engine once.
 2. **Choose the primary runtime.** A profile can select zero or one execution
    host. Active workspace bindings inherit later identity/execution edits.
-3. **Bind it to a workspace.** The workspace roster owns local capacity,
-   routing eligibility, engagement, approval, and capability overrides.
+3. **Bind it to a workspace.** Mission Control owns binding and unbinding;
+   workspace settings own local capacity, routing eligibility, engagement,
+   approval, and capability overrides.
 4. **Declare capabilities.** Lowercase, free-form. Common entries match
    priority names (`urgent`, `high`) for `PRIORITY_MATCH` and label names
    (`infra`, `frontend`) for `CAPABILITY_MATCH`.
@@ -370,7 +372,11 @@ without leaving the current page.
 - **Agent detail page** — `/w/<slug>/agents/<id>`. Pipeline (assigned-but-not-
   yet-acked → in-progress → recent), timeline (assignment, ack, transition,
   comment events), uptime sparkline, webhook delivery health.
-- **Settings → Agents** — `/w/<slug>/settings/agents`. Create, edit, archive.
+- **Mission Control → Agents** — `/agents`. Create and edit profiles, attach
+  runtimes and MCP clients, bind/unbind workspaces, inspect recent runs, and
+  archive or safely remove identities.
+- **Settings → Agent policy** — `/w/<slug>/settings/agents`. Workspace-local
+  capacity, routing eligibility, engagement, approval, and capabilities.
 - **Settings → Workspace** — `/w/<slug>/settings/workspace`. The dispatch
   knobs that govern agent selection.
 - **Settings → Dispatch Rules** — declarative routing, evaluated before

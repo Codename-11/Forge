@@ -49,7 +49,7 @@ export function deriveGlobalOperationsPosture(input: {
       label: "Ready to dispatch",
       summary: `${input.agentsOnline} ${input.agentsOnline === 1 ? "agent is" : "agents are"} online and ready for work.`,
       actionLabel: "Open agent coverage",
-      actionHref: "/settings/agents",
+      actionHref: "/agents",
     };
   }
 
@@ -58,6 +58,6 @@ export function deriveGlobalOperationsPosture(input: {
     label: "Standing by",
     summary: "Runtime coverage is healthy, but no agents are currently online.",
     actionLabel: "Review agents",
-    actionHref: "/settings/agents",
+    actionHref: "/agents",
   };
 }

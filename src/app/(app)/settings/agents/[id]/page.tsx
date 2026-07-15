@@ -1,16 +1,10 @@
-import { AgentDetailContent } from "./agent-detail-content";
+import { redirect } from "next/navigation";
 
 /**
- * Global agent profile detail — definition card + per-workspace bindings
- * table + cross-workspace recent runs. Reads from `agents.profiles.get`.
- * Renders inside the settings layout `SettingsRail`. Part of the
- * multi-workspace restructure.
+ * Compatibility route for former Agent Studio detail links. Mission Control
+ * now owns the canonical profile detail at `/agents/[id]`.
  */
-export default async function AgentDetailPage({
-  params,
-}: {
-  params: Promise<{ id: string }>;
-}) {
+export default async function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <AgentDetailContent id={id} />;
+  redirect(`/agents/${id}`);
 }

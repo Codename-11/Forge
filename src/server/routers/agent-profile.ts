@@ -73,8 +73,21 @@ async function assertRuntimeAvailable(
 export const agentProfileRouter = router({
   /** Owned + instance-shared profiles, with cross-workspace binding summary. */
   list: globalProcedure.query(async ({ ctx }) => {
+    const [instanceRole, memberships] = await Promise.all([
+      instanceRoleOf(ctx.db, ctx.session.user.id),
+      ctx.db.membership.findMany({
+        where: { userId: ctx.session.user.id },
+        select: { workspaceId: true },
+      }),
+    ]);
+    const visibleWorkspaceIds = new Set(memberships.map((membership) => membership.workspaceId));
     const profiles = await ctx.db.agentProfile.findMany({
-      where: { archivedAt: null, OR: [{ ownerId: ctx.session.user.id }, { instanceShared: true }] },
+      where: {
+        archivedAt: null,
+        ...(instanceRole === "INSTANCE_ADMIN"
+          ? {}
+          : { OR: [{ ownerId: ctx.session.user.id }, { instanceShared: true }] }),
+      },
       orderBy: { createdAt: "asc" },
       include: {
         runtime: { select: { id: true, name: true, kind: true } },
@@ -91,12 +104,20 @@ export const agentProfileRouter = router({
         },
       },
     });
-    return profiles.map((p) => ({
-      ...p,
-      ownedByMe: p.ownerId === ctx.session.user.id,
-      online: p.bindings.some((b) => b.status === "ONLINE" || b.status === "BUSY"),
-      clientCount: p.bindings.reduce((total, binding) => total + binding._count.apiKeys, 0),
-    }));
+    return profiles.map((p) => {
+      const canSeeAllBindings =
+        p.ownerId === ctx.session.user.id || instanceRole === "INSTANCE_ADMIN";
+      const bindings = canSeeAllBindings
+        ? p.bindings
+        : p.bindings.filter((binding) => visibleWorkspaceIds.has(binding.workspace.id));
+      return {
+        ...p,
+        bindings,
+        ownedByMe: p.ownerId === ctx.session.user.id,
+        online: bindings.some((b) => b.status === "ONLINE" || b.status === "BUSY"),
+        clientCount: bindings.reduce((total, binding) => total + binding._count.apiKeys, 0),
+      };
+    });
   }),
 
   /** Single profile (owner / instance-shared / admin) with bindings + recent cross-WS runs. */
@@ -140,8 +161,26 @@ export const agentProfileRouter = router({
     const visible = canEdit || p.instanceShared;
     if (!visible) throw new TRPCError({ code: "FORBIDDEN" });
 
-    // Recent runs across all this profile's bindings (read-only, cross-WS).
-    const bindingIds = p.bindings.map((b) => b.id);
+    const workspaceIds = p.bindings.map((b) => b.workspace.id);
+    const memberships = workspaceIds.length
+      ? await ctx.db.membership.findMany({
+          where: {
+            userId: ctx.session.user.id,
+            workspaceId: { in: workspaceIds },
+          },
+          select: { workspaceId: true, role: true },
+        })
+      : [];
+    const visibleWorkspaceIds = new Set(memberships.map((membership) => membership.workspaceId));
+    const manageableWorkspaceIds = new Set(
+      memberships
+        .filter((membership) => membership.role === "OWNER" || membership.role === "ADMIN")
+        .map((membership) => membership.workspaceId),
+    );
+    const visibleBindings = canEdit
+      ? p.bindings
+      : p.bindings.filter((binding) => visibleWorkspaceIds.has(binding.workspace.id));
+    const bindingIds = visibleBindings.map((binding) => binding.id);
     const recentRuns = bindingIds.length
       ? await ctx.db.agentRun.findMany({
           where: { agentId: { in: bindingIds } },
@@ -160,7 +199,16 @@ export const agentProfileRouter = router({
           },
         })
       : [];
-    return { ...p, ownedByMe: p.ownerId === ctx.session.user.id, canEdit, recentRuns };
+    return {
+      ...p,
+      bindings: visibleBindings.map((binding) => ({
+        ...binding,
+        canManage: manageableWorkspaceIds.has(binding.workspace.id),
+      })),
+      ownedByMe: p.ownerId === ctx.session.user.id,
+      canEdit,
+      recentRuns,
+    };
   }),
 
   /** Pending profile requests awaiting approval. INSTANCE_ADMIN only. */

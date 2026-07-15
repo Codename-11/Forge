@@ -27,7 +27,12 @@ export async function getGlobalShellData(): Promise<{
       memberships: {
         where: { workspace: { deletedAt: null } },
         orderBy: { createdAt: "asc" },
-        select: { workspace: { select: { id: true, slug: true, name: true, key: true, avatarUrl: true } } },
+        select: {
+          role: true,
+          workspace: {
+            select: { id: true, slug: true, name: true, key: true, avatarUrl: true },
+          },
+        },
       },
     },
   });
@@ -40,7 +45,7 @@ export async function getGlobalShellData(): Promise<{
       image: user.image,
       instanceRole: user.instanceRole,
     },
-    workspaces: user.memberships.map((m) => m.workspace),
+    workspaces: user.memberships.map((m) => ({ ...m.workspace, role: m.role })),
   };
 }
 

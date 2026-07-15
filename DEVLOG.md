@@ -13312,3 +13312,35 @@ production Playwright build passed all 45 desktop, mobile, accessibility, and
 application journeys. Before/after evidence plus the UX health report are
 preserved under `docs/audits/agent-studio-2026-07-15/`. Production verification
 follows after tagging and deployment.
+
+---
+
+## 2026-07-15 — Mission Control agent fleet management
+
+Promoted Mission Control from a read-only agent summary to the primary fleet
+control plane. The new `/agents` and `/agents/[id]` routes own global profile
+creation/editing, the single execution-runtime assignment, MCP-client rollups,
+workspace filtering and bind/unbind actions, recent work, and permission-aware
+archive/removal. Legacy Agent Studio URLs redirect to the new routes.
+
+Binding writes name one workspace explicitly, re-check owner/admin membership
+server-side, record the same durable audit/activity events as workspace writes,
+and preserve archived bindings for reversible re-adoption. Workspace Agent
+settings are now policy-only (capacity, capability overrides, routing,
+engagement, and approval); Instance Admin is governance-only (request approval,
+instance sharing, force-disable, audit/recovery) and links to Mission Control
+for routine management. Instance admins get smart removal there, while profile
+owners get archive and workspace admins can only unbind.
+
+The global shell now labels ordinary aggregate pages as read-only and the Agent
+fleet as a Global control plane. Navigation, account settings, workspace copy,
+current guides, router integration coverage, and Playwright lifecycle/redirect
+coverage were updated to reflect Define → Bind → Operate, with Govern reserved
+for instance administrators.
+
+Verification: typecheck and lint passed (existing repository warnings only);
+the full Vitest gate passed 1,320 tests with one intentional live-connector
+skip; the production build succeeded; and both focused Playwright journeys
+passed after creating, binding, unbinding, and removing a profile through
+Mission Control while confirming workspace policy and instance governance stay
+separate.

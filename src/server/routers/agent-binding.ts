@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { EngagementMode, EventKind } from "@prisma/client";
-import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { router, workspaceProcedure, adminProcedure, protectedProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 
 /**
@@ -49,7 +49,15 @@ export const agentBindingRouter = router({
       orderBy: { createdAt: "asc" },
       include: {
         profile: {
-          select: { id: true, profileKey: true, name: true, instanceShared: true, disabledAt: true, baseCapabilities: true, ownerId: true },
+          select: {
+            id: true,
+            profileKey: true,
+            name: true,
+            instanceShared: true,
+            disabledAt: true,
+            baseCapabilities: true,
+            ownerId: true,
+          },
         },
         runtime: { select: { id: true, name: true, kind: true } },
         _count: { select: { assignedIssues: true } },
@@ -81,21 +89,34 @@ export const agentBindingRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const profile = await ctx.db.agentProfile.findUnique({ where: { id: input.profileId } });
-      if (!profile || profile.archivedAt) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+      if (!profile || profile.archivedAt)
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
       const shareable = profile.ownerId === ctx.session.user.id || profile.instanceShared;
-      if (!shareable) throw new TRPCError({ code: "FORBIDDEN", message: "That profile isn't available to this workspace." });
+      if (!shareable)
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "That profile isn't available to this workspace.",
+        });
       // Pending (requested-but-unapproved) profiles can't be bound.
       if (profile.requestedById && !profile.approvedAt) {
-        throw new TRPCError({ code: "FORBIDDEN", message: "That profile is pending instance-admin approval." });
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "That profile is pending instance-admin approval.",
+        });
       }
 
       // profileKey is unique per (workspaceId). Reuse an archived binding if present.
       const existing = await ctx.db.agent.findUnique({
-        where: { workspaceId_profileKey: { workspaceId: ctx.workspaceId, profileKey: profile.profileKey } },
+        where: {
+          workspaceId_profileKey: { workspaceId: ctx.workspaceId, profileKey: profile.profileKey },
+        },
         select: { id: true, archivedAt: true },
       });
       if (existing && !existing.archivedAt) {
-        throw new TRPCError({ code: "CONFLICT", message: "That profile is already bound to this workspace." });
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "That profile is already bound to this workspace.",
+        });
       }
 
       const data = {
@@ -120,13 +141,135 @@ export const agentBindingRouter = router({
       };
 
       const agent = existing
-        ? await ctx.db.agent.update({ where: { id: existing.id }, data: { ...data, archivedAt: null } })
+        ? await ctx.db.agent.update({
+            where: { id: existing.id },
+            data: { ...data, archivedAt: null },
+          })
         : await ctx.db.agent.create({ data: { ...data, workspaceId: ctx.workspaceId } });
 
       await recordChange(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        entity: "Agent",
+        entityId: agent.id,
+        action: "create",
+        after: { profileKey: agent.profileKey, profileId: profile.id },
+        eventKind: EventKind.AGENT_CREATED,
+        subjectType: "agent",
+        subjectId: agent.id,
+        payload: { profileKey: agent.profileKey, profileId: profile.id, bound: true },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return agent;
+    }),
+
+  /**
+   * Mission Control bind action. The caller chooses an explicit workspace,
+   * then receives the same workspace-admin and audit guarantees as `bind`.
+   */
+  bindFromMissionControl: protectedProcedure
+    .input(
+      z.object({
+        workspaceId: z.string().cuid(),
+        profileId: z.string().cuid(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const membership = await ctx.db.membership.findUnique({
+        where: {
+          userId_workspaceId: {
+            userId: ctx.session.user.id,
+            workspaceId: input.workspaceId,
+          },
+        },
+        select: { role: true },
+      });
+      if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Workspace admin role required." });
+      }
+
+      const [profile, actor] = await Promise.all([
+        ctx.db.agentProfile.findUnique({ where: { id: input.profileId } }),
+        ctx.db.user.findUnique({
+          where: { id: ctx.session.user.id },
+          select: { instanceRole: true },
+        }),
+      ]);
+      if (!profile || profile.archivedAt) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+      }
+      const available =
+        profile.ownerId === ctx.session.user.id ||
+        profile.instanceShared ||
+        actor?.instanceRole === "INSTANCE_ADMIN";
+      if (!available) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "That profile isn't available to this workspace.",
+        });
+      }
+      if (profile.requestedById && !profile.approvedAt) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "That profile is pending instance-admin approval.",
+        });
+      }
+      if (profile.disabledAt) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "That profile is disabled." });
+      }
+
+      const existing = await ctx.db.agent.findUnique({
+        where: {
+          workspaceId_profileKey: {
+            workspaceId: input.workspaceId,
+            profileKey: profile.profileKey,
+          },
+        },
+        select: { id: true, archivedAt: true },
+      });
+      if (existing && !existing.archivedAt) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "That profile is already bound to this workspace.",
+        });
+      }
+
+      const data = {
+        profileId: profile.id,
+        name: profile.name,
+        profileKey: profile.profileKey,
+        description: profile.description,
+        avatar: profile.avatar,
+        provider: profile.provider,
+        runtimeMode: profile.runtimeMode,
+        runEngine: profile.runEngine,
+        webhookUrl: profile.webhookUrl,
+        webhookSecret: profile.webhookSecret,
+        runtimeId: profile.runtimeId,
+        role: profile.role,
+        templateMarkdown: profile.templateMarkdown,
+        capabilities: profile.baseCapabilities,
+        maxConcurrent: 1,
+        autoDispatchEligible: true,
+        engagementMode: null,
+        requireApprovalBeforeStart: false,
+      };
+
+      const agent = existing
+        ? await ctx.db.agent.update({
+            where: { id: existing.id },
+            data: { ...data, archivedAt: null },
+          })
+        : await ctx.db.agent.create({
+            data: { ...data, workspaceId: input.workspaceId },
+          });
+
+      await recordChange(ctx.db, {
+        workspaceId: input.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: null,
         entity: "Agent",
         entityId: agent.id,
         action: "create",
@@ -173,11 +316,58 @@ export const agentBindingRouter = router({
         select: { id: true, profileKey: true },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
-      const updated = await ctx.db.agent.update({ where: { id: agent.id }, data: { archivedAt: new Date() } });
+      const updated = await ctx.db.agent.update({
+        where: { id: agent.id },
+        data: { archivedAt: new Date() },
+      });
       await recordChange(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
         actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+        entity: "Agent",
+        entityId: agent.id,
+        action: "delete",
+        before: { profileKey: agent.profileKey },
+        eventKind: EventKind.AGENT_DELETED,
+        subjectType: "agent",
+        subjectId: agent.id,
+        payload: { profileKey: agent.profileKey, unbound: true },
+        ip: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      return updated;
+    }),
+
+  /** Mission Control unbind action, explicitly scoped to a managed workspace. */
+  unbindFromMissionControl: protectedProcedure
+    .input(z.object({ workspaceId: z.string().cuid(), agentId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const membership = await ctx.db.membership.findUnique({
+        where: {
+          userId_workspaceId: {
+            userId: ctx.session.user.id,
+            workspaceId: input.workspaceId,
+          },
+        },
+        select: { role: true },
+      });
+      if (!membership || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Workspace admin role required." });
+      }
+      const agent = await ctx.db.agent.findFirst({
+        where: { id: input.agentId, workspaceId: input.workspaceId, archivedAt: null },
+        select: { id: true, profileKey: true },
+      });
+      if (!agent) throw new TRPCError({ code: "NOT_FOUND", message: "Binding not found." });
+
+      const updated = await ctx.db.agent.update({
+        where: { id: agent.id },
+        data: { archivedAt: new Date() },
+      });
+      await recordChange(ctx.db, {
+        workspaceId: input.workspaceId,
+        actorId: ctx.session.user.id,
+        actorAgentId: null,
         entity: "Agent",
         entityId: agent.id,
         action: "delete",

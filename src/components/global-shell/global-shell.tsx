@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Sparkles,
+  Bot,
   Inbox,
   Activity,
   Search,
@@ -45,6 +46,7 @@ export interface GlobalShellWorkspace {
   name: string;
   key: string;
   avatarUrl?: string | null;
+  role?: "OWNER" | "ADMIN" | "MEMBER" | "GUEST";
   mentions?: number;
 }
 
@@ -78,7 +80,10 @@ export function WorkspaceBadge({
   return (
     <span
       aria-hidden
-      className={cn("inline-flex shrink-0 items-center justify-center rounded-md font-mono font-semibold", className)}
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center rounded-md font-mono font-semibold",
+        className,
+      )}
       style={{
         width: size,
         height: size,
@@ -111,6 +116,7 @@ export interface GlobalShellUser {
 
 const GLOBAL_NAV: { href: string; icon: LucideIcon; label: string; hint: string }[] = [
   { href: "/", icon: Sparkles, label: "Mission Control", hint: "Across all workspaces" },
+  { href: "/agents", icon: Bot, label: "Agents", hint: "Fleet & profiles" },
   { href: "/inbox", icon: Inbox, label: "Inbox", hint: "Mentions & assignments" },
   { href: "/activity", icon: Activity, label: "Activity", hint: "Live run feed" },
 ];
@@ -120,7 +126,7 @@ function ActivityPill() {
     <Link
       href="/activity"
       title="Activity · live runs + chat (G 5)"
-      className="focus-ring relative inline-flex min-h-8 items-center gap-2 rounded-full border px-2 py-0.5 text-meta font-medium transition-colors sm:min-h-0"
+      className="focus-ring text-meta relative inline-flex min-h-8 items-center gap-2 rounded-full border px-2 py-0.5 font-medium transition-colors sm:min-h-0"
       style={{
         background: "hsl(var(--ember) / 0.12)",
         borderColor: "hsl(var(--ember) / 0.35)",
@@ -128,10 +134,17 @@ function ActivityPill() {
       }}
     >
       <span aria-hidden className="relative inline-flex" style={{ width: 7, height: 7 }}>
-        <span className="absolute inset-0 rounded-full" style={{ background: "currentColor", opacity: 0.85 }} />
         <span
           className="absolute inset-0 rounded-full"
-          style={{ background: "currentColor", opacity: 0.5, animation: "forge-act-pulse 2.4s ease-in-out infinite" }}
+          style={{ background: "currentColor", opacity: 0.85 }}
+        />
+        <span
+          className="absolute inset-0 rounded-full"
+          style={{
+            background: "currentColor",
+            opacity: 0.5,
+            animation: "forge-act-pulse 2.4s ease-in-out infinite",
+          }}
         />
       </span>
       <span className="tracking-tight">Activity</span>
@@ -143,7 +156,13 @@ function ActivityPill() {
   );
 }
 
-function WorkspaceSwitcherCard({ ws, onNavigate }: { ws: GlobalShellWorkspace; onNavigate?: () => void }) {
+function WorkspaceSwitcherCard({
+  ws,
+  onNavigate,
+}: {
+  ws: GlobalShellWorkspace;
+  onNavigate?: () => void;
+}) {
   return (
     <Link
       href={`/w/${ws.slug}`}
@@ -154,7 +173,7 @@ function WorkspaceSwitcherCard({ ws, onNavigate }: { ws: GlobalShellWorkspace; o
       <WorkspaceBadge ws={ws} size={20} />
       <span className="min-w-0 flex-1">
         <span className="block truncate font-medium text-foreground">{ws.name}</span>
-        <span className="block truncate text-id text-muted-foreground/70">{ws.key}</span>
+        <span className="text-id block truncate text-muted-foreground/70">{ws.key}</span>
       </span>
       {!!ws.mentions && ws.mentions > 0 && (
         <span className="inline-flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-ember/15 px-1 text-[9px] font-medium text-ember">
@@ -181,13 +200,15 @@ function NavRow({
       onClick={onNavigate}
       className={cn(
         "group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors",
-        active ? "bg-subtle text-foreground" : "text-muted-foreground hover:bg-subtle hover:text-foreground",
+        active
+          ? "bg-subtle text-foreground"
+          : "text-muted-foreground hover:bg-subtle hover:text-foreground",
       )}
     >
       <Ico size={14} className={active ? "text-ember" : ""} />
       <span className="min-w-0 flex-1">
         <span className="block font-medium leading-tight">{item.label}</span>
-        <span className="block text-meta leading-tight text-muted-foreground/70">{item.hint}</span>
+        <span className="text-meta block leading-tight text-muted-foreground/70">{item.hint}</span>
       </span>
     </Link>
   );
@@ -221,8 +242,10 @@ function GlobalNavContent({
         >
           <Avatar name={user.name ?? user.email ?? "?"} image={user.image} size={26} />
           <span className="min-w-0 flex-1 text-left">
-            <span className="block truncate text-sm font-semibold tracking-tight">{user.name ?? "You"}</span>
-            <span className="block truncate text-meta text-muted-foreground">{user.email}</span>
+            <span className="block truncate text-sm font-semibold tracking-tight">
+              {user.name ?? "You"}
+            </span>
+            <span className="text-meta block truncate text-muted-foreground">{user.email}</span>
           </span>
           <ChevronDown size={12} className="text-muted-foreground" />
         </Link>
@@ -244,13 +267,22 @@ function GlobalNavContent({
 
       <nav className={cn("mt-3 flex flex-col gap-px", inDrawer ? "" : "px-2")}>
         {GLOBAL_NAV.map((it) => (
-          <NavRow key={it.href} item={it} active={activePath === it.href} onNavigate={onNavigate} />
+          <NavRow
+            key={it.href}
+            item={it}
+            active={
+              activePath === it.href || (it.href !== "/" && activePath.startsWith(`${it.href}/`))
+            }
+            onNavigate={onNavigate}
+          />
         ))}
       </nav>
 
       <div className={cn("mt-4 flex flex-col", inDrawer ? "" : "min-h-0 flex-1 px-2")}>
         <div className="flex items-center justify-between px-2 pb-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">Workspaces</span>
+          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+            Workspaces
+          </span>
           <Link
             href="/settings/workspaces"
             onClick={onNavigate}
@@ -272,7 +304,12 @@ function GlobalNavContent({
         </div>
       </div>
 
-      <div className={cn("mt-2 flex flex-col gap-px border-t border-border/60 pt-2", inDrawer ? "" : "mx-2")}>
+      <div
+        className={cn(
+          "mt-2 flex flex-col gap-px border-t border-border/60 pt-2",
+          inDrawer ? "" : "mx-2",
+        )}
+      >
         <Link
           href="/settings"
           onClick={onNavigate}
@@ -328,9 +365,10 @@ function GlobalSidebar({
 }) {
   return (
     <aside
-      className="hidden h-full w-60 min-h-0 shrink-0 flex-col overflow-hidden border-r border-border md:flex"
+      className="hidden h-full min-h-0 w-60 shrink-0 flex-col overflow-hidden border-r border-border md:flex"
       style={{
-        background: "linear-gradient(180deg, hsl(var(--card) / 0.6) 0%, hsl(var(--card) / 0.3) 100%)",
+        background:
+          "linear-gradient(180deg, hsl(var(--card) / 0.6) 0%, hsl(var(--card) / 0.3) 100%)",
       }}
     >
       <GlobalNavContent user={user} workspaces={workspaces} activePath={activePath} />
@@ -338,7 +376,15 @@ function GlobalSidebar({
   );
 }
 
-function GlobalTopBar({ crumbs, onOpenNav }: { crumbs: string[]; onOpenNav?: () => void }) {
+function GlobalTopBar({
+  crumbs,
+  scope = "read",
+  onOpenNav,
+}: {
+  crumbs: string[];
+  scope?: "read" | "control";
+  onOpenNav?: () => void;
+}) {
   return (
     <header
       className="flex min-h-12 shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 sm:flex-nowrap sm:gap-3 sm:px-4 sm:py-0"
@@ -352,17 +398,19 @@ function GlobalTopBar({ crumbs, onOpenNav }: { crumbs: string[]; onOpenNav?: () 
       >
         <Menu size={18} />
       </button>
-      <nav className="flex min-w-0 items-center gap-1 text-meta text-muted-foreground">
+      <nav className="text-meta flex min-w-0 items-center gap-1 text-muted-foreground">
         {crumbs.map((c, i) => (
           <span key={i} className="flex min-w-0 items-center gap-1">
             {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-            <span className={cn("truncate", i === crumbs.length - 1 ? "text-foreground" : "")}>{c}</span>
+            <span className={cn("truncate", i === crumbs.length - 1 ? "text-foreground" : "")}>
+              {c}
+            </span>
           </span>
         ))}
       </nav>
-      <span className="hidden items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-meta text-muted-foreground sm:ml-2 sm:inline-flex">
-        <Eye size={10} />
-        <span>Read-only across workspaces</span>
+      <span className="text-meta hidden items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-muted-foreground sm:ml-2 sm:inline-flex">
+        {scope === "control" ? <Shield size={10} /> : <Eye size={10} />}
+        <span>{scope === "control" ? "Global control plane" : "Read-only across workspaces"}</span>
       </span>
       <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
         <ActivityPill />
@@ -399,12 +447,25 @@ export function GlobalPageHeader({
     >
       <div className="min-w-0 flex-1">
         {eyebrow && (
-          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">{eyebrow}</div>
+          <div className="text-[10px] font-semibold uppercase tracking-[0.16em] text-muted-foreground/80">
+            {eyebrow}
+          </div>
         )}
-        <h1 className={cn("mt-0.5 truncate font-semibold tracking-tight", big ? "text-[1.65rem]" : "text-xl")}>{title}</h1>
-        {subtitle && <p className="mt-1 line-clamp-2 text-sm text-muted-foreground sm:truncate">{subtitle}</p>}
+        <h1
+          className={cn(
+            "mt-0.5 truncate font-semibold tracking-tight",
+            big ? "text-[1.65rem]" : "text-xl",
+          )}
+        >
+          {title}
+        </h1>
+        {subtitle && (
+          <p className="mt-1 line-clamp-2 text-sm text-muted-foreground sm:truncate">{subtitle}</p>
+        )}
       </div>
-      {actions && <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-nowrap">{actions}</div>}
+      {actions && (
+        <div className="flex min-w-0 flex-wrap items-center gap-1.5 sm:flex-nowrap">{actions}</div>
+      )}
     </header>
   );
 }
@@ -419,6 +480,7 @@ export function GlobalShell({
   eyebrow,
   actions,
   big,
+  scope = "read",
   contentClass = "overflow-y-auto",
   children,
 }: {
@@ -431,6 +493,7 @@ export function GlobalShell({
   eyebrow?: string;
   actions?: React.ReactNode;
   big?: boolean;
+  scope?: "read" | "control";
   contentClass?: string;
   children: React.ReactNode;
 }) {
@@ -441,13 +504,26 @@ export function GlobalShell({
     <div className="flex h-svh w-full overflow-hidden bg-background text-foreground">
       <GlobalSidebar user={user} workspaces={workspaces} activePath={active} />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-        <GlobalTopBar crumbs={crumbs} onOpenNav={() => setMobileNavOpen(true)} />
-        {title && <GlobalPageHeader title={title} subtitle={subtitle} eyebrow={eyebrow} actions={actions} big={big} />}
+        <GlobalTopBar crumbs={crumbs} scope={scope} onOpenNav={() => setMobileNavOpen(true)} />
+        {title && (
+          <GlobalPageHeader
+            title={title}
+            subtitle={subtitle}
+            eyebrow={eyebrow}
+            actions={actions}
+            big={big}
+          />
+        )}
         <div className={cn("min-h-0 flex-1", contentClass)}>{children}</div>
       </main>
 
       {/* Mobile nav — bottom-sheet Drawer (md:hidden trigger lives in the top bar). */}
-      <Drawer open={mobileNavOpen} onOpenChange={setMobileNavOpen} title="Menu" maxHeight="min(82vh, 42rem)">
+      <Drawer
+        open={mobileNavOpen}
+        onOpenChange={setMobileNavOpen}
+        title="Menu"
+        maxHeight="min(82vh, 42rem)"
+      >
         <GlobalNavContent
           user={user}
           workspaces={workspaces}
