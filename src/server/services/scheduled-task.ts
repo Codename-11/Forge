@@ -59,6 +59,7 @@ export async function executeScheduledTask(args: {
         id: task.id,
         enabled: true,
         status: { not: ScheduledTaskStatus.RUNNING },
+        workspace: { deletedAt: null },
         ...(args.trigger === ScheduledTaskRunTrigger.SCHEDULE
           ? { nextRunAt: { not: null, lte: now } }
           : {}),

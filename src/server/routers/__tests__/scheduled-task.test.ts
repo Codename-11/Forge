@@ -121,6 +121,19 @@ describe("scheduledTaskRouter", () => {
       where: { id: created.id },
       data: { status: "RUNNING" },
     });
+    await expect(
+      caller.update({
+        id: created.id,
+        name: "Race edit",
+        action: ScheduledTaskAction.CREATE_ISSUE,
+        prompt: "This edit must not overwrite a running task.",
+        issueTitle: "Race edit",
+        issuePriority: Priority.NONE,
+        deliveryType: ScheduledTaskDeliveryType.PROJECT,
+        projectId: project.id,
+        schedule: dailySchedule,
+      }),
+    ).rejects.toThrow(/current run/i);
     const pausedWhileRunning = await caller.pause({ id: created.id });
     expect(pausedWhileRunning).toMatchObject({ enabled: false, status: "RUNNING" });
     await expect(caller.resume({ id: created.id })).rejects.toThrow(/current run/i);
@@ -235,6 +248,12 @@ describe("scheduledTaskRouter", () => {
     });
     const archived = await sweepScheduledTasks(now);
     expect(archived.claimed).toBe(0);
+    const directArchivedClaim = await executeScheduledTask({
+      taskId: task.id,
+      trigger: ScheduledTaskRunTrigger.SCHEDULE,
+      now,
+    });
+    expect(directArchivedClaim).toBeNull();
     expect(await getPrisma().scheduledTaskRun.count({ where: { scheduledTaskId: task.id } })).toBe(1);
     await getPrisma().workspace.update({
       where: { id: fixture.workspace.id },

@@ -203,9 +203,13 @@ export const scheduledTaskRouter = router({
       const nextRunAt = current.enabled
         ? nextScheduledRunAt(input.schedule as ScheduledTaskSchedule, new Date())
         : null;
-      return ctx.db.$transaction(async (tx) => {
-        const task = await tx.scheduledTask.update({
-          where: { id: current.id },
+      const task = await ctx.db.$transaction(async (tx) => {
+        const updated = await tx.scheduledTask.updateMany({
+          where: {
+            id: current.id,
+            workspaceId: ctx.workspaceId,
+            status: { not: ScheduledTaskStatus.RUNNING },
+          },
           data: {
             name: input.name,
             action: input.action,
@@ -218,6 +222,10 @@ export const scheduledTaskRouter = router({
             nextRunAt,
           },
         });
+        if (updated.count !== 1) {
+          throw new TRPCError({ code: "CONFLICT", message: "Wait for the current run to finish." });
+        }
+        const task = await tx.scheduledTask.findUniqueOrThrow({ where: { id: current.id } });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
@@ -235,6 +243,7 @@ export const scheduledTaskRouter = router({
         });
         return task;
       });
+      return task;
     }),
 
   pause: adminProcedure

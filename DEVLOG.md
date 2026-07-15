@@ -6,10 +6,11 @@
 
 Addressed the Codex reviews on AXI-92. Manual Run now treats a lost atomic
 claim as a conflict instead of reporting a false success and advances an overdue
-occurrence so the worker cannot immediately duplicate the manual run. The
-worker's global due-task sweep has an `enabled, nextRunAt` index matching its
-filter and ordering. Added focused regression coverage for both manual-run
-guards.
+occurrence so the worker cannot immediately duplicate the manual run. Execution
+claims recheck workspace archival and edits reject newly running tasks inside the
+same atomic database predicate. The worker's global due-task sweep has an
+`enabled, nextRunAt` index matching its filter and ordering. Added focused
+regression coverage for the manual-run, archival, and lifecycle guards.
 
 ## 2026-07-15 — Read-only GitHub sync health refresh
 
