@@ -39,10 +39,7 @@ function priorityLabel(p: Priority): string {
 }
 
 /** Toggle a string id within an optional array; empty collapses to undefined. */
-function toggleId(
-  arr: readonly string[] | undefined,
-  id: string,
-): string[] | undefined {
+function toggleId(arr: readonly string[] | undefined, id: string): string[] | undefined {
   const set = new Set(arr ?? []);
   if (set.has(id)) set.delete(id);
   else set.add(id);
@@ -134,9 +131,7 @@ export function IssueFacetChips({
             label={l.name}
             color={l.color}
             checked={filters.labelIds?.includes(l.id) ?? false}
-            onToggle={() =>
-              onChange({ ...filters, labelIds: toggleId(filters.labelIds, l.id) })
-            }
+            onToggle={() => onChange({ ...filters, labelIds: toggleId(filters.labelIds, l.id) })}
           />
         ))}
       </FacetChip>
@@ -159,7 +154,7 @@ export function SortChip({
     priority: "Priority",
     newest: "Newest",
     oldest: "Oldest",
-    updated: "Recently updated",
+    updated: "Last updated",
     title: "Title A–Z",
   };
   return (
@@ -236,9 +231,7 @@ function usePopoverKeys(
       e.preventDefault();
       const idx = items.indexOf(document.activeElement as HTMLElement);
       const next =
-        e.key === "ArrowDown"
-          ? (idx + 1) % items.length
-          : (idx - 1 + items.length) % items.length;
+        e.key === "ArrowDown" ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
       items[next]?.focus();
     }
   };
@@ -285,9 +278,7 @@ function FacetChip({
       >
         {label}
         {active && (
-          <span className="rounded-full bg-ember/20 px-1 tabular-nums text-ember">
-            {count}
-          </span>
+          <span className="rounded-full bg-ember/20 px-1 tabular-nums text-ember">{count}</span>
         )}
         <ChevronDown className="h-2.5 w-2.5 opacity-60" aria-hidden />
       </button>
@@ -407,9 +398,7 @@ function SelectChip<T extends string>({
                   )}
                 >
                   <span className="flex-1 truncate">{o.label}</span>
-                  {value === o.value && (
-                    <Check className="h-3 w-3 text-ember" aria-hidden />
-                  )}
+                  {value === o.value && <Check className="h-3 w-3 text-ember" aria-hidden />}
                 </button>
               </li>
             ))}

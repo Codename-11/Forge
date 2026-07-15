@@ -1,5 +1,5 @@
 "use client";
-import { CheckCircle2, CircleSlash, Inbox, Layers, ShieldAlert, Sparkles } from "lucide-react";
+import { CircleSlash, Inbox, Layers, ShieldAlert, Sparkles } from "lucide-react";
 import { StatusCategory } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -39,11 +39,7 @@ export function QuickFilterChips({
   // dedicated "backlog category" column on Workspace yet because the
   // category enum already serves that role.
   const backlogStatusIds = (statuses ?? [])
-    .filter(
-      (s) =>
-        s.category === StatusCategory.BACKLOG ||
-        s.category === StatusCategory.TODO,
-    )
+    .filter((s) => s.category === StatusCategory.BACKLOG || s.category === StatusCategory.TODO)
     .map((s) => s.id);
 
   // -- Predicate helpers — derive `active` and `toggle` per chip from
@@ -66,24 +62,16 @@ export function QuickFilterChips({
   const toggleMyBacklog = () => {
     if (!meId) return;
     if (myBacklogActive) {
-      const nextAssignees = (filters.assigneeIds ?? []).filter(
-        (id) => id !== meId,
-      );
-      const nextStatuses = (filters.statusIds ?? []).filter(
-        (id) => !backlogStatusIds.includes(id),
-      );
+      const nextAssignees = (filters.assigneeIds ?? []).filter((id) => id !== meId);
+      const nextStatuses = (filters.statusIds ?? []).filter((id) => !backlogStatusIds.includes(id));
       onChange({
         ...filters,
         assigneeIds: nextAssignees.length ? nextAssignees : undefined,
         statusIds: nextStatuses.length ? nextStatuses : undefined,
       });
     } else {
-      const nextAssignees = Array.from(
-        new Set([...(filters.assigneeIds ?? []), meId]),
-      );
-      const nextStatuses = Array.from(
-        new Set([...(filters.statusIds ?? []), ...backlogStatusIds]),
-      );
+      const nextAssignees = Array.from(new Set([...(filters.assigneeIds ?? []), meId]));
+      const nextStatuses = Array.from(new Set([...(filters.statusIds ?? []), ...backlogStatusIds]));
       onChange({
         ...filters,
         assigneeIds: nextAssignees,
@@ -108,20 +96,6 @@ export function QuickFilterChips({
     onChange({
       ...filters,
       updatedSince: updatedActive ? undefined : "3d",
-    });
-  };
-
-  // Done / completed work. Use category instead of ids so custom terminal
-  // statuses stay covered and the server/client both infer includeDone.
-  const doneActive = filters.statusCategories?.includes(StatusCategory.DONE) ?? false;
-  const toggleDone = () => {
-    const nextCategories = doneActive
-      ? (filters.statusCategories ?? []).filter((c) => c !== StatusCategory.DONE)
-      : Array.from(new Set([...(filters.statusCategories ?? []), StatusCategory.DONE]));
-    onChange({
-      ...filters,
-      statusCategories: nextCategories.length ? nextCategories : undefined,
-      includeDone: doneActive ? undefined : true,
     });
   };
 
@@ -170,15 +144,7 @@ export function QuickFilterChips({
           active={updatedActive}
           onClick={toggleUpdated}
           icon={<Sparkles className="h-3 w-3" aria-hidden />}
-          label="Recently updated"
-        />
-      </li>
-      <li>
-        <Chip
-          active={doneActive}
-          onClick={toggleDone}
-          icon={<CheckCircle2 className="h-3 w-3" aria-hidden />}
-          label="Done"
+          label={`Updated in ${filters.updatedSince ?? "3d"}`}
         />
       </li>
       <li>
@@ -216,7 +182,7 @@ function Chip({
       title={title}
       aria-pressed={active}
       className={cn(
-        "focus-ring inline-flex h-6 items-center gap-1.5 rounded-md border px-2 text-meta transition-colors",
+        "focus-ring text-meta inline-flex h-6 items-center gap-1.5 rounded-md border px-2 transition-colors",
         active
           ? "border-ember/60 bg-ember/15 text-foreground"
           : "border-border/80 bg-background/40 text-muted-foreground hover:border-ember/30 hover:bg-subtle/60 hover:text-foreground",

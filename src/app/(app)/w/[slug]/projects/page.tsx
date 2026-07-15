@@ -24,7 +24,7 @@ export default function ProjectsPage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
-  const { data, isLoading, refetch } = trpc.project.list.useQuery({ archived: false, limit: 50 });
+  const { data, isLoading } = trpc.project.list.useQuery({ archived: false, limit: 50 });
   const [starterOpen, setStarterOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const existingKeys = new Set((data?.items ?? []).map((p) => p.key));
@@ -50,7 +50,7 @@ export default function ProjectsPage() {
   }) {
     setPendingTemplate(s.id);
     try {
-      await create.mutateAsync({
+      const project = await create.mutateAsync({
         key: s.suggestedKey,
         name: s.name,
         description: s.description ?? undefined,
@@ -58,7 +58,7 @@ export default function ProjectsPage() {
         icon: s.icon ?? undefined,
       });
       toast.success(`Created ${s.name}.`);
-      refetch();
+      router.push(`/w/${slug}/projects/${project.id}`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create project.");
     } finally {
@@ -120,9 +120,9 @@ export default function ProjectsPage() {
                   <span className="block">
                     Projects group related issues and roll up to initiatives.
                   </span>
-                  <span className="block text-meta text-muted-foreground">
-                    Start blank, or kick off from a template. Press{" "}
-                    <Kbd>⇧C</Kbd> from anywhere to quick-create.
+                  <span className="text-meta block text-muted-foreground">
+                    Start blank, or kick off from a template. Press <Kbd>⇧C</Kbd> from anywhere to
+                    quick-create.
                   </span>
                 </span>
               }
@@ -132,11 +132,7 @@ export default function ProjectsPage() {
                     <Plus className="h-3.5 w-3.5" /> New project
                   </Button>
                   {previewStarters.length === 0 && (starters?.length ?? 0) === 0 && (
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setStarterOpen(true)}
-                    >
+                    <Button variant="ghost" size="sm" onClick={() => setStarterOpen(true)}>
                       Browse templates
                     </Button>
                   )}
@@ -168,19 +164,17 @@ export default function ProjectsPage() {
                             style={{ backgroundColor: s.color ?? "#78716c" }}
                           />
                           {s.icon && <span aria-hidden="true">{s.icon}</span>}
-                          <span className="truncate text-sm font-medium">
-                            {s.name}
-                          </span>
-                          <span className="ml-auto text-id text-muted-foreground">
+                          <span className="truncate text-sm font-medium">{s.name}</span>
+                          <span className="text-id ml-auto text-muted-foreground">
                             {s.suggestedKey}
                           </span>
                         </div>
                         {s.description && (
-                          <p className="mt-1 line-clamp-2 text-meta text-muted-foreground">
+                          <p className="text-meta mt-1 line-clamp-2 text-muted-foreground">
                             {s.description}
                           </p>
                         )}
-                        <p className="mt-2 text-meta text-muted-foreground">
+                        <p className="text-meta mt-2 text-muted-foreground">
                           {pendingTemplate === s.id ? "Adding…" : "Tap to add →"}
                         </p>
                       </button>
@@ -218,7 +212,7 @@ export default function ProjectsPage() {
                       style={{ backgroundColor: p.color ?? "#78716c" }}
                     />
                     <span className="text-id text-muted-foreground">{p.key}</span>
-                    <span className="ml-auto text-meta text-muted-foreground">
+                    <span className="text-meta ml-auto text-muted-foreground">
                       {p._count.issues} issues
                     </span>
                   </div>
@@ -232,16 +226,31 @@ export default function ProjectsPage() {
                     </div>
                   )}
                   {p._count.issues > 0 && (
-                    <div className="mt-3 h-1 w-full overflow-hidden rounded-full bg-subtle">
+                    <div className="mt-3 space-y-1.5">
+                      <div className="text-meta flex items-center justify-between text-muted-foreground">
+                        <span>Progress</span>
+                        <span>
+                          {p._count.doneIssues}/{p._count.issues} done
+                        </span>
+                      </div>
                       <div
-                        className="h-full rounded-full bg-ember"
-                        style={{
-                          width: `${Math.round((p._count.doneIssues / p._count.issues) * 100)}%`,
-                        }}
-                      />
+                        className="h-1 w-full overflow-hidden rounded-full bg-subtle"
+                        role="progressbar"
+                        aria-label={`${p.name} completion`}
+                        aria-valuemin={0}
+                        aria-valuemax={p._count.issues}
+                        aria-valuenow={p._count.doneIssues}
+                      >
+                        <div
+                          className="h-full rounded-full bg-ember"
+                          style={{
+                            width: `${Math.round((p._count.doneIssues / p._count.issues) * 100)}%`,
+                          }}
+                        />
+                      </div>
                     </div>
                   )}
-                  <div className="mt-3 flex items-center gap-2 text-meta text-muted-foreground">
+                  <div className="text-meta mt-3 flex items-center gap-2 text-muted-foreground">
                     <span>Updated {relativeTime(p.updatedAt)}</span>
                     {p.initiative && (
                       <span className="inline-flex items-center gap-1 truncate">
@@ -262,12 +271,12 @@ export default function ProjectsPage() {
         open={starterOpen}
         onClose={() => setStarterOpen(false)}
         existingKeys={existingKeys}
-        onCreated={() => refetch()}
+        onCreated={(project) => router.push(`/w/${slug}/projects/${project.id}`)}
       />
       <NewProjectDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={() => refetch()}
+        onCreated={(project) => router.push(`/w/${slug}/projects/${project.id}`)}
       />
     </>
   );
@@ -282,7 +291,7 @@ function StarterDialog({
   open: boolean;
   onClose: () => void;
   existingKeys: Set<string>;
-  onCreated: () => void;
+  onCreated: (project: { id: string }) => void;
 }) {
   const { slug } = useWorkspace();
   const { data: starters } = trpc.projectTemplate.list.useQuery(undefined, { enabled: open });
@@ -299,7 +308,7 @@ function StarterDialog({
   }) {
     setPending(s.id);
     try {
-      await create.mutateAsync({
+      const project = await create.mutateAsync({
         key: s.suggestedKey,
         name: s.name,
         description: s.description ?? undefined,
@@ -307,7 +316,7 @@ function StarterDialog({
         icon: s.icon ?? undefined,
       });
       toast.success(`Created ${s.name}.`);
-      onCreated();
+      onCreated(project);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create project.");
     } finally {
@@ -329,7 +338,7 @@ function StarterDialog({
             </Link>
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Managed in Settings. Each row below invokes the standard project.create API.
+            Choose a prepared starting point. You can customize it after creation.
           </p>
         </div>
         <ul className="space-y-2">
@@ -348,12 +357,10 @@ function StarterDialog({
                   <div className="flex items-center gap-2">
                     {s.icon && <span>{s.icon}</span>}
                     <span className="text-sm font-medium">{s.name}</span>
-                    <span className="text-id text-muted-foreground">
-                      {s.suggestedKey}
-                    </span>
+                    <span className="text-id text-muted-foreground">{s.suggestedKey}</span>
                   </div>
                   {s.description && (
-                    <div className="mt-0.5 text-meta text-muted-foreground">{s.description}</div>
+                    <div className="text-meta mt-0.5 text-muted-foreground">{s.description}</div>
                   )}
                 </div>
                 <Button
@@ -368,7 +375,7 @@ function StarterDialog({
             );
           })}
           {starters?.length === 0 && (
-            <li className="py-8 text-center text-meta text-muted-foreground">
+            <li className="text-meta py-8 text-center text-muted-foreground">
               No templates defined. Create some in Settings.
             </li>
           )}
@@ -382,4 +389,3 @@ function StarterDialog({
     </Dialog>
   );
 }
-

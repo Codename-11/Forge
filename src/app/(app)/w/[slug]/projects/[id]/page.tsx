@@ -18,6 +18,7 @@ import type { EventKind, StatusCategory } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { IssueList } from "@/components/issue-list";
 import { IssueBoard } from "@/components/issue-board";
+import { IssueScopeToggle, type IssueLifecycleScope } from "@/components/issue-scope-toggle";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -48,11 +49,20 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const tabParam = (searchParams?.get("view") ?? "overview") as Tab;
   const tab: Tab = tabParam === "list" || tabParam === "board" ? tabParam : "overview";
+  const issueScope: IssueLifecycleScope = searchParams?.get("scope") === "all" ? "all" : "open";
 
   const setTab = (next: Tab) => {
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     if (next === "overview") params.delete("view");
     else params.set("view", next);
+    const qs = params.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname);
+  };
+
+  const setIssueScope = (scope: IssueLifecycleScope) => {
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    if (scope === "all") params.set("scope", "all");
+    else params.delete("scope");
     const qs = params.toString();
     router.replace(qs ? `${pathname}?${qs}` : pathname);
   };
@@ -176,6 +186,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           <ProjectTabButton active={tab === "board"} onClick={() => setTab("board")}>
             Board
           </ProjectTabButton>
+          {tab !== "overview" && (
+            <IssueScopeToggle value={issueScope} onChange={setIssueScope} className="ml-auto" />
+          )}
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -186,10 +199,20 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           )}
           {tab === "list" && (
             <div className="h-full overflow-y-auto">
-              <IssueList workspaceKey={ws?.key ?? "—"} projectId={project.id} includeDone />
+              <IssueList
+                workspaceKey={ws?.key ?? "—"}
+                projectId={project.id}
+                includeDone={issueScope === "all"}
+              />
             </div>
           )}
-          {tab === "board" && <IssueBoard workspaceKey={ws?.key ?? "—"} projectId={project.id} />}
+          {tab === "board" && (
+            <IssueBoard
+              workspaceKey={ws?.key ?? "—"}
+              projectId={project.id}
+              includeDone={issueScope === "all"}
+            />
+          )}
         </div>
       </div>
 
@@ -950,9 +973,7 @@ function EditProjectDialog({
   const [repoBranch, setRepoBranch] = useState(project.repoBranch ?? "");
   const [completionAutomation, setCompletionAutomation] = useState<
     "INHERIT" | "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE"
-  >(
-    project.completionAutomation ?? "INHERIT",
-  );
+  >(project.completionAutomation ?? "INHERIT");
 
   const update = trpc.project.update.useMutation({
     onSuccess: () => {
@@ -1039,11 +1060,7 @@ function EditProjectDialog({
           value={completionAutomation}
           onChange={(value) =>
             setCompletionAutomation(
-              (value ?? "INHERIT") as
-                | "INHERIT"
-                | "OFF"
-                | "RECOMMEND"
-                | "AUTO_WHEN_SAFE",
+              (value ?? "INHERIT") as "INHERIT" | "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE",
             )
           }
           options={[

@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
-import { Archive, ArchiveRestore, Sparkles, Folder } from "lucide-react";
+import { Archive, ArchiveRestore, Sparkles, Folder, X } from "lucide-react";
 import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { IssueList } from "@/components/issue-list";
@@ -22,11 +22,13 @@ import {
 import { GroupChip, IssueFacetChips, SortChip } from "@/components/saved-views/facet-chips";
 import { QuickFilterChips } from "@/components/saved-views/quick-filter-chips";
 import { SavedViewsBar, SaveViewDialog } from "@/components/saved-views/saved-views-bar";
+import { IssueScopeToggle, type IssueLifecycleScope } from "@/components/issue-scope-toggle";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import {
   doneStatusIds,
+  filtersTargetDone,
   filtersEqual,
   isEmptyFilters,
   ISSUE_GROUP_VALUES,
@@ -75,6 +77,7 @@ export default function IssuesPage() {
   const fParam = searchParams?.get("f") ?? null;
   const dueOnFromUrl = searchParams?.get("dueOn") ?? null;
   const showArchived = searchParams?.get("archived") === "1";
+  const requestedScope: IssueLifecycleScope = searchParams?.get("scope") === "all" ? "all" : "open";
   // Reject a malformed or calendar-invalid ?dueOn (e.g. 2026-13-45, which
   // passes the shape regex but rolls over) before it reaches the chip/query.
   const dueOn = dueOnFromUrl && isRealDateString(dueOnFromUrl) ? dueOnFromUrl : null;
@@ -114,6 +117,13 @@ export default function IssuesPage() {
   const { data: wsCount, isLoading: wsLoading } = trpc.workspace.current.useQuery();
   const { data: me } = trpc.user.me.useQuery();
   const { data: views } = trpc.savedView.list.useQuery();
+  const { data: statuses } = trpc.status.list.useQuery();
+  const doneIds = useMemo(() => doneStatusIds(statuses ?? []), [statuses]);
+  // Legacy saved views may already encode terminal inclusion in their
+  // filter blob. Reflect that truth in the visible scope control instead
+  // of claiming the view is "Open" while rendering completed work.
+  const scope: IssueLifecycleScope =
+    filters.includeDone || filtersTargetDone(filters, doneIds) ? "all" : requestedScope;
   const key = wsCount?.key ?? ws.key;
 
   // Canonical URL writer. Every mutation routes through here, building the
@@ -129,6 +139,7 @@ export default function IssuesPage() {
       view: string | null;
       dueOn: string | null;
       archived: boolean;
+      scope: IssueLifecycleScope;
     }) => {
       const p = new URLSearchParams();
       if (s.view) p.set("view", s.view);
@@ -138,6 +149,7 @@ export default function IssuesPage() {
       if (s.group !== "status") p.set("group", s.group);
       if (s.dueOn) p.set("dueOn", s.dueOn);
       if (s.archived) p.set("archived", "1");
+      if (s.scope === "all") p.set("scope", "all");
       return p.toString();
     },
     [],
@@ -152,6 +164,7 @@ export default function IssuesPage() {
         view: string | null;
         dueOn: string | null;
         archived: boolean;
+        scope: IssueLifecycleScope;
       }>,
       opts?: { push?: boolean },
     ) => {
@@ -163,6 +176,7 @@ export default function IssuesPage() {
         view: next.view !== undefined ? next.view : (activeViewId ?? viewIdFromUrl),
         dueOn: next.dueOn !== undefined ? next.dueOn : dueOn,
         archived: next.archived ?? showArchived,
+        scope: next.scope ?? scope,
       });
       const url = qs ? `${pathname}?${qs}` : pathname;
       if (opts?.push) router.push(url);
@@ -178,6 +192,7 @@ export default function IssuesPage() {
       viewIdFromUrl,
       dueOn,
       showArchived,
+      scope,
       pathname,
       router,
     ],
@@ -289,7 +304,30 @@ export default function IssuesPage() {
     setActiveViewId(null);
     // One URL write that drops filters, query, view AND dueOn together —
     // the old two-call clear read a stale snapshot and could re-add ?view=.
-    commit({ filters: {}, query: "", view: null, dueOn: null }, { push: true });
+    commit({ filters: {}, query: "", view: null, dueOn: null, scope: "open" }, { push: true });
+  }
+
+  function setLifecycleScope(nextScope: IssueLifecycleScope) {
+    if (nextScope === "all") {
+      commit({ scope: "all" }, { push: true });
+      return;
+    }
+
+    // Returning to Open also clears terminal-only selections and legacy
+    // `includeDone` flags so the visible scope is authoritative.
+    const nextStatusIds = filters.statusIds?.filter((id) => !doneIds.has(id));
+    const nextStatusCategories = filters.statusCategories?.filter(
+      (category) => category !== "DONE" && category !== "CANCELED",
+    );
+    const nextFilters: SavedViewFilters = {
+      ...filters,
+      statusIds: nextStatusIds?.length ? nextStatusIds : undefined,
+      statusCategories: nextStatusCategories?.length ? nextStatusCategories : undefined,
+      includeDone: undefined,
+    };
+    setFilters(nextFilters);
+    setActiveViewId(null);
+    commit({ filters: nextFilters, view: null, scope: "open" }, { push: true });
   }
 
   function clearDueOn() {
@@ -300,8 +338,10 @@ export default function IssuesPage() {
     commit({ archived }, { push: true });
   }
 
-  const hasFilters = !isEmptyFilters(filters) || !!query || !!dueOn;
-  const isWorkspaceEmpty = !showArchived && !!wsCount && wsCount._count.issues === 0 && !hasFilters;
+  const hasNarrowing = !isEmptyFilters(filters) || !!query || !!dueOn;
+  const hasViewAdjustments = hasNarrowing || scope !== "open";
+  const isWorkspaceEmpty =
+    !showArchived && !!wsCount && wsCount._count.issues === 0 && !hasViewAdjustments;
 
   // The query object we pass down. `query` is kept separate from the
   // saved-view filter blob (it's not persisted with views by default to
@@ -313,13 +353,11 @@ export default function IssuesPage() {
 
   // Honest header count. Tracks what the current view actually shows
   // instead of a raw workspace total (which over-counts soft-deleted +
-  // done + snoozed). The board includes done; the list applies the same
-  // effective includeDone as IssueList. Shares `issue.count`, so it can't
-  // drift from the list's own where-clause.
-  const { data: statuses } = trpc.status.list.useQuery();
-  const doneIds = useMemo(() => doneStatusIds(statuses ?? []), [statuses]);
-  const countIncludeDone =
-    showArchived || view === "board" ? true : resolveIncludeDone(issueQueryFilters, false, doneIds);
+  // done + snoozed). List and board share this exact lifecycle baseline,
+  // so changing presentation cannot change which issues are eligible.
+  const countIncludeDone = showArchived
+    ? true
+    : resolveIncludeDone(issueQueryFilters, scope === "all", doneIds);
   const { data: countData } = trpc.issue.count.useQuery({
     ...issueQueryFilters,
     includeDone: countIncludeDone,
@@ -335,7 +373,15 @@ export default function IssuesPage() {
         title={showArchived ? "Archived issues" : "All issues"}
         subtitle={
           countData
-            ? `${countData.count} ${hasFilters ? "matching" : showArchived ? "archived" : "issues"}`
+            ? `${countData.count} ${
+                hasNarrowing
+                  ? "matching"
+                  : showArchived
+                    ? "archived"
+                    : scope === "open"
+                      ? "open"
+                      : "issues"
+              }`
             : !showArchived && wsCount
               ? `${wsCount._count.issues} issues`
               : undefined
@@ -351,13 +397,40 @@ export default function IssuesPage() {
                 <Input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search…"
-                  className="h-8 w-[min(44vw,12rem)] pr-7 text-xs sm:h-7 sm:w-48"
+                  placeholder={
+                    showArchived
+                      ? "Search archived issues…"
+                      : scope === "open"
+                        ? "Search open issues…"
+                        : "Search all issues…"
+                  }
+                  aria-label={
+                    showArchived
+                      ? "Search archived issues"
+                      : scope === "open"
+                        ? "Search open issues"
+                        : "Search all issues"
+                  }
+                  className="h-8 w-[min(55vw,15rem)] pr-8 text-xs sm:h-7 sm:w-60"
                 />
                 {searchPending && (
                   <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2">
                     <Spinner size="sm" />
                   </span>
+                )}
+                {!searchPending && query && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery("");
+                      setDebouncedQuery("");
+                      commit({ query: "" });
+                    }}
+                    aria-label="Clear search"
+                    className="focus-ring absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3 w-3" aria-hidden />
+                  </button>
                 )}
               </div>
             )}
@@ -397,12 +470,13 @@ export default function IssuesPage() {
               fields) + Sprint/Initiative (single-pick). Sort — and Group,
               list view only — are pinned right. */}
           <div className="flex flex-wrap items-center gap-2 pt-1">
+            {!showArchived && <IssueScopeToggle value={scope} onChange={setLifecycleScope} />}
             <IssueFacetChips filters={filters} onChange={onChangeFilters} />
             <ProjectFilterChip value={projectId} onChange={setProjectId} />
             <CycleFilterChip value={cycleId} onChange={setCycleId} />
             <InitiativeFilterChip value={initiativeId} onChange={setInitiativeId} />
             {dueOn && <DueOnChip dueOn={dueOn} onClear={clearDueOn} />}
-            {hasFilters && (
+            {hasViewAdjustments && (
               <button
                 type="button"
                 onClick={clearAllFilters}
@@ -451,17 +525,21 @@ export default function IssuesPage() {
             <IssueList
               workspaceKey={key}
               extraFilters={issueQueryFilters}
+              includeDone={countIncludeDone}
               sort={sort}
               groupBy={groupBy}
               dueOn={dueOn ?? undefined}
               archived={showArchived}
               emptyOverride={
-                showArchived && !hasFilters ? (
+                showArchived && !hasNarrowing ? (
                   <ArchivedEmptyState onReturn={() => setShowArchived(false)} />
-                ) : hasFilters ? (
+                ) : hasViewAdjustments ? (
                   <FilteredEmptyState
                     activeViewName={activeView?.name ?? null}
                     onClear={clearAllFilters}
+                    query={query}
+                    scope={scope}
+                    onSearchAll={() => setLifecycleScope("all")}
                   />
                 ) : undefined
               }
@@ -471,13 +549,17 @@ export default function IssuesPage() {
           <IssueBoard
             workspaceKey={key}
             extraFilters={issueQueryFilters}
+            includeDone={countIncludeDone}
             sort={sort}
             dueOn={dueOn ?? undefined}
             emptyOverride={
-              hasFilters ? (
+              hasViewAdjustments ? (
                 <FilteredEmptyState
                   activeViewName={activeView?.name ?? null}
                   onClear={clearAllFilters}
+                  query={query}
+                  scope={scope}
+                  onSearchAll={() => setLifecycleScope("all")}
                 />
               ) : undefined
             }
@@ -521,9 +603,15 @@ function ArchivedEmptyState({ onReturn }: { onReturn: () => void }) {
 function FilteredEmptyState({
   activeViewName,
   onClear,
+  query,
+  scope,
+  onSearchAll,
 }: {
   activeViewName: string | null;
   onClear: () => void;
+  query: string;
+  scope: IssueLifecycleScope;
+  onSearchAll: () => void;
 }) {
   return (
     <div className="flex h-60 items-center justify-center">
@@ -533,11 +621,25 @@ function FilteredEmptyState({
         title="No issues match this view"
         description={
           <span>
-            {activeViewName ? (
+            {query && scope === "open" ? (
+              <>
+                No open issues match <span className="font-medium text-foreground">“{query}”</span>.{" "}
+                <button
+                  type="button"
+                  onClick={onSearchAll}
+                  className="text-foreground underline-offset-2 hover:text-ember hover:underline"
+                >
+                  Search all issues
+                </button>{" "}
+                to include completed work, or{" "}
+              </>
+            ) : activeViewName ? (
               <>
                 The view <span className="font-medium text-foreground">{activeViewName}</span> has
                 no matches right now.{" "}
               </>
+            ) : query ? (
+              "No issues match this search. "
             ) : (
               "Your active filters returned nothing. "
             )}
@@ -546,7 +648,7 @@ function FilteredEmptyState({
               onClick={onClear}
               className="text-foreground underline-offset-2 hover:text-ember hover:underline"
             >
-              Clear filters
+              {query ? "Clear search and filters" : "Clear filters"}
             </button>{" "}
             to see all issues.
           </span>

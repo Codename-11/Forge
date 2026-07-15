@@ -33,9 +33,7 @@ type QuickFormProps = {
   description?: React.ReactNode;
   primaryLabel: string;
   secondaryLabel?: string;
-  onSubmit: (
-    e: React.FormEvent<HTMLFormElement>,
-  ) => SubmitResult | Promise<SubmitResult>;
+  onSubmit: (e: React.FormEvent<HTMLFormElement>) => SubmitResult | Promise<SubmitResult>;
   onSecondary?: () => void | Promise<void>;
   /** Optional external loading flag — merges with internal pending. */
   loading?: boolean;
@@ -232,20 +230,18 @@ export function QuickForm({
           ref={formRef}
           onSubmit={doSubmit}
           onKeyDown={handleKeyDown}
+          onChange={() => {
+            if (error) setError(null);
+          }}
           className="flex max-h-[calc(100dvh-5rem)] flex-col gap-3 p-5"
           noValidate
         >
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1">
-              <h2
-                id="quickform-title"
-                className="text-sm font-semibold text-foreground"
-              >
+              <h2 id="quickform-title" className="text-sm font-semibold text-foreground">
                 {title}
               </h2>
-              {description && (
-                <p className="text-xs text-muted-foreground">{description}</p>
-              )}
+              {description && <p className="text-xs text-muted-foreground">{description}</p>}
             </div>
             {restored && (
               <span className="shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember">
@@ -255,7 +251,11 @@ export function QuickForm({
           </div>
 
           {error && (
-            <div className="rounded-md border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-foreground">
+            <div
+              className="rounded-md border border-ember/30 bg-ember/10 px-2.5 py-2 text-xs text-foreground"
+              role="alert"
+              aria-live="polite"
+            >
               {error}
             </div>
           )}
@@ -320,18 +320,13 @@ function Field({
   return (
     <div className={cn("space-y-1", className)}>
       {label && (
-        <label
-          htmlFor={htmlFor}
-          className="flex items-center gap-1 text-xs text-muted-foreground"
-        >
+        <label htmlFor={htmlFor} className="flex items-center gap-1 text-xs text-muted-foreground">
           <span>{label}</span>
           {required && <span className="text-ember">*</span>}
         </label>
       )}
       {children}
-      {hint && !error && (
-        <p className="text-[0.6875rem] text-muted-foreground">{hint}</p>
-      )}
+      {hint && !error && <p className="text-[0.6875rem] text-muted-foreground">{hint}</p>}
       {error && (
         <p className="text-[0.6875rem] text-danger" role="alert">
           {error}

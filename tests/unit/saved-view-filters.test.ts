@@ -3,6 +3,7 @@ import {
   filtersEqual,
   hasTerminalStatusCategory,
   isEmptyFilters,
+  resolveIncludeDone,
   safeParseFilters,
   withIncludeDoneForTerminalFilters,
   type SavedViewFilters,
@@ -39,9 +40,7 @@ describe("filtersEqual", () => {
   });
 
   it("returns false when array lengths differ", () => {
-    expect(filtersEqual({ statusIds: ["x"] }, { statusIds: ["x", "y"] })).toBe(
-      false,
-    );
+    expect(filtersEqual({ statusIds: ["x"] }, { statusIds: ["x", "y"] })).toBe(false);
   });
 
   it("treats missing array and empty array as equal", () => {
@@ -51,9 +50,7 @@ describe("filtersEqual", () => {
   it("compares scalar values strictly", () => {
     expect(filtersEqual({ query: "foo" }, { query: "foo" })).toBe(true);
     expect(filtersEqual({ query: "foo" }, { query: "bar" })).toBe(false);
-    expect(filtersEqual({ updatedSince: "7d" }, { updatedSince: "1d" })).toBe(
-      false,
-    );
+    expect(filtersEqual({ updatedSince: "7d" }, { updatedSince: "1d" })).toBe(false);
   });
 });
 
@@ -82,5 +79,15 @@ describe("terminal status filter helpers", () => {
       statusCategories: [StatusCategory.DONE],
     });
     expect(filters.includeDone).toBe(true);
+  });
+
+  it("keeps the surface default authoritative until a terminal filter is explicit", () => {
+    const doneIds = new Set(["done-id", "canceled-id"]);
+    expect(resolveIncludeDone({}, false, doneIds)).toBe(false);
+    expect(resolveIncludeDone({}, true, doneIds)).toBe(true);
+    expect(resolveIncludeDone({ statusIds: ["done-id"] }, false, doneIds)).toBe(true);
+    expect(
+      resolveIncludeDone({ statusCategories: [StatusCategory.CANCELED] }, false, doneIds),
+    ).toBe(true);
   });
 });
