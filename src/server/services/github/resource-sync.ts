@@ -11,6 +11,7 @@ import {
   type StatusCategory,
 } from "@prisma/client";
 import { recordChange } from "@/server/audit";
+import { syncWorkSessionsFromPullRequest } from "@/server/services/work-session";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
 import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
 import {
@@ -240,6 +241,13 @@ export async function recordGitHubResourceChangeToLinkedIssues(args: {
   skipIssueIds?: Set<string>;
 }): Promise<number> {
   if (!gitHubResourceStateChanged(args.before, args.after)) return 0;
+  await syncWorkSessionsFromPullRequest(args.db, {
+    id: args.after.id,
+    workspaceId: args.workspaceId,
+    resourceType: args.after.resourceType,
+    state: args.after.state,
+    metadata: args.after.metadata,
+  });
   const links = await args.db.externalResourceLink.findMany({
     where: { workspaceId: args.workspaceId, externalResourceId: args.after.id },
     select: { issueId: true },
@@ -1001,9 +1009,7 @@ export async function migrateGenericGitHubAttachments(
     WHERE a."kind" = 'LINK'
       AND a."targetType" = 'issue'
       AND a."targetId" IS NOT NULL
-      AND COALESCE(NULLIF(a."externalUrl", ''), a."url") ~* ${
-        "^https?://(?:www\\.)?github\\.com/[^/]+/[^/]+/(?:issues|pull)/[0-9]+(?:[/?#].*)?$"
-      }
+      AND COALESCE(NULLIF(a."externalUrl", ''), a."url") ~* ${"^https?://(?:www\\.)?github\\.com/[^/]+/[^/]+/(?:issues|pull)/[0-9]+(?:[/?#].*)?$"}
       ${workspaceFilter}
     ORDER BY a."createdAt" ASC, a."id" ASC
     LIMIT ${limit}

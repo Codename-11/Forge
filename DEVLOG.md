@@ -16,6 +16,78 @@ with a compatibility fallback. The worker's global due-task sweep has an
 regression coverage for the manual-run, archival, timezone, and lifecycle
 guards.
 
+## 2026-07-16 — Project-declared branch topology
+
+Reconciled the shared delivery policy after clarifying Forge's trunk-based flow
+against Hermes-Relay's integration train. Repository guidance now requires each
+project to declare its integration branch, release branch, tag source, staging
+and production sources, hotfix base, and back-merge target. Forge explicitly
+uses `feature → main → tag`; staging may deploy an exact `main` SHA and does not
+justify a branch by itself.
+
+The durable Obsidian Development Standards and Axiom Delivery Workflows no
+longer prescribe GitFlow-lite universally. Forge's release note mirrors its
+trunk contract, Hermes runtime integration defers to the target repository, and
+the Hermes-Relay project note now defines `feature → dev → release PR → main →
+surface tag`, including separate release ownership and hotfix back-merge rules.
+
+## 2026-07-15 — Clean-checkout worker image follow-up
+
+The first guarded v0.20.0 deployment correctly stopped before production when
+the new dedicated clean clone exposed that the worker Docker stage copied
+Next's generated, gitignored `next-env.d.ts`. The worker executes through
+`tsx` and does not consume that declaration file, so the Dockerfile no longer
+requires it. This makes the image reproducible from a clean exact-ref checkout;
+v0.20.1 carries the deployment-only correction.
+
+## 2026-07-15 — Shared code-work ownership and guarded delivery
+
+Implemented the common delivery contract for Forge agents, Codex Desktop tasks,
+and contributors. A first-class WorkSession provides one active coordination
+lease per issue with repository, branch, base, worktree path, owner, heartbeat,
+native PR, and explicit merged/released/deployed/verified milestones. Duplicate
+work is rejected with the current owner and branch; stale work remains blocking
+and raises one shared ActionRequest rather than being silently discarded.
+
+Native GitHub PR snapshots remain authoritative and advance attached sessions
+through draft/review/ready/merged states using branch, aggregate checks, review
+decision, and mergeability evidence. The issue rail adds a compact Delivery card
+and richer GitHub evidence; the dashboard adds an active Delivery work card so
+ownership and next steps survive navigation. Workspace settings now own the
+stale lease threshold. Release/deploy/verification transitions require workspace
+admin authority.
+
+Added `workSessions.*` MCP tools to the bounded runtime profile and injected the
+coordination policy into every EXECUTE run: claim before editing, never work in
+main/deployment checkouts, heartbeat after commits/phase changes, use native
+IMPLEMENTS links, and stop at operator release/deploy gates. Added a timestamped
+Prisma migration, service coverage for lease conflicts, PR-derived delivery,
+milestone ordering, and stale action-request deduplication.
+
+Production compose now accepts `FORGE_SOURCE_PATH`; a dedicated clean deployment
+clone was initialized at `/home/bailey/deploy/forge-prod`. The guarded deploy
+script serializes with `flock`, resolves an exact tag/SHA, verifies main ancestry
+and version/tag agreement, stamps the build, deploys both services, and smoke
+tests the live sign-in route. Repository policy/docs and the canonical Obsidian
+Delivery Workflows, Development Standards, Forge Release Workflow, and Hermes ↔
+Forge Integration notes were updated to the same model.
+
+Verification: lint and TypeScript passed; the focused coordination and MCP
+profile suites passed **11/11**; the complete Vitest gate passed **1,297/1,299**
+concurrently, with its one failed stale-dispatch case passing in isolation
+**9/9** (the remaining test is skipped); the production docs + Next.js build
+passed; and Playwright passed **37/39** concurrently, with the intentional
+dashboard widget expectation corrected and both affected specs passing in a
+serial follow-up **4/4**. The unrelated chat `/clear` timing case also passed in
+that serial follow-up.
+
+The pre-merge Codex review identified two narrowing-boundary omissions and one
+heartbeat race. `workSessions.list` and `workSessions.claim` now enforce the
+calling API key's project/label/initiative scope before reading or leasing an
+issue. The stale sweep now atomically rechecks both status and heartbeat cutoff
+when claiming a session for transition, so a concurrent heartbeat wins instead
+of being overwritten. Focused regression coverage now passes **13/13**.
+
 ## 2026-07-15 — Read-only GitHub sync health refresh
 
 Closed the post-release usability gap in workspace GitHub App settings. Added a
@@ -13115,32 +13187,3 @@ fresh production E2E build completed. The browser run passed 35 of 38 journeys
 before Chromium crashed on a memory-saturated host; each of the three reported
 journeys passed immediately in a fresh isolated browser process. Release,
 deployment, and production smoke results follow after the pull request lands.
-
-## 2026-07-15 — First-class scheduled tasks (AXI-92)
-
-Added a ScheduledTask / ScheduledTaskRun automation domain alongside the
-unchanged legacy RecurringIssue feature. Scheduled tasks support interval,
-daily, and weekly timezone-aware schedules; create real Forge issues in the
-workspace inbox or an active project through the canonical issue creation
-service; and retain durable success/failure run history. The maintenance worker
-claims due tasks once per minute and persists the next future occurrence before
-executing, so a failed action keeps its next run visible and active.
-
-Added tenant-scoped, admin-gated tRPC lifecycle operations with audit/activity
-events, safe pause/resume and typed-name deletion, manual runs, a first-class
-Automation navigation entry and responsive management surface, schedule and
-delivery builders, failure detail, linked output issues, documentation, and
-focused schedule/router/execution coverage. Independent review then hardened
-worker-crash recovery, archived-workspace filtering, soft-deleted delivery
-target validation, and pause/resume races around in-flight runs.
-
-Verification: Prisma format, validate, generate, and migration deploy passed;
-typecheck and the production Next build passed; lint passed with only existing
-repository warnings; focused coverage passed 17/17 after review hardening; and
-the full Vitest gate
-passed 1,300 tests with one intentional live-connector skip. The new scheduled
-task Playwright lifecycle passed in an isolated single-worker run. The full
-parallel Playwright gate passed 35/40: the new lifecycle initially hit a strict
-locator ambiguity that was fixed and rerun green; three unrelated chat/browser
-failures passed immediately in isolation, while the pre-existing shared E2E
-workspace state left one dispatch-default assertion disabled on rerun.

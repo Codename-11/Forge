@@ -54,7 +54,14 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
           .locator(":scope > [data-widget-id]")
           .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-widget-id"))),
       )
-      .toEqual(["agent-attention", "agent-activity", "standup", "pulse", "today"]);
+      .toEqual([
+        "agent-attention",
+        "delivery-work",
+        "agent-activity",
+        "standup",
+        "pulse",
+        "today",
+      ]);
     const priorityColumns = await priorityGrid.evaluate((node) => {
       const tracks = getComputedStyle(node).gridTemplateColumns;
       return tracks === "none" ? 1 : tracks.split(" ").length;

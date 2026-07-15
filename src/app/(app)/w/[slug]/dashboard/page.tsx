@@ -31,6 +31,7 @@ import { WhatsNewTile } from "@/components/dashboard/whats-new-tile";
 import { AgentActivityTile } from "@/components/dashboard/agent-activity-tile";
 import { NeedsYouTile } from "@/components/dashboard/needs-you-tile";
 import { PulseTile } from "@/components/dashboard/pulse-tile";
+import { DeliveryWorkTile } from "@/components/dashboard/delivery-work-tile";
 import { IssueCard, type DashboardWorkCard } from "@/components/dashboard/issue-card";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
@@ -184,6 +185,12 @@ export default function DashboardPage() {
         title: "Agent attention",
         defaultWidth: "full",
         node: <AgentAttentionPanel slug={slug} />,
+      },
+      {
+        id: "delivery-work",
+        title: "Delivery work",
+        defaultWidth: "full",
+        node: <DeliveryWorkTile />,
       },
       {
         id: "agent-activity",

@@ -9,6 +9,27 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.20.1 · Clean-checkout deployment
+
+### Fixed
+
+- **Worker images now build from the dedicated clean deployment clone.** The Dockerfile no longer requires Next's generated, gitignored `next-env.d.ts` for the `tsx` worker stage, removing a hidden dependency on development-checkout residue.
+
+## [2026-07-15] — v0.20.0 · Coordinated code delivery
+
+### Added
+
+- **Issues now coordinate one active code work session across Forge, Codex Desktop, and contributors.** The Delivery card records the owner, repository, branch, base, isolated worktree, heartbeat, native implementation PR, and separate merge, release, deployment, and live-verification milestones.
+- **Active delivery work remains visible after navigation.** A dashboard card shows current branches, owners, PR state, stale work, and the next delivery stage; workspace admins can tune the stale lease threshold.
+- **Agents receive a code-work contract and MCP tools.** EXECUTE runs check and claim shared ownership before editing, heartbeat meaningful phases, and attach native GitHub implementation PRs instead of generic links.
+- **Production deployment has a serialized exact-ref path.** A guarded script requires a clean dedicated clone, verifies the target belongs to `origin/main`, locks concurrent releases, stamps the build SHA, and smoke-tests the live sign-in route.
+
+### Changed
+
+- **GitHub remains authoritative for PR delivery facts.** Review, checks, mergeability, branch head, and merge state advance the Forge delivery session without creating a parallel PR status model.
+- **Stale work is actionable instead of silently released.** Quiet sessions retain their ownership lease and create one shared action request until the owner resumes or an operator abandons the session.
+- **Parallel contributors use timestamped Prisma migration names.** Repository, agent-context, release, docs-site, production compose, and Obsidian policies now share the same worktree and delivery rules.
+
 ## [2026-07-15] — v0.19.1 · Refreshable GitHub sync health
 
 ### Added

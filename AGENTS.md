@@ -15,16 +15,16 @@ Vitest + Playwright.
 
 ## Where things live
 
-| What                        | Where                                    |
-|-----------------------------|------------------------------------------|
-| DB schema                   | `prisma/schema.prisma`                   |
-| tRPC routers                | `src/server/routers/`                    |
-| Plugin runtime + MCP        | `src/server/services/`                   |
-| API route handlers          | `src/app/api/`                           |
-| App pages (RSC + client)    | `src/app/(app)/`                         |
-| Design tokens               | `src/app/globals.css`, `tailwind.config.ts` |
-| Sample plugin               | `plugins/issue-triage/`                  |
-| DevLog                      | `DEVLOG.md` — update at session end      |
+| What                     | Where                                       |
+| ------------------------ | ------------------------------------------- |
+| DB schema                | `prisma/schema.prisma`                      |
+| tRPC routers             | `src/server/routers/`                       |
+| Plugin runtime + MCP     | `src/server/services/`                      |
+| API route handlers       | `src/app/api/`                              |
+| App pages (RSC + client) | `src/app/(app)/`                            |
+| Design tokens            | `src/app/globals.css`, `tailwind.config.ts` |
+| Sample plugin            | `plugins/issue-triage/`                     |
+| DevLog                   | `DEVLOG.md` — update at session end         |
 
 ## Primitives
 
@@ -63,6 +63,7 @@ All tenant-scoped on `workspaceId`.
 
 `Workspace.autoDispatch` + `autoDispatchMode` drive automatic agent
 selection when an issue hits the queue unassigned. Modes:
+
 - `MANUAL_ONLY` — dispatcher is a no-op; assignment is human-only.
 - `ROUND_ROBIN` — pick the least-recently-dispatched eligible agent.
 - `PRIORITY_MATCH` — prefer agents whose `capabilities` contain the
@@ -70,10 +71,10 @@ selection when an issue hits the queue unassigned. Modes:
 - `CAPABILITY_MATCH` — intersect the issue's label names with agent
   capabilities; most matches wins; round-robin tie-break; zero-match
   falls through to round-robin rather than stalling dispatch.
-`maxConcurrent` caps active assignments per agent (0 = unlimited).
-`requireApprovalBeforeStart` gates push until a human approves.
-`autoStartOnAssign` determines whether AGENT_ASSIGNED fires a webhook on
-assignment (vs just filling the agent's queue).
+  `maxConcurrent` caps active assignments per agent (0 = unlimited).
+  `requireApprovalBeforeStart` gates push until a human approves.
+  `autoStartOnAssign` determines whether AGENT_ASSIGNED fires a webhook on
+  assignment (vs just filling the agent's queue).
 
 ## Configurability
 
@@ -86,7 +87,7 @@ baked into handlers. Current knobs: `cycleLengthDays` (7),
 
 ## Granular ApiKey scopes
 
-`ApiKey` has the usual coarse `PluginScope[]` ceiling *plus* three
+`ApiKey` has the usual coarse `PluginScope[]` ceiling _plus_ three
 narrowing arrays: `projectIds`, `labelIds`, `initiativeIds`, plus an
 optional `linkedAgentId` pointing at the `Agent` row the key belongs
 to. Empty arrays = unrestricted within the declared scopes. Non-empty =
@@ -149,3 +150,29 @@ hardcoded — those should stay small regardless of Appearance.
 3. Append to `DEVLOG.md`
 4. Commit; optional push.
 5. Follow `RELEASE.md` for release tagging and deploy.
+
+## Code work coordination
+
+- GitHub `origin` is the code source of truth; Forge is the ownership and
+  delivery source of truth. Forge agents, Codex Desktop tasks, and contributors
+  follow the same workflow.
+- One issue has one active work session, one isolated worktree/branch, and one
+  primary implementation PR. Check and claim the issue's Delivery session
+  before editing. Continue an existing session instead of creating competing
+  work.
+- Branch names include the issue key (`codex/axi-123-description`). Never edit,
+  commit, or test changes in the deployment/main checkout.
+- Heartbeat the work session during meaningful phases and after commits. Link
+  PRs through native GitHub `IMPLEMENTS` relations, never generic attachments.
+- GitHub owns PR/review/check/merge truth. Forge records the delivery sequence:
+  Claimed → In progress → PR/review → Merged → Released → Deployed → Verified.
+- Release/deploy/verification require explicit operator authority and are
+  serialized. See `docs/engineering/work-management.md` and `RELEASE.md`.
+- Use timestamped Prisma migration directories to prevent parallel numbering
+  collisions.
+- Forge's branch contract is trunk-based: integration branch `main`, release
+  branch `main`, tag source `main`, staging source an exact `main` SHA, and
+  production source an immutable `v*` tag. Hotfixes branch from and return to
+  `main`; there is no back-merge target. Other repositories may declare a
+  different contract, such as Hermes Relay's `feature → dev → main → tag`
+  release train.

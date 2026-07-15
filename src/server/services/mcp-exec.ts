@@ -201,6 +201,18 @@ async function resolveExplicitPolicyTarget(
     case "agent.inbox.outputStarted":
     case "runtimes.provisioning":
       return { kind: "none" };
+    case "workSessions.claim":
+      return { kind: "issues", issueIds: [input.issueId as string] };
+    case "workSessions.heartbeat":
+    case "workSessions.attachPullRequest": {
+      const sessionId = input.sessionId as string | undefined;
+      if (!sessionId) return { kind: "none" };
+      const session = await db.workSession.findFirst({
+        where: { id: sessionId, workspaceId: ctx.workspaceId },
+        select: { issueId: true },
+      });
+      return session ? { kind: "issues", issueIds: [session.issueId] } : { kind: "none" };
+    }
   }
 }
 
