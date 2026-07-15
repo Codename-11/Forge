@@ -4,10 +4,12 @@
 
 ## 2026-07-15 — Scheduled Tasks review follow-up
 
-Addressed the Codex review on AXI-92. Manual Run now treats a lost atomic
-claim as a conflict instead of reporting a false success, and the worker's
-global due-task sweep has an `enabled, nextRunAt` index matching its filter
-and ordering. Added focused regression coverage for the lost-claim guard.
+Addressed the Codex reviews on AXI-92. Manual Run now treats a lost atomic
+claim as a conflict instead of reporting a false success and advances an overdue
+occurrence so the worker cannot immediately duplicate the manual run. The
+worker's global due-task sweep has an `enabled, nextRunAt` index matching its
+filter and ordering. Added focused regression coverage for both manual-run
+guards.
 
 ## 2026-07-15 — Read-only GitHub sync health refresh
 

@@ -98,9 +98,14 @@ describe("scheduledTaskRouter", () => {
     expect(resumed.enabled).toBe(true);
     expect(resumed.nextRunAt?.getTime()).toBeGreaterThan(Date.now());
 
+    await getPrisma().scheduledTask.update({
+      where: { id: created.id },
+      data: { nextRunAt: new Date(Date.now() - 60_000) },
+    });
     const result = await caller.runNow({ id: created.id });
     expect(result?.status).toBe("SUCCEEDED");
     const detail = await caller.get({ id: created.id });
+    expect(detail.nextRunAt?.getTime()).toBeGreaterThan(Date.now());
     expect(detail.runs[0]).toMatchObject({ status: "SUCCEEDED", trigger: "MANUAL" });
     expect(detail.runs[0].outputIssue).toMatchObject({ title: "Prepare customer brief" });
     const issue = await getPrisma().issue.findUniqueOrThrow({

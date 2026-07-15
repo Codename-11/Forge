@@ -44,8 +44,15 @@ export async function executeScheduledTask(args: {
 
     const scheduledForAt =
       args.trigger === ScheduledTaskRunTrigger.SCHEDULE ? task.nextRunAt : null;
-    const nextRunAt = scheduledForAt
-      ? nextScheduledRunAt(scheduleFromTask(task), now, scheduledForAt)
+    const overdueManualOccurrence =
+      args.trigger === ScheduledTaskRunTrigger.MANUAL &&
+      task.nextRunAt &&
+      task.nextRunAt.getTime() <= now.getTime()
+        ? task.nextRunAt
+        : null;
+    const occurrenceToAdvance = scheduledForAt ?? overdueManualOccurrence;
+    const nextRunAt = occurrenceToAdvance
+      ? nextScheduledRunAt(scheduleFromTask(task), now, occurrenceToAdvance)
       : task.nextRunAt;
     const updated = await tx.scheduledTask.updateMany({
       where: {
