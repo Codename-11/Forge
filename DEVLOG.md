@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — v0.23.0 production verification
+
+Merged the Mission Control agent fleet implementation through PR #46 and the
+release metadata through PR #47. The release makes Mission Control the global
+profile and workspace-binding control plane, keeps workspace settings focused
+on local agent policy, and reserves Instance Administration for governance and
+recovery. Legacy Agent Studio routes continue into the new hierarchy.
+
+The implementation and release passed lint and typecheck, 1,320 Vitest tests
+with one intentional live-connector skip, a production Next.js build, all 47
+serial Playwright journeys on a fresh disposable E2E database, and all three
+required GitHub CI jobs. Release PR #47 merged as
+`17ade4da1b8730b11b942fb7775bfcc76b1fea36`; immutable tag `v0.23.0` and its
+GitHub Release point to that exact `main` commit.
+
+Production rebuilt the app and worker from the dedicated clean checkout under
+the deployment lock and restarted both containers with no pending migrations.
+Live verification returned HTTP 200 for `/signin`; MCP initialization reported
+version `0.23.0`, SHA `17ade4d`, and build time `2026-07-15T23:17:45Z`; app and
+worker remained up with clean startup logs.
+
 ## 2026-07-15 — v0.22.0 release
 
 Merged the MCP delivery timeline contract through PR #43 and the screenshot-
