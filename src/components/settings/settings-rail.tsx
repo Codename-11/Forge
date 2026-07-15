@@ -64,8 +64,7 @@ export function SettingsRail(props: SettingsRailProps) {
         .map((g) => ({
           ...g,
           items: g.items.filter(
-            (it) =>
-              it.label.toLowerCase().includes(q) || it.hint.toLowerCase().includes(q),
+            (it) => it.label.toLowerCase().includes(q) || it.hint.toLowerCase().includes(q),
           ),
         }))
         .filter((g) => g.items.length > 0)
@@ -79,7 +78,7 @@ export function SettingsRail(props: SettingsRailProps) {
             Scope
           </div>
           <div className="truncate text-xs font-medium text-foreground">
-            {props.scope === "workspace" ? `Workspace · ${props.name}` : "Personal settings"}
+            {props.scope === "workspace" ? `Workspace · ${props.name}` : "Account & identity"}
           </div>
         </div>
         <button
@@ -90,13 +89,15 @@ export function SettingsRail(props: SettingsRailProps) {
           onClick={() => setMobileOpen((value) => !value)}
         >
           Browse
-          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", mobileOpen && "rotate-180")} />
+          <ChevronDown
+            className={cn("h-3.5 w-3.5 transition-transform", mobileOpen && "rotate-180")}
+          />
         </button>
       </div>
       {props.scope === "account" && (
         <div
           className={cn(
-            "border-b border-border/60 px-3 pt-3 pb-2",
+            "border-b border-border/60 px-3 pb-2 pt-3",
             !mobileOpen && "hidden md:block",
           )}
         >
@@ -110,7 +111,7 @@ export function SettingsRail(props: SettingsRailProps) {
         </div>
       )}
 
-      <div className={cn("px-3 pt-3 pb-2", !mobileOpen && "hidden md:block")}>
+      <div className={cn("px-3 pb-2 pt-3", !mobileOpen && "hidden md:block")}>
         <div className="relative">
           <input
             ref={inputRef}
@@ -122,22 +123,17 @@ export function SettingsRail(props: SettingsRailProps) {
             className="focus-ring h-7 w-full rounded-md border border-border bg-background px-2 pl-7 text-xs text-foreground placeholder:text-muted-foreground"
           />
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
-          {!query && (
-            <span className="kbd absolute right-1.5 top-1/2 -translate-y-1/2">/</span>
-          )}
+          {!query && <span className="kbd absolute right-1.5 top-1/2 -translate-y-1/2">/</span>}
         </div>
       </div>
 
       <nav
         id="settings-navigation"
         aria-label="Settings"
-        className={cn(
-          "min-h-0 flex-1 overflow-y-auto px-2 pb-3",
-          !mobileOpen && "hidden md:block",
-        )}
+        className={cn("min-h-0 flex-1 overflow-y-auto px-2 pb-3", !mobileOpen && "hidden md:block")}
       >
         {filtered.length === 0 && (
-          <p className="px-2 py-3 text-meta text-muted-foreground">No settings match.</p>
+          <p className="text-meta px-2 py-3 text-muted-foreground">No settings match.</p>
         )}
         {filtered.map((g, gi) => (
           <div key={g.id} className={gi === 0 ? "" : "mt-3"}>
@@ -146,7 +142,7 @@ export function SettingsRail(props: SettingsRailProps) {
                 {g.label}
               </span>
               {g.hint && (
-                <span className="hidden truncate text-meta text-muted-foreground/60 sm:inline">
+                <span className="text-meta hidden truncate text-muted-foreground/60 sm:inline">
                   · {g.hint}
                 </span>
               )}
@@ -168,10 +164,7 @@ export function SettingsRail(props: SettingsRailProps) {
                       )}
                     >
                       <it.icon
-                        className={cn(
-                          "mt-0.5 h-3.5 w-3.5 shrink-0",
-                          active && "text-ember",
-                        )}
+                        className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", active && "text-ember")}
                       />
                       <span className="min-w-0 flex-1">
                         <span className="flex flex-wrap items-center gap-1.5">
@@ -182,7 +175,7 @@ export function SettingsRail(props: SettingsRailProps) {
                             </span>
                           )}
                         </span>
-                        <span className="block truncate text-meta text-muted-foreground/80">
+                        <span className="text-meta block truncate text-muted-foreground/80">
                           {it.hint}
                         </span>
                       </span>
@@ -196,7 +189,12 @@ export function SettingsRail(props: SettingsRailProps) {
       </nav>
 
       {props.scope === "account" && (
-        <div className={cn("shrink-0 border-t border-border/60 px-3 py-2", !mobileOpen && "hidden md:block")}>
+        <div
+          className={cn(
+            "shrink-0 border-t border-border/60 px-3 py-2",
+            !mobileOpen && "hidden md:block",
+          )}
+        >
           <div className="truncate text-[0.6875rem] text-muted-foreground">
             Signed in as <span className="font-medium">{props.email}</span>
           </div>
@@ -236,9 +234,9 @@ function workspaceGroups(slug: string): RailGroup[] {
 const GLOBAL_RAIL_ITEMS: RailItem[] = [
   {
     href: "/settings/agents",
-    label: "My agent profiles",
+    label: "Agent Studio",
     icon: Bot,
-    hint: "Profiles (definitions)",
+    hint: "Identity, runtime & workspace clients",
     adminOnly: false,
   },
   {
@@ -274,8 +272,8 @@ function accountGroups(): RailGroup[] {
     },
     {
       id: "resources",
-      label: "Resources",
-      hint: "Definitions and identities you own.",
+      label: "Agent Studio",
+      hint: "Definitions and execution resources you own.",
       items: GLOBAL_RAIL_ITEMS,
     },
   ];

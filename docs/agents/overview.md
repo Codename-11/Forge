@@ -7,18 +7,25 @@ This page covers the data model, the human/agent dual-assignment story, the
 lifecycle of an agent, the implicit heartbeat that comes from webhook delivery,
 and where to find each piece of the surface in the app.
 
+::: info Configuration map
+Use **Agent Studio** for identity, prompt, and the single primary execution
+runtime; **Workspace → Agent roster** for binding policy; **Workspace → Agent
+access** for one or more MCP client credentials; **Instance Administration**
+for global governance; and **Mission Control** for read-only operations.
+:::
+
 ## Two ways to run agent work
 
 There are two ways to put an agent to work, and they're intentionally
 different. Reach for the one that matches how much you want to drive.
 
-| | **Direct dispatch** | **Goal orchestration** |
-|---|---|---|
-| Entry point | Assign / @-mention / queue an **issue** | State a **Goal** → approve a plan |
-| Who decides the steps | You do — one issue, one unit of work | A planner agent decomposes into a step DAG |
-| Who drives | You — assign, nudge, reassign | An automated crew loop (plan → work → judge → retry) |
-| Stops when | The agent finishes that issue | Every step passes, or a budget/time cap trips |
-| Reach for it when | You know the task and want an agent on it now | The objective is big and you want it broken down and run to completion on its own |
+|                       | **Direct dispatch**                           | **Goal orchestration**                                                            |
+| --------------------- | --------------------------------------------- | --------------------------------------------------------------------------------- |
+| Entry point           | Assign / @-mention / queue an **issue**       | State a **Goal** → approve a plan                                                 |
+| Who decides the steps | You do — one issue, one unit of work          | A planner agent decomposes into a step DAG                                        |
+| Who drives            | You — assign, nudge, reassign                 | An automated crew loop (plan → work → judge → retry)                              |
+| Stops when            | The agent finishes that issue                 | Every step passes, or a budget/time cap trips                                     |
+| Reach for it when     | You know the task and want an agent on it now | The objective is big and you want it broken down and run to completion on its own |
 
 **Direct dispatch** is the everyday path: assign an agent to an issue (or
 @-mention one, or let auto-dispatch pick from the queue) and it works that one
@@ -34,8 +41,8 @@ direct assignment or a Goal step, it shows up the same way in Mission Control,
 counts toward the agent's load, and is watched by the same stalled-run /
 watchdog logic. A Goal step can also be **materialized into a real issue** (see
 the orchestration guide), so planned work appears on the board and sprint
-alongside everything else. The two paths are different ways to *start* work, not
-two different systems for *tracking* it.
+alongside everything else. The two paths are different ways to _start_ work, not
+two different systems for _tracking_ it.
 
 Orthogonal to the path are two other dials, both also carried on the run:
 the [**engagement mode**](/agents/engagement-modes.html) (how far to take the
@@ -74,26 +81,26 @@ model Agent {
 
 The columns worth knowing in detail:
 
-| Column | Purpose |
-| --- | --- |
-| `id` | Internal identifier. Use this to reference an agent from API keys, dispatch rules, or issue assignments. |
-| `workspaceId` | Tenant scope. An agent never crosses workspaces. |
-| `name` | Human-facing display name. Free to change. |
-| `profileKey` | Stable cross-system handle, unique per workspace. Matches the Hermes profile directory name (e.g. `victor`, `mizu`). Treat this like a username — addressable, mostly immutable. |
-| `description` | Free-form prose used in the agent picker and on the agent page. |
-| `avatar` | Optional URL or data-URI; falls back to the agent's initials. |
-| `provider` | Runtime family: `HERMES`, `CLAUDE`, `CODEX`, or `CUSTOM`. Hermes is first-class; Claude/Codex are supported as MCP clients today. |
-| `runtimeMode` | `PERSISTENT` or `EPHEMERAL`. Hermes/custom bridges can be persistent; Claude and Codex are currently single-session, with persistent runners on the roadmap. |
-| `webhookUrl` | Where Forge POSTs assignment payloads. May also be the synthetic `agent:dispatch:{agentId}` shim — see [Activity & Audit](/concepts/activity-and-audit.html). |
-| `webhookSecret` | Per-agent HMAC secret. If unset, Forge falls back to the workspace synthetic secret. |
-| `capabilities` | Free-form lowercase tags consumed by `PRIORITY_MATCH` and `CAPABILITY_MATCH` dispatch. Use whatever vocabulary your agents announce. |
-| `role` | `WORKER` (default), `COACH`, or `OBSERVER`. See [Roles](#roles). |
-| `templateMarkdown` | Optional. When the agent is assigned an issue with an empty description, Forge prepends this content. |
-| `status` | `ONLINE`, `OFFLINE`, or `BUSY`. Drives dispatcher eligibility. |
-| `lastHeartbeatAt` | Updated automatically on every successful webhook delivery. |
-| `maxConcurrent` | Cap on active issues; `0` means unlimited. |
-| `lastDispatchedAt` | Round-robin bookkeeping. Null sorts first, so brand-new agents pick up work immediately. |
-| `archivedAt` | When set, the agent is hidden from pickers and ineligible for auto-dispatch. |
+| Column             | Purpose                                                                                                                                                                          |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`               | Internal identifier. Use this to reference an agent from API keys, dispatch rules, or issue assignments.                                                                         |
+| `workspaceId`      | Tenant scope. An agent never crosses workspaces.                                                                                                                                 |
+| `name`             | Human-facing display name. Free to change.                                                                                                                                       |
+| `profileKey`       | Stable cross-system handle, unique per workspace. Matches the Hermes profile directory name (e.g. `victor`, `mizu`). Treat this like a username — addressable, mostly immutable. |
+| `description`      | Free-form prose used in the agent picker and on the agent page.                                                                                                                  |
+| `avatar`           | Optional URL or data-URI; falls back to the agent's initials.                                                                                                                    |
+| `provider`         | Runtime family: `HERMES`, `CLAUDE`, `CODEX`, or `CUSTOM`. Hermes is first-class; Claude/Codex are supported as MCP clients today.                                                |
+| `runtimeMode`      | `PERSISTENT` or `EPHEMERAL`. Hermes/custom bridges can be persistent; Claude and Codex are currently single-session, with persistent runners on the roadmap.                     |
+| `webhookUrl`       | Where Forge POSTs assignment payloads. May also be the synthetic `agent:dispatch:{agentId}` shim — see [Activity & Audit](/concepts/activity-and-audit.html).                    |
+| `webhookSecret`    | Per-agent HMAC secret. If unset, Forge falls back to the workspace synthetic secret.                                                                                             |
+| `capabilities`     | Free-form lowercase tags consumed by `PRIORITY_MATCH` and `CAPABILITY_MATCH` dispatch. Use whatever vocabulary your agents announce.                                             |
+| `role`             | `WORKER` (default), `COACH`, or `OBSERVER`. See [Roles](#roles).                                                                                                                 |
+| `templateMarkdown` | Optional. When the agent is assigned an issue with an empty description, Forge prepends this content.                                                                            |
+| `status`           | `ONLINE`, `OFFLINE`, or `BUSY`. Drives dispatcher eligibility.                                                                                                                   |
+| `lastHeartbeatAt`  | Updated automatically on every successful webhook delivery.                                                                                                                      |
+| `maxConcurrent`    | Cap on active issues; `0` means unlimited.                                                                                                                                       |
+| `lastDispatchedAt` | Round-robin bookkeeping. Null sorts first, so brand-new agents pick up work immediately.                                                                                         |
+| `archivedAt`       | When set, the agent is hidden from pickers and ineligible for auto-dispatch.                                                                                                     |
 
 ::: info
 Agents are not users. They never log in, never own a session, and they don't
@@ -156,23 +163,23 @@ opening each agent's detail page.
 
 A typical onboarding sequence:
 
-1. **Choose the provider.** Settings → Agents → New starts with Hermes,
-   Claude, Codex, or custom. Hermes is the persistent first-class path;
-   Claude/Codex are single-session MCP clients today.
-2. **Create the agent.** Set `name`, `profileKey`, `description`, avatar,
-   provider, and runtime mode. The agent starts at `status = OFFLINE`.
-3. **Pick the connection mode.** MCP-only agents pull work and heartbeat with
-   a linked API key. Push agents additionally configure a real `webhookUrl`
-   plus optional `webhookSecret`.
+1. **Define the identity.** Agent Studio → New profile starts with Hermes,
+   Claude, Codex, or custom. Set `name`, `profileKey`, description, avatar,
+   provider, and execution engine once.
+2. **Choose the primary runtime.** A profile can select zero or one execution
+   host. Active workspace bindings inherit later identity/execution edits.
+3. **Bind it to a workspace.** The workspace roster owns local capacity,
+   routing eligibility, engagement, approval, and capability overrides.
 4. **Declare capabilities.** Lowercase, free-form. Common entries match
    priority names (`urgent`, `high`) for `PRIORITY_MATCH` and label names
    (`infra`, `frontend`) for `CAPABILITY_MATCH`.
 5. **Set the role.** Default `WORKER`. Use `COACH` for an agent that posts
    diagnostic comments via [AI Coach](/agents/ai-triage-and-coach.html); use
    `OBSERVER` for an agent that should never auto-pick up work.
-6. **Issue a linked MCP key.** Onboarding can create one immediately, or you
-   can create it later under Developer access. A linked key makes
-   `agents.me`, `agents.heartbeat`, and `issues.assigned` self-aware.
+6. **Add MCP clients.** In Workspace → Agent access, issue one or more linked
+   credentials for Codex, Claude, Hermes, or another MCP client. A linked key
+   makes `agents.me`, `agents.heartbeat`, and `issues.assigned` self-aware
+   without replacing the primary execution runtime.
 7. **Bring it online.** Either call `agents.heartbeat`, flip `status` to
    `ONLINE`, or fire a webhook delivery — the first successful POST will flip
    OFFLINE → ONLINE automatically via `recordAgentReachable`.
@@ -284,11 +291,11 @@ Once an agent is in flight on an issue, the operator can intervene
 without waiting for the agent to notice. Each `AgentRun` carries a
 `controlState` (`AgentRunControlState`):
 
-| State | Meaning |
-|---|---|
-| `NONE` | Steady state. The run is proceeding normally. |
-| `PAUSE_REQUESTED` | Operator asked the agent to pause on its next loop tick. |
-| `CANCEL_REQUESTED` | Operator asked the agent to abort the run. |
+| State              | Meaning                                                  |
+| ------------------ | -------------------------------------------------------- |
+| `NONE`             | Steady state. The run is proceeding normally.            |
+| `PAUSE_REQUESTED`  | Operator asked the agent to pause on its next loop tick. |
+| `CANCEL_REQUESTED` | Operator asked the agent to abort the run.               |
 
 Three procs write the state:
 
@@ -326,17 +333,17 @@ pipeline row, with options for pause / cancel / redirect-to-…
 Forge tracks two distinct flavours of "stalled" — the difference matters
 because the right response is different:
 
-| Flavour | Definition | Where it surfaces |
-|---|---|---|
-| **Stalled run** | An `AgentRun` is still `ACTIVE` but `lastEventAt` is older than `STALE_RUN_MS` (5 min). Defined once in `src/lib/agent-stale.ts`; consumed by the Mission Control overlay, the agent detail page, the dashboard tile, and the `agentRun.kick` mutation. | Mission Control "Needs attention" lane, agent detail Stalled bucket, dashboard Agents tile (red `N stl` chip), Mission Control glance roster (per-agent red `N stl` pill). |
-| **Stalled issue** | An issue is in `IN_PROGRESS` / `IN_REVIEW` and `updatedAt` is older than `Workspace.stalledThresholdDays` (default 7d, settings-driven, `0` disables). | Inbox "Stalled" sub-buckets (yours / agents), dashboard "Stalled" column, agent detail Stalled bucket, dashboard Agents tile (warning `N quiet` chip). |
+| Flavour           | Definition                                                                                                                                                                                                                                              | Where it surfaces                                                                                                                                                          |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Stalled run**   | An `AgentRun` is still `ACTIVE` but `lastEventAt` is older than `STALE_RUN_MS` (5 min). Defined once in `src/lib/agent-stale.ts`; consumed by the Mission Control overlay, the agent detail page, the dashboard tile, and the `agentRun.kick` mutation. | Mission Control "Needs attention" lane, agent detail Stalled bucket, dashboard Agents tile (red `N stl` chip), Mission Control glance roster (per-agent red `N stl` pill). |
+| **Stalled issue** | An issue is in `IN_PROGRESS` / `IN_REVIEW` and `updatedAt` is older than `Workspace.stalledThresholdDays` (default 7d, settings-driven, `0` disables).                                                                                                  | Inbox "Stalled" sub-buckets (yours / agents), dashboard "Stalled" column, agent detail Stalled bucket, dashboard Agents tile (warning `N quiet` chip).                     |
 
-A stalled *run* is usually a runtime glitch — the agent's last loop tick
+A stalled _run_ is usually a runtime glitch — the agent's last loop tick
 crashed, the webhook didn't deliver, the runner is offline. The
 operator's first move is the **Kick** button (`agentRun.kick`), which
 re-fires the dispatch webhook without changing assignment.
 
-A stalled *issue* is usually a design / dependency wait — the agent did
+A stalled _issue_ is usually a design / dependency wait — the agent did
 its turn and is now waiting on a human review, an external dependency,
 or a clarifying answer in the comment thread. There is no "Kick" for
 issues; the right move is to read the thread, comment, and possibly
@@ -344,7 +351,7 @@ reassign.
 
 The agent detail page's Stalled bucket renders both lists side-by-side.
 When the same issue appears in both (an issue is past the day-threshold
-*and* its run is past the 5-minute threshold), the issue row carries an
+_and_ its run is past the 5-minute threshold), the issue row carries an
 "also stalled run" tag so the operator doesn't read the same incident
 twice.
 
@@ -374,9 +381,9 @@ without leaving the current page.
 - [Orchestration loop](/concepts/orchestration.html) — the second way to run
   agent work: Goal → plan → crew loop, and how its steps open runs and can
   become issues.
-- [Engagement modes](/agents/engagement-modes.html) — *how far* a dispatch
+- [Engagement modes](/agents/engagement-modes.html) — _how far_ a dispatch
   takes the work (execute / research / review / discuss).
-- [Chat & Dispatch engines](/agents/engines.html) — *who owns the loop* for a
+- [Chat & Dispatch engines](/agents/engines.html) — _who owns the loop_ for a
   run (Forge-owned Completions vs. runtime-owned Runs).
 - [Hermes Integration](/agents/hermes.html) — how `profileKey` maps to a
   Hermes runtime profile, and what the MCP self-management loop looks like.

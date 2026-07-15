@@ -37,7 +37,12 @@ test.describe("multi-workspace restructure", () => {
     await expect(page).toHaveURL(/\/admin$/);
     // Admin shell brand + the instance-scope warning bar.
     await expect(page.getByText("Instance admin").first()).toBeVisible();
-    await expect(page.locator("header").locator("span", { hasText: /Instance scope/i }).first()).toBeVisible();
+    await expect(
+      page
+        .locator("header")
+        .locator("span", { hasText: /Instance scope/i })
+        .first(),
+    ).toBeVisible();
   });
 
   test("global agents page lists profiles", async ({ page }) => {
@@ -49,7 +54,7 @@ test.describe("multi-workspace restructure", () => {
 
   test("settings scope, redirects, and dispatch defaults stay authoritative", async ({ page }) => {
     await page.goto("/settings", { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Personal settings", { exact: true })).toBeVisible();
+    await expect(page.getByText("Account & identity", { exact: true })).toBeVisible();
     await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
 
     await page.goto("/settings/auth", { waitUntil: "domcontentloaded" });
@@ -61,13 +66,15 @@ test.describe("multi-workspace restructure", () => {
     await expect(page.getByRole("radio", { name: "Capability match" })).toBeEnabled();
     await page.getByRole("radio", { name: "Priority match" }).click();
     await page.reload({ waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("radio", { name: "Priority match" })).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByRole("radio", { name: "Priority match" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 
   test("an agent profile can be bound to a workspace and unbound", async ({ page }) => {
     await page.goto("/w/forge/settings/agents", { waitUntil: "domcontentloaded" });
-    // The Definition → Binding → Instance-policy explainer + catalog are the
-    // page's signature.
+    // Workspace policy stays separate from the global Agent Studio definition.
     await expect(page.getByText("Available to bind")).toBeVisible();
 
     // A bound Atlas card carries links to /w/forge/agents/atlas (Chat,
@@ -91,7 +98,10 @@ test.describe("multi-workspace restructure", () => {
       .first()
       .locator('xpath=ancestor::*[.//button[normalize-space()="Unbind"]][1]');
     await atlasCard.getByRole("button", { name: "Unbind" }).click();
-    await page.getByRole("alertdialog").getByRole("button", { name: /Unbind/ }).click();
+    await page
+      .getByRole("alertdialog")
+      .getByRole("button", { name: /Unbind/ })
+      .click();
     await expect(atlasLinks).toHaveCount(0, { timeout: 15_000 });
   });
 });

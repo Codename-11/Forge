@@ -25,9 +25,7 @@ async function expectShellControls(page: Page, width: number) {
   await expect(page.getByRole("button", { name: "New issue" }).first()).toBeVisible();
 
   if (width < 768) {
-    await expect(
-      page.getByRole("button", { name: "Open navigation" }),
-    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Open navigation" })).toBeVisible();
   }
 }
 
@@ -63,27 +61,19 @@ test.describe("Mobile smoke", () => {
 
       await page.goto("/w/forge/dashboard");
       await expectShellControls(page, width);
-      await expect(
-        page.locator("header", { hasText: "Dashboard" }).last(),
-      ).toBeVisible();
+      await expect(page.locator("header", { hasText: "Dashboard" }).last()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `dashboard at ${width}px`);
 
       await page.goto("/w/forge/inbox");
       await expectShellControls(page, width);
-      await expect(
-        page.locator("header", { hasText: "Inbox" }).last(),
-      ).toBeVisible();
+      await expect(page.locator("header", { hasText: "Inbox" }).last()).toBeVisible();
       await expect(page.getByRole("button", { name: /mark read/i })).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: /this workspace/i }),
-      ).toBeVisible();
+      await expect(page.getByRole("button", { name: /this workspace/i })).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `inbox at ${width}px`);
 
       await page.goto("/w/forge/issues");
       await expectShellControls(page, width);
-      await expect(
-        page.locator("header", { hasText: "All issues" }).last(),
-      ).toBeVisible();
+      await expect(page.locator("header", { hasText: "All issues" }).last()).toBeVisible();
       await expect(page.getByPlaceholder(/search/i)).toBeVisible();
       await expect(page.getByRole("button", { name: "List" })).toBeVisible();
       await expect(page.getByRole("button", { name: "Kanban" })).toBeVisible();
@@ -109,24 +99,18 @@ test.describe("Mobile smoke", () => {
 
       await page.goto("/w/forge/command-center");
       await expectShellControls(page, width);
-      await expect(
-        page.locator("header", { hasText: "Command center" }).last(),
-      ).toBeVisible();
+      await expect(page.locator("header", { hasText: "Command center" }).last()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `command center at ${width}px`);
 
       await page.goto("/w/forge/agents");
       await expectShellControls(page, width);
-      await expect(
-        page.locator("header", { hasText: "Agents" }).last(),
-      ).toBeVisible();
+      await expect(page.locator("header", { hasText: "Agents" }).last()).toBeVisible();
       await expect(page.getByRole("link", { name: /@victor/i }).first()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `agents at ${width}px`);
 
       await page.goto("/w/forge/settings/runtimes");
       await expectShellControls(page, width);
-      await expect(
-        page.locator("header", { hasText: "Runtimes" }).last(),
-      ).toBeVisible();
+      await expect(page.locator("header", { hasText: "Runtimes" }).last()).toBeVisible();
       await expect(page.getByTestId("runtime-row-e2e-codex-runtime")).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `runtimes at ${width}px`);
     });
@@ -137,9 +121,7 @@ test.describe("Mobile smoke", () => {
       await page.setViewportSize({ width, height: HEIGHT });
 
       await page.goto("/");
-      await expect(
-        page.getByRole("heading", { name: "Mission Control" }),
-      ).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
       const activityPill = page.getByTitle("Activity · live runs + chat (G 5)");
       await expect(activityPill).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `mission control activity pill at ${width}px`);
@@ -153,7 +135,7 @@ test.describe("Mobile smoke", () => {
       await openSettingsNavigation(page);
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
       await expect(
-        page.locator("main").getByText("Profiles you've defined.").first(),
+        page.locator("main").getByRole("heading", { name: "Agent Studio" }),
       ).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `instance agent settings at ${width}px`);
 
@@ -176,9 +158,7 @@ test.describe("Mobile smoke", () => {
 
       await page.goto("/admin/runtimes");
       await expect(page.getByText("Instance scope", { exact: true })).toBeVisible();
-      await expect(
-        page.getByRole("heading", { level: 1, name: "Runtimes" }),
-      ).toBeVisible();
+      await expect(page.getByRole("heading", { level: 1, name: "Runtimes" })).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `admin runtimes at ${width}px`);
     });
   }

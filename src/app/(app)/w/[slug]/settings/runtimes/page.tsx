@@ -31,10 +31,7 @@ import { Combobox } from "@/components/ui/combobox";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
-import {
-  RuntimeSelfTestBadge,
-  RuntimeSelfTestLine,
-} from "@/components/settings/runtime-self-test";
+import { RuntimeSelfTestBadge, RuntimeSelfTestLine } from "@/components/settings/runtime-self-test";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
@@ -104,11 +101,7 @@ type AdapterCapabilities = {
   presence: string;
 };
 
-function AdapterCapabilityBadges({
-  capabilities,
-}: {
-  capabilities?: AdapterCapabilities;
-}) {
+function AdapterCapabilityBadges({ capabilities }: { capabilities?: AdapterCapabilities }) {
   if (!capabilities) return null;
   return (
     <>
@@ -364,7 +357,7 @@ export default function RuntimesPage() {
                           </div>
                         )}
                       </div>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
+                      <div className="text-meta mt-1.5 flex flex-wrap items-center gap-3 text-muted-foreground">
                         <span>{rt.health.lastSignal}</span>
                         <span>·</span>
                         <span>{rt.health.reason}</span>
@@ -382,14 +375,8 @@ export default function RuntimesPage() {
                           <>
                             <span>·</span>
                             <span className="inline-flex items-center gap-1.5">
-                              <Avatar
-                                name={rt.owner.name}
-                                image={rt.owner.image}
-                                size={16}
-                              />
-                              <span className="truncate">
-                                {rt.owner.name ?? "unknown"}
-                              </span>
+                              <Avatar name={rt.owner.name} image={rt.owner.image} size={16} />
+                              <span className="truncate">{rt.owner.name ?? "unknown"}</span>
                             </span>
                           </>
                         )}
@@ -405,9 +392,7 @@ export default function RuntimesPage() {
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-1">
-                      <Link
-                        href={`/w/${ws.slug}/settings/runtimes/${rt.id}`}
-                      >
+                      <Link href={`/w/${ws.slug}/settings/runtimes/${rt.id}`}>
                         <Button size="sm" variant="ghost">
                           View
                         </Button>
@@ -447,9 +432,7 @@ export default function RuntimesPage() {
                           size="sm"
                           variant="ghost"
                           data-testid="runtime-toggle-enabled"
-                          onClick={() =>
-                            setEnabled.mutate({ id: rt.id, enabled: isDisabled })
-                          }
+                          onClick={() => setEnabled.mutate({ id: rt.id, enabled: isDisabled })}
                           disabled={setEnabled.isPending}
                           title={
                             isDisabled
@@ -473,9 +456,7 @@ export default function RuntimesPage() {
                         <Button
                           size="sm"
                           variant="ghost"
-                          onClick={() =>
-                            setArchiveTarget({ id: rt.id, name: rt.name })
-                          }
+                          onClick={() => setArchiveTarget({ id: rt.id, name: rt.name })}
                         >
                           Archive
                         </Button>
@@ -494,8 +475,8 @@ export default function RuntimesPage() {
                       <code className="rounded bg-subtle px-1 font-mono text-[0.6875rem]">
                         forge daemon start
                       </code>
-                      . Hermes-style remote runtimes appear here once an
-                      agent has a webhook configured.
+                      . Hermes-style remote runtimes appear here once an agent has a webhook
+                      configured.
                     </span>
                   }
                 />
@@ -621,22 +602,24 @@ function TierExplainer() {
 
 function AgentClientsCallout() {
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-ember/30 bg-ember/5 px-3 py-2 text-meta">
+    <div className="text-meta flex flex-wrap items-center gap-3 rounded-lg border border-ember/30 bg-ember/5 px-3 py-2">
       <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-ember/30 bg-background/50 text-ember">
         <Terminal className="h-3.5 w-3.5" />
       </span>
       <div className="min-w-0 flex-1">
-        <span className="font-medium text-foreground">Looking for Claude Code, Codex CLI, or a one-time MCP session?</span>
+        <span className="font-medium text-foreground">
+          Looking for Claude Code, Codex CLI, or a one-time MCP session?
+        </span>
         <span className="ml-1 text-muted-foreground">
           Those are agent clients, not managed runtime hosts.
         </span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <Link
-          href="/settings/clients"
+          href="/settings/access"
           className="focus-ring inline-flex h-7 items-center justify-center rounded-md border border-border bg-card/60 px-2 text-xs font-medium text-foreground hover:bg-subtle"
         >
-          Agent Clients
+          Agent access
         </Link>
         <Link
           href="/settings/access?create=session"
@@ -697,7 +680,9 @@ function PlannedAdapters({ adapters }: { adapters: PlannedAdapterOption[] }) {
                   planned
                 </span>
               </div>
-              <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted-foreground">{a.note}</p>
+              <p className="mt-1 text-[0.6875rem] leading-relaxed text-muted-foreground">
+                {a.note}
+              </p>
             </li>
           );
         })}
@@ -783,7 +768,8 @@ type AdapterOption = {
   capabilities: AdapterCapabilities;
 };
 
-const fieldLabel = "mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground";
+const fieldLabel =
+  "mb-1 block font-mono text-[0.6875rem] uppercase tracking-[0.1em] text-muted-foreground";
 
 const RUNTIME_ENGAGEMENT_MODES = ["EXECUTE", "REVIEW", "RESEARCH", "DISCUSS"] as const;
 
@@ -857,13 +843,12 @@ function runtimeToolPolicyFromConfig(config: unknown): RuntimeToolPolicy {
     localWorkspaceTools: runtimeDeclaresLocalWorkspaceTools(config),
     toolCapabilities: declaredRuntimeToolCapabilities(config),
     workspaceRoot: runtimeWorkspaceRoot(config) ?? "",
-    modeToolPolicyEnforced:
-      !!(
-        config &&
-        typeof config === "object" &&
-        !Array.isArray(config) &&
-        (config as Record<string, unknown>).modeToolPolicyEnforced === true
-      ),
+    modeToolPolicyEnforced: !!(
+      config &&
+      typeof config === "object" &&
+      !Array.isArray(config) &&
+      (config as Record<string, unknown>).modeToolPolicyEnforced === true
+    ),
     modeToolProfiles,
   };
 }
@@ -873,16 +858,12 @@ function runtimeToolPolicyToConfig(p: RuntimeToolPolicy): Record<string, unknown
     localWorkspaceTools: p.localWorkspaceTools,
     modeToolPolicyEnforced: p.modeToolPolicyEnforced,
   };
-  const tools = RUNTIME_TOOL_CAPABILITIES.filter((tool) =>
-    p.toolCapabilities.includes(tool),
-  );
+  const tools = RUNTIME_TOOL_CAPABILITIES.filter((tool) => p.toolCapabilities.includes(tool));
   out.toolCapabilities = tools;
   out.modeToolProfiles = Object.fromEntries(
     RUNTIME_ENGAGEMENT_MODES.map((mode) => [
       mode,
-      RUNTIME_TOOL_CAPABILITIES.filter((tool) =>
-        p.modeToolProfiles[mode]?.includes(tool),
-      ),
+      RUNTIME_TOOL_CAPABILITIES.filter((tool) => p.modeToolProfiles[mode]?.includes(tool)),
     ]),
   );
   if (p.workspaceRoot.trim()) out.workspaceRoot = p.workspaceRoot.trim();
@@ -937,7 +918,7 @@ function HermesRuntimeFields({
           />
           <span className="min-w-0">
             <span className="block font-medium text-foreground">YOLO auto-approve</span>
-            <span className="block text-meta text-muted-foreground">
+            <span className="text-meta block text-muted-foreground">
               Forge auto-resolves Hermes approval requests for runs from this runtime.
             </span>
           </span>
@@ -1079,11 +1060,11 @@ function RuntimeToolPolicyFields({
           type="checkbox"
           className="mt-0.5"
           checked={value.localWorkspaceTools}
-            onChange={(e) => void handleLocalWorkspaceToggle(e.target.checked)}
-          />
+          onChange={(e) => void handleLocalWorkspaceToggle(e.target.checked)}
+        />
         <span className="min-w-0">
           <span className="block font-medium text-foreground">Local workspace tools enabled</span>
-          <span className="block text-meta text-muted-foreground">
+          <span className="text-meta block text-muted-foreground">
             Use only when the Hermes host can run commands in the repo.
           </span>
         </span>
@@ -1102,7 +1083,7 @@ function RuntimeToolPolicyFields({
         />
         <span className="min-w-0">
           <span className="block font-medium text-foreground">Host-enforced mode tools</span>
-          <span className="block text-meta text-muted-foreground">
+          <span className="text-meta block text-muted-foreground">
             Hermes enforces Forge&apos;s per-run tool allowlist for non-Execute modes.
           </span>
         </span>
@@ -1175,14 +1156,13 @@ function RuntimeToolPolicyFields({
           })}
         </div>
         <span className="mt-1.5 block text-[0.625rem] text-muted-foreground/70">
-          Hermes receives this per-run allowlist. Non-Execute modes keep Forge issue
-          mutations blocked; this only changes host tools.
+          Hermes receives this per-run allowlist. Non-Execute modes keep Forge issue mutations
+          blocked; this only changes host tools.
         </span>
       </div>
       <label className="block">
         <span className={fieldLabel}>
-          Workspace root{" "}
-          <span className="normal-case text-muted-foreground/70">(optional)</span>
+          Workspace root <span className="normal-case text-muted-foreground/70">(optional)</span>
         </span>
         <Input
           value={value.workspaceRoot}
@@ -1220,9 +1200,7 @@ function CreateRuntimeModal({
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
   const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
-  const [hermes, setHermes] = useState<HermesRuntimePolicy>(
-    DEFAULT_HERMES_RUNTIME_POLICY,
-  );
+  const [hermes, setHermes] = useState<HermesRuntimePolicy>(DEFAULT_HERMES_RUNTIME_POLICY);
 
   useEffect(() => {
     if (open) {
@@ -1270,10 +1248,13 @@ function CreateRuntimeModal({
       }}
     >
       <div className="space-y-3">
-        <div className="rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
+        <div className="text-meta rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-muted-foreground">
           Claude Code, Codex CLI, and one-off local sessions do not need a host row. Use{" "}
-          <Link href="/settings/clients" className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground">
-            Agent Clients
+          <Link
+            href="/settings/access"
+            className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
+          >
+            Agent access
           </Link>{" "}
           or generate a session key instead.
         </div>
@@ -1345,8 +1326,8 @@ function CreateRuntimeModal({
             className="font-mono"
           />
           <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
-            Public hosts must use a secure transport (wss:// or https://); plaintext is
-            allowed only for loopback / private-LAN addresses.
+            Public hosts must use a secure transport (wss:// or https://); plaintext is allowed only
+            for loopback / private-LAN addresses.
           </span>
         </label>
         <label className="block">
@@ -1369,7 +1350,7 @@ function CreateRuntimeModal({
 
 function CodexDockerBridgeHint() {
   return (
-    <div className="rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
+    <div className="text-meta rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-muted-foreground">
       <div className="font-medium text-foreground">Recommended: Docker bridge</div>
       <div className="mt-1">
         Run the Codex stdio-to-WebSocket bridge in Docker, mount{" "}
@@ -1417,9 +1398,7 @@ function EditRuntimeModal({
   const [endpoint, setEndpoint] = useState("");
   const [secret, setSecret] = useState("");
   const [codex, setCodex] = useState<CodexPolicy>(DEFAULT_CODEX_POLICY);
-  const [hermes, setHermes] = useState<HermesRuntimePolicy>(
-    DEFAULT_HERMES_RUNTIME_POLICY,
-  );
+  const [hermes, setHermes] = useState<HermesRuntimePolicy>(DEFAULT_HERMES_RUNTIME_POLICY);
   const isCodex = target?.adapterKey === "codex-app-server";
   const isHermes = target?.adapterKey === "hermes";
 
@@ -1606,9 +1585,9 @@ function CodexPolicyFields({
         />
         <span className="min-w-0">
           <span className="block font-medium text-foreground">YOLO mode</span>
-          <span className="block text-meta text-muted-foreground">
-            Every turn (chat, dispatch, research) runs with full access and skips
-            approval prompts. Forces danger-full-access + approval “never”.
+          <span className="text-meta block text-muted-foreground">
+            Every turn (chat, dispatch, research) runs with full access and skips approval prompts.
+            Forces danger-full-access + approval “never”.
           </span>
         </span>
       </label>
@@ -1653,8 +1632,8 @@ function CodexPolicyFields({
           options={APPROVAL_POLICY_OPTIONS.map((o) => ({ value: o.value, label: o.label }))}
         />
         <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
-          Anything but “never” surfaces command/file approvals as cards in chat for you to
-          accept or deny.
+          Anything but “never” surfaces command/file approvals as cards in chat for you to accept or
+          deny.
         </span>
       </label>
       <label className="block">
@@ -1669,8 +1648,8 @@ function CodexPolicyFields({
           className="font-mono"
         />
         <span className="mt-1 block text-[0.625rem] text-muted-foreground/70">
-          Working directory for each turn. Setting this also declares terminal,
-          filesystem, and git access for runtime preflight.
+          Working directory for each turn. Setting this also declares terminal, filesystem, and git
+          access for runtime preflight.
         </span>
       </label>
     </div>

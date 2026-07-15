@@ -5,10 +5,7 @@ import { Bot, Server, Settings, Sparkles, Terminal } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState } from "@/components/ui";
 import { RuntimeToolSurfaceBadges } from "@/components/runtime-tool-surface";
-import {
-  RuntimeSelfTestBadge,
-  RuntimeSelfTestLine,
-} from "@/components/settings/runtime-self-test";
+import { RuntimeSelfTestBadge, RuntimeSelfTestLine } from "@/components/settings/runtime-self-test";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
@@ -48,7 +45,7 @@ function StatusPip({ tone }: { tone: "success" | "warning" | "danger" | "muted" 
 
 function WsChipDense({ ws }: { ws: Workspace }) {
   return (
-    <span className="inline-flex items-center gap-1 text-meta">
+    <span className="text-meta inline-flex items-center gap-1">
       <span
         aria-hidden
         className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] text-[8px] font-bold text-white"
@@ -72,31 +69,38 @@ export default function RuntimesPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-4 p-6">
-          <div className="flex items-center gap-3 rounded-md border border-border bg-card/40 p-3 text-meta">
+          <div className="text-meta flex items-center gap-3 rounded-md border border-border bg-card/40 p-3">
             <Bot size={14} className="shrink-0 text-muted-foreground" />
             <div className="min-w-0 flex-1">
               <span className="font-medium text-foreground">Most runtimes auto-register.</span>
               <span className="ml-1 text-muted-foreground">
-                Run <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">forge daemon start</code> on
-                the host — it calls{" "}
-                <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">runtimes.register</code> via MCP,
-                then heartbeats every 60s.
+                Run{" "}
+                <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">
+                  forge daemon start
+                </code>{" "}
+                on the host — it calls{" "}
+                <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">
+                  runtimes.register
+                </code>{" "}
+                via MCP, then heartbeats every 60s.
               </span>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-3 rounded-md border border-ember/30 bg-ember/5 p-3 text-meta">
+          <div className="text-meta flex flex-wrap items-center gap-3 rounded-md border border-ember/30 bg-ember/5 p-3">
             <Terminal size={14} className="shrink-0 text-ember" />
             <div className="min-w-0 flex-1">
-              <span className="font-medium text-foreground">Claude Code, Codex CLI, and one-off MCP sessions live under Agent Clients.</span>
+              <span className="font-medium text-foreground">
+                Claude Code, Codex CLI, and one-off MCP sessions live under Agent access.
+              </span>
               <span className="ml-1 text-muted-foreground">
                 Runtime hosts are for managed compute that Forge dials or monitors.
               </span>
             </div>
             <Link
-              href="/settings/clients"
+              href="/settings/access"
               className="focus-ring inline-flex h-7 items-center justify-center rounded-md border border-border bg-card/60 px-2 text-xs font-medium text-foreground hover:bg-subtle"
             >
-              Open Agent Clients
+              Open Agent access
             </Link>
           </div>
 
@@ -115,13 +119,14 @@ export default function RuntimesPage() {
             <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
               {runtimes!.map((r) => {
                 const Ico = r.kind === "CLOUD" ? Sparkles : r.kind === "REMOTE_HTTP" ? Server : Bot;
-                const tone = r.health.kind === "online"
-                  ? "border-success/30 bg-success/5"
-                  : r.health.tone === "danger"
-                    ? "border-danger/30 bg-danger/5"
-                    : r.health.tone === "warning"
-                      ? "border-warning/30 bg-warning/5"
-                      : "border-border bg-card/40";
+                const tone =
+                  r.health.kind === "online"
+                    ? "border-success/30 bg-success/5"
+                    : r.health.tone === "danger"
+                      ? "border-danger/30 bg-danger/5"
+                      : r.health.tone === "warning"
+                        ? "border-warning/30 bg-warning/5"
+                        : "border-border bg-card/40";
                 // Runtime detail authorization is currently home-workspace
                 // scoped. Until a canonical global detail exists, always use
                 // that authoritative workspace rather than an arbitrary
@@ -140,13 +145,13 @@ export default function RuntimesPage() {
                         <div className="flex items-center gap-1.5">
                           <span className="truncate text-sm font-semibold">{r.name}</span>
                           <StatusPip tone={r.health.tone} />
-                          <span className="text-meta text-muted-foreground">
-                            {r.health.label}
-                          </span>
+                          <span className="text-meta text-muted-foreground">{r.health.label}</span>
                           <RuntimeSelfTestBadge selfTest={r.selfTest} />
                         </div>
                         {r.endpoint && (
-                          <div className="truncate text-meta text-muted-foreground">{r.endpoint}</div>
+                          <div className="text-meta truncate text-muted-foreground">
+                            {r.endpoint}
+                          </div>
                         )}
                       </div>
                       {settingsWorkspace && (
@@ -161,7 +166,7 @@ export default function RuntimesPage() {
                       )}
                     </header>
 
-                    <div className="grid grid-cols-2 gap-2 text-meta">
+                    <div className="text-meta grid grid-cols-2 gap-2">
                       <div>
                         <div className="text-muted-foreground">Last signal</div>
                         <div className="mt-0.5">{r.health.lastSignal}</div>
@@ -172,9 +177,7 @@ export default function RuntimesPage() {
                       </div>
                       <div>
                         <div className="text-muted-foreground">Adapter</div>
-                        <div className="mt-0.5 font-mono text-[11px]">
-                          {r.health.adapter}
-                        </div>
+                        <div className="mt-0.5 font-mono text-[11px]">{r.health.adapter}</div>
                       </div>
                       <div>
                         <div className="text-muted-foreground">Self-test</div>
@@ -183,7 +186,7 @@ export default function RuntimesPage() {
                         </div>
                       </div>
                     </div>
-                    <div className="rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-meta text-muted-foreground">
+                    <div className="text-meta rounded-md border border-border/60 bg-background/40 px-2.5 py-2 text-muted-foreground">
                       {r.health.reason}
                     </div>
                     <RuntimeToolSurfaceBadges
@@ -203,7 +206,7 @@ export default function RuntimesPage() {
                             r.boundAgents.map((p) => (
                               <span
                                 key={p.id}
-                                className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5 text-meta"
+                                className="text-meta inline-flex items-center gap-1 rounded-md border border-border bg-background px-1.5 py-0.5"
                               >
                                 <span className="font-mono text-[10px]">@{p.profileKey}</span>
                               </span>
@@ -212,7 +215,7 @@ export default function RuntimesPage() {
                         </div>
                       </div>
                       <div className="min-w-0">
-                        <div className="text-right text-meta text-muted-foreground">In use by</div>
+                        <div className="text-meta text-right text-muted-foreground">In use by</div>
                         <div className="mt-1 flex flex-wrap justify-end gap-1">
                           {r.workspacesInUse.length === 0 ? (
                             <span className="text-meta italic text-muted-foreground">—</span>
@@ -223,7 +226,7 @@ export default function RuntimesPage() {
                       </div>
                     </div>
 
-                    <div className="border-t border-border/60 pt-2 text-meta text-muted-foreground">
+                    <div className="text-meta border-t border-border/60 pt-2 text-muted-foreground">
                       Registered {relativeTime(r.registeredAt)}
                     </div>
                   </div>

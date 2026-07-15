@@ -2,13 +2,17 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Server } from "lucide-react";
+import { ArrowLeft, CheckCircle2, KeyRound, Link2, Server, TriangleAlert } from "lucide-react";
+import { AgentProvider, RunEngine } from "@prisma/client";
 import { toast } from "sonner";
 import { Topbar } from "@/components/topbar";
 import { Spinner, EmptyState, Section } from "@/components/ui";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
+import { AgentAvatar } from "@/components/agents/agent-avatar";
 
 /**
  * Client body for the agent profile detail page. Reads
@@ -56,14 +60,79 @@ function Def({ label, children }: { label: string; children: React.ReactNode }) 
   );
 }
 
+function EditorField({
+  label,
+  hint,
+  className,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <label className={className}>
+      <span className="text-meta mb-1 flex items-baseline gap-1.5">
+        <span className="font-medium text-foreground">{label}</span>
+        {hint && <span className="text-muted-foreground">{hint}</span>}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+function ReadinessCard({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  ready,
+}: {
+  icon: typeof Server;
+  label: string;
+  value: string;
+  detail: string;
+  ready: boolean;
+}) {
+  const StateIcon = ready ? CheckCircle2 : TriangleAlert;
+  return (
+    <div
+      className={
+        "rounded-lg border p-3 " +
+        (ready ? "border-success/25 bg-success/5" : "border-warning/30 bg-warning/5")
+      }
+    >
+      <div className="text-meta flex items-center gap-2 text-muted-foreground">
+        <Icon className="h-3.5 w-3.5" />
+        <span className="font-medium uppercase tracking-wide">{label}</span>
+        <StateIcon className={"ml-auto h-3.5 w-3.5 " + (ready ? "text-success" : "text-warning")} />
+      </div>
+      <div className="mt-2 truncate text-sm font-semibold text-foreground">{value}</div>
+      <p className="text-meta mt-1 leading-relaxed text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
 export function AgentDetailContent({ id }: { id: string }) {
   const utils = trpc.useUtils();
   const [promptDraft, setPromptDraft] = useState<string | null>(null);
+  const [definitionDraft, setDefinitionDraft] = useState<{
+    name: string;
+    description: string;
+    avatar: string;
+    provider: AgentProvider;
+    runEngine: "DEFAULT" | RunEngine;
+    runtimeId: string;
+    capabilities: string;
+  } | null>(null);
   const { data: a, isLoading, error } = trpc.agents.profiles.get.useQuery({ id });
+  const { data: runtimes } = trpc.global.runtimes.useQuery();
   const updateProfile = trpc.agents.profiles.update.useMutation({
     onSuccess: async () => {
-      toast.success("Agent prompt saved");
+      toast.success("Agent profile saved");
       setPromptDraft(null);
+      setDefinitionDraft(null);
       await utils.agents.profiles.get.invalidate({ id });
       await utils.agents.profiles.list.invalidate();
     },
@@ -114,13 +183,51 @@ export function AgentDetailContent({ id }: { id: string }) {
       ? `Your capabilities: ${a.baseCapabilities.join(", ")}.\n\n`
       : "") +
     (template ? `${template}\n` : "");
+  const clients = a.bindings.flatMap((binding) =>
+    binding.apiKeys.map((client) => ({ ...client, binding, workspace: binding.workspace })),
+  );
+  const activeClients = clients.filter(
+    (client) =>
+      !client.revokedAt && (!client.expiresAt || new Date(client.expiresAt).getTime() > Date.now()),
+  );
+  const executionReady = !!a.runtime;
+  const profile = a;
+
+  function beginDefinitionEdit() {
+    setDefinitionDraft({
+      name: profile.name,
+      description: profile.description ?? "",
+      avatar: profile.avatar ?? "",
+      provider: profile.provider,
+      runEngine: profile.runEngine ?? "DEFAULT",
+      runtimeId: profile.runtimeId ?? "",
+      capabilities: profile.baseCapabilities.join(", "),
+    });
+  }
+
+  function saveDefinition() {
+    if (!definitionDraft) return;
+    updateProfile.mutate({
+      id: profile.id,
+      name: definitionDraft.name.trim(),
+      description: definitionDraft.description.trim() || null,
+      avatar: definitionDraft.avatar.trim() || null,
+      provider: definitionDraft.provider,
+      runEngine: definitionDraft.runEngine === "DEFAULT" ? null : definitionDraft.runEngine,
+      runtimeId: definitionDraft.runtimeId || null,
+      baseCapabilities: definitionDraft.capabilities
+        .split(",")
+        .map((capability) => capability.trim().toLowerCase())
+        .filter(Boolean),
+    });
+  }
 
   return (
     <>
       <Topbar
         title={
           <span className="inline-flex items-center gap-2">
-            <span className="text-xl">{a.avatar ?? "🤖"}</span>
+            <AgentAvatar agent={a} size="sm" title={null} />
             <span>{a.name}</span>
             <StatusPip
               status={
@@ -138,7 +245,7 @@ export function AgentDetailContent({ id }: { id: string }) {
         }
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-6 p-6">
+        <div className="mx-auto max-w-4xl space-y-6 p-6">
           <div>
             <Link
               href="/settings/agents"
@@ -148,57 +255,285 @@ export function AgentDetailContent({ id }: { id: string }) {
             </Link>
           </div>
 
+          <div className="grid gap-3 sm:grid-cols-3">
+            <ReadinessCard
+              icon={Server}
+              label="Primary execution runtime"
+              value={a.runtime?.name ?? "Not assigned"}
+              detail={
+                a.runtime
+                  ? "Forge starts this identity through one execution host."
+                  : "Assign one runtime before automatic execution."
+              }
+              ready={executionReady}
+            />
+            <ReadinessCard
+              icon={Link2}
+              label="Workspace bindings"
+              value={`${a.bindings.length} active`}
+              detail="Each workspace owns capacity, routing, and approval policy."
+              ready={a.bindings.length > 0}
+            />
+            <ReadinessCard
+              icon={KeyRound}
+              label="MCP clients"
+              value={`${activeClients.length} active`}
+              detail="An identity can hold multiple client keys across its bindings."
+              ready={activeClients.length > 0}
+            />
+          </div>
+
           {/* Definition */}
-          <Section title="Definition" hint="Identity-level — applies in every workspace.">
-            <div className="grid grid-cols-2 gap-4 rounded-lg border border-border bg-card/40 p-4">
-              <Def label="Profile key">
-                <span className="font-mono">@{a.profileKey}</span>
-              </Def>
-              <Def label="Provider">
-                <span>{a.provider}</span>
-                {a.runEngine && (
-                  <span className="ml-1 font-mono text-[11px] text-muted-foreground">
-                    {a.runEngine}
-                  </span>
-                )}
-              </Def>
-              <Def label="Runtime">
-                {a.runtime ? (
-                  <span className="inline-flex items-center gap-1.5">
-                    <Server size={11} className="text-muted-foreground" />
-                    {a.runtime.name}
-                    <span className="text-[11px] text-muted-foreground">
-                      ({a.runtime.kind.toLowerCase().replace("_", " ")})
+          <Section
+            title="Identity & execution"
+            hint="Global definition — the identity and primary runtime apply to every workspace binding."
+            actions={
+              a.canEdit ? (
+                definitionDraft ? (
+                  <div className="flex items-center gap-2">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={updateProfile.isPending}
+                      onClick={() => setDefinitionDraft(null)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ember"
+                      disabled={updateProfile.isPending || !definitionDraft.name.trim()}
+                      onClick={saveDefinition}
+                    >
+                      Save identity
+                    </Button>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={beginDefinitionEdit}>
+                    Edit identity
+                  </Button>
+                )
+              ) : undefined
+            }
+          >
+            {definitionDraft ? (
+              <div className="grid gap-4 rounded-lg border border-border bg-card/40 p-4 sm:grid-cols-2">
+                <EditorField label="Name">
+                  <Input
+                    value={definitionDraft.name}
+                    onChange={(event) =>
+                      setDefinitionDraft({ ...definitionDraft, name: event.target.value })
+                    }
+                  />
+                </EditorField>
+                <EditorField label="Avatar" hint="Initials, emoji, or image URL">
+                  <Input
+                    value={definitionDraft.avatar}
+                    onChange={(event) =>
+                      setDefinitionDraft({ ...definitionDraft, avatar: event.target.value })
+                    }
+                  />
+                </EditorField>
+                <EditorField label="Provider">
+                  <select
+                    aria-label="Agent provider"
+                    value={definitionDraft.provider}
+                    onChange={(event) =>
+                      setDefinitionDraft({
+                        ...definitionDraft,
+                        provider: event.target.value as AgentProvider,
+                      })
+                    }
+                    className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    {Object.values(AgentProvider).map((provider) => (
+                      <option key={provider} value={provider}>
+                        {provider.toLowerCase()}
+                      </option>
+                    ))}
+                  </select>
+                </EditorField>
+                <EditorField label="Run engine" hint="Default follows the provider">
+                  <select
+                    aria-label="Agent run engine"
+                    value={definitionDraft.runEngine}
+                    onChange={(event) =>
+                      setDefinitionDraft({
+                        ...definitionDraft,
+                        runEngine: event.target.value as "DEFAULT" | RunEngine,
+                      })
+                    }
+                    className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="DEFAULT">Default</option>
+                    {Object.values(RunEngine).map((engine) => (
+                      <option key={engine} value={engine}>
+                        {engine.toLowerCase()}
+                      </option>
+                    ))}
+                  </select>
+                </EditorField>
+                <EditorField label="Primary execution runtime" hint="One runtime per identity">
+                  <select
+                    aria-label="Primary execution runtime"
+                    value={definitionDraft.runtimeId}
+                    onChange={(event) =>
+                      setDefinitionDraft({ ...definitionDraft, runtimeId: event.target.value })
+                    }
+                    className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+                  >
+                    <option value="">Not assigned</option>
+                    {a.runtime &&
+                      !(runtimes ?? []).some((runtime) => runtime.id === a.runtime!.id) && (
+                        <option value={a.runtime.id}>{a.runtime.name} · assigned</option>
+                      )}
+                    {(runtimes ?? []).map((runtime) => (
+                      <option key={runtime.id} value={runtime.id}>
+                        {runtime.name} · {runtime.health.label}
+                      </option>
+                    ))}
+                  </select>
+                </EditorField>
+                <EditorField label="Capabilities" hint="Comma-separated">
+                  <Input
+                    value={definitionDraft.capabilities}
+                    onChange={(event) =>
+                      setDefinitionDraft({
+                        ...definitionDraft,
+                        capabilities: event.target.value,
+                      })
+                    }
+                  />
+                </EditorField>
+                <EditorField label="Description" className="sm:col-span-2">
+                  <textarea
+                    rows={3}
+                    value={definitionDraft.description}
+                    onChange={(event) =>
+                      setDefinitionDraft({ ...definitionDraft, description: event.target.value })
+                    }
+                    className="focus-ring w-full resize-y rounded-md border border-input bg-background px-2.5 py-2 text-sm"
+                  />
+                </EditorField>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-4 rounded-lg border border-border bg-card/40 p-4 sm:grid-cols-2">
+                <Def label="Profile key">
+                  <span className="font-mono">@{a.profileKey}</span>
+                </Def>
+                <Def label="Provider">
+                  <span>{a.provider}</span>
+                  {a.runEngine && (
+                    <span className="ml-1 font-mono text-[11px] text-muted-foreground">
+                      {a.runEngine}
                     </span>
-                  </span>
-                ) : (
-                  <span className="italic text-muted-foreground">unassigned</span>
-                )}
-              </Def>
-              <Def label="Sharing">
-                {a.instanceShared ? (
-                  <span className="text-success">Shared with the whole instance</span>
-                ) : (
-                  <span className="text-muted-foreground">Private to you</span>
-                )}
-              </Def>
-              <div className="col-span-2">
-                <div className="text-meta text-muted-foreground">Base capabilities</div>
-                <div className="mt-1 flex flex-wrap gap-1">
-                  {a.baseCapabilities.length === 0 ? (
-                    <span className="text-meta italic text-muted-foreground">none</span>
-                  ) : (
-                    a.baseCapabilities.map((c) => (
-                      <span
-                        key={c}
-                        className="text-meta inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5"
-                      >
-                        {c}
-                      </span>
-                    ))
                   )}
+                </Def>
+                <Def label="Runtime">
+                  {a.runtime ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Server size={11} className="text-muted-foreground" />
+                      {a.runtime.name}
+                      <span className="text-[11px] text-muted-foreground">
+                        ({a.runtime.kind.toLowerCase().replace("_", " ")})
+                      </span>
+                    </span>
+                  ) : (
+                    <span className="italic text-muted-foreground">unassigned</span>
+                  )}
+                </Def>
+                <Def label="Sharing">
+                  {a.instanceShared ? (
+                    <span className="text-success">Shared with the whole instance</span>
+                  ) : (
+                    <span className="text-muted-foreground">Private to you</span>
+                  )}
+                </Def>
+                <div className="col-span-2">
+                  <div className="text-meta text-muted-foreground">Base capabilities</div>
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {a.baseCapabilities.length === 0 ? (
+                      <span className="text-meta italic text-muted-foreground">none</span>
+                    ) : (
+                      a.baseCapabilities.map((c) => (
+                        <span
+                          key={c}
+                          className="text-meta inline-flex items-center rounded-md border border-border bg-background px-1.5 py-0.5"
+                        >
+                          {c}
+                        </span>
+                      ))
+                    )}
+                  </div>
                 </div>
               </div>
+            )}
+          </Section>
+
+          <Section
+            title="MCP clients"
+            hint="Credential connections are workspace-scoped. One identity can have multiple clients without changing its primary execution runtime."
+          >
+            <div className="overflow-hidden rounded-lg border border-border bg-card/40">
+              {a.bindings.length === 0 ? (
+                <EmptyState
+                  variant="card"
+                  title="Bind this identity first"
+                  description="MCP client keys attach to a workspace binding so scopes and access remain tenant-safe."
+                />
+              ) : (
+                a.bindings.map((binding) => {
+                  const bindingActive = binding.apiKeys.filter(
+                    (client) =>
+                      !client.revokedAt &&
+                      (!client.expiresAt || new Date(client.expiresAt).getTime() > Date.now()),
+                  );
+                  return (
+                    <div
+                      key={binding.id}
+                      className="flex flex-col gap-3 border-b border-border/60 p-3 last:border-b-0 sm:flex-row sm:items-start"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 text-sm font-medium">
+                          <WsChipDense ws={binding.workspace} />
+                          <span>{binding.workspace.name}</span>
+                          <span className="text-meta text-muted-foreground">
+                            {bindingActive.length} active
+                          </span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {binding.apiKeys.length === 0 ? (
+                            <span className="text-meta italic text-muted-foreground">
+                              No clients attached
+                            </span>
+                          ) : (
+                            binding.apiKeys.map((client) => (
+                              <span
+                                key={client.id}
+                                className="text-meta inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2 py-1"
+                              >
+                                <KeyRound className="h-3 w-3 text-muted-foreground" />
+                                <span>{client.name}</span>
+                                <span className="font-mono text-[10px] text-muted-foreground">
+                                  {client.prefix}…
+                                </span>
+                                {client.revokedAt && <span className="text-danger">revoked</span>}
+                              </span>
+                            ))
+                          )}
+                        </div>
+                      </div>
+                      <Link
+                        href={`/w/${binding.workspace.slug}/settings/access?create=agent&agentId=${binding.id}`}
+                        className="focus-ring inline-flex h-8 shrink-0 items-center justify-center rounded-md border border-border px-3 text-xs font-medium hover:bg-subtle"
+                      >
+                        <KeyRound className="mr-1.5 h-3.5 w-3.5" />
+                        Add MCP client
+                      </Link>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </Section>
 
