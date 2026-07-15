@@ -587,7 +587,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             <IssueMain
               issueId={issue.id}
               description={issue.description}
-              comments={issue.comments}
               currentRunId={issue.currentAgentRun?.id ?? null}
               kind={issue.kind}
               projectId={issue.projectId ?? null}

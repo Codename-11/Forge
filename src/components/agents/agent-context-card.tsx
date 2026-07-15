@@ -23,7 +23,8 @@ import { formatIssueId, relativeTime } from "@/lib/utils";
  * Data sources (no new tRPC procedures):
  *   - `agent.pipeline` — already used elsewhere on the page; cheap to
  *     re-query because react-query dedupes.
- *   - `issue.byId`     — populated `attachments[]` and `comments[]`.
+ *   - `issue.byId`     — populated `attachments[]` and current metadata.
+ *   - `agent.pipeline` — carries the lightweight comment count.
  */
 export function AgentContextCard({
   agentId,
@@ -80,7 +81,7 @@ export function AgentContextCard({
   }
 
   const attachmentCount = issueDetail?.attachments?.length ?? 0;
-  const commentCount = issueDetail?.comments?.length ?? nextIssue._count?.comments ?? 0;
+  const commentCount = nextIssue._count?.comments ?? 0;
 
   return (
     <Section

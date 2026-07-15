@@ -713,16 +713,6 @@ export const issueRouter = router({
             },
           },
           labels: { include: { label: true } },
-          comments: {
-            orderBy: { createdAt: "asc" },
-            include: {
-              author: { select: { id: true, name: true, image: true } },
-              authoringAgent: {
-                select: { id: true, name: true, profileKey: true, avatar: true },
-              },
-              run: { select: { id: true, status: true, finishedAt: true } },
-            },
-          },
           attachments: true,
           children: {
             where: { deletedAt: null },

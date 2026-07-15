@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import type { Prisma } from "@prisma/client";
 import {
   ActionRequestKind,
+  AgentRunStatus,
   CommentKind,
   ConfidenceLevel,
   EngagementMode,
@@ -84,6 +85,66 @@ export const inlineActionRequestSchema = z.object({
 });
 
 export const commentRouter = router({
+  /**
+   * Cursor-paginated issue conversation, newest window first.
+   *
+   * The UI reverses each page back into chronological order and prepends
+   * older pages on demand. Keeping this out of `issue.byId` prevents a busy
+   * thread from making every metadata refresh re-download its full history.
+   */
+  listForIssue: workspaceProcedure
+    .input(
+      z.object({
+        issueId: z.string().cuid(),
+        cursor: z.string().cuid().optional(),
+        limit: z.number().int().min(5).max(50).default(15),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!issue) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+      }
+
+      const where = {
+        workspaceId: ctx.workspaceId,
+        issueId: input.issueId,
+        deletedAt: null,
+        NOT: {
+          kind: CommentKind.STATUS,
+          run: {
+            is: {
+              status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            },
+          },
+        },
+      } satisfies Prisma.CommentWhereInput;
+      const [rows, total] = await Promise.all([
+        ctx.db.comment.findMany({
+          where,
+          take: input.limit + 1,
+          cursor: input.cursor ? { id: input.cursor } : undefined,
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          include: {
+            author: { select: { id: true, name: true, image: true } },
+            authoringAgent: {
+              select: { id: true, name: true, profileKey: true, avatar: true },
+            },
+            run: { select: { id: true, status: true, finishedAt: true } },
+          },
+        }),
+        ctx.db.comment.count({ where }),
+      ]);
+
+      let nextCursor: string | undefined;
+      if (rows.length > input.limit) nextCursor = rows.pop()!.id;
+      rows.reverse();
+      return { items: rows, nextCursor, total };
+    }),
+
   create: workspaceProcedure
     .input(
       z.object({

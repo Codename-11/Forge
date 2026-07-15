@@ -12885,3 +12885,29 @@ typecheck and lint passed with only pre-existing repository warnings; and a
 fresh production build passed. The full serial Playwright run passed 36 of 38
 journeys; its shared-state chat and Command Center failures both passed against
 a clean disposable E2E database immediately afterward.
+
+---
+
+## 2026-07-14 — Long issue discussion progressive history
+
+Audited a 36-comment issue at desktop and mobile widths. The eager comment
+timeline made the issue column 7,713px tall, placed the reply composer behind a
+full-history scroll, rendered long markdown at unlimited height, and bundled
+the entire conversation into every `issue.byId` metadata refresh.
+
+Moved issue comments to a tenant-scoped cursor-paginated query with a newest-15
+initial window and explicit earlier-history loading. The conversation remains
+chronological, prepending history preserves the reader's viewport, realtime
+events refresh the new cache, and the total count stays visible. Added a Reply
+jump that focuses the existing composer, measured Show more / Show less
+collapse for long rich bodies, and timestamp deep links that automatically
+page backward until an older target is present. The page keeps one vertical
+scroll region and normal mobile flow.
+
+The seeded audit column fell to 2,398px (69% less). Loading an earlier page
+moved the existing anchor by 1px; an oldest-comment deep link loaded all 36
+rows and centered the target. Typecheck passed; lint passed with existing
+repository warnings; the focused comment router suite passed 15 tests; the
+isolated stale-work suite passed 9 tests after a known full-suite concurrency
+failure; the fresh E2E production build passed; and the existing issue-flow
+Playwright journey passed.

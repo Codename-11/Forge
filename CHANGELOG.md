@@ -9,6 +9,18 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-14] — v0.16.0 · Scannable issue discussions
+
+### Added
+
+- **Busy issue discussions now open on recent context.** Forge loads the latest 15 comments first, shows the full count, and fetches earlier history on demand without moving the reader's place.
+- **Replies and specific comments are directly reachable.** A Reply action focuses the composer, timestamps provide durable links, and older deep links automatically load the history they need.
+
+### Changed
+
+- **Long rich comments start at a clean, readable height.** Markdown, images, and tool-rich bodies expand with explicit Show more / Show less controls while the issue page retains one predictable scroll region on desktop and mobile.
+- **Issue metadata refreshes no longer carry the full discussion.** Comments use an independent tenant-scoped cursor cache that updates for realtime creates and edits.
+
 ## [2026-07-14] — v0.15.1 · Manual GitHub retry safety
 
 ### Fixed

@@ -89,6 +89,7 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
         if (evt.subjectId) {
           void utils.issue.activity.invalidate({ issueId: evt.subjectId });
           void utils.issue.byId.invalidate({ id: evt.subjectId });
+          void utils.comment.listForIssue.invalidate({ issueId: evt.subjectId });
         }
         // Cycle planning board reads cycle.get(cycleId).issues — trigger
         // a refresh whenever an issue changes in this workspace.
@@ -120,6 +121,7 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
       }
       if (evt.kind?.startsWith("COMMENT_")) {
         void utils.issue.byId.invalidate();
+        void utils.comment.listForIssue.invalidate();
         void utils.inbox.badge.invalidate();
       }
       // AgentRun lifecycle: every STARTED/STEP/STALLED/COMPLETED event
@@ -139,9 +141,7 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
     };
     es.onerror = () => {
       setRealtimeConnectionHealth({
-        status: typeof navigator !== "undefined" && !navigator.onLine
-          ? "offline"
-          : "reconnecting",
+        status: typeof navigator !== "undefined" && !navigator.onLine ? "offline" : "reconnecting",
       });
     };
     const onOffline = () => setRealtimeConnectionHealth({ status: "offline" });

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { MessageCircleReply, Sparkles, Target, Workflow } from "lucide-react";
+import { ArrowDown, ChevronUp, MessageCircleReply, Sparkles, Target, Workflow } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
@@ -301,7 +301,6 @@ function splitProvenance(body: string): { provenance: string | null; rest: strin
 export function IssueMain({
   issueId,
   description,
-  comments,
   onDescriptionSave,
   /**
    * Caller-resolved signal used by `<ActionRequestCard>` to decide
@@ -319,7 +318,6 @@ export function IssueMain({
 }: {
   issueId: string;
   description: string | null;
-  comments: Comment[];
   onDescriptionSave: (next: string | null) => void;
   currentRunId?: string | null;
   canResolveActions?: boolean;
@@ -337,7 +335,7 @@ export function IssueMain({
       <IssuePlansStrip issueId={issueId} />
       <DescriptionBlock issueId={issueId} description={description} onSave={onDescriptionSave} />
       <SubIssuesPanel parentId={issueId} parentProjectId={projectId} parentKind={kind} />
-      <Comments issueId={issueId} comments={comments} canResolveActions={canResolveActions} />
+      <Comments issueId={issueId} canResolveActions={canResolveActions} />
     </div>
   );
 }
@@ -703,16 +701,52 @@ function DescriptionBlock({
   );
 }
 
-function Comments({
-  issueId,
-  comments,
-  canResolveActions,
-}: {
-  issueId: string;
-  comments: Comment[];
-  canResolveActions: boolean;
-}) {
+function Comments({ issueId, canResolveActions }: { issueId: string; canResolveActions: boolean }) {
   const utils = trpc.useUtils();
+  const historyRef = useRef<HTMLDivElement | null>(null);
+  const composerFormRef = useRef<HTMLFormElement | null>(null);
+  const {
+    data: commentPages,
+    isLoading: commentsLoading,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = trpc.comment.listForIssue.useInfiniteQuery(
+    { issueId, limit: 15 },
+    { getNextPageParam: (last) => last.nextCursor },
+  );
+  const comments = useMemo(() => {
+    const orderedPages = [...(commentPages?.pages ?? [])].reverse();
+    const seen = new Set<string>();
+    return orderedPages.flatMap((page) =>
+      page.items.filter((comment) => {
+        if (seen.has(comment.id)) return false;
+        seen.add(comment.id);
+        return true;
+      }),
+    ) as Comment[];
+  }, [commentPages]);
+  const totalComments = commentPages?.pages[0]?.total ?? 0;
+  const remainingComments = Math.max(0, totalComments - comments.length);
+
+  const loadEarlier = useCallback(async () => {
+    if (!hasNextPage || isFetchingNextPage) return;
+    const history = historyRef.current;
+    const scroller = history?.closest(".overflow-y-auto") as HTMLElement | null;
+    const beforeHeight = scroller?.scrollHeight ?? 0;
+    const beforeTop = scroller?.scrollTop ?? 0;
+    await fetchNextPage();
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (scroller) scroller.scrollTop = beforeTop + (scroller.scrollHeight - beforeHeight);
+      });
+    });
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+
+  const jumpToLatest = useCallback(() => {
+    composerFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => composerRef.current?.focus(), 350);
+  }, []);
   // Draft persists per-issue under `forge.draft.comment:<issueId>` so a
   // half-written comment survives accidental navigation. We hydrate from
   // localStorage on first mount; subsequent renders own `draft` in state
@@ -909,6 +943,7 @@ function Comments({
   const createComment = trpc.comment.create.useMutation({
     onSuccess: () => {
       utils.issue.byId.invalidate({ id: issueId });
+      utils.comment.listForIssue.invalidate({ issueId });
       utils.issue.activity.invalidate({ issueId });
       // Immediate agent feedback: the server auto-resumes a WAITING run
       // to ACTIVE in the same transaction as the comment (openOrTouchRun),
@@ -1053,13 +1088,63 @@ function Comments({
     }
     return null;
   }, [timelineComments]);
+
+  // A copied comment URL may point into history older than the initial
+  // window. Fetch successive pages until the target exists, then bring it
+  // into view. This keeps deep links reliable without eager-loading every
+  // comment on ordinary visits.
+  useEffect(() => {
+    const targetId = window.location.hash.match(/^#comment-(.+)$/)?.[1];
+    if (!targetId) return;
+    const target = document.getElementById(`comment-${targetId}`);
+    if (target) {
+      target.scrollIntoView({ block: "center" });
+      return;
+    }
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [comments.length, fetchNextPage, hasNextPage, isFetchingNextPage]);
+
   return (
-    <section>
-      <SectionLabel>
-        Comments {timelineComments.length > 0 && <Count>{timelineComments.length}</Count>}
-      </SectionLabel>
-      <div className="space-y-3">
-        {timelineComments.length === 0 && (
+    <section aria-labelledby="issue-comments-heading">
+      <div className="mb-3 flex min-h-7 flex-wrap items-center justify-between gap-2">
+        <h2
+          id="issue-comments-heading"
+          className="flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground"
+        >
+          Comments {totalComments > 0 && <Count>{totalComments}</Count>}
+        </h2>
+        {totalComments > 0 && (
+          <Button type="button" variant="ghost" size="sm" onClick={jumpToLatest}>
+            <ArrowDown className="mr-1 h-3.5 w-3.5" />
+            Reply
+          </Button>
+        )}
+      </div>
+      <div ref={historyRef} className="space-y-3">
+        {hasNextPage && (
+          <div className="flex justify-center pb-1">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void loadEarlier()}
+              disabled={isFetchingNextPage}
+              aria-label={`Load ${remainingComments} earlier comments`}
+            >
+              <ChevronUp className="mr-1 h-3.5 w-3.5" />
+              {isFetchingNextPage
+                ? "Loading earlier comments…"
+                : `Load earlier comments · ${remainingComments} remaining`}
+            </Button>
+          </div>
+        )}
+        {commentsLoading && (
+          <div className="space-y-2" aria-label="Loading comments">
+            <div className="h-16 animate-pulse rounded-md border border-border bg-card/30" />
+            <div className="h-20 animate-pulse rounded-md border border-border bg-card/30" />
+          </div>
+        )}
+        {!commentsLoading && timelineComments.length === 0 && (
           <p className="text-xs text-muted-foreground">No comments yet.</p>
         )}
         {timelineComments.map((c) => (
@@ -1073,6 +1158,7 @@ function Comments({
         ))}
       </div>
       <form
+        ref={composerFormRef}
         onSubmit={(e) => {
           e.preventDefault();
           submitDraft();
@@ -1275,7 +1361,10 @@ function TimelineCommentCard({
   // useMemo above so hook order stays stable across render paths.
   if (comment.kind === "SYSTEM") {
     return (
-      <div className="text-meta flex items-center gap-2 px-1 py-1.5 italic text-muted-foreground">
+      <div
+        id={`comment-${comment.id}`}
+        className="text-meta flex scroll-mt-28 items-center gap-2 px-1 py-1.5 italic text-muted-foreground"
+      >
         <span className="h-px flex-1 bg-border/60" />
         <RichContentRenderer
           body={comment.body}
@@ -1289,7 +1378,7 @@ function TimelineCommentCard({
     );
   }
   return (
-    <div className="flex gap-2.5">
+    <div id={`comment-${comment.id}`} className="flex scroll-mt-28 gap-2.5">
       <CommentAvatar
         name={displayName}
         image={isAgent ? null : (comment.author?.image ?? null)}
@@ -1351,9 +1440,13 @@ function TimelineCommentCard({
                 · {comment.currentStep}
               </span>
             )}
-            <span className="text-muted-foreground">
+            <Link
+              href={`#comment-${comment.id}`}
+              className="rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              title="Link to this comment"
+            >
               {isStatus ? `updated ${relativeTime(statusTime)}` : relativeTime(comment.createdAt)}
-            </span>
+            </Link>
             {!isStatus && comment.editedAt && (
               <CommentEditedMarker commentId={comment.id} editedAt={comment.editedAt} />
             )}
@@ -1404,7 +1497,7 @@ function TimelineCommentCard({
               onClose={() => setEditing(false)}
             />
           ) : (
-            <CommentBodyWithTools
+            <ExpandableCommentBody
               segments={bodySegments}
               className="mt-1.5 text-[0.8125rem] text-foreground/90"
             />
@@ -1488,6 +1581,7 @@ function CommentEditor({
   const updateM = trpc.comment.update.useMutation({
     onSuccess: () => {
       utils.issue.byId.invalidate({ id: issueId });
+      utils.comment.listForIssue.invalidate({ issueId });
       utils.issue.activity.invalidate({ issueId });
       onClose();
     },
@@ -1590,6 +1684,58 @@ function CommentBodyWithTools({
         if (!seg.text.trim()) return null;
         return <RichContentRenderer key={`md-${i}`} body={seg.text} />;
       })}
+    </div>
+  );
+}
+
+/**
+ * Keeps unusually long replies scannable while preserving the complete rich
+ * body on demand. Height is measured from the rendered content rather than a
+ * character heuristic, so markdown lists, images, and headings behave like
+ * the user actually sees them.
+ */
+function ExpandableCommentBody({
+  segments,
+  className,
+}: {
+  segments: ReturnType<typeof splitToolDirectives>;
+  className?: string;
+}) {
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [canExpand, setCanExpand] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  useEffect(() => {
+    const node = bodyRef.current;
+    if (!node || expanded) return;
+    const measure = () => setCanExpand(node.scrollHeight > node.clientHeight + 2);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [expanded, segments]);
+
+  return (
+    <div className="relative">
+      <div ref={bodyRef} className={!expanded ? "max-h-64 overflow-hidden" : undefined}>
+        <CommentBodyWithTools segments={segments} className={className} />
+      </div>
+      {canExpand && !expanded && (
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 h-16 bg-gradient-to-t from-card via-card/90 to-transparent"
+          aria-hidden="true"
+        />
+      )}
+      {canExpand && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          aria-expanded={expanded}
+          className="focus-ring text-meta relative mt-1 rounded px-1 py-0.5 font-medium text-muted-foreground transition-colors hover:text-foreground"
+        >
+          {expanded ? "Show less" : "Show more"}
+        </button>
+      )}
     </div>
   );
 }

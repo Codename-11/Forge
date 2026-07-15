@@ -159,6 +159,49 @@ describe("commentRouter.create — agent authorship", () => {
   });
 });
 
+describe("commentRouter.listForIssue — bounded history", () => {
+  it("returns the newest window chronologically and pages into older comments", async () => {
+    const { fixture, ctx } = await setup();
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const base = new Date("2026-01-01T12:00:00.000Z").getTime();
+    await prisma.comment.createMany({
+      data: Array.from({ length: 18 }, (_, index) => ({
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        authorId: fixture.user.id,
+        body: `comment-${index + 1}`,
+        createdAt: new Date(base + index * 1_000),
+      })),
+    });
+
+    const caller = commentRouter.createCaller(ctx);
+    const first = await caller.listForIssue({ issueId: issue.id, limit: 5 });
+    expect(first.total).toBe(18);
+    expect(first.items.map((comment) => comment.body)).toEqual([
+      "comment-14",
+      "comment-15",
+      "comment-16",
+      "comment-17",
+      "comment-18",
+    ]);
+    expect(first.nextCursor).toBeTruthy();
+
+    const second = await caller.listForIssue({
+      issueId: issue.id,
+      limit: 5,
+      cursor: first.nextCursor,
+    });
+    expect(second.items.map((comment) => comment.body)).toEqual([
+      "comment-9",
+      "comment-10",
+      "comment-11",
+      "comment-12",
+      "comment-13",
+    ]);
+  });
+});
+
 describe("commentRouter.create — auto-watch + mention resolution", () => {
   it("commenter (human) becomes a watcher", async () => {
     const { fixture, ctx } = await setup();
