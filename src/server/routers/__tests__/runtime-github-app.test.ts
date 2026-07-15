@@ -23,6 +23,7 @@ const { privateKey: PEM } = generateKeyPairSync("rsa", {
 
 afterEach(async () => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
   while (fixtures.length) {
     const f = fixtures.pop()!;
     await f.cleanup();
@@ -105,6 +106,73 @@ describe("workspace GitHub App router", () => {
       select: { privateKeyEnc: true },
     });
     expect(after.privateKeyEnc).toBe(before.privateKeyEnc);
+  });
+
+  it("configures a signed webhook without returning its secret", async () => {
+    const { apps } = await setup("GHW");
+    const prisma = getPrisma();
+    const created = await apps.createManual({
+      name: "Webhook App",
+      appId: "1234567",
+      installationId: "7654321",
+      privateKey: PEM,
+      slug: "webhook-app",
+    });
+    vi.stubEnv("AUTH_URL", "https://forge.example");
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url === "https://api.github.com/app") {
+        return Response.json({
+          events: [
+            "issues",
+            "issue_comment",
+            "pull_request",
+            "pull_request_review",
+            "check_suite",
+            "check_run",
+            "status",
+          ],
+          permissions: {
+            issues: "read",
+            pull_requests: "write",
+            checks: "write",
+            statuses: "read",
+            metadata: "read",
+          },
+        });
+      }
+      expect(url).toBe("https://api.github.com/app/hook/config");
+      expect(init?.method).toBe("PATCH");
+      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+      expect(body.url).toBe("https://forge.example/api/ingest/github");
+      expect(body.secret).toEqual(expect.any(String));
+      expect(String(body.secret)).toHaveLength(43);
+      return new Response("{}", { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await apps.configureWebhook({ id: created.id });
+    expect(result).toMatchObject({
+      ok: true,
+      url: "https://forge.example/api/ingest/github",
+      readiness: { ready: true, missingEvents: [], missingPermissions: [] },
+    });
+    const row = await prisma.githubApp.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.webhookConfiguredAt).toBeTruthy();
+    expect(row.webhookSecretPreviousEnc).toBeNull();
+    expect(decryptSecret(row.webhookSecretEnc!)).toHaveLength(43);
+    const listed = await apps.list();
+    expect(listed[0]).not.toHaveProperty("webhookSecretEnc");
+    expect(listed[0]).not.toHaveProperty("webhookSecretPreviousEnc");
+
+    const beforeFailedRotation = row.webhookSecretEnc;
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("nope", { status: 500 })));
+    await expect(apps.configureWebhook({ id: created.id })).rejects.toThrow(/GitHub API error/i);
+    const afterFailedRotation = await prisma.githubApp.findUniqueOrThrow({
+      where: { id: created.id },
+    });
+    expect(afterFailedRotation.webhookSecretEnc).toBe(beforeFailedRotation);
+    expect(afterFailedRotation.webhookSecretPreviousEnc).toBeNull();
+    expect(afterFailedRotation.webhookLastError).toMatch(/GitHub API error/i);
   });
 
   it("rejects a non-PEM key and a non-numeric app id", async () => {

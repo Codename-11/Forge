@@ -55,6 +55,8 @@ export async function GET(req: NextRequest) {
         appId: conv.appId,
         slug: conv.slug || null,
         privateKeyEnc: encryptSecret(conv.privateKeyPem),
+        webhookSecretEnc: conv.webhookSecret ? encryptSecret(conv.webhookSecret) : null,
+        webhookConfiguredAt: conv.webhookSecret ? new Date() : null,
         clientId: conv.clientId,
         createdViaManifest: true,
       },

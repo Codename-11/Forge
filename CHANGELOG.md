@@ -9,6 +9,21 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.19.0 · Unified GitHub realtime sync
+
+### Added
+
+- **Workspace GitHub Apps now own realtime state detection.** Forge stores per-App webhook secrets encrypted, rotates them with crash-safe grace credentials, and shows whether each App is providing realtime sync or polling only.
+- **Legacy GitHub attachments have a bounded migration path.** An explicit maintenance command resolves old issue/PR URLs through the provider sequentially, creates native relations, and removes generic cards only after success.
+
+### Changed
+
+- **One GitHub App handles sync and runtime access.** Newly created Apps request the issue, pull-request, review, check, and status events required for native state detection while continuing to mint short-lived runtime credentials.
+
+### Fixed
+
+- **Webhook delivery no longer depends on missing instance secrets.** Signatures resolve from the payload installation's workspace App with the former environment credential retained only as a compatibility fallback.
+
 ## [2026-07-15] — v0.18.0 · Reliable GitHub state detection
 
 ### Added

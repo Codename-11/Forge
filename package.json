@@ -1,6 +1,6 @@
 {
   "name": "forge",
-  "version": "0.18.0",
+  "version": "0.19.0",
   "private": true,
   "description": "Forge — a fast, minimalist, keyboard-driven project management platform with pluggable agents.",
   "license": "MIT",
@@ -35,6 +35,8 @@
     "worker": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx src/server/worker.ts",
     "worker:live": "./scripts/worker-live.sh",
     "worker:live:watch": "./scripts/worker-live.sh --watch",
+    "maintenance:github-links": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx scripts/migrate-github-link-attachments.ts",
+    "maintenance:github-webhook": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx scripts/configure-github-app-webhook.ts",
     "format": "prettier --write .",
     "docs:install": "pnpm --dir docs --ignore-workspace install",
     "docs:dev": "pnpm --dir docs --ignore-workspace dev",

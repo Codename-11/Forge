@@ -65,16 +65,22 @@ provider's secret in Settings → Authentication after a rotation.
 
 ## GitHub App integration
 
-Required only when enabling GitHub issue/PR import, linking, and webhook sync.
-Forge uses a GitHub App installation as durable repo auth and mints short-lived
-installation tokens just in time. Installation access tokens are not stored.
+The preferred setup is **Workspace Settings → GitHub Apps**. Forge stores that
+App's PEM and webhook secret encrypted, uses it for native issue/PR sync, and
+mints short-lived installation tokens just in time for runtime git access.
+Installation access tokens are not stored.
+
+The variables below are an optional legacy/instance-wide fallback for
+installations that have not moved to workspace-managed Apps. They are no longer
+required when the matching installed Workspace GitHub App has realtime sync
+enabled.
 
 | Var                         | Required | Notes |
 |-----------------------------|----------|-------|
-| `GITHUB_APP_ID`             | Yes      | Numeric GitHub App id used for JWT signing. |
-| `GITHUB_APP_SLUG`           | Yes      | App slug for `/api/connections/github/install` redirects. |
-| `GITHUB_APP_PRIVATE_KEY`    | Yes      | PEM private key. Newlines may be literal or escaped as `\n`. |
-| `GITHUB_APP_WEBHOOK_SECRET` | Yes      | HMAC secret used to verify `/api/ingest/github`. |
+| `GITHUB_APP_ID`             | No       | Legacy instance App id used for JWT signing. |
+| `GITHUB_APP_SLUG`           | No       | Legacy App slug for `/api/connections/github/install` redirects. |
+| `GITHUB_APP_PRIVATE_KEY`    | No       | Legacy PEM private key. Newlines may be literal or escaped as `\n`. |
+| `GITHUB_APP_WEBHOOK_SECRET` | No       | Legacy HMAC fallback used to verify `/api/ingest/github`. |
 
 ```bash
 GITHUB_APP_ID="123456"
@@ -95,6 +101,23 @@ Configure the GitHub App with:
   actions Forge uses to invalidate a cached CI aggregate when a rerun starts.
   Forge otherwise reads check data and does not create check runs.
 - Repository metadata access for repository selection/listing.
+
+Existing workspace Apps can enable or rotate the signed endpoint from
+**Workspace Settings → GitHub Apps → Enable realtime sync**. Operators can run
+the same action inside the worker container without exposing the generated
+secret:
+
+```bash
+pnpm maintenance:github-webhook -- --id=<github-app-row-id>
+```
+
+To review and migrate legacy generic GitHub issue/PR attachments into native
+relations, dry-run first and then execute a bounded batch:
+
+```bash
+pnpm maintenance:github-links -- --dry-run --limit=25
+pnpm maintenance:github-links -- --limit=25
+```
 
 ## Storage (MinIO / S3)
 
