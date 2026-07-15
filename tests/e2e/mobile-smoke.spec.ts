@@ -31,6 +31,11 @@ async function expectShellControls(page: Page, width: number) {
   }
 }
 
+async function openSettingsNavigation(page: Page) {
+  await page.getByRole("button", { name: /Browse/ }).click();
+  await expect(page.getByRole("navigation", { name: "Settings" })).toBeVisible();
+}
+
 async function createIssueFromMobileTopbar(page: Page, title: string) {
   await page.getByRole("button", { name: "New issue" }).first().click();
   const dialog = page.getByRole("dialog");
@@ -145,6 +150,7 @@ test.describe("Mobile smoke", () => {
       await expectNoDocumentHorizontalOverflow(page, `activity feed at ${width}px`);
 
       await page.goto("/settings/agents");
+      await openSettingsNavigation(page);
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
       await expect(
         page.locator("main").getByText("Profiles you've defined.").first(),
@@ -152,11 +158,13 @@ test.describe("Mobile smoke", () => {
       await expectNoDocumentHorizontalOverflow(page, `instance agent settings at ${width}px`);
 
       await page.goto("/settings/runtimes");
+      await openSettingsNavigation(page);
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
       await expect(page.locator("main").getByText("Runtimes").first()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `instance runtimes settings at ${width}px`);
 
       await page.goto("/settings/appearance");
+      await openSettingsNavigation(page);
       await expect(page.getByPlaceholder("Search settings")).toBeVisible();
       await expect(page.locator("main").getByText("Appearance").first()).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `instance appearance settings at ${width}px`);
@@ -221,7 +229,7 @@ test.describe("Mobile smoke", () => {
     await expect(runtimeRow).toBeVisible();
     await runtimeRow.getByRole("link").first().click();
     await expect(page).toHaveURL(/\/w\/forge\/settings\/runtimes\//);
-    await expect(page.getByText(/Tool surface|terminal|filesystem|git/i).first()).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Runtime environment" })).toBeVisible();
     await expectNoDocumentHorizontalOverflow(page, "runtime detail at 390px");
   });
 });

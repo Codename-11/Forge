@@ -47,6 +47,23 @@ test.describe("multi-workspace restructure", () => {
     await expect(page.getByText("Atlas").first()).toBeVisible();
   });
 
+  test("settings scope, redirects, and dispatch defaults stay authoritative", async ({ page }) => {
+    await page.goto("/settings", { waitUntil: "domcontentloaded" });
+    await expect(page.getByText("Personal settings", { exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+
+    await page.goto("/settings/auth", { waitUntil: "domcontentloaded" });
+    await expect(page).toHaveURL(/\/admin\/auth$/);
+    await expect(page.getByText(/Instance scope/).first()).toBeVisible();
+    await expect(page.getByText("Identity & sign-in").first()).toBeVisible();
+
+    await page.goto("/w/forge/settings/dispatch-rules", { waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("radio", { name: "Capability match" })).toBeEnabled();
+    await page.getByRole("radio", { name: "Priority match" }).click();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(page.getByRole("radio", { name: "Priority match" })).toHaveAttribute("aria-checked", "true");
+  });
+
   test("an agent profile can be bound to a workspace and unbound", async ({ page }) => {
     await page.goto("/w/forge/settings/agents", { waitUntil: "domcontentloaded" });
     // The Definition → Binding → Instance-policy explainer + catalog are the

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ArrowLeft, Bot, PlugZap, Search, Server, Terminal } from "lucide-react";
+import { ArrowLeft, Bot, ChevronDown, PlugZap, Search, Server } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   ACCOUNT_SETTINGS_GROUP,
@@ -29,12 +29,13 @@ type RailItem = {
 type RailGroup = { id: string; label: string; hint?: string; items: RailItem[] };
 
 type SettingsRailProps =
-  | { scope: "workspace"; slug: string }
+  | { scope: "workspace"; slug: string; name: string }
   | { scope: "account"; backHref: string; backLabel: string; email: string };
 
 export function SettingsRail(props: SettingsRailProps) {
   const pathname = usePathname();
   const [query, setQuery] = useState("");
+  const [mobileOpen, setMobileOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const groups = useMemo(
@@ -71,9 +72,34 @@ export function SettingsRail(props: SettingsRailProps) {
     : groups;
 
   return (
-    <aside className="flex max-h-64 min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-border bg-card/30 md:h-full md:max-h-none md:w-60 md:border-b-0 md:border-r">
+    <aside className="flex min-h-0 w-full shrink-0 flex-col overflow-hidden border-b border-border bg-card/30 md:h-full md:w-60 md:border-b-0 md:border-r">
+      <div className="flex min-h-11 items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Scope
+          </div>
+          <div className="truncate text-xs font-medium text-foreground">
+            {props.scope === "workspace" ? `Workspace · ${props.name}` : "Personal settings"}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="focus-ring inline-flex min-h-9 items-center gap-1 rounded-md px-2 text-xs text-muted-foreground hover:bg-subtle hover:text-foreground md:hidden"
+          aria-expanded={mobileOpen}
+          aria-controls="settings-navigation"
+          onClick={() => setMobileOpen((value) => !value)}
+        >
+          Browse
+          <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", mobileOpen && "rotate-180")} />
+        </button>
+      </div>
       {props.scope === "account" && (
-        <div className="border-b border-border/60 px-3 pt-3 pb-2">
+        <div
+          className={cn(
+            "border-b border-border/60 px-3 pt-3 pb-2",
+            !mobileOpen && "hidden md:block",
+          )}
+        >
           <Link
             href={props.backHref}
             className="focus-ring inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[0.75rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
@@ -84,7 +110,7 @@ export function SettingsRail(props: SettingsRailProps) {
         </div>
       )}
 
-      <div className="px-3 pt-3 pb-2">
+      <div className={cn("px-3 pt-3 pb-2", !mobileOpen && "hidden md:block")}>
         <div className="relative">
           <input
             ref={inputRef}
@@ -92,6 +118,7 @@ export function SettingsRail(props: SettingsRailProps) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search settings"
+            aria-label="Search settings"
             className="focus-ring h-7 w-full rounded-md border border-border bg-background px-2 pl-7 text-xs text-foreground placeholder:text-muted-foreground"
           />
           <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
@@ -101,7 +128,14 @@ export function SettingsRail(props: SettingsRailProps) {
         </div>
       </div>
 
-      <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+      <nav
+        id="settings-navigation"
+        aria-label="Settings"
+        className={cn(
+          "min-h-0 flex-1 overflow-y-auto px-2 pb-3",
+          !mobileOpen && "hidden md:block",
+        )}
+      >
         {filtered.length === 0 && (
           <p className="px-2 py-3 text-meta text-muted-foreground">No settings match.</p>
         )}
@@ -124,6 +158,8 @@ export function SettingsRail(props: SettingsRailProps) {
                   <li key={it.href}>
                     <Link
                       href={it.href}
+                      aria-current={active ? "page" : undefined}
+                      onClick={() => setMobileOpen(false)}
                       className={cn(
                         "group flex items-start gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors",
                         active
@@ -160,7 +196,7 @@ export function SettingsRail(props: SettingsRailProps) {
       </nav>
 
       {props.scope === "account" && (
-        <div className="shrink-0 border-t border-border/60 px-3 py-2">
+        <div className={cn("shrink-0 border-t border-border/60 px-3 py-2", !mobileOpen && "hidden md:block")}>
           <div className="truncate text-[0.6875rem] text-muted-foreground">
             Signed in as <span className="font-medium">{props.email}</span>
           </div>
@@ -200,28 +236,21 @@ function workspaceGroups(slug: string): RailGroup[] {
 const GLOBAL_RAIL_ITEMS: RailItem[] = [
   {
     href: "/settings/agents",
-    label: "Agents",
+    label: "My agent profiles",
     icon: Bot,
     hint: "Profiles (definitions)",
     adminOnly: false,
   },
   {
-    href: "/settings/clients",
-    label: "Agent Clients",
-    icon: Terminal,
-    hint: "MCP sessions + keys",
-    adminOnly: false,
-  },
-  {
     href: "/settings/runtimes",
-    label: "Runtimes",
+    label: "Runtime inventory",
     icon: Server,
     hint: "Hosts I've registered",
     adminOnly: false,
   },
   {
     href: "/settings/connections",
-    label: "Connections",
+    label: "Connected accounts",
     icon: PlugZap,
     hint: "OAuth identities",
     adminOnly: false,
@@ -234,17 +263,20 @@ function accountGroups(): RailGroup[] {
       id: ACCOUNT_SETTINGS_GROUP.id,
       label: ACCOUNT_SETTINGS_GROUP.label,
       hint: ACCOUNT_SETTINGS_GROUP.hint,
-      items: [
-        ...GLOBAL_RAIL_ITEMS,
-        ...ACCOUNT_SETTINGS_GROUP.items.map((item) => ({
-          // Account paths are already rooted at `/settings`.
-          href: item.path,
-          label: item.label,
-          icon: item.icon,
-          hint: item.description,
-          adminOnly: (item.badge ?? "").toLowerCase().includes("admin"),
-        })),
-      ],
+      items: ACCOUNT_SETTINGS_GROUP.items.map((item) => ({
+        // Account paths are already rooted at `/settings`.
+        href: item.path,
+        label: item.label,
+        icon: item.icon,
+        hint: item.description,
+        adminOnly: (item.badge ?? "").toLowerCase().includes("admin"),
+      })),
+    },
+    {
+      id: "resources",
+      label: "Resources",
+      hint: "Definitions and identities you own.",
+      items: GLOBAL_RAIL_ITEMS,
     },
   ];
 }

@@ -17,7 +17,7 @@ export default function WorkspaceSettingsLayout({
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden md:flex-row">
-      <SettingsRail scope="workspace" slug={ws.slug} />
+      <SettingsRail scope="workspace" slug={ws.slug} name={ws.name} />
       <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
     </div>
   );

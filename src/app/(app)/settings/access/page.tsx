@@ -28,6 +28,7 @@ import {
   type McpOnboardingProvider,
 } from "@/components/mcp-integration-blocks";
 import { trpc } from "@/lib/trpc";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { relativeTime } from "@/lib/utils";
 
 const ALL_SCOPES = [
@@ -141,6 +142,8 @@ type RevealKeyState = {
 };
 
 export default function AccessPage() {
+  const workspace = useMaybeWorkspace();
+  const clientsHref = workspace ? `/w/${workspace.slug}/settings/clients` : "/settings/clients";
   const searchParams = useSearchParams();
   const handledDeepLinkRef = useRef<string | null>(null);
   const { data: keys, refetch } = trpc.access.list.useQuery();
@@ -497,7 +500,7 @@ export default function AccessPage() {
     <>
       <Topbar
         title="Developer access"
-        subtitle="API keys + MCP endpoint for external agents."
+        subtitle={workspace ? `${workspace.name} · workspace API keys and MCP access` : "API keys + MCP endpoint for the current workspace."}
         actions={
           <Button variant="ember" size="sm" onClick={openCreate}>
             Register agent
@@ -506,7 +509,7 @@ export default function AccessPage() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-6 p-6">
-          <Intro baseUrl={baseUrl} />
+          <Intro baseUrl={baseUrl} clientsHref={clientsHref} />
 
           {/* ── Registered Agents ── */}
           <Section
@@ -1300,7 +1303,7 @@ function ScopeSelector({
   );
 }
 
-function Intro({ baseUrl }: { baseUrl: string }) {
+function Intro({ baseUrl, clientsHref }: { baseUrl: string; clientsHref: string }) {
   return (
     <Section
       title="Connect an external agent"
@@ -1323,7 +1326,7 @@ function Intro({ baseUrl }: { baseUrl: string }) {
       <div className="mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-meta text-muted-foreground">
         Use this page to issue or rotate secrets. Use{" "}
         <Link
-          href="/settings/clients"
+          href={clientsHref}
           className="font-medium text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground"
         >
           Agent Clients

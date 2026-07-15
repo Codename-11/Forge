@@ -85,10 +85,15 @@ test("/clear restores suggested prompts on an emptied conversation", async ({ pa
       response.url().includes("/api/chat/stream") && response.request().method() === "POST",
   );
   await sendButton.click();
-  expect((await streamResponse).status()).toBe(200);
+  const response = await streamResponse;
+  expect(response.status()).toBe(200);
+  await response.finished();
   await expect(
     page.getByTestId("chat-message-user").filter({ hasText: "hello before clear" }),
   ).toBeVisible();
+  await expect(
+    page.getByTestId("chat-message-agent").filter({ hasText: /E2E mock reply: pong/i }),
+  ).toBeVisible({ timeout: 25_000 });
   await expect(suggestions).toBeHidden();
 
   await composer.fill("/clear");

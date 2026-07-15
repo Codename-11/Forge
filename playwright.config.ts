@@ -36,7 +36,7 @@ export default defineConfig({
     url: BASE_URL,
     reuseExistingServer: !process.env.CI,
     // First boot migrates + seeds + runs a full `next build`, so allow headroom.
-    timeout: 360_000,
+    timeout: Number(process.env.E2E_WEB_TIMEOUT_MS ?? 360_000),
     stdout: "pipe",
     stderr: "pipe",
   },

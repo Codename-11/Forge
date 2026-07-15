@@ -2,6 +2,7 @@ import { z } from "zod";
 import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
+  AutoDispatchMode,
   CompletionAutomation,
   CycleStatus,
   DefaultIssueAssigneeMode,
@@ -288,6 +289,8 @@ export const workspaceRouter = router({
         cycleCooldownDays: z.number().int().min(0).max(30).optional(),
         timeTrackingEnabled: z.boolean().optional(),
         attachmentQuotaMb: z.number().int().min(0).max(1_024_000).optional(),
+        autoDispatch: z.boolean().optional(),
+        autoDispatchMode: z.nativeEnum(AutoDispatchMode).optional(),
         defaultIssueAssigneeMode: z.nativeEnum(DefaultIssueAssigneeMode).optional(),
         defaultIssueAssigneeUserId: z.string().cuid().nullable().optional(),
         agentIdleTimeoutMinutes: z.number().int().min(0).max(1440).optional(),

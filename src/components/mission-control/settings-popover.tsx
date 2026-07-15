@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { trpc } from "@/lib/trpc";
@@ -33,6 +33,8 @@ function normalizeDefaultTab(value: string | null | undefined): DefaultTabPref {
 
 export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopoverProps) {
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const utils = trpc.useUtils();
   const workspace = useMaybeWorkspace();
   const workspaceId = workspace?.id ?? null;
@@ -62,12 +64,29 @@ export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopover
   const wsPref = wsPrefRaw ? normalizeDefaultTab(wsPrefRaw) : null;
   const effectivePref = wsPref ?? userPref;
 
+  useEffect(() => {
+    if (!open) return;
+    dialogRef.current?.focus();
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      setOpen(false);
+      buttonRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [open]);
+
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         type="button"
         onClick={() => setOpen((v) => !v)}
-        title="Settings"
+        title="Activity preferences"
+        aria-label="Activity preferences"
+        aria-haspopup="dialog"
+        aria-expanded={open}
         className={cn(
           "focus-ring flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:h-8 md:w-8",
         )}
@@ -78,6 +97,10 @@ export function SettingsPopover({ soundEnabled, onToggleSound }: SettingsPopover
         <>
           <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
           <div
+            ref={dialogRef}
+            role="dialog"
+            aria-label="Activity preferences"
+            tabIndex={-1}
             className="absolute right-0 top-12 z-40 w-64 rounded-md border border-border bg-card p-2 shadow-md md:top-9"
             onClick={(e) => e.stopPropagation()}
           >

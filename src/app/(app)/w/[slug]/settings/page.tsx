@@ -3,11 +3,8 @@ import Link from "next/link";
 import { Topbar } from "@/components/topbar";
 import { Section } from "@/components/settings/section";
 import { Card } from "@/components/settings/card";
-import {
-  ACCOUNT_SETTINGS_GROUP,
-  WORKSPACE_SETTINGS_GROUPS,
-  type SettingsNavItem,
-} from "@/components/settings/settings-nav";
+import { WORKSPACE_SETTINGS_GROUPS, type SettingsNavItem } from "@/components/settings/settings-nav";
+import { User } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 
@@ -64,12 +61,16 @@ export default function SettingsPage() {
             </Section>
           ))}
 
-          <Section title={ACCOUNT_SETTINGS_GROUP.label} hint={ACCOUNT_SETTINGS_GROUP.hint}>
-            <Card>
-              {ACCOUNT_SETTINGS_GROUP.items.map((item) => (
-                // Account paths are already rooted at `/settings`.
-                <EntryRow key={item.path} href={item.path} item={item} />
-              ))}
+          <Section title="Personal" hint="A separate scope: these changes follow you across workspaces.">
+            <Card as="div" className="p-4">
+              <Link href="/settings" className="focus-ring flex items-start gap-3 rounded-md p-2 hover:bg-subtle/60">
+                <User className="mt-0.5 h-4 w-4 text-muted-foreground" />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium">Open personal settings</span>
+                  <span className="mt-1 block text-xs text-muted-foreground">Profile, appearance, connected accounts, owned agent profiles, and runtime inventory.</span>
+                </span>
+                <span aria-hidden>→</span>
+              </Link>
             </Card>
           </Section>
 

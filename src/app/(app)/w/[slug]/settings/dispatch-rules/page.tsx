@@ -4,7 +4,7 @@ import Link from "next/link";
 import { toast } from "sonner";
 import { Route, GripVertical, MoreHorizontal } from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
-import { MentionEngagementPolicy, Priority } from "@prisma/client";
+import { AutoDispatchMode, MentionEngagementPolicy, Priority } from "@prisma/client";
 import type { EngagementMode } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -63,17 +63,11 @@ const EMPTY_EDITING: EditingState = {
   targetAgentId: "",
 };
 
-// Human-readable labels for the workspace auto-dispatch (fall-through)
-// modes. The page can read the current mode from `workspace.current`,
-// but the `workspace.update` mutation does not (yet) accept
-// `autoDispatchMode`, so the fall-through control is rendered read-only
-// — see the "Fall-through" section below. Setting it lives under
-// Settings → Workspace.
-const FALL_THROUGH_OPTIONS: { value: string; label: string }[] = [
-  { value: "ROUND_ROBIN", label: "Round robin" },
-  { value: "CAPABILITY_MATCH", label: "Capability match" },
-  { value: "PRIORITY_MATCH", label: "Priority match" },
-  { value: "MANUAL_ONLY", label: "Manual only" },
+const FALL_THROUGH_OPTIONS: { value: AutoDispatchMode; label: string }[] = [
+  { value: AutoDispatchMode.ROUND_ROBIN, label: "Round robin" },
+  { value: AutoDispatchMode.CAPABILITY_MATCH, label: "Capability match" },
+  { value: AutoDispatchMode.PRIORITY_MATCH, label: "Priority match" },
+  { value: AutoDispatchMode.MANUAL_ONLY, label: "Manual only" },
 ];
 
 const MENTION_POLICY_OPTIONS: {
@@ -212,7 +206,7 @@ export default function DispatchRulesPage() {
   // chosen value through `workspace.current`.
   const updateWorkspace = trpc.workspace.update.useMutation({
     onSuccess: () => {
-      toast.success("Engagement defaults saved.");
+      toast.success("Dispatch defaults saved.");
       utils.workspace.current.invalidate();
     },
     onError: (e) => toast.error(e.message),
@@ -667,46 +661,59 @@ export default function DispatchRulesPage() {
             </Card>
           </Section>
 
-          {/* Fall-through mode. The current value comes from
-              `workspace.current` (which exposes `autoDispatchMode`), but
-              `workspace.update` does not accept `autoDispatchMode`, so this
-              is rendered read-only — changing it lives under Settings →
-              Workspace. Wiring an inline mutation would require a new
-              backend field, which is out of scope here. */}
           <Section
             title="Fall-through"
-            hint="What happens when no rule matches. Set the mode under Settings → Workspace."
+            hint="What happens when no rule matches. This is the workspace's authoritative dispatch default."
           >
-            <Card as="div" className="space-y-2 p-5">
+            <Card as="div" className="space-y-4 p-5">
+              <label className="flex items-center justify-between gap-4">
+                <span>
+                  <span className="block text-sm font-medium">Automatic dispatch</span>
+                  <span className="text-meta text-muted-foreground">
+                    When off, unmatched issues stay queued for a person to assign.
+                  </span>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={workspace?.autoDispatch ?? false}
+                  disabled={updateWorkspace.isPending}
+                  onChange={(event) =>
+                    updateWorkspace.mutate({ autoDispatch: event.target.checked })
+                  }
+                  aria-label="Enable automatic dispatch"
+                />
+              </label>
               <div
                 role="radiogroup"
-                aria-label="Fall-through mode (read-only)"
-                aria-readonly="true"
+                aria-label="Fall-through mode"
                 className="inline-flex flex-wrap rounded-md border border-border bg-card/30 p-0.5"
               >
                 {FALL_THROUGH_OPTIONS.map((o) => {
                   const active = workspace?.autoDispatchMode === o.value;
                   return (
-                    <span
+                    <button
                       key={o.value}
+                      type="button"
                       role="radio"
                       aria-checked={active}
+                      disabled={updateWorkspace.isPending || !(workspace?.autoDispatch ?? false)}
+                      onClick={() => updateWorkspace.mutate({ autoDispatchMode: o.value })}
                       className={
-                        "rounded-[0.3125rem] px-3 py-1 text-xs transition-colors " +
+                        "focus-ring rounded-[0.3125rem] px-3 py-1 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 " +
                         (active
                           ? "bg-ember text-ember-foreground"
                           : "text-muted-foreground")
                       }
                     >
                       {o.label}
-                    </span>
+                    </button>
                   );
                 })}
               </div>
               <p className="text-meta text-muted-foreground">
-                Unmatched issues fall through to the workspace&rsquo;s
-                auto-dispatch mode. This reflects the current setting; change
-                it under Settings &rarr; Workspace.
+                Effective value: {workspace?.autoDispatch
+                  ? FALL_THROUGH_OPTIONS.find((option) => option.value === workspace.autoDispatchMode)?.label
+                  : "Manual assignment (automatic dispatch is off)"}.
               </p>
             </Card>
           </Section>
