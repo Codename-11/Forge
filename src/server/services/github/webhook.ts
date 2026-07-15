@@ -481,8 +481,11 @@ async function processReviewEvent(args: {
       !Array.isArray(existingMetadata.review)
         ? (existingMetadata.review as Record<string, unknown>)
         : {};
-    const existingUpdatedAt =
-      typeof existingReview.updatedAt === "string" ? Date.parse(existingReview.updatedAt) : NaN;
+    const existingTimes = [existingReview.updatedAt, existingReview.lastEventAt]
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => Date.parse(value))
+      .filter(Number.isFinite);
+    const existingUpdatedAt = existingTimes.length > 0 ? Math.max(...existingTimes) : NaN;
     const incomingUpdatedAt = submittedAt ? Date.parse(submittedAt) : NaN;
     if (
       decision &&
