@@ -89,6 +89,7 @@ export async function upsertExternalResourceFromWebhook(
       resourceType: args.snapshot.resourceType,
       number: args.snapshot.number,
     });
+    await canonicalizeGitHubResourceIdentity(tx, args);
     const key = {
       workspaceId: args.workspaceId,
       provider: args.snapshot.provider,
@@ -505,15 +506,13 @@ async function canonicalizeGitHubResourceIdentity(
   );
   if (equivalent.length === 0) return;
 
-  let canonical = equivalent.find((row) => row.repoFullName === args.snapshot.repoFullName);
-  if (!canonical) {
-    const legacy = equivalent[0]!;
-    canonical = await db.externalResource.update({
-      where: { id: legacy.id },
-      data: { repoFullName: args.snapshot.repoFullName },
-      include: { links: true },
-    });
-  }
+  const stateRank = (state: string) => (state === "merged" ? 2 : state === "closed" ? 1 : 0);
+  const canonical = equivalent.reduce((newest, row) => {
+    const newestAt = newest.externalUpdatedAt?.getTime() ?? newest.updatedAt.getTime();
+    const rowAt = row.externalUpdatedAt?.getTime() ?? row.updatedAt.getTime();
+    if (rowAt !== newestAt) return rowAt > newestAt ? row : newest;
+    return stateRank(row.state) > stateRank(newest.state) ? row : newest;
+  });
 
   // Older builds could create one row per repository spelling. Preserve every
   // issue relation on the canonical row, keeping the original link id unless
@@ -541,6 +540,12 @@ async function canonicalizeGitHubResourceIdentity(
       }
     }
     await db.externalResource.delete({ where: { id: duplicate.id } });
+  }
+  if (canonical.repoFullName !== args.snapshot.repoFullName) {
+    await db.externalResource.update({
+      where: { id: canonical.id },
+      data: { repoFullName: args.snapshot.repoFullName },
+    });
   }
 }
 
@@ -899,6 +904,10 @@ export async function recoverGenericGitHubAttachments(
       ${urlPattern},
       'i'
     ) AS matched(parts)
+    JOIN "Issue" i
+      ON i."id" = a."targetId"
+     AND i."workspaceId" = a."workspaceId"
+     AND i."deletedAt" IS NULL
     JOIN "ExternalResource" r
       ON r."workspaceId" = a."workspaceId"
      AND r."provider" = ${GITHUB_PROVIDER}

@@ -168,6 +168,49 @@ describe("GitHub webhook hardening", () => {
     ).resolves.toBe(1);
   });
 
+  it("applies webhook freshness guards across repository casing", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const merged = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        connectionMappingId: mapping.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "Acme/Forge",
+        number: 42,
+        url: "https://github.com/Acme/Forge/pull/42",
+        title: "Newest merged state",
+        state: "merged",
+        externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+
+    const result = await upsertExternalResourceFromWebhook(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Delayed open state",
+        state: "open",
+        externalUpdatedAt: new Date("2026-07-14T11:00:00Z"),
+      },
+    });
+
+    expect(result).toMatchObject({ applied: false });
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: merged.id } }),
+    ).resolves.toMatchObject({
+      repoFullName: "acme/forge",
+      title: "Newest merged state",
+      state: "merged",
+      externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+    });
+  });
+
   it("does not let an older PR webhook regress a newer merged snapshot", async () => {
     const { fixture, prisma, issue, mapping } = await setup();
     const resource = await upsertExternalResource(prisma, {
@@ -627,6 +670,26 @@ describe("GitHub webhook hardening", () => {
         state: "open",
       },
     });
+    const deletedIssue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    await prisma.issue.update({
+      where: { id: deletedIssue.id },
+      data: { deletedAt: new Date("2026-07-14T08:30:00Z") },
+    });
+    const deletedIssueAttachment = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: deletedIssue.id,
+        targetType: "issue",
+        targetId: deletedIssue.id,
+        kind: "LINK",
+        filename: "Deleted issue GitHub PR",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://github.com/acme/forge/pull/42",
+        externalUrl: "https://github.com/acme/forge/pull/42",
+        createdAt: new Date("2026-07-14T08:00:00Z"),
+      },
+    });
     const attachment = await prisma.attachment.create({
       data: {
         workspaceId: fixture.workspace.id,
@@ -651,6 +714,9 @@ describe("GitHub webhook hardening", () => {
     expect(await prisma.attachment.findUnique({ where: { id: attachment.id } })).toBeNull();
     await expect(
       prisma.attachment.findUnique({ where: { id: unmatched.id } }),
+    ).resolves.toBeTruthy();
+    await expect(
+      prisma.attachment.findUnique({ where: { id: deletedIssueAttachment.id } }),
     ).resolves.toBeTruthy();
     await expect(
       prisma.externalResourceLink.findUnique({
