@@ -146,11 +146,13 @@ export function SavedViewsBar({
   // sortKey, since the saved-view bar doesn't track sort yet.
   const matchedView = useMemo(() => {
     if (!filtersDirty || !views) return null;
-    return (
-      views.find((v) => filtersEqual(safeParseFilters(v.filters), currentFilters)) ??
-      null
-    );
+    return views.find((v) => filtersEqual(safeParseFilters(v.filters), currentFilters)) ?? null;
   }, [views, currentFilters, filtersDirty]);
+
+  // Avoid dedicating a permanent toolbar row to an empty-state sentence.
+  // The row appears as soon as there is a saved view or something useful
+  // to save.
+  if (!hasViews && !filtersDirty) return null;
 
   return (
     <>
@@ -181,16 +183,12 @@ export function SavedViewsBar({
                         e.preventDefault();
                         setOverId(v.id);
                       }}
-                      onDragLeave={() =>
-                        setOverId((o) => (o === v.id ? null : o))
-                      }
+                      onDragLeave={() => setOverId((o) => (o === v.id ? null : o))}
                       onDrop={(e) => {
                         e.preventDefault();
                         onDrop(v.id);
                       }}
-                      onClick={() =>
-                        onApply(v.id, safeParseFilters(v.filters))
-                      }
+                      onClick={() => onApply(v.id, safeParseFilters(v.filters))}
                       className={cn(
                         "focus-ring inline-flex h-6 items-center gap-1.5 rounded-full border px-2.5 transition-colors",
                         "text-meta",
@@ -202,15 +200,10 @@ export function SavedViewsBar({
                       title="Click to apply · drag to reorder"
                     >
                       <Bookmark
-                        className={cn(
-                          "h-3 w-3",
-                          isActive ? "fill-ember/60 text-ember" : "",
-                        )}
+                        className={cn("h-3 w-3", isActive ? "fill-ember/60 text-ember" : "")}
                         aria-hidden
                       />
-                      <span className="max-w-[160px] truncate">
-                        {v.name}
-                      </span>
+                      <span className="max-w-[160px] truncate">{v.name}</span>
                     </button>
                     {/* Phase 1A: per-workspace pin toggle. Lives between
                         the chip body and the ⋯ menu so it's discoverable
@@ -328,7 +321,7 @@ export function SavedViewsBar({
                   filters: currentFilters,
                 })
               }
-              className="focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-ember/40 px-2.5 text-meta text-foreground hover:bg-ember/10"
+              className="focus-ring text-meta inline-flex h-6 items-center gap-1 rounded-full border border-ember/40 px-2.5 text-foreground hover:bg-ember/10"
               title={`Overwrite "${matchedView.name}" with the current filters.`}
               disabled={update.isPending}
             >
@@ -338,7 +331,7 @@ export function SavedViewsBar({
             <button
               type="button"
               onClick={onCreate}
-              className="focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-ember/40 px-2.5 text-meta text-foreground hover:bg-ember/10"
+              className="focus-ring text-meta inline-flex h-6 items-center gap-1 rounded-full border border-dashed border-ember/40 px-2.5 text-foreground hover:bg-ember/10"
               title="Save the current filters as a brand-new view."
             >
               <BookmarkPlus className="h-3 w-3" aria-hidden />
@@ -351,16 +344,12 @@ export function SavedViewsBar({
             onClick={onCreate}
             disabled={!filtersDirty}
             className={cn(
-              "focus-ring inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2.5 text-meta",
+              "focus-ring text-meta inline-flex h-6 items-center gap-1 rounded-full border border-dashed px-2.5",
               filtersDirty
                 ? "border-ember/40 text-foreground hover:bg-ember/10"
                 : "cursor-not-allowed border-border/60 text-muted-foreground/60",
             )}
-            title={
-              filtersDirty
-                ? "Save the current filters as a view"
-                : "Apply some filters first"
-            }
+            title={filtersDirty ? "Save the current filters as a view" : "Apply some filters first"}
           >
             <BookmarkPlus className="h-3 w-3" aria-hidden />
             Save view
@@ -384,9 +373,7 @@ export function SavedViewsBar({
           if (!open) setDeleteTarget(null);
         }}
         variant="destructive"
-        title={
-          deleteTarget ? `Delete view "${deleteTarget.name}"?` : "Delete view?"
-        }
+        title={deleteTarget ? `Delete view "${deleteTarget.name}"?` : "Delete view?"}
         description="The filters are detached, but no issues are touched."
         primaryLabel="Delete"
         loading={remove.isPending}
@@ -440,12 +427,7 @@ function RenameDialog({
       }}
     >
       <QuickForm.Field label="Name" required>
-        <Input
-          autoFocus
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          maxLength={80}
-        />
+        <Input autoFocus value={name} onChange={(e) => setName(e.target.value)} maxLength={80} />
       </QuickForm.Field>
     </QuickForm>
   );

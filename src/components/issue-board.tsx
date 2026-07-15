@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { Plus } from "lucide-react";
+import { StatusCategory } from "@prisma/client";
 import { trpc } from "@/lib/trpc";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -30,6 +31,7 @@ export function IssueBoard({
   cycleId,
   initiativeId,
   extraFilters,
+  includeDone = true,
   sort,
   dueOn,
   emptyOverride,
@@ -43,6 +45,8 @@ export function IssueBoard({
   initiativeId?: string | null;
   /** Phase 1D saved-view projection. Spread into each column's `issue.list`. */
   extraFilters?: SavedViewFilters;
+  /** Whether terminal workflow columns and rows are eligible to appear. */
+  includeDone?: boolean;
   /** Within-column ordering. Forwarded to each column's query. */
   sort?: IssueSort;
   /** Single-day due-date filter (UTC `YYYY-MM-DD`), same as the list view. */
@@ -58,17 +62,16 @@ export function IssueBoard({
   const base = ws ? `/w/${ws.slug}` : "";
 
   // Total matching count across all columns — drives the filtered-empty
-  // state. Uses the same filter the columns do (includeDone defaults true
-  // for a board so the Done/Cancelled columns populate; a saved view can
-  // still override). Shares `issue.count`, so it can't drift from the list.
+  // state. The parent supplies the lifecycle baseline so switching between
+  // list and board never changes the result universe.
   const countFilter = {
-    includeDone: true,
     projectId,
     assigneeId,
     cycleId,
     initiativeId,
     dueOn,
     ...(extraFilters ?? {}),
+    includeDone,
   };
   const { data: countData } = trpc.issue.count.useQuery(countFilter);
 
@@ -79,6 +82,12 @@ export function IssueBoard({
   const statusIdFilter = extraFilters?.statusIds;
   const statusCatFilter = extraFilters?.statusCategories;
   const visibleStatuses = statuses.filter((s) => {
+    if (
+      !includeDone &&
+      (s.category === StatusCategory.DONE || s.category === StatusCategory.CANCELED)
+    ) {
+      return false;
+    }
     if (statusIdFilter?.length && !statusIdFilter.includes(s.id)) return false;
     if (statusCatFilter?.length && !statusCatFilter.includes(s.category)) return false;
     return true;
@@ -104,8 +113,8 @@ export function IssueBoard({
           workspaceKey={workspaceKey}
           projectId={projectId}
           columnFilter={{
-            includeDone: true,
             ...restFilters,
+            includeDone,
             statusIds: [s.id],
             projectId,
             assigneeId,

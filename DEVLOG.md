@@ -13187,3 +13187,35 @@ fresh production E2E build completed. The browser run passed 35 of 38 journeys
 before Chromium crashed on a memory-saturated host; each of the three reported
 journeys passed immediately in a fresh isolated browser process. Release,
 deployment, and production smoke results follow after the pull request lands.
+
+---
+
+## 2026-07-15 — Projects and issues lifecycle UX
+
+Audited the projects, project creation, global issues, and project issue flows
+from captured browser evidence. The same completed issue could previously be
+absent from the default list, visible on the default board, and hidden again
+behind an implicit Done filter, while duplicate quick filters and an empty
+saved-view row obscured what the page was actually showing.
+
+Added one explicit Open/All lifecycle scope shared by global List and Kanban
+views and by project List and Board tabs. Counts, columns, results, URLs,
+search labels, and filtered-empty recovery now use that same scope; searches
+with no open match offer a direct completed-work recovery path. Removed the
+duplicate Done quick filter, clarified updated-time filtering versus sorting,
+hid the saved-view bar when it has nothing to show, and added a clear-search
+control.
+
+Project creation now identifies required fields before submission, explains
+that the project key becomes an immutable issue-ID prefix, clears validation
+feedback as the form is corrected, gives color choices accessible names and
+selected state, and navigates directly to the created project. Starter
+templates follow the same destination. Project cards now expose explicit
+completed/total progress text and a semantic progress bar.
+
+Verification: formatting and typecheck passed; lint passed with existing
+repository warnings; the focused saved-view filter suite passed 13 tests; the
+fresh production E2E build succeeded; and both new Playwright journeys passed.
+The unconfigured full Vitest command could not run integration tests because
+this shell did not provide `DATABASE_URL` or `AUTH_SECRET`; its focused,
+dependency-free coverage passed separately.
