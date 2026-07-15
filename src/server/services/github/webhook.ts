@@ -480,6 +480,7 @@ async function processReviewEvent(args: {
   // a PR lifecycle transition. A review-first delivery may seed identity and
   // review hints, but must not make delayed opened/synchronize events stale.
   snapshot.externalUpdatedAt = null;
+  const reviewAction = args.payload.action ?? null;
   const submittedAt = args.payload.review?.submitted_at ?? null;
   const reviewState = args.payload.review?.state?.toUpperCase() ?? null;
   const decision =
@@ -530,6 +531,7 @@ async function processReviewEvent(args: {
     const existingUpdatedAt = existingTimes.length > 0 ? Math.max(...existingTimes) : NaN;
     const incomingUpdatedAt = submittedAt ? Date.parse(submittedAt) : NaN;
     if (
+      reviewAction !== "dismissed" &&
       Number.isFinite(existingUpdatedAt) &&
       Number.isFinite(incomingUpdatedAt) &&
       existingUpdatedAt > incomingUpdatedAt
@@ -541,13 +543,20 @@ async function processReviewEvent(args: {
     // aggregate and make every individual event a refresh hint.
     const persistedDecision =
       typeof existingMetadata.reviewDecision === "string" ? existingMetadata.reviewDecision : null;
+    // GitHub's dismissed payload retains the original review submitted_at;
+    // it does not timestamp the dismissal. Accept the invalidation without
+    // rewinding a newer webhook watermark.
+    const lastEventAt =
+      reviewAction === "dismissed" && typeof existingReview.lastEventAt === "string"
+        ? existingReview.lastEventAt
+        : (submittedAt ?? new Date().toISOString());
     const review = {
       ...existingReview,
       source: "webhook-hint",
       dirty: true,
       lastEventDecision: decision,
       lastEventState: reviewState,
-      lastEventAt: submittedAt ?? new Date().toISOString(),
+      lastEventAt,
       lastReviewId: args.payload.review?.id ?? null,
       lastReviewer: args.payload.review?.user?.login ?? null,
     };

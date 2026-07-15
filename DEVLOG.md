@@ -12986,7 +12986,7 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught twenty-five identity/bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught twenty-six identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
@@ -13035,9 +13035,12 @@ link issue keys and apply configured lifecycle rules.
 Legacy attachment recovery compares captured GitHub numbers as normalized text
 rather than casting untrusted URL digits to `int4`, so an oversized malformed
 link cannot abort a reconciliation sweep or starve valid recovery candidates.
+Review-dismissed webhooks bypass submission-time staleness because GitHub
+retains the original review timestamp; they dirty the provider aggregate while
+preserving any newer webhook watermark instead of rewinding it.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
-55 tests; lint passed with existing repository warnings; typecheck passed; and
+56 tests; lint passed with existing repository warnings; typecheck passed; and
 the CI-style serial Vitest gate passed 1,274 tests with one intentional live
 connector skip. The canonical parallel gate also passed 1,274 tests and the
 fresh production E2E build completed. The browser run passed 35 of 38 journeys

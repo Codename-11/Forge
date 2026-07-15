@@ -1144,6 +1144,64 @@ describe("GitHub webhook hardening", () => {
     ).resolves.toBe(1);
   });
 
+  it("accepts a review dismissal without rewinding its submission watermark", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Dismissed review",
+        state: "open",
+        metadata: {
+          reviewDecision: "APPROVED",
+          review: {
+            decision: "APPROVED",
+            updatedAt: "2026-07-14T15:00:00Z",
+            lastEventAt: "2026-07-14T14:00:00Z",
+          },
+        },
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("dismiss-old-review"),
+      event: "pull_request_review",
+      payload: {
+        action: "dismissed",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest(),
+        review: {
+          id: 807,
+          state: "dismissed",
+          submitted_at: "2026-07-14T13:00:00Z",
+          user: { login: "reviewer" },
+        },
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      lastSyncedAt: null,
+      metadata: {
+        reviewDecision: "APPROVED",
+        review: {
+          dirty: true,
+          lastEventState: "DISMISSED",
+          lastEventAt: "2026-07-14T14:00:00Z",
+        },
+      },
+    });
+  });
+
   it("canonicalizes legacy identity before applying review hints", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await prisma.externalResource.create({
