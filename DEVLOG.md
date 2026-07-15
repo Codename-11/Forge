@@ -13234,3 +13234,30 @@ fresh production E2E build succeeded; and both new Playwright journeys passed.
 The unconfigured full Vitest command could not run integration tests because
 this shell did not provide `DATABASE_URL` or `AUTH_SECRET`; its focused,
 dependency-free coverage passed separately.
+
+---
+
+## 2026-07-15 — MCP delivery timeline contract
+
+Closed the gap between dispatched AgentRun guidance and ordinary MCP code-work
+sessions. The native Streamable HTTP handshake now teaches agents to claim and
+heartbeat delivery sessions, keep mechanical traces out of comments, use
+rolling status comments for meaningful phase changes, and leave one durable
+implementation/PR/validation handoff on the issue.
+
+Added a settings-driven `DeliveryTimelinePolicy` with Off, Recommend, Require
+on PR, and Auto on PR modes. `workSessions.attachPullRequest` accepts an
+optional `timelineUpdate`; strict workspaces reject missing updates, automatic
+workspaces synthesize a concise agent-authored PR handoff, and recommended
+workspaces return an explicit `comments.create` next action plus a suggested
+template. PR attachment, comment creation, watcher enrollment, audit/event
+fan-out, and delivery-state advancement occur atomically. Reattaching the same
+PR is idempotent and cannot duplicate the automatic comment. The settings UI
+explains each policy, and MCP tool descriptions put the human-facing contract
+at the relevant decision points.
+
+Verification: Prisma schema validation, typecheck, and lint passed (existing
+repository warnings only); the focused work-session suite passed 8 tests; the
+full Vitest gate passed 1,316 tests with one intentional live skip; the fresh
+production build succeeded; and the focused settings Playwright journey
+passed.

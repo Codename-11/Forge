@@ -124,7 +124,13 @@ export const workSessionRouter = router({
     }),
 
   attachPullRequest: workspaceProcedure
-    .input(z.object({ sessionId: z.string().cuid(), externalResourceId: z.string().cuid() }))
+    .input(
+      z.object({
+        sessionId: z.string().cuid(),
+        externalResourceId: z.string().cuid(),
+        timelineUpdate: z.object({ body: z.string().trim().min(1).max(50_000) }).optional(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       await assertSessionManager(ctx, input.sessionId);
       return attachPullRequest(ctx.db, {
