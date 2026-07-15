@@ -9,6 +9,18 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.21.0 · Clear project and issue scope
+
+### Added
+
+- **Issue lists and boards share one visible lifecycle scope.** Open and All apply consistently across global and project views, remain encoded in the URL, and offer a direct recovery path when completed work matches a search.
+- **Project creation explains its durable choices.** Required fields, immutable issue-key behavior, accessible color selection, inline validation recovery, and direct navigation to the created project make setup predictable.
+
+### Changed
+
+- **Issue filtering exposes only meaningful controls.** Redundant Done filtering and empty saved-view chrome are removed, updated-time filtering is distinguished from sorting, and active searches can be cleared directly.
+- **Project progress is readable and accessible.** Cards show completed and total issue counts alongside semantic progress indicators.
+
 ## [2026-07-15] — v0.20.1 · Clean-checkout deployment
 
 ### Fixed

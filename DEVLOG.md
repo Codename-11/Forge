@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — v0.21.0 release
+
+Merged AXI-108 through PR #40 and prepared the feature release from the exact
+merged `main` commit. The release records the unified Open/All issue lifecycle
+scope, clearer issue filtering, improved project creation guidance, and
+accessible project progress presentation. Release validation, deployment, and
+live smoke evidence are recorded with the tagged release.
+
 ## 2026-07-15 — Scheduled Tasks review follow-up
 
 Addressed the Codex reviews on AXI-92. Manual Run now treats a lost atomic
