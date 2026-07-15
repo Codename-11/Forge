@@ -1392,6 +1392,21 @@ describe("GitHub webhook hardening", () => {
         createdAt: new Date("2026-07-14T09:00:00Z"),
       },
     });
+    const oversized = await prisma.attachment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        targetType: "issue",
+        targetId: issue.id,
+        kind: "LINK",
+        filename: "Oversized GitHub PR number",
+        mimeType: "text/url",
+        size: 0,
+        url: "https://github.com/acme/forge/pull/999999999999999999999999999999999",
+        externalUrl: "https://github.com/acme/forge/pull/999999999999999999999999999999999",
+        createdAt: new Date("2026-07-14T07:00:00Z"),
+      },
+    });
     const resource = await upsertExternalResource(prisma, {
       workspaceId: fixture.workspace.id,
       connectionMappingId: mapping.id,
@@ -1449,6 +1464,9 @@ describe("GitHub webhook hardening", () => {
     expect(await prisma.attachment.findUnique({ where: { id: attachment.id } })).toBeNull();
     await expect(
       prisma.attachment.findUnique({ where: { id: unmatched.id } }),
+    ).resolves.toBeTruthy();
+    await expect(
+      prisma.attachment.findUnique({ where: { id: oversized.id } }),
     ).resolves.toBeTruthy();
     await expect(
       prisma.attachment.findUnique({ where: { id: deletedIssueAttachment.id } }),

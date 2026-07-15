@@ -933,7 +933,7 @@ export async function recoverGenericGitHubAttachments(
        WHEN lower((matched.parts)[3]) = 'pull' THEN 'PULL_REQUEST'
        ELSE 'ISSUE'
      END
-     AND r."number" = ((matched.parts)[4])::integer
+     AND r."number"::text = COALESCE(NULLIF(ltrim((matched.parts)[4], '0'), ''), '0')
     WHERE a."kind" = 'LINK'
       AND a."targetType" = 'issue'
       AND a."targetId" IS NOT NULL
