@@ -483,7 +483,68 @@ export async function fetchGitHubSnapshot(args: {
   );
 }
 
-export async function upsertExternalResource(
+async function canonicalizeGitHubResourceIdentity(
+  db: DbClient,
+  args: {
+    workspaceId: string;
+    snapshot: GitHubResourceSnapshot;
+  },
+): Promise<void> {
+  const candidates = await db.externalResource.findMany({
+    where: {
+      workspaceId: args.workspaceId,
+      provider: args.snapshot.provider,
+      resourceType: args.snapshot.resourceType,
+      number: args.snapshot.number,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    include: { links: true },
+  });
+  const equivalent = candidates.filter((row) =>
+    sameRepo(row.repoFullName, args.snapshot.repoFullName),
+  );
+  if (equivalent.length === 0) return;
+
+  let canonical = equivalent.find((row) => row.repoFullName === args.snapshot.repoFullName);
+  if (!canonical) {
+    const legacy = equivalent[0]!;
+    canonical = await db.externalResource.update({
+      where: { id: legacy.id },
+      data: { repoFullName: args.snapshot.repoFullName },
+      include: { links: true },
+    });
+  }
+
+  // Older builds could create one row per repository spelling. Preserve every
+  // issue relation on the canonical row, keeping the original link id unless
+  // the same issue/kind relation already exists there.
+  for (const duplicate of equivalent) {
+    if (duplicate.id === canonical.id) continue;
+    for (const link of duplicate.links) {
+      const collision = await db.externalResourceLink.findUnique({
+        where: {
+          issueId_externalResourceId_kind: {
+            issueId: link.issueId,
+            externalResourceId: canonical.id,
+            kind: link.kind,
+          },
+        },
+        select: { id: true },
+      });
+      if (collision) {
+        await db.externalResourceLink.delete({ where: { id: link.id } });
+      } else {
+        await db.externalResourceLink.update({
+          where: { id: link.id },
+          data: { externalResourceId: canonical.id },
+        });
+      }
+    }
+    await db.externalResource.delete({ where: { id: duplicate.id } });
+  }
+}
+
+async function upsertExternalResourceInTransaction(
   db: DbClient,
   args: {
     workspaceId: string;
@@ -492,6 +553,13 @@ export async function upsertExternalResource(
   },
 ): Promise<ExternalResource> {
   const now = new Date();
+  await acquireGitHubResourceOrderLock(db, {
+    workspaceId: args.workspaceId,
+    repoFullName: args.snapshot.repoFullName,
+    resourceType: args.snapshot.resourceType,
+    number: args.snapshot.number,
+  });
+  await canonicalizeGitHubResourceIdentity(db, args);
   const existing = await db.externalResource.findUnique({
     where: {
       workspaceId_provider_repoFullName_resourceType_number: {
@@ -617,6 +685,20 @@ export async function upsertExternalResource(
     },
   });
   return row;
+}
+
+export async function upsertExternalResource(
+  db: DbClient,
+  args: {
+    workspaceId: string;
+    connectionMappingId?: string | null;
+    snapshot: GitHubResourceSnapshot;
+  },
+): Promise<ExternalResource> {
+  if ("$transaction" in db) {
+    return db.$transaction((tx) => upsertExternalResourceInTransaction(tx, args));
+  }
+  return upsertExternalResourceInTransaction(db, args);
 }
 
 export async function linkExternalResourceToIssue(

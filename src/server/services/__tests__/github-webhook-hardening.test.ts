@@ -114,6 +114,60 @@ describe("GitHub webhook hardening", () => {
     expect(result).toMatchObject({ processed: 0, skipped: "no-mapping" });
   });
 
+  it("canonicalizes repository casing without orphaning existing issue links", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const legacy = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        connectionMappingId: mapping.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "Acme/Forge",
+        number: 42,
+        url: "https://github.com/Acme/Forge/pull/42",
+        title: "Legacy casing",
+        state: "open",
+      },
+    });
+    const link = await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        externalResourceId: legacy.id,
+        kind: "IMPLEMENTS",
+      },
+    });
+
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Canonical casing",
+        state: "open",
+      },
+    });
+
+    expect(resource).toMatchObject({ id: legacy.id, repoFullName: "acme/forge" });
+    await expect(
+      prisma.externalResourceLink.findUniqueOrThrow({ where: { id: link.id } }),
+    ).resolves.toMatchObject({ externalResourceId: resource.id, issueId: issue.id });
+    await expect(
+      prisma.externalResource.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          provider: "GITHUB",
+          resourceType: "PULL_REQUEST",
+          number: 42,
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("does not let an older PR webhook regress a newer merged snapshot", async () => {
     const { fixture, prisma, issue, mapping } = await setup();
     const resource = await upsertExternalResource(prisma, {

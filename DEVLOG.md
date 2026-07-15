@@ -12930,14 +12930,16 @@ native relations without provider calls. Native sync no longer substitutes a
 separate runtime-auth GitHub App, and the documented instance-app permissions
 now include checks, commit statuses, and the `status` webhook event.
 
-PR review caught two bounded-prefix/race edge cases before merge. Lifecycle
+PR review caught three identity/bounded-prefix/race edge cases before merge. Lifecycle
 rules now compare the provider's lifecycle version rather than volatile check
 metadata, so a concurrent check hint cannot suppress a merged/closed action.
 Legacy-link recovery selects only attachments with an existing matching native
 resource, so permanently unmatched links cannot starve recoverable rows.
+Canonical repo casing now rekeys the existing resource and preserves or merges
+its issue relations instead of creating a new unlinked canonical row.
 
 Verification: the focused GitHub/client/reconciliation/completion suites passed
-41 tests; lint passed with existing repository warnings; typecheck passed; and
+42 tests; lint passed with existing repository warnings; typecheck passed; and
 the CI-style serial Vitest gate passed 1,274 tests with one intentional live
 connector skip. The canonical parallel gate also passed 1,274 tests and the
 fresh production E2E build completed. The browser run passed 35 of 38 journeys
