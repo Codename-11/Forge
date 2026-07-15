@@ -99,6 +99,16 @@ const taskInclude = {
   },
 };
 
+export function requireClaimedManualRun<T>(result: T | null): T {
+  if (!result) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "The task changed before the run could start. Refresh and try again.",
+    });
+  }
+  return result;
+}
+
 export const scheduledTaskRouter = router({
   list: workspaceProcedure.query(({ ctx }) =>
     ctx.db.scheduledTask.findMany({
@@ -360,10 +370,11 @@ export const scheduledTaskRouter = router({
         throw new TRPCError({ code: "CONFLICT", message: "This task is already running." });
       }
       const { executeScheduledTask } = await import("@/server/services/scheduled-task");
-      return executeScheduledTask({
+      const result = await executeScheduledTask({
         taskId: task.id,
         trigger: ScheduledTaskRunTrigger.MANUAL,
         actorId: ctx.session.user.id,
       });
+      return requireClaimedManualRun(result);
     }),
 });

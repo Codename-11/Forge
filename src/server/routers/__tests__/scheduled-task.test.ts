@@ -6,7 +6,10 @@ import {
   ScheduledTaskRunTrigger,
   ScheduledTaskScheduleType,
 } from "@prisma/client";
-import { scheduledTaskRouter } from "@/server/routers/scheduled-task";
+import {
+  requireClaimedManualRun,
+  scheduledTaskRouter,
+} from "@/server/routers/scheduled-task";
 import { executeScheduledTask, sweepScheduledTasks } from "@/server/services/scheduled-task";
 import {
   buildContext,
@@ -47,6 +50,10 @@ const dailySchedule = {
 } as const;
 
 describe("scheduledTaskRouter", () => {
+  it("rejects a manual run when its atomic claim is lost", () => {
+    expect(() => requireClaimedManualRun(null)).toThrow(/changed before the run could start/i);
+  });
+
   it("supports create, list, edit, pause, resume, run now, history, and confirmed delete", async () => {
     const { caller, project } = await setup();
     const created = await caller.create({

@@ -2,6 +2,13 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — Scheduled Tasks review follow-up
+
+Addressed the Codex review on AXI-92. Manual Run now treats a lost atomic
+claim as a conflict instead of reporting a false success, and the worker's
+global due-task sweep has an `enabled, nextRunAt` index matching its filter
+and ordering. Added focused regression coverage for the lost-claim guard.
+
 ## 2026-07-15 — Read-only GitHub sync health refresh
 
 Closed the post-release usability gap in workspace GitHub App settings. Added a
