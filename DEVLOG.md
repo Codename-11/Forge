@@ -43,6 +43,13 @@ dashboard widget expectation corrected and both affected specs passing in a
 serial follow-up **4/4**. The unrelated chat `/clear` timing case also passed in
 that serial follow-up.
 
+The pre-merge Codex review identified two narrowing-boundary omissions and one
+heartbeat race. `workSessions.list` and `workSessions.claim` now enforce the
+calling API key's project/label/initiative scope before reading or leasing an
+issue. The stale sweep now atomically rechecks both status and heartbeat cutoff
+when claiming a session for transition, so a concurrent heartbeat wins instead
+of being overwritten. Focused regression coverage now passes **13/13**.
+
 ## 2026-07-15 — Read-only GitHub sync health refresh
 
 Closed the post-release usability gap in workspace GitHub App settings. Added a

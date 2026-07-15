@@ -512,13 +512,21 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
       },
     });
     for (const session of sessions) {
-      await db.$transaction(async (tx) => {
-        const updated = await tx.workSession.update({
-          where: { id: session.id },
+      const markedStale = await db.$transaction(async (tx) => {
+        const claimed = await tx.workSession.updateMany({
+          where: {
+            id: session.id,
+            status: { in: [...STALEABLE_WORK_SESSION_STATUSES] },
+            lastHeartbeatAt: { lt: cutoff },
+          },
           data: { status: WorkSessionStatus.STALE, staleAt: new Date() },
         });
+        if (claimed.count === 0) return null;
+        const updated = await tx.workSession.findUniqueOrThrow({ where: { id: session.id } });
         await auditSession(tx, session, { userId: null }, "work-session-stale", session, updated);
+        return updated;
       });
+      if (!markedStale) continue;
       const issue = await db.issue.findUnique({
         where: { id: session.issueId },
         select: { authorId: true, workspace: { select: { key: true } }, number: true },
@@ -532,8 +540,8 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
           `${workspace.workSessionStaleMinutes} minutes. Resume the existing session or abandon it before starting replacement work.`,
         severity: NotificationSeverity.WARNING,
         kind: ActionRequestKind.FREE_FORM,
-        assignedUserId: session.ownerUserId ?? issue?.authorId ?? null,
-        assignedAgentId: session.ownerAgentId,
+        assignedUserId: markedStale.ownerUserId ?? issue?.authorId ?? null,
+        assignedAgentId: markedStale.ownerAgentId,
         sourceType: "work-session",
         sourceId: session.id,
         dedupeKey: `work-session-stale:${session.id}`,

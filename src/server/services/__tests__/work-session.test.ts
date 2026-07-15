@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { WorkSessionSource } from "@prisma/client";
+import { mcpTools, type McpContext } from "@/server/services/mcp";
 import {
   advanceWorkSession,
   attachPullRequest,
@@ -175,5 +176,81 @@ describe("work session coordination", () => {
       }),
     ).toBe(1);
     expect(await sweepStaleWorkSessions(prisma)).toBe(0);
+  });
+
+  it("enforces narrowed API-key scope for listing and claiming sessions", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const allowedProject = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: `AL${Date.now().toString().slice(-6)}`,
+        name: "Allowed lane",
+        createdById: fixture.user.id,
+      },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `scoped-${Date.now()}`,
+        name: "Scoped agent",
+      },
+    });
+    const ctx = {
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      pluginId: null,
+      apiKey: {
+        keyId: "scoped-key",
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        pluginId: null,
+        scopes: ["READ_ISSUES", "WRITE_ISSUES"],
+        projectIds: [allowedProject.id],
+        labelIds: [],
+        initiativeIds: [],
+        linkedAgentId: agent.id,
+      },
+    } as unknown as McpContext;
+
+    await expect(
+      mcpTools["workSessions.list"].run({ issueId: issue.id } as never, ctx),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      mcpTools["workSessions.claim"].run(
+        {
+          issueId: issue.id,
+          repoFullName: "acme/forge",
+          branch: "agent/out-of-scope",
+          baseBranch: "main",
+        } as never,
+        ctx,
+      ),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(await prisma.workSession.count({ where: { issueId: issue.id } })).toBe(0);
+  });
+
+  it("leaves recently refreshed work active during the stale sweep", async () => {
+    const { fixture, prisma, issue } = await setup();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { workSessionStaleMinutes: 1 },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/refreshed-before-sweep",
+      source: WorkSessionSource.CODEX_DESKTOP,
+      actor: { userId: fixture.user.id },
+    });
+    await prisma.workSession.update({
+      where: { id: session.id },
+      data: { lastHeartbeatAt: new Date() },
+    });
+
+    expect(await sweepStaleWorkSessions(prisma)).toBe(0);
+    expect((await prisma.workSession.findUniqueOrThrow({ where: { id: session.id } })).status).toBe(
+      "CLAIMED",
+    );
   });
 });

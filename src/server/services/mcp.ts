@@ -7878,6 +7878,7 @@ export const mcpTools = {
     scopes: ["READ_ISSUES"] as const,
     input: z.object({ issueId: z.string().cuid() }),
     async run(input: { issueId: string }, ctx: McpContext) {
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       return listIssueWorkSessions(db, ctx.workspaceId, input.issueId);
     },
   },
@@ -7913,6 +7914,7 @@ export const mcpTools = {
     ) {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) throw new Error("workSessions.claim requires a linked agent key.");
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       return claimWorkSession(db, {
         workspaceId: ctx.workspaceId,
         ...input,
