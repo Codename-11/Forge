@@ -7,7 +7,7 @@ export default function GithubAppsPage() {
     <>
       <Topbar
         title="GitHub Apps"
-        subtitle="Shared GitHub Apps for runtime git auth — install once, mint short-lived tokens."
+        subtitle="Realtime issue and PR sync plus short-lived runtime git credentials."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">

@@ -66,9 +66,9 @@ export async function isWorkspaceAdmin(
 
 /**
  * The GitHub App manifest. Minimal permissions for git work (clone/push/PR) +
- * metadata. Webhooks are inactive — this app is for runtime git auth, not the
- * instance issue-sync app. `redirect_url` receives the conversion `code`;
- * `setup_url` receives the post-install `installation_id`.
+ * metadata. The same app also owns native issue/PR sync so operators do not
+ * have to configure a second instance-level app. `redirect_url` receives the
+ * conversion `code`; `setup_url` receives the post-install `installation_id`.
  */
 export function buildManifest(opts: { origin: string; name: string }): Record<string, unknown> {
   return {
@@ -81,9 +81,20 @@ export function buildManifest(opts: { origin: string; name: string }): Record<st
     default_permissions: {
       contents: "write",
       pull_requests: "write",
+      issues: "read",
+      checks: "write",
+      statuses: "read",
       metadata: "read",
     },
-    default_events: [],
-    hook_attributes: { url: `${opts.origin}/api/ingest/github`, active: false },
+    default_events: [
+      "issues",
+      "issue_comment",
+      "pull_request",
+      "pull_request_review",
+      "check_suite",
+      "check_run",
+      "status",
+    ],
+    hook_attributes: { url: `${opts.origin}/api/ingest/github`, active: true },
   };
 }

@@ -11577,6 +11577,33 @@ prod build. Green.
 
 ---
 
+## 2026-07-15 — Unified workspace GitHub webhooks and legacy-link migration
+
+Closed the two operational gaps left after v0.18.0. Workspace `GithubApp` rows
+now store encrypted current/previous webhook HMAC secrets and can configure the
+GitHub App webhook through app-JWT authentication. Signature verification
+selects secrets by the payload installation and retains the instance env secret
+only as a fallback. Secret rotation stages both credentials until GitHub accepts
+the new endpoint, so a crash on either side cannot sever delivery authentication.
+
+The manifest flow now creates one App for runtime git credentials and native
+issue/PR sync, with active webhooks and the required issue, pull-request,
+review, check, and commit-status events. Workspace Settings shows realtime vs.
+polling state and offers an explicit enable/rotate action without exposing any
+secret.
+
+Added a bounded operator-only migration for old generic GitHub attachments.
+It scans live issue targets, resolves at most 100 URLs sequentially through the
+existing tenant-scoped mapping/client path, creates the native relation first,
+and deletes the generic attachment only after success. Dry-run and per-row
+failure reporting make the production backfill reviewable and safely rerunnable.
+
+Verification before PR: Prisma migration applied to the development database;
+typecheck and lint passed (existing warnings only); 39 focused manifest,
+GitHub-App router, webhook, and migration tests passed.
+
+---
+
 ## 2026-05-25 — Command Center: inline issue status on asks
 
 Bailey noticed the "Asks for you" cards offered only Accept/Decline. When an

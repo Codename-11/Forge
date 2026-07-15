@@ -18,9 +18,21 @@ describe("github-app manifest helpers", () => {
     expect(m.default_permissions).toEqual({
       contents: "write",
       pull_requests: "write",
+      issues: "read",
+      checks: "write",
+      statuses: "read",
       metadata: "read",
     });
-    expect((m.hook_attributes as { active: boolean }).active).toBe(false);
+    expect(m.default_events).toEqual([
+      "issues",
+      "issue_comment",
+      "pull_request",
+      "pull_request_review",
+      "check_suite",
+      "check_run",
+      "status",
+    ]);
+    expect((m.hook_attributes as { active: boolean }).active).toBe(true);
   });
 
   it("round-trips signed state and rejects tampered/garbage tokens", () => {

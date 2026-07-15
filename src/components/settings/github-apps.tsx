@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Loader2,
   Pencil,
+  Webhook,
 } from "lucide-react";
 import { Section } from "@/components/ui";
 import { Card } from "@/components/settings/card";
@@ -31,8 +32,8 @@ type VerifyResult = {
 /**
  * Workspace GitHub Apps — shared git auth for runtimes. Create one via the
  * manifest flow (GitHub generates the key, no paste) or by pasting credentials,
- * install it on your org, and point runtimes at it. Forge mints a short-lived
- * token into GH_TOKEN at provision time.
+ * install it on your org, and point runtimes at it. The same app can provide
+ * realtime issue/PR sync and short-lived runtime GH_TOKEN credentials.
  */
 export function GithubAppsManager() {
   const ws = useWorkspace();
@@ -87,7 +88,7 @@ export function GithubAppsManager() {
           <span className="font-mono text-meta text-muted-foreground">{apps?.length ?? 0}</span>
         </span>
       }
-      hint="Shared GitHub Apps for runtime git auth. Install one app, manage repo access on GitHub, and point runtimes at it — Forge mints a short-lived token into GH_TOKEN automatically. No per-repo keys."
+      hint="One workspace GitHub App for realtime issue/PR sync and runtime git auth. Forge verifies signed webhooks and mints short-lived GH_TOKEN credentials without per-repo keys."
     >
       <Card as="div" className="divide-y-0 p-0">
         {isLoading ? (
@@ -175,6 +176,8 @@ type AppListItem = {
   createdViaManifest: boolean;
   lastMintedAt: Date | string | null;
   lastError: string | null;
+  webhookConfiguredAt: Date | string | null;
+  webhookLastError: string | null;
   runtimeCount: number;
   installed: boolean;
 };
@@ -216,6 +219,15 @@ function AppRow({
     },
     onError: (e) => toast.error(e.message),
   });
+  const configureWebhook = trpc.githubApp.configureWebhook.useMutation({
+    onSuccess: (result) => {
+      onChanged();
+      if (result.readiness?.ready) toast.success("GitHub realtime sync enabled");
+      else
+        toast.warning("Webhook endpoint secured; review the App events and permissions on GitHub");
+    },
+    onError: (e) => toast.error(e.message),
+  });
 
   const installHref = app.slug
     ? `https://github.com/apps/${app.slug}/installations/new`
@@ -236,6 +248,19 @@ function AppRow({
         )}
         {app.createdViaManifest && (
           <span className="text-[0.625rem] text-muted-foreground">via GitHub</span>
+        )}
+        {app.webhookConfiguredAt && !app.webhookLastError ? (
+          <span className="rounded-md border border-emerald-600/30 bg-emerald-600/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-emerald-700 dark:text-emerald-400">
+            realtime sync
+          </span>
+        ) : app.webhookLastError ? (
+          <span className="rounded-md border border-amber-600/30 bg-amber-600/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:text-amber-500">
+            action required
+          </span>
+        ) : (
+          <span className="rounded-md border border-amber-600/30 bg-amber-600/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-amber-700 dark:text-amber-500">
+            polling only
+          </span>
         )}
         <span className="ml-auto text-meta text-muted-foreground/70">
           {app.runtimeCount} runtime{app.runtimeCount === 1 ? "" : "s"}
@@ -259,6 +284,25 @@ function AppRow({
         lastError={app.lastError}
         testResult={testResult}
       />
+      {app.webhookLastError && (
+        <div className="flex flex-wrap items-start gap-2 text-meta text-amber-700 dark:text-amber-500">
+          <p className="inline-flex items-start gap-1.5">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Webhook: {app.webhookLastError}
+          </p>
+          {app.slug && (
+            <a
+              href={`https://github.com/apps/${app.slug}`}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 underline underline-offset-2"
+            >
+              Review App settings
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          )}
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 pt-0.5">
         <Button
@@ -275,6 +319,25 @@ function AppRow({
             <ShieldCheck className="h-3.5 w-3.5" />
           )}
           Test connection
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => configureWebhook.mutate({ id: app.id })}
+          disabled={configureWebhook.isPending || !app.installed}
+          title={
+            app.installed
+              ? "Configure Forge as this app's signed webhook endpoint"
+              : "Install the app first"
+          }
+        >
+          {configureWebhook.isPending ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <Webhook className="h-3.5 w-3.5" />
+          )}
+          {app.webhookConfiguredAt ? "Rotate webhook secret" : "Enable realtime sync"}
         </Button>
         {installHref && (
           <a

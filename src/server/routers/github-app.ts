@@ -3,7 +3,11 @@ import { TRPCError } from "@trpc/server";
 import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { encryptSecret, decryptSecret } from "@/server/crypto";
-import { verifyGithubApp, invalidateInstallationToken } from "@/server/services/github-app";
+import {
+  configureStoredGithubAppWebhook,
+  verifyGithubApp,
+  invalidateInstallationToken,
+} from "@/server/services/github-app";
 
 /**
  * Workspace-scoped **GitHub App** management for runtime git auth. One app can
@@ -56,8 +60,33 @@ const appSelect = {
   createdViaManifest: true,
   lastMintedAt: true,
   lastError: true,
+  webhookConfiguredAt: true,
+  webhookLastError: true,
   updatedAt: true,
 } as const;
+
+function forgeWebhookUrl(): string {
+  const configured = process.env.AUTH_URL?.trim() || process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (!configured) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Set AUTH_URL before enabling GitHub webhooks.",
+    });
+  }
+  let url: URL;
+  try {
+    url = new URL("/api/ingest/github", configured);
+  } catch {
+    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "AUTH_URL is not a valid URL." });
+  }
+  if (url.protocol !== "https:" && url.hostname !== "localhost" && url.hostname !== "127.0.0.1") {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "GitHub webhooks require an HTTPS public URL.",
+    });
+  }
+  return url.toString();
+}
 
 /** Confirm an app belongs to the caller's workspace, or 404. */
 async function assertAppInWorkspace(
@@ -199,6 +228,28 @@ export const githubAppRouter = router({
       } catch (e) {
         const message = e instanceof Error ? e.message : "GitHub App check failed.";
         await ctx.db.githubApp.update({ where: { id: app.id }, data: { lastError: message } });
+        throw new TRPCError({ code: "BAD_REQUEST", message });
+      }
+    }),
+
+  /**
+   * Make this workspace App authoritative for native issue/PR webhooks. The
+   * secret rotates with an old+new grace pair so a process interruption cannot
+   * leave GitHub and Forge unable to authenticate each other.
+   */
+  configureWebhook: adminProcedure
+    .input(z.object({ id: appId }))
+    .mutation(async ({ ctx, input }) => {
+      const url = forgeWebhookUrl();
+      try {
+        return await configureStoredGithubAppWebhook({
+          db: ctx.db,
+          githubAppId: input.id,
+          workspaceId: ctx.workspaceId,
+          url,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "GitHub webhook setup failed.";
         throw new TRPCError({ code: "BAD_REQUEST", message });
       }
     }),

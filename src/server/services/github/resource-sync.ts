@@ -960,6 +960,101 @@ export async function recoverGenericGitHubAttachments(
   return { inspected: candidates.length, recovered, unmatched: 0 };
 }
 
+/**
+ * Explicit, provider-backed migration for legacy GitHub link attachments that
+ * do not yet have a native ExternalResource row. Unlike the recurring repair
+ * sweep, this is only called by an operator-run maintenance command: the
+ * bounded sequential budget prevents an untracked retry/rate-limit loop.
+ */
+export async function migrateGenericGitHubAttachments(
+  db: PrismaClient,
+  options: { workspaceId?: string; limit?: number; dryRun?: boolean } = {},
+): Promise<{
+  inspected: number;
+  migrated: number;
+  failed: number;
+  candidates: Array<{ attachmentId: string; issueId: string; workspaceId: string }>;
+  failures: Array<{ attachmentId: string; message: string }>;
+}> {
+  const limit = Math.max(1, Math.min(options.limit ?? 25, 100));
+  const workspaceFilter = options.workspaceId
+    ? Prisma.sql`AND a."workspaceId" = ${options.workspaceId}`
+    : Prisma.empty;
+  const rows = await db.$queryRaw<
+    Array<{
+      attachmentId: string;
+      workspaceId: string;
+      issueId: string;
+      url: string;
+    }>
+  >(Prisma.sql`
+    SELECT
+      a."id" AS "attachmentId",
+      a."workspaceId",
+      a."targetId" AS "issueId",
+      COALESCE(NULLIF(a."externalUrl", ''), a."url") AS "url"
+    FROM "Attachment" a
+    JOIN "Issue" i
+      ON i."id" = a."targetId"
+     AND i."workspaceId" = a."workspaceId"
+     AND i."deletedAt" IS NULL
+    WHERE a."kind" = 'LINK'
+      AND a."targetType" = 'issue'
+      AND a."targetId" IS NOT NULL
+      AND COALESCE(NULLIF(a."externalUrl", ''), a."url") ~* ${
+        "^https?://(?:www\\.)?github\\.com/[^/]+/[^/]+/(?:issues|pull)/[0-9]+(?:[/?#].*)?$"
+      }
+      ${workspaceFilter}
+    ORDER BY a."createdAt" ASC, a."id" ASC
+    LIMIT ${limit}
+  `);
+  const candidates = rows.map(({ attachmentId, issueId, workspaceId }) => ({
+    attachmentId,
+    issueId,
+    workspaceId,
+  }));
+  if (options.dryRun) {
+    return { inspected: rows.length, migrated: 0, failed: 0, candidates, failures: [] };
+  }
+
+  let migrated = 0;
+  const failures: Array<{ attachmentId: string; message: string }> = [];
+  for (const row of rows) {
+    try {
+      await linkGitHubUrlToIssue({
+        db,
+        workspaceId: row.workspaceId,
+        issueId: row.issueId,
+        url: row.url,
+        kind: "RELATES_TO",
+        actor: { actorId: null },
+      });
+      const deleted = await db.attachment.deleteMany({
+        where: {
+          id: row.attachmentId,
+          workspaceId: row.workspaceId,
+          kind: "LINK",
+          targetType: "issue",
+          targetId: row.issueId,
+        },
+      });
+      if (deleted.count === 1) migrated += 1;
+    } catch (error) {
+      failures.push({
+        attachmentId: row.attachmentId,
+        message: (error instanceof Error ? error.message : "Migration failed.").slice(0, 500),
+      });
+    }
+  }
+  return {
+    inspected: rows.length,
+    migrated,
+    failed: failures.length,
+    candidates,
+    failures,
+  };
+}
+
 export async function importGitHubIssue(args: {
   db: PrismaClient;
   workspaceId: string;

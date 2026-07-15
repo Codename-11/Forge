@@ -2,6 +2,7 @@ import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { CommentKind, type ExternalResource, type Prisma, type PrismaClient } from "@prisma/client";
 import { recordChange } from "@/server/audit";
+import { decryptSecret } from "@/server/crypto";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
 import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
 import {
@@ -79,10 +80,29 @@ export type GitHubWebhookResult = {
   skipped?: string;
 };
 
-function webhookSecret(): string {
-  const secret = process.env.GITHUB_APP_WEBHOOK_SECRET;
-  if (!secret) throw new Error("GITHUB_APP_WEBHOOK_SECRET is not configured.");
-  return secret;
+async function webhookSecrets(args: {
+  db: PrismaClient;
+  installationId?: number | null;
+}): Promise<string[]> {
+  const encrypted = args.installationId
+    ? await args.db.githubApp.findMany({
+        where: { installationId: String(args.installationId) },
+        select: { webhookSecretEnc: true, webhookSecretPreviousEnc: true },
+      })
+    : [];
+  const secrets = [process.env.GITHUB_APP_WEBHOOK_SECRET?.trim() || null];
+  for (const app of encrypted) {
+    for (const value of [app.webhookSecretEnc, app.webhookSecretPreviousEnc]) {
+      if (!value) continue;
+      try {
+        secrets.push(decryptSecret(value));
+      } catch {
+        // A malformed encrypted row must not take down verification for a
+        // second matching app or the legacy instance-level secret.
+      }
+    }
+  }
+  return [...new Set(secrets.filter((secret): secret is string => Boolean(secret)))];
 }
 
 export function verifyGitHubWebhookSignature(args: {
@@ -1078,15 +1098,6 @@ export async function handleGitHubWebhookRequest(args: {
   deliveryId: string | null;
   event: string | null;
 }): Promise<GitHubWebhookResult> {
-  if (
-    !verifyGitHubWebhookSignature({
-      secret: webhookSecret(),
-      rawBody: args.rawBody,
-      signature: args.signature,
-    })
-  ) {
-    throw new Error("Bad GitHub webhook signature.");
-  }
   if (!args.deliveryId) throw new Error("Missing X-GitHub-Delivery header.");
   if (!args.event) throw new Error("Missing X-GitHub-Event header.");
 
@@ -1095,6 +1106,24 @@ export async function handleGitHubWebhookRequest(args: {
     payload = JSON.parse(args.rawBody) as GitHubWebhookPayload;
   } catch {
     throw new Error("GitHub webhook body is not valid JSON.");
+  }
+  const secrets = await webhookSecrets({
+    db: args.db,
+    installationId: payload.installation?.id ?? null,
+  });
+  if (secrets.length === 0) {
+    throw new Error("GitHub webhook is not configured for this installation.");
+  }
+  if (
+    !secrets.some((secret) =>
+      verifyGitHubWebhookSignature({
+        secret,
+        rawBody: args.rawBody,
+        signature: args.signature,
+      }),
+    )
+  ) {
+    throw new Error("Bad GitHub webhook signature.");
   }
   return processGitHubWebhook({
     db: args.db,

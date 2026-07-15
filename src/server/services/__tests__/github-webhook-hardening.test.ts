@@ -1,12 +1,16 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { createHmac } from "node:crypto";
+import { encryptSecret } from "@/server/crypto";
 import { gitHubReviewDecision } from "@/server/services/github/client";
 import {
   claimGitHubWebhookDelivery,
   finishGitHubWebhookDelivery,
+  handleGitHubWebhookRequest,
   processGitHubWebhook,
 } from "@/server/services/github/webhook";
 import {
   gitHubResourceVersionMatches,
+  migrateGenericGitHubAttachments,
   recoverGenericGitHubAttachments,
   resolveGitHubRepoMapping,
   upsertExternalResource,
@@ -99,6 +103,43 @@ function pullRequest(overrides: Record<string, unknown> = {}) {
 }
 
 describe("GitHub webhook hardening", () => {
+  it("verifies a webhook with the matching stored workspace App secret", async () => {
+    const { fixture, prisma } = await setup();
+    const secret = "workspace-app-webhook-secret";
+    await prisma.githubApp.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Webhook App",
+        appId: "123",
+        installationId: "101",
+        privateKeyEnc: encryptSecret("unused-private-key"),
+        webhookSecretEnc: encryptSecret(secret),
+      },
+    });
+    const rawBody = JSON.stringify({ installation: { id: 101 } });
+    const signature = `sha256=${createHmac("sha256", secret).update(rawBody).digest("hex")}`;
+    const deliveryId = delivery("stored-secret");
+
+    await expect(
+      handleGitHubWebhookRequest({
+        db: prisma,
+        rawBody,
+        signature,
+        deliveryId,
+        event: "ping",
+      }),
+    ).resolves.toMatchObject({ ok: true, processed: 0, skipped: "missing-repository" });
+    await expect(
+      handleGitHubWebhookRequest({
+        db: prisma,
+        rawBody,
+        signature: "sha256=bad",
+        deliveryId: delivery("stored-secret-bad"),
+        event: "ping",
+      }),
+    ).rejects.toThrow("Bad GitHub webhook signature");
+  });
+
   it("keeps outstanding review requests ahead of approvals", () => {
     expect(
       gitHubReviewDecision({
@@ -1540,5 +1581,20 @@ describe("GitHub webhook hardening", () => {
         },
       }),
     ).resolves.toBeTruthy();
+    await expect(
+      migrateGenericGitHubAttachments(prisma, {
+        workspaceId: fixture.workspace.id,
+        limit: 10,
+        dryRun: true,
+      }),
+    ).resolves.toMatchObject({
+      inspected: 2,
+      migrated: 0,
+      failed: 0,
+      candidates: expect.arrayContaining([
+        expect.objectContaining({ attachmentId: unmatched.id }),
+        expect.objectContaining({ attachmentId: oversized.id }),
+      ]),
+    });
   });
 });

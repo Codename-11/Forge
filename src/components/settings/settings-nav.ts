@@ -165,7 +165,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         label: "GitHub Apps",
         icon: Github,
         description:
-          "Shared GitHub Apps for runtime git auth. Install one app, manage repos on GitHub, point runtimes at it — Forge mints a short-lived GH_TOKEN. No per-repo keys.",
+          "Workspace GitHub Apps for realtime issue/PR sync and short-lived runtime GH_TOKEN credentials.",
       },
       {
         path: "/plugins",

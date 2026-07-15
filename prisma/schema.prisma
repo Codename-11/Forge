@@ -2033,8 +2033,8 @@ model RuntimeRepo {
 /// The private key (PEM) is AES-256-GCM-encrypted at rest (`src/server/crypto.ts`)
 /// and NEVER returned to clients; the minted token never touches the DB. App ID,
 /// installation ID and slug are non-secret and shown in the management UI.
-/// Distinct from the **instance** GitHub App (env-var creds) used for issue
-/// sync — see `src/server/services/github/app-auth.ts`.
+/// The same row can own native issue/PR webhook sync; instance env credentials
+/// remain a legacy fallback — see `src/server/services/github/webhook.ts`.
 model GithubApp {
   id                 String    @id @default(cuid())
   workspaceId        String
@@ -2047,6 +2047,15 @@ model GithubApp {
   installationId     String?
   /// AES-256-GCM ciphertext of the app's PEM private key. Write-only.
   privateKeyEnc      String
+  /// HMAC secret for this app's native Forge webhook. Encrypted with
+  /// AUTH_SECRET and never returned to clients. Keeping webhook auth beside
+  /// the app removes the old requirement for a second, instance-env app.
+  webhookSecretEnc         String?
+  /// Previous secret accepted during a crash-safe rotation. Cleared after
+  /// GitHub confirms the new webhook configuration.
+  webhookSecretPreviousEnc String?
+  webhookConfiguredAt      DateTime?
+  webhookLastError         String?
   /// App slug (e.g. `forge-bot`) for deep-linking to GitHub's install/settings
   /// pages. From the manifest conversion, or the first successful test.
   slug               String?
@@ -2065,6 +2074,7 @@ model GithubApp {
   runtimes  Runtime[]
 
   @@index([workspaceId])
+  @@index([installationId])
 }
 
 /// A per-workspace chat-model credential — lets the Streaming (Completions)
