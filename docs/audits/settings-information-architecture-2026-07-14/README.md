@@ -1,7 +1,7 @@
 # Forge settings information architecture review
 
-Date: 2026-07-14  
-Status: code-based review complete; screenshot-backed product audit blocked  
+Date: 2026-07-14
+Status: screenshot-backed audit complete; first implementation slice in progress
 Scope: Instance Admin, cross-workspace Mission Control/global settings, per-workspace settings
 
 ## Executive decision
@@ -18,16 +18,35 @@ The recommended first implementation slice is navigation and naming, not a route
 
 ## Evidence and audit limit
 
-The Product Design audit workflow requires screenshots captured and inspected during the current run. No screenshot was accepted in this run:
+The audit used fresh captures from the seeded running product after explicit
+approval to use Playwright CLI. Accepted evidence covers Mission Control,
+Personal/global settings, named-workspace settings, Instance Admin, ambiguous
+agent/runtime/client surfaces, and the floating operations preferences at
+1440×900 and 390×844. Every accepted image was opened and inspected at original
+resolution; three obstructed or incorrectly framed states were rejected and
+recaptured.
 
-- The Codex in-app Browser (`iab`) was not exposed to this task.
-- The permitted fallback, the user's existing Chrome session, could not be attached because Chrome remote debugging was disabled and no `DevToolsActivePort` was available.
-- Playwright was not substituted because the workflow requires explicit user permission before using it as a browser replacement.
-- Figma was not used or offered, matching the explicit product-design preference.
+The strongest visible evidence is:
 
-Therefore, this document is **not a screenshot-backed visual or WCAG audit**. It is a code-grounded information-architecture, discoverability, permission, and likely-accessibility review. Visual hierarchy, actual focus order, contrast, zoom/reflow, screen-reader output, and touch behavior still require a browser walkthrough.
+- `09-authentication-in-account-shell-desktop.png`: an explicitly
+  instance-wide, instance-admin-only control inside the Account shell.
+- `17-developer-access-in-account-shell-desktop.png`: workspace API keys inside
+  that same Account shell, with no named-workspace scope label.
+- `06-dispatch-fall-through-desktop.png`: a read-only mode that instructs the
+  user to visit a Workspace control that does not exist.
+- `10-instance-admin-overview-desktop.png`: the clearest existing pattern—scope,
+  audience, and blast radius are persistent.
+- `13-workspace-settings-overview-mobile.png` and
+  `15-instance-admin-overview-mobile.png`: navigation consumes a large top
+  region and data surfaces overflow/crowd before the primary task begins.
 
-Current-run capture log: [screenshots/README.md](screenshots/README.md)
+Capture log and full evidence index: [screenshots/README.md](screenshots/README.md)
+
+The evidence supports visible hierarchy, naming, reflow, density, and
+obstruction findings. It does not by itself prove screen-reader output,
+contrast ratios, or every permission path. Those remain covered by DOM/axe,
+keyboard, and role-specific tests in the implementation phase. Figma and Orca
+were not used.
 
 ## User goal and target
 
@@ -126,6 +145,75 @@ This makes “General” a catch-all rather than a useful destination.
 
 Instance Admin is the clearest of the three current shells because it has a persistent instance-scope warning and a distinct visual tone. Preserve that safety signal inside the unified settings frame. The main gap is that instance configuration is split: sign-in providers live in Account settings, while users, agents, runtimes, audit, and system live under `/admin`.
 
+## Complete control-surface mapping
+
+Frequency uses **H/M/L** for high/medium/low; risk uses **L/M/H/C** for low,
+medium, high, or critical blast radius. “Source” names the authoritative value
+or inheritance chain. “Entry/duplication” records current discoverability and
+conflicts.
+
+### Personal, account, and cross-workspace resources
+
+| Route / controls | Authoritative scope | Audience | Freq / risk | Prerequisite | Effective value / source | Current entry / duplication |
+|---|---|---|---|---|---|---|
+| `/settings` | Personal | Any signed-in user | H / L | Session | None; route absent | Global Settings jumps to Agents; no overview. |
+| `/settings/account` — profile, timezone, locale, time format, theme, Pomodoro | Personal | Signed-in user | L / L | Session | `User` preferences | Account rail; theme overlaps Appearance. |
+| `/settings/appearance` — theme, density, text size, motion, background | Personal | Signed-in user | L / L | Session | `User`; applied by `AppearanceProvider` | Account rail; theme duplicated in Profile. |
+| `/settings/connections` — OAuth identities | Personal identity | Connection owner | L / M | Provider client configured | `UserConnection`; workspace mappings consume it | “Connections” also names a workspace mapping surface. |
+| `/settings/agents` + detail — profile definitions | User-owned definition with instance governance | Owners; instance admin for create/share/disable | M / H | Provider/runtime as applicable | `AgentProfile` plus instance sharing/disabled policy | “Agents” also means roster and governance. |
+| `/settings/runtimes` — owned inventory, health, detail hop | User-owned inventory; current mutation/details remain workspace-bound | Runtime owner/operator | M / H | Registered runtime and home workspace | Runtime home workspace + health signals | “Global to your account” copy conflicts with workspace authorization; detail can use wrong workspace. |
+| `/settings/workspaces` — create, rename, switch, archive | Cross-workspace directory; writes affect a workspace | Members/admins | M / H | Membership; admin for destructive writes | `Workspace` + `WorkspaceMember` | Correctly global to discovery, but archive ownership is tenant scope. |
+| `/settings/access` — agent, personal, session API keys; scopes/context/expiry/rotate/revoke | **Workspace** (`ApiKey.workspaceId`) despite Account shell | Workspace admins/developers | M / C | Implicit last-workspace cookie | Explicit key scopes + project/label/initiative narrowing; no broader inheritance | Account rail hides named workspace; duplicated by Agent Clients. |
+| `/settings/clients` — derived MCP clients and revocation | **Workspace**, derived from workspace keys | Workspace admins/developers | M / H | Implicit last-workspace cookie | Same `ApiKey` rows as Developer access | Account rail; duplicates access inventory/actions. |
+| `/settings/auth` — OIDC/GitHub/Google providers, discovery, enable/disable/delete | **Instance** | Instance admin | L / C | Instance-admin role; provider credentials | `SsoProvider`; email/password fallback | Account rail beside personal preferences; missing from Instance nav. |
+| Personal notifications (router/schema only) | Personal default with workspace override | Signed-in user | M / L | Notification capability | `UserNotificationPreference` + membership override | No durable settings page; some preferences leak into Activity popover. |
+
+### Mission Control as Operations
+
+| Surface / controls | Authoritative scope | Audience | Freq / risk | Prerequisite | Effective value / source | Current entry / duplication |
+|---|---|---|---|---|---|---|
+| `/` — global Mission Control overview | Cross-workspace read-only operations | Operators/members | H / L | One or more memberships | Aggregated runs, queues, agents, runtimes, activity | Global home; correct operational responsibility. |
+| `/activity` | Cross-workspace activity operations | Operators | H / L | Membership | Activity/event stream | Name collides conceptually with workspace dock currently called Mission Control. |
+| `/w/:slug/command-center` | Workspace intervention | Workspace operators/admins | H / H | Workspace membership; action-specific permission | Live runs, approvals, recoveries, incidents | Durable home for operational intervention. |
+| Floating “Mission Control” — Live, Queue, Agents, Chat | Workspace quick operations | Workspace members/operators | H / M | Workspace context | Live workspace state; durable actions deep-link elsewhere | Duplicates global product name and sidebar entry. |
+| Floating gear — sound, global default tab, workspace default tab | Local browser + Personal + Workspace override | Signed-in user | L / L | Workspace context | localStorage sound; `User` default; membership override; effective override shown | Three scopes mixed in one unlabeled popover; generic Settings name. |
+
+### Named Workspace settings
+
+| Route / controls | Authoritative scope | Audience | Freq / risk | Prerequisite | Effective value / source | Current entry / duplication |
+|---|---|---|---|---|---|---|
+| `/w/:slug/settings` — overview | Workspace index plus cross-scope Account links | Members | M / L | Membership | Nav catalog only | Sidebar Settings; repeats full rail and introduces unannounced Account scope jump. |
+| `/workspace` — identity/avatar, sprint cadence/cooldown, time/storage, default assignee, liveness/SLA/ack/review, budgets, lifecycle, completion, AI, danger | Workspace | Mostly workspace admins | L / C | Admin role; status/member/provider prerequisites by control | `Workspace` columns; many `0`/`null` sentinel defaults; project completion may override | “General” catch-all; no inheritance summary; destructive controls buried at bottom. |
+| `/members` — invite, roles, remove | Workspace access policy | Workspace admins | M / C | Admin role | `WorkspaceMember` | Marked admin-only; no global user-role cross-link. |
+| `/statuses` — pipeline states/categories/order | Workspace workflow | Admins/editors as router permits | L / H | Existing default statuses | Workspace statuses; issue status resolves directly | Workflow nav; permission badge absent. |
+| `/labels` — create/rename/recolor/delete | Workspace workflow | Admins/editors as router permits | M / M | Membership | Workspace labels | Workflow nav. |
+| `/templates` — issue/project templates | Workspace work management | Workspace members/admins | M / M | Relevant statuses/projects | Workspace template rows | “Templates” aliases old project-template redirect. |
+| `/views` — personal/shared saved views | Mixed Personal or Workspace sharing | Members | M / M | Membership | Owner plus shared flag | Listed only under Workspace without personal/shared scope signal. |
+| `/recurring` — cadence and auto-create | Workspace automation | Workspace admins/operators | M / H | Template/workflow targets | Recurring rule rows | Under Workflow despite automation behavior. |
+| `/agents` — bind profile, runtime/provider, capability/capacity/eligibility, approval/start policy | Workspace binding | Workspace admins/operators; members read | M / H | Available profile; optional runtime/connection | Profile definition → binding override → instance policy | Strongest existing explanation; generic “Agents” duplicates two other scopes. |
+| `/dispatch-rules` — ordered matching rules, engagement defaults, mention policy, fall-through | Workspace automation policy | Workspace admins/operators | H / H | Bound eligible agents; labels/projects for conditions | First matching rule, then `Workspace.autoDispatchMode` | Fall-through read-only and points to nonexistent control; settings split from General. |
+| `/connections` — provider mapping, GitHub status repair/reconciliation defaults | Workspace integration mapping/policy | Workspace admins | M / H | Personal OAuth identity and repository access | `Connection` mapping + workspace reconciliation defaults | Generic “Connections” duplicates Personal identities. |
+| `/github-apps` — shared App credentials/install state for runtime tokens | Workspace integration/runtime access | Workspace admins | L / C | GitHub App and installation | Workspace GitHub App config | Ambiguous between instance credential, workspace mapping, and runtime prerequisite. |
+| `/plugins` + detail — install/approve/suspend/scopes | Workspace extensions | Workspace admins | L / C | Plugin manifest and declared scopes | Manifest ceiling + issued key scopes | No instance default/allowlist is visible. |
+| `/deliveries` — queue, failures, DLQ, requeue | Workspace operational diagnostics | Workspace admins/operators | M / H | Webhooks/plugins configured | Durable `WebhookDelivery` rows | Operational surface under settings; should deep-link from Operations and retain canonical diagnostics home. |
+| `/admin` — audit, activity, delivery observability | Workspace governance/operations | Workspace admins | M / H | Admin role | Workspace audit/activity/delivery data | “Admin portal” easily confused with Instance Admin. |
+| `/data` — export/import | Workspace data governance | Workspace admins | L / C | Admin role; valid snapshot for import | Workspace snapshot schema | Admin group; archive/delete remain in General. |
+| `/runtimes` + detail (not in rail) — runtime secrets/self-test/config | Runtime home workspace | Workspace admins/runtime operators | M / C | Runtime belongs to current workspace | Runtime row scoped by `workspaceId` | Hidden from workspace nav while global inventory deep-links here. |
+
+### Instance Administration
+
+| Route / controls | Authoritative scope | Audience | Freq / risk | Prerequisite | Effective value / source | Current entry / duplication |
+|---|---|---|---|---|---|---|
+| `/admin` — health, license, tenant/user/run/runtime totals, events | Instance | Instance admin | H / L | Instance-admin role | Cross-tenant aggregates/build metadata | Strong persistent Instance scope warning. |
+| `/admin/tenants` — tenant inventory/create | Instance tenancy | Instance admin | M / C | Instance-admin role | All `Workspace` rows | “Workspaces” overlaps personal directory but authority is clear in admin shell. |
+| `/admin/move-issues` — cross-workspace move | Instance data operation | Instance admin | L / C | Source/target workspace and compatible mappings | Explicit move input; no inheritance | Separate top-level item despite tenancy relationship. |
+| `/admin/users` — users and instance roles | Instance access | Instance admin | M / C | Instance-admin role | `User` role + memberships | Should name roles explicitly. |
+| `/admin/agents` — share/unshare/disable/remove profiles | Instance agent governance | Instance admin | M / C | Existing profile | Profile owner definition + instance shared/disabled policy | Correct authority; generic “Agent policy” underspecifies governance. |
+| `/admin/runtimes` — inventory, health, instance actions | Instance runtime governance | Instance admin/operator | M / C | Registered runtimes | Cross-workspace runtime view + instance policy | Relationship to personal inventory and workspace detail is not cross-linked. |
+| `/admin/audit` | Instance audit/security | Instance admin/security | H / H | Instance-admin role | Cross-tenant audit log | Correct scope; search/export affordances limited. |
+| `/admin/system` — version/build/regions/totals | Instance infrastructure | Instance admin/operator | M / H | Instance-admin role | Build/runtime environment | “System & backup” implied by overview CTA but backup readiness is not authoritative here. |
+| `/admin/auth` (target; absent initially) | Instance identity & sign-in | Instance admin/security | L / C | Instance-admin role + provider credentials | `SsoProvider` | Authoritative page missing; existing control lives at `/settings/auth`. |
+
 ## What is working
 
 - The data model already distinguishes user, workspace/binding, and instance policy. The IA can align to real ownership instead of inventing new concepts.
@@ -135,33 +223,42 @@ Instance Admin is the clearest of the three current shells because it has a pers
 - The Instance Admin shell visibly warns that writes affect every tenant.
 - Old workspace account routes redirect, reducing broken bookmarks during migration.
 
-## Code-derived journey health
+## Numbered walkthrough health report
 
-These health labels describe route and interaction structure found in code; they
-do not replace the blocked screenshot walkthrough.
+These labels combine the inspected screenshots with route, permission, and
+data-model evidence.
 
-1. **Mission Control → Settings — at risk.** The persistent entry is easy to
-   find, but it opens Agent profiles instead of a settings overview, and the
-   floating panel exposes a second generic Settings gear.
-2. **Personal/global settings — poor.** Nine destinations with different
-   ownership and permissions appear under one Account heading; Authentication
-   is actually instance-wide.
-3. **Workspace settings overview — mixed.** The workspace groups share a single
-   source of truth, but account links are appended inside the workspace index
-   and cause an unexplained shell/scope jump.
-4. **Agent, Runtime, and Connection configuration — poor.** The underlying
-   definition/binding/governance model is sound, but repeated generic labels and
-   a broken possible runtime-detail hop obscure it.
-5. **Instance Admin — generally healthy, with one serious split.** The shell,
-   warning, and gate are clear; sign-in provider configuration lives elsewhere
-   and breaks the instance boundary.
+1. **Mission Control → Settings — at risk.** Screenshot 01 shows a clear global
+   home, but the persistent Settings entry opens Agent profiles instead of an
+   overview. Screenshot 12 exposes a second generic gear inside another surface
+   also called Mission Control.
+2. **Personal/global settings — poor.** Screenshots 02, 09, 17, and 18 show
+   personal definitions, instance SSO, and workspace API keys in one Account
+   rail. Scope cannot be determined from the shell.
+3. **Workspace settings overview — mixed.** Screenshot 04 shows a useful grouped
+   index and shared navigation source, but repeats the rail and later appends
+   Account destinations. Screenshot 13 shows that mobile users spend roughly
+   the first third of the viewport traversing a separately scrolling rail.
+4. **Agent, Runtime, and Connection configuration — mixed.** Screenshot 07
+   provides the best explanatory model—definition → binding → instance policy.
+   Screenshots 02, 03, 08, 11, and 17 show that the same nouns elsewhere omit
+   that qualifier. The global runtime detail hop may authorize against the wrong
+   workspace, and its four-column telemetry visibly collides at desktop width.
+5. **Instance Admin — generally healthy, with one serious split.** Screenshots
+   10 and 11 make scope, audience, and destructive authority obvious. Screenshot
+   09 proves that sign-in provider configuration is stranded outside it.
 6. **Switching scope and returning — poor.** There is no scope switcher, account
    settings always returns to Mission Control, and the originating workspace is
    lost.
-7. **Mobile, keyboard, and assistive technology — unverified / at risk.** The
-   code includes focus styles and some shortcuts, but active-state semantics,
-   popover behavior, the 16rem mobile settings rail, reflow, and announcements
-   require browser testing.
+7. **Mobile and responsive behavior — poor.** Screenshots 13–16 confirm capped
+   nested navigation, crowded/clipped admin tables, and an operations shelf that
+   covers nearly the full workspace. The Activity preferences popover itself
+   reflows within 390px, but it obscures its parent and has no dialog semantics.
+8. **Keyboard and assistive technology — at risk.** Visible focus styles and
+   several shortcuts are strengths. Search lacks a programmatic label, active
+   nav links lack `aria-current`, and the Activity preferences popover lacks
+   Escape/focus-return semantics. Screenshot evidence alone cannot certify
+   screen-reader behavior or contrast.
 
 ## Highest-impact findings
 
@@ -201,6 +298,27 @@ do not replace the blocked screenshot walkthrough.
 7. Add a “Why can't I edit this?” permission explanation instead of discovering authorization only after submitting.
 
 ## Proposed settings hierarchy
+
+```mermaid
+flowchart TD
+  S["Settings"] --> P["Personal / Account"]
+  S --> W["Workspace: named tenant"]
+  S --> I["Instance Administration"]
+  MC["Mission Control"] --> O["Operations: observe and intervene"]
+  O -. "deep-links durable policy" .-> W
+  O -. "deep-links platform policy" .-> I
+  P --> P1["Profile · Appearance · Notifications"]
+  P --> P2["Connected accounts · Developer tools"]
+  P --> P3["My agent profiles · Workspaces"]
+  W --> W1["Workspace · Members"]
+  W --> W2["Work management"]
+  W --> W3["Agents & automation"]
+  W --> W4["Integrations"]
+  W --> W5["Data & governance"]
+  I --> I1["Tenancy · Users · Identity"]
+  I --> I2["Agent/runtime governance"]
+  I --> I3["Audit · System · Backup"]
+```
 
 ### Shared settings frame
 
@@ -277,24 +395,79 @@ The Instance option is omitted for non-instance-admins. Its selected state retai
 | Completion | Workspace lifecycle default | Project-level override with explicit inheritance | No instance override |
 | Notifications | Personal global default | Per-workspace override | Instance only configures delivery infrastructure, not personal choices |
 
-## Interaction and accessibility risks to verify in-browser
+## Move, rename, merge, and deprecate map
 
-These are code-indicated risks, not screenshot-confirmed failures:
+| Current surface | Action | Target / compatibility |
+|---|---|---|
+| Global Settings → `/settings/agents` | Move entry point | `/settings` overview; retain `/settings/agents`. |
+| Account → Authentication | Move + rename | `/admin/auth` **Identity & sign-in**; `/settings/auth` server redirect for at least one release. |
+| Account → Developer access / Agent Clients | Move workspace-bound rows | Canonical `/w/:slug/settings/access` and `/clients`; old routes resolve the last authorized workspace, preserve query strings, and redirect. Personal tokens may later split to `/settings/developer`. |
+| Account → Agents | Rename | **My agent profiles**; route retained. |
+| Account → Runtimes | Rename | **Runtime inventory**; route retained; detail always uses home workspace until a global detail exists. |
+| Account → Connections | Rename | **Connected accounts**; route retained. |
+| Workspace → General | Split progressively | **Workspace profile**, **Issue lifecycle**, **Reliability & safety**, **AI & triage**; keep `/workspace` as overview/alias during migration. |
+| Workspace → Automation / Agents | Rename | **Agents & automation / Agent roster**; route retained. |
+| Workspace → Dispatch rules | Merge controls + rename | **Dispatch & routing**, including master toggle and fall-through mode. |
+| Workspace → Connections | Rename | **Integration mappings**; route retained. |
+| Workspace → Admin portal | Rename | **Audit & activity** under Data & governance. |
+| Floating Mission Control | Rename | **Activity**; gear becomes **Activity preferences**. `/` remains Mission Control. |
+| Instance → Agent policy / Runtimes / Users | Rename | **Agent governance**, **Runtime governance**, **Users & roles**; routes retained. |
+
+## Role-based visibility and editability
+
+| Role | Personal | Workspace | Instance | Operations |
+|---|---|---|---|---|
+| Signed-in user | Own profile/preferences/connections; own agent definitions subject to governance | Only workspaces where a member | Hidden | Aggregates and workspace operations limited to memberships. |
+| Workspace member | Same | Browse allowed surfaces; admin-gated pages visibly **Read only** or hidden when they reveal sensitive data | Hidden | Observe; interventions gated per action. |
+| Workspace admin/owner | Same | Full tenant policy, access, integrations, data, and danger controls | Hidden unless separately instance admin | Observe and intervene; durable policy deep-links to named workspace settings. |
+| Instance admin | Same | Only tenant rights granted by membership, except explicit cross-tenant admin tools | Full Instance nav; critical actions carry persistent blast-radius warning | Cross-tenant observe/intervene plus deep-links to Instance policy. |
+
+Visibility is not authorization: route/procedure gates remain authoritative.
+Hidden navigation reduces leakage; page headers explain read-only state before a
+user reaches a control. A workspace member must never discover permission only
+after submitting a form.
+
+## Contextual deep-link and effective-value plan
+
+- Operations cards link to the durable owner of a policy, not a duplicate
+  editor: queue/routing → named Workspace Dispatch & routing; SSO incident →
+  Instance Identity & sign-in; runtime health → authorized home-workspace detail
+  or Instance governance.
+- Cross-scope links carry `returnTo` only when it is an internal, validated
+  relative Forge URL. The settings frame renders “Back to {origin}.”
+- Agent links name the level explicitly: profile definition, workspace roster
+  binding, or instance governance.
+- Inherited controls render three lines when applicable: broader default,
+  local override, and **Effective** value. `null`/`0` sentinel semantics are
+  translated into human copy such as “Inherited” or “Unlimited.”
+- Runtime, GitHub App, connection, and plugin prerequisites are linked inline
+  before an unavailable control, with the missing authority named.
+- Old URLs preserve deep links with server redirects and query strings. Route
+  aliases remain for at least one release and are covered by E2E redirect tests;
+  telemetry/log searches determine when they can be removed.
+
+## Interaction and accessibility findings
+
+The responsive findings below are screenshot-confirmed; semantic findings are
+confirmed from the rendered component structure and require automated/manual
+assistive-technology validation after implementation.
 
 - Settings search uses placeholder text without a programmatic label (`settings-rail.tsx:87-100`). Add an accessible name.
 - Active settings, global, workspace, and admin links do not expose `aria-current="page"`; color alone appears to carry active state.
 - The Activity settings button has a `title` but no explicit `aria-label`, `aria-haspopup`, or `aria-expanded`.
 - The Activity popover is a plain positioned `div`, not a menu/dialog; it has no Escape handler, focus management, or focus return.
-- Mobile settings navigation is a persistent top region capped at 16rem (`settings-rail.tsx:73-74`) rather than a drawer. Verify that it does not obscure the page, trap two independent scroll regions, or make later settings hard to reach.
+- Mobile settings navigation is a persistent top region capped at 16rem (`settings-rail.tsx:73-74`) rather than a drawer. Screenshots 13 and 14 confirm that it obscures discovery and creates two scroll regions before content.
 - Dense admin and settings rail links appear shorter than the recommended mobile touch target; verify actual rendered size.
 - Admin/read-only state is inconsistently communicated. Keyboard and screen-reader users may reach controls that fail only after activation.
 - Thirty-seven native `<select>` elements remain across settings surfaces. Native selects are not inherently inaccessible, but label association, error association, and consistent focus styling should be tested.
 - Scope changes and mutations announce success mainly through toasts; verify live-region behavior and that errors are attached to their fields.
 - Reduced-motion code exists, but persistent Activity and status animations must be checked with OS and in-app reduced-motion settings.
 
-### Required browser walkthrough
+### Remaining browser validation
 
-When browser access is available, capture and inspect at least these steps at desktop (1440×900), tablet (768×1024), mobile (390×844), 200% zoom, keyboard only, and reduced motion:
+Desktop and mobile visual walkthroughs are complete. Before release, repeat the
+changed flows at tablet (768×1024), 200% zoom, keyboard-only, and reduced-motion
+settings, then exercise member/admin/instance-admin roles:
 
 1. Open Mission Control and locate global Settings.
 2. Open Personal settings and switch among profile, notifications, connected accounts, and developer tools.
@@ -306,6 +479,25 @@ When browser access is available, capture and inspect at least these steps at de
 8. Switch scopes using keyboard only and verify focus placement/announcement.
 9. Search settings with synonyms and no results.
 10. Verify read-only/member and admin experiences separately.
+
+## P0 / P1 / P2 implementation backlog
+
+| Priority | Work item | Acceptance criteria |
+|---|---|---|
+| P0 | Canonicalize Instance Identity & sign-in | `/admin/auth` is gated by the admin layout; `/settings/auth` redirects; Account nav has no SSO controls; instance warning is persistent. |
+| P0 | Fix Dispatch & routing fall-through | Admin can enable/disable auto-dispatch and select every persisted `AutoDispatchMode`; reload shows the saved value; read-only dead-end copy is gone; mutation tests cover validation. |
+| P0 | Fix runtime detail authority | Every inventory settings link uses a workspace authorized by `runtime.byId`; home-workspace fallback is deterministic; no valid card 404s. |
+| P0 | Make scope visible before writes | Personal pages say Personal; workspace pages name the workspace; instance pages say Instance and blast radius. Scope remains visible on mobile. |
+| P1 | Add Personal settings overview and coherent groups | Global Settings opens `/settings`; Personal, Developer tools, and Resources are separate groups; search finds aliases; no item is filed under a false Account scope. |
+| P1 | Clarify agent/runtime/integration ownership | Definition, binding/mapping, and governance labels appear in rails, headers, and cross-links; the same unqualified noun is not used for multiple scopes. |
+| P1 | Rename workspace dock to Activity | “Mission Control” only names `/`; dock, region labels, controls, shortcuts, tests, and quick preferences say Activity. |
+| P1 | Repair responsive settings/admin navigation | At 390px and 200% zoom, the page heading/content appears without traversing a 16rem rail; nav is keyboard accessible; admin tables do not cause page-level clipping. |
+| P1 | Accessibility semantics | Current links expose `aria-current`; search and icon buttons have names; preferences popover supports Escape, initial focus, focus containment/return, and expanded state. |
+| P1 | Preserve cross-scope return context | Valid internal `returnTo` survives settings cross-links and redirects; unsafe/external values are ignored; Back returns to the originating named workspace. |
+| P2 | Split Workspace General | Lifecycle, reliability/safety, AI/triage, and Danger zone gain named destinations without breaking `/workspace`; unsaved edits are guarded. |
+| P2 | Surface inheritance and prerequisites | Effective source/override appears for completion, dispatch, notifications, runtimes, GitHub Apps, and instance defaults; missing prerequisites link to their owner. |
+| P2 | Permission-aware discoverability | Member/admin/instance-admin E2E fixtures verify hidden, read-only, and editable states; no sensitive count/name leaks through hidden navigation. |
+| P2 | Retire aliases safely | Redirects retain queries for at least one release; usage is checked before removal; release notes document canonical routes. |
 
 ## Migration plan
 

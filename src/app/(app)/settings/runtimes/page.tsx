@@ -122,11 +122,11 @@ export default function RuntimesPage() {
                     : r.health.tone === "warning"
                       ? "border-warning/30 bg-warning/5"
                       : "border-border bg-card/40";
-                // Prefer a workspace the runtime is actively used in, but
-                // always fall back to its home workspace so the settings link
-                // is never a dead-end (a freshly registered daemon has no
-                // workspacesInUse yet but still needs self-test / secrets).
-                const settingsWorkspace = r.workspacesInUse[0] ?? r.homeWorkspace;
+                // Runtime detail authorization is currently home-workspace
+                // scoped. Until a canonical global detail exists, always use
+                // that authoritative workspace rather than an arbitrary
+                // workspace where the runtime happened to run.
+                const settingsWorkspace = r.homeWorkspace;
                 return (
                   <div key={r.id} className={`flex flex-col gap-3 rounded-lg border p-4 ${tone}`}>
                     <header className="flex items-start gap-2">
@@ -161,7 +161,7 @@ export default function RuntimesPage() {
                       )}
                     </header>
 
-                    <div className="grid grid-cols-2 gap-2 text-meta sm:grid-cols-4">
+                    <div className="grid grid-cols-2 gap-2 text-meta">
                       <div>
                         <div className="text-muted-foreground">Last signal</div>
                         <div className="mt-0.5">{r.health.lastSignal}</div>

@@ -4,7 +4,6 @@ import {
   DatabaseBackup,
   Github,
   Key,
-  KeyRound,
   Layers,
   ListChecks,
   Palette,
@@ -15,6 +14,7 @@ import {
   Settings as SettingsIcon,
   Shield,
   Tag,
+  Terminal,
   User as UserIcon,
   Users,
   Workflow,
@@ -120,17 +120,31 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
     items: [
       {
         path: "/agents",
-        label: "Agents",
+        label: "Agent roster",
         icon: Bot,
         description:
           "MCP-first actors that hold keys and receive work. Profile, provider, runtime, and connection in one place.",
       },
       {
         path: "/dispatch-rules",
-        label: "Dispatch rules",
+        label: "Dispatch & routing",
         icon: Workflow,
         description:
           "Declarative routing: pin issues matching priority / label / project to a specific agent before the mode-based picker runs.",
+      },
+      {
+        path: "/access",
+        label: "API access",
+        icon: Key,
+        badge: "admin only",
+        description: "Workspace-scoped API keys, MCP endpoints, scopes, context limits, rotation, and revocation.",
+      },
+      {
+        path: "/clients",
+        label: "Developer clients",
+        icon: Terminal,
+        badge: "admin only",
+        description: "MCP sessions and clients derived from this workspace's API keys.",
       },
     ],
   },
@@ -200,13 +214,13 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
  * their `path` values are already rooted at `/settings`.
  */
 export const ACCOUNT_SETTINGS_GROUP: SettingsNavGroup = {
-  id: "account",
-  label: "Account",
-  hint: "Tied to your login, shared across all workspaces.",
+  id: "personal",
+  label: "Personal",
+  hint: "Follows you across every workspace.",
   items: [
     {
       path: "/settings/account",
-      label: "Profile",
+      label: "Profile & regional",
       icon: UserIcon,
       description: "Profile, timezone, locale, time format, theme.",
     },
@@ -215,22 +229,6 @@ export const ACCOUNT_SETTINGS_GROUP: SettingsNavGroup = {
       label: "Appearance",
       icon: Palette,
       description: "Density, text size, and motion. Saved per user.",
-    },
-    {
-      path: "/settings/access",
-      label: "Developer access",
-      icon: Key,
-      badge: "external agents",
-      description:
-        "API keys + MCP endpoints. Provider setup for Hermes, Claude, Codex, custom HTTP, and env vars.",
-    },
-    {
-      path: "/settings/auth",
-      label: "Authentication",
-      icon: KeyRound,
-      badge: "instance admin",
-      description:
-        "Sign-in providers for the whole instance. Add OIDC (Authelia, Keycloak, Okta…), GitHub, or Google; enable/disable without a redeploy.",
     },
     {
       path: "/settings/workspaces",

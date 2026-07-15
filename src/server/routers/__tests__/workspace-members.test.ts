@@ -1,5 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { DefaultIssueAssigneeMode, Role } from "@prisma/client";
+import { AutoDispatchMode, DefaultIssueAssigneeMode, Role } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { workspaceRouter } from "@/server/routers/workspace";
 import {
@@ -46,6 +46,25 @@ async function adminSetup() {
 }
 
 describe("workspaceRouter — admin member management", () => {
+  it("updates the authoritative automatic-dispatch default", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+
+    await caller.update({
+      autoDispatch: true,
+      autoDispatchMode: AutoDispatchMode.PRIORITY_MATCH,
+    });
+
+    const workspace = await prisma.workspace.findUniqueOrThrow({
+      where: { id: fixture.workspace.id },
+      select: { autoDispatch: true, autoDispatchMode: true },
+    });
+    expect(workspace).toEqual({
+      autoDispatch: true,
+      autoDispatchMode: AutoDispatchMode.PRIORITY_MATCH,
+    });
+  });
+
   it("updates the agent-run stale watchdog threshold", async () => {
     const { caller, fixture } = await adminSetup();
     const prisma = getPrisma();

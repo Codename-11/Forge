@@ -13,6 +13,7 @@ import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { Section } from "@/components/settings/section";
 import { trpc } from "@/lib/trpc";
+import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn, relativeTime } from "@/lib/utils";
 
 type AccessKey = {
@@ -117,6 +118,8 @@ function statusClasses(tone: ClientStatus["tone"]) {
 }
 
 export default function AgentClientsPage() {
+  const workspace = useMaybeWorkspace();
+  const accessHref = workspace ? `/w/${workspace.slug}/settings/access` : "/settings/access";
   const [revokeTarget, setRevokeTarget] = useState<AccessKey | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<AccessKey | null>(null);
   const { data: keys, isLoading, refetch } = trpc.access.list.useQuery();
@@ -146,10 +149,10 @@ export default function AgentClientsPage() {
     <>
       <Topbar
         title="Agent Clients"
-        subtitle="MCP clients, session keys, and user-owned tokens for Claude Code, Codex CLI, Hermes, and scripts."
+        subtitle={workspace ? `${workspace.name} · workspace-scoped MCP clients and session keys` : "MCP clients and session keys for the current workspace."}
         actions={
           <Link
-            href="/settings/access?create=session"
+            href={`${accessHref}?create=session`}
             className="focus-ring inline-flex h-7 items-center justify-center gap-1.5 rounded-md bg-ember px-2 text-xs font-medium text-ember-foreground hover:bg-ember/90"
           >
             <Terminal className="h-3.5 w-3.5" />
@@ -164,21 +167,21 @@ export default function AgentClientsPage() {
               icon={Terminal}
               title="Ephemeral client"
               body="Short-lived key for Claude Code, Codex CLI, or a one-off local agent session."
-              href="/settings/access?create=session"
+              href={`${accessHref}?create=session`}
               action="Generate session key"
             />
             <SetupCard
               icon={User}
               title="Personal MCP token"
               body="User-owned token for scripts and local clients that should survive longer than a session."
-              href="/settings/access?create=personal"
+              href={`${accessHref}?create=personal`}
               action="Create token"
             />
             <SetupCard
               icon={Bot}
               title="Registered agent"
               body="Persistent agent key tied to a Forge agent profile and provider-specific MCP setup."
-              href="/settings/access?create=agent"
+              href={`${accessHref}?create=agent`}
               action="Register agent"
             />
           </div>
@@ -192,7 +195,7 @@ export default function AgentClientsPage() {
                   {activeCount} active
                 </span>
                 <Link
-                  href="/settings/access"
+                  href={accessHref}
                   className="focus-ring inline-flex h-7 items-center justify-center rounded-md border border-border px-2 text-xs font-medium hover:bg-subtle"
                 >
                   Developer access
@@ -265,7 +268,7 @@ export default function AgentClientsPage() {
                       </div>
                       <div className="flex shrink-0 flex-wrap items-center gap-1">
                         <Link
-                          href="/settings/access"
+                          href={accessHref}
                           className="focus-ring inline-flex h-7 items-center justify-center rounded-md px-2 text-xs font-medium text-muted-foreground hover:bg-subtle hover:text-foreground"
                         >
                           Manage
@@ -300,7 +303,7 @@ export default function AgentClientsPage() {
 
           <div className="rounded-md border border-border bg-card/40 px-3 py-2 text-meta text-muted-foreground">
             Need the raw MCP config again? Rotate the key from{" "}
-            <Link href="/settings/access" className="text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground">
+            <Link href={accessHref} className="text-foreground underline decoration-border underline-offset-2 hover:decoration-foreground">
               Developer access
             </Link>
             . Forge stores only a hash after the creation or rotation reveal.

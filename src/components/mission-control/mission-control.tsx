@@ -486,8 +486,8 @@ export function MissionControl() {
           }}
           title={
             hasStalled
-              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Mission Control`
-              : `Mission Control (${modKey}')`
+              ? `${stalledRuns.length} stalled ${stalledRuns.length === 1 ? "run" : "runs"} · open Activity`
+              : `Activity (${modKey}')`
           }
           className={cn(
             "group flex items-center gap-2 rounded-full border bg-card/90 px-3 py-1.5 text-[0.75rem] shadow-sm backdrop-blur",
@@ -619,12 +619,12 @@ export function MissionControl() {
       ref={containerRef}
       data-mission-control-root
       role="region"
-      aria-label="Mission Control"
+      aria-label="Activity"
       className="fixed inset-x-2 bottom-20 z-40 flex h-[calc(100svh-6rem)] flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl md:relative md:inset-auto md:z-30 md:mx-3 md:mb-3 md:h-[21rem] md:w-auto md:shrink-0 md:shadow-md"
     >
       <header className="flex min-w-0 flex-wrap items-center gap-2 border-b border-border/70 bg-card/80 px-3 py-2">
         <Activity className="h-4 w-4 shrink-0 text-ember" />
-        <span className="text-[0.75rem] font-semibold text-foreground">Mission Control</span>
+        <span className="text-[0.75rem] font-semibold text-foreground">Activity</span>
         {hasStalled && (
           <span className="rounded-md border border-warning/30 bg-warning/10 px-1.5 py-0.5 text-[0.625rem] text-warning">
             {stalledRuns.length} stalled
@@ -633,7 +633,7 @@ export function MissionControl() {
 
         <nav
           role="tablist"
-          aria-label="Mission Control views"
+          aria-label="Activity views"
           className="order-3 flex w-full items-center gap-0.5 overflow-x-auto md:order-none md:ml-3 md:w-auto"
         >
           {TABS.map((t) => {
@@ -702,7 +702,7 @@ export function MissionControl() {
           <button
             type="button"
             onClick={() => setSize("pill")}
-            aria-label="Collapse Mission Control"
+            aria-label="Collapse Activity"
             title="Collapse (Esc)"
             className="focus-ring flex h-11 min-w-11 items-center justify-center gap-1 rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground md:h-8 md:min-w-8"
           >
