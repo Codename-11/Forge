@@ -89,8 +89,12 @@ Configure the GitHub App with:
 - Webhook URL: `https://forge.example/api/ingest/github`
 - Webhook events: `issues`, `issue_comment`, `pull_request`,
   `pull_request_review`, `check_suite`, `check_run`, `status`
-- Read permissions for issues, pull requests, checks, and commit statuses.
-  Repository metadata access is needed for repository selection/listing.
+- Read permissions for issues, pull requests, and commit statuses.
+- **Read and write** permission for checks. GitHub requires write-level Checks
+  permission to deliver the `requested`/`rerequested` check-suite and check-run
+  actions Forge uses to invalidate a cached CI aggregate when a rerun starts.
+  Forge otherwise reads check data and does not create check runs.
+- Repository metadata access for repository selection/listing.
 
 ## Storage (MinIO / S3)
 

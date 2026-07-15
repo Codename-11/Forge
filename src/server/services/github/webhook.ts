@@ -616,11 +616,17 @@ async function processCheckEvent(args: {
 
   const workspaceId = args.mapping.workspace.id;
   const config = readGitHubMappingConfig(args.mapping.config);
-  const conclusion =
-    args.payload.check_suite?.conclusion ??
-    args.payload.check_run?.conclusion ??
-    args.payload.state ??
-    null;
+  // GitHub sends rerequested (and check-suite requested) before the check run
+  // itself is reset, so those payloads can still carry the previous failure.
+  // They are cache-invalidation signals only; reconciliation will fetch the
+  // new aggregate once GitHub has advanced it.
+  const resetsChecks = ["requested", "rerequested"].includes(args.payload.action ?? "");
+  const conclusion = resetsChecks
+    ? null
+    : (args.payload.check_suite?.conclusion ??
+      args.payload.check_run?.conclusion ??
+      args.payload.state ??
+      null);
   const successfulConclusion =
     conclusion !== null && ["success", "neutral", "skipped"].includes(conclusion);
   const checkStatus =

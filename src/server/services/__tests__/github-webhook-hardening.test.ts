@@ -555,6 +555,79 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("does not apply a stale failed conclusion from a check rerun request", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const failedStatus = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "CANCELED" },
+    });
+    await prisma.connectionMapping.update({
+      where: { id: mapping.id },
+      data: {
+        config: { github: { statusRules: { checksFailedStatusId: failedStatus.id } } },
+      },
+    });
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Rerequest failed check",
+        state: "open",
+        metadata: {
+          head: { sha: "head-new" },
+          checks: { status: "completed", conclusion: "failure", source: "api-aggregate" },
+        },
+      },
+    });
+    await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        externalResourceId: resource.id,
+        kind: "IMPLEMENTS",
+      },
+    });
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("check-run-rerequested-stale-failure"),
+      event: "check_run",
+      payload: {
+        action: "rerequested",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        check_run: {
+          head_sha: "head-new",
+          status: "completed",
+          conclusion: "failure",
+          pull_requests: [{ number: 42 }],
+        },
+      },
+    });
+
+    const issueAfter = await prisma.issue.findUniqueOrThrow({
+      where: { id: issue.id },
+      include: { status: true },
+    });
+    expect(issueAfter.status.category).toBe("IN_PROGRESS");
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      metadata: {
+        checks: {
+          status: "dirty",
+          event: "check_run",
+          observedConclusion: null,
+          lastRunConclusion: null,
+        },
+      },
+    });
+  });
+
   it("ignores an older review hint instead of replacing a newer decision", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await upsertExternalResource(prisma, {
