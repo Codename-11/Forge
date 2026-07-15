@@ -5,6 +5,7 @@ import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { encryptSecret, decryptSecret } from "@/server/crypto";
 import {
   configureStoredGithubAppWebhook,
+  refreshStoredGithubAppSyncReadiness,
   verifyGithubApp,
   invalidateInstallationToken,
 } from "@/server/services/github-app";
@@ -61,6 +62,7 @@ const appSelect = {
   lastMintedAt: true,
   lastError: true,
   webhookConfiguredAt: true,
+  webhookLastCheckedAt: true,
   webhookLastError: true,
   updatedAt: true,
 } as const;
@@ -118,15 +120,13 @@ export const githubAppRouter = router({
     }));
   }),
 
-  get: workspaceProcedure
-    .input(z.object({ id: appId }))
-    .query(async ({ ctx, input }) => {
-      const app = await ctx.db.githubApp.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: appSelect,
-      });
-      return app; // null if not found
-    }),
+  get: workspaceProcedure.input(z.object({ id: appId })).query(async ({ ctx, input }) => {
+    const app = await ctx.db.githubApp.findFirst({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+      select: appSelect,
+    });
+    return app; // null if not found
+  }),
 
   createManual: adminProcedure
     .input(
@@ -182,55 +182,51 @@ export const githubAppRouter = router({
       });
     }),
 
-  delete: adminProcedure
-    .input(z.object({ id: appId }))
-    .mutation(async ({ ctx, input }) => {
-      const app = await assertAppInWorkspace(ctx.db, ctx.workspaceId, input.id);
-      invalidateInstallationToken(app.id);
-      // Runtimes pointing here are unlinked (FK is SET NULL).
-      await ctx.db.githubApp.delete({ where: { id: app.id } });
-      return { ok: true };
-    }),
+  delete: adminProcedure.input(z.object({ id: appId })).mutation(async ({ ctx, input }) => {
+    const app = await assertAppInWorkspace(ctx.db, ctx.workspaceId, input.id);
+    invalidateInstallationToken(app.id);
+    // Runtimes pointing here are unlinked (FK is SET NULL).
+    await ctx.db.githubApp.delete({ where: { id: app.id } });
+    return { ok: true };
+  }),
 
   // Live credential check: sign as the app, mint a token, report what it can
   // reach. Persists discovered slug + health for the UI.
-  test: adminProcedure
-    .input(z.object({ id: appId }))
-    .mutation(async ({ ctx, input }) => {
-      const app = await ctx.db.githubApp.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true, appId: true, installationId: true, privateKeyEnc: true, slug: true },
+  test: adminProcedure.input(z.object({ id: appId })).mutation(async ({ ctx, input }) => {
+    const app = await ctx.db.githubApp.findFirst({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+      select: { id: true, appId: true, installationId: true, privateKeyEnc: true, slug: true },
+    });
+    if (!app) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "GitHub App not found." });
+    }
+    if (!app.installationId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Install the app on GitHub first — no installation ID yet.",
       });
-      if (!app) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "GitHub App not found." });
-      }
-      if (!app.installationId) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Install the app on GitHub first — no installation ID yet.",
-        });
-      }
-      try {
-        const result = await verifyGithubApp({
-          appId: app.appId,
-          installationId: app.installationId,
-          privateKeyPem: decryptSecret(app.privateKeyEnc),
-        });
-        await ctx.db.githubApp.update({
-          where: { id: app.id },
-          data: {
-            lastMintedAt: new Date(),
-            lastError: null,
-            ...(result.slug && !app.slug ? { slug: result.slug } : {}),
-          },
-        });
-        return result;
-      } catch (e) {
-        const message = e instanceof Error ? e.message : "GitHub App check failed.";
-        await ctx.db.githubApp.update({ where: { id: app.id }, data: { lastError: message } });
-        throw new TRPCError({ code: "BAD_REQUEST", message });
-      }
-    }),
+    }
+    try {
+      const result = await verifyGithubApp({
+        appId: app.appId,
+        installationId: app.installationId,
+        privateKeyPem: decryptSecret(app.privateKeyEnc),
+      });
+      await ctx.db.githubApp.update({
+        where: { id: app.id },
+        data: {
+          lastMintedAt: new Date(),
+          lastError: null,
+          ...(result.slug && !app.slug ? { slug: result.slug } : {}),
+        },
+      });
+      return result;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : "GitHub App check failed.";
+      await ctx.db.githubApp.update({ where: { id: app.id }, data: { lastError: message } });
+      throw new TRPCError({ code: "BAD_REQUEST", message });
+    }
+  }),
 
   /**
    * Make this workspace App authoritative for native issue/PR webhooks. The
@@ -250,6 +246,24 @@ export const githubAppRouter = router({
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : "GitHub webhook setup failed.";
+        throw new TRPCError({ code: "BAD_REQUEST", message });
+      }
+    }),
+
+  /** Recheck GitHub without rotating or otherwise changing credentials. */
+  refreshSyncStatus: adminProcedure
+    .input(z.object({ id: appId }))
+    .mutation(async ({ ctx, input }) => {
+      const url = forgeWebhookUrl();
+      try {
+        return await refreshStoredGithubAppSyncReadiness({
+          db: ctx.db,
+          githubAppId: input.id,
+          workspaceId: ctx.workspaceId,
+          expectedWebhookUrl: url,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "GitHub sync check failed.";
         throw new TRPCError({ code: "BAD_REQUEST", message });
       }
     }),

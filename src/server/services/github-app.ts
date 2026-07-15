@@ -92,8 +92,11 @@ const REQUIRED_SYNC_PERMISSIONS = {
 
 export type GithubAppSyncReadiness = {
   ready: boolean;
+  webhookActive: boolean | null;
+  webhookUrlMatches: boolean | null;
   missingEvents: string[];
   missingPermissions: string[];
+  missingInstallationPermissions: string[];
 };
 
 function permissionIncludes(actual: string | undefined, required: "read" | "write"): boolean {
@@ -103,6 +106,8 @@ function permissionIncludes(actual: string | undefined, required: "read" | "writ
 export async function readGithubAppSyncReadiness(args: {
   appId: string;
   privateKeyPem: string;
+  installationId?: string;
+  expectedWebhookUrl?: string;
 }): Promise<GithubAppSyncReadiness> {
   const jwt = buildAppJwt(args.appId, args.privateKeyPem, Math.floor(Date.now() / 1000));
   const res = await ghFetch(`${GH_API}/app`, jwt);
@@ -112,19 +117,133 @@ export async function readGithubAppSyncReadiness(args: {
   const json = (await res.json()) as {
     events?: string[];
     permissions?: Record<string, string>;
+    hook_attributes?: { active?: boolean; url?: string };
   };
   const events = new Set(json.events ?? []);
   const missingEvents = REQUIRED_SYNC_EVENTS.filter((event) => !events.has(event));
   const missingPermissions = Object.entries(REQUIRED_SYNC_PERMISSIONS)
-    .filter(([permission, required]) =>
-      !permissionIncludes(json.permissions?.[permission], required),
+    .filter(
+      ([permission, required]) => !permissionIncludes(json.permissions?.[permission], required),
     )
     .map(([permission, required]) => `${permission}:${required}`);
+  let missingInstallationPermissions: string[] = [];
+  if (args.installationId) {
+    const token = await mintInstallationToken({
+      appId: args.appId,
+      installationId: args.installationId,
+      privateKeyPem: args.privateKeyPem,
+    });
+    missingInstallationPermissions = Object.entries(REQUIRED_SYNC_PERMISSIONS)
+      .filter(
+        ([permission, required]) => !permissionIncludes(token.permissions?.[permission], required),
+      )
+      .map(([permission, required]) => `${permission}:${required}`);
+  }
+  let webhookActive = json.hook_attributes?.active ?? null;
+  let webhookUrlMatches: boolean | null = null;
+  if (args.expectedWebhookUrl) {
+    let actualWebhookUrl = json.hook_attributes?.url;
+    if (!actualWebhookUrl) {
+      const hookRes = await ghFetch(`${GH_API}/app/hook/config`, jwt);
+      if (!hookRes.ok) {
+        throw new Error(humanizeGithubError(hookRes.status, await hookRes.text().catch(() => "")));
+      }
+      const hook = (await hookRes.json()) as { url?: string; active?: boolean };
+      actualWebhookUrl = hook.url;
+      webhookActive = hook.active ?? webhookActive;
+    }
+    webhookUrlMatches = actualWebhookUrl === args.expectedWebhookUrl;
+  }
   return {
-    ready: missingEvents.length === 0 && missingPermissions.length === 0,
+    ready:
+      webhookActive !== false &&
+      webhookUrlMatches !== false &&
+      missingEvents.length === 0 &&
+      missingPermissions.length === 0 &&
+      missingInstallationPermissions.length === 0,
+    webhookActive,
+    webhookUrlMatches,
     missingEvents,
     missingPermissions,
+    missingInstallationPermissions,
   };
+}
+
+function syncReadinessError(readiness: GithubAppSyncReadiness): string | null {
+  if (readiness.ready) return null;
+  const details = [
+    readiness.webhookActive === false ? "webhook is inactive" : null,
+    readiness.webhookUrlMatches === false ? "webhook URL does not point to Forge" : null,
+    readiness.missingEvents.length ? `events: ${readiness.missingEvents.join(", ")}` : null,
+    readiness.missingPermissions.length
+      ? `App permissions: ${readiness.missingPermissions.join(", ")}`
+      : null,
+    readiness.missingInstallationPermissions.length
+      ? `installation approval: ${readiness.missingInstallationPermissions.join(", ")}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join("; ");
+  return `GitHub realtime sync needs attention (${details}).`;
+}
+
+/** Read-only end-to-end check of registration, webhook, and installed permissions. */
+export async function refreshStoredGithubAppSyncReadiness(args: {
+  db: PrismaClient;
+  githubAppId: string;
+  workspaceId?: string;
+  expectedWebhookUrl: string;
+}): Promise<GithubAppSyncReadiness> {
+  const app = await args.db.githubApp.findFirst({
+    where: {
+      id: args.githubAppId,
+      ...(args.workspaceId ? { workspaceId: args.workspaceId } : {}),
+    },
+    select: {
+      id: true,
+      appId: true,
+      installationId: true,
+      privateKeyEnc: true,
+      webhookConfiguredAt: true,
+    },
+  });
+  if (!app) throw new Error("GitHub App not found.");
+  if (!app.installationId) throw new Error("Install the GitHub App before checking sync.");
+  if (!app.webhookConfiguredAt) throw new Error("Enable GitHub realtime sync before checking it.");
+
+  const checkedAt = new Date();
+  try {
+    const readiness = await readGithubAppSyncReadiness({
+      appId: app.appId,
+      installationId: app.installationId,
+      privateKeyPem: decryptSecret(app.privateKeyEnc),
+      expectedWebhookUrl: args.expectedWebhookUrl,
+    });
+    const message = syncReadinessError(readiness);
+    await args.db.githubApp.update({
+      where: { id: app.id },
+      data: {
+        webhookLastCheckedAt: checkedAt,
+        webhookLastError: message?.slice(0, 2000) ?? null,
+        lastMintedAt: checkedAt,
+        lastError: null,
+      },
+    });
+    return readiness;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GitHub sync check failed.";
+    await args.db.githubApp
+      .update({
+        where: { id: app.id },
+        data: {
+          webhookLastCheckedAt: checkedAt,
+          webhookLastError: message.slice(0, 2000),
+          lastError: message.slice(0, 2000),
+        },
+      })
+      .catch(() => undefined);
+    throw new Error(message);
+  }
 }
 
 /**
@@ -132,9 +251,7 @@ export async function readGithubAppSyncReadiness(args: {
  * requires app-JWT authentication for this endpoint; installation tokens and
  * user PATs are intentionally rejected.
  */
-export async function configureGithubAppWebhook(
-  config: GithubAppWebhookConfig,
-): Promise<void> {
+export async function configureGithubAppWebhook(config: GithubAppWebhookConfig): Promise<void> {
   const jwt = buildAppJwt(config.appId, config.privateKeyPem, Math.floor(Date.now() / 1000));
   const res = await fetch(`${GH_API}/app/hook/config`, {
     method: "PATCH",
@@ -210,21 +327,11 @@ export async function configureStoredGithubAppWebhook(args: {
     try {
       readiness = await readGithubAppSyncReadiness({
         appId: app.appId,
+        installationId: app.installationId,
         privateKeyPem: decryptSecret(app.privateKeyEnc),
+        expectedWebhookUrl: args.url,
       });
-      if (!readiness.ready) {
-        const details = [
-          readiness.missingEvents.length
-            ? `events: ${readiness.missingEvents.join(", ")}`
-            : null,
-          readiness.missingPermissions.length
-            ? `permissions: ${readiness.missingPermissions.join(", ")}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join("; ");
-        readinessError = `Webhook endpoint configured; update the GitHub App registration (${details}).`;
-      }
+      readinessError = syncReadinessError(readiness);
     } catch (error) {
       readinessError = `Webhook endpoint configured, but App events/permissions could not be verified: ${
         error instanceof Error ? error.message : "unknown error"
@@ -236,6 +343,7 @@ export async function configureStoredGithubAppWebhook(args: {
       data: {
         webhookSecretPreviousEnc: null,
         webhookConfiguredAt: configuredAt,
+        webhookLastCheckedAt: configuredAt,
         webhookLastError: readinessError?.slice(0, 2000) ?? null,
       },
     });
@@ -250,10 +358,11 @@ export async function configureStoredGithubAppWebhook(args: {
               // GitHub may already be using the new secret. Preserve both
               // staged values so either side of the interrupted rotation is
               // accepted until the operator retries.
-              webhookLastError: `Webhook rotated on GitHub but local finalization failed: ${message}`.slice(
-                0,
-                2000,
-              ),
+              webhookLastError:
+                `Webhook rotated on GitHub but local finalization failed: ${message}`.slice(
+                  0,
+                  2000,
+                ),
             }
           : {
               webhookSecretEnc: app.webhookSecretEnc,
@@ -279,7 +388,8 @@ async function ghFetch(url: string, bearer: string): Promise<Response> {
 }
 
 function humanizeGithubError(status: number, body: string): string {
-  if (status === 401) return "GitHub rejected the app credentials (401) — check the App ID and private key.";
+  if (status === 401)
+    return "GitHub rejected the app credentials (401) — check the App ID and private key.";
   if (status === 404)
     return "Installation not found (404) — check the installation ID and that the app is still installed.";
   const detail = body ? `: ${body.slice(0, 200)}` : "";

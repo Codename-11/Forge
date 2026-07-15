@@ -2055,6 +2055,7 @@ model GithubApp {
   /// GitHub confirms the new webhook configuration.
   webhookSecretPreviousEnc String?
   webhookConfiguredAt      DateTime?
+  webhookLastCheckedAt     DateTime?
   webhookLastError         String?
   /// App slug (e.g. `forge-bot`) for deep-linking to GitHub's install/settings
   /// pages. From the manifest conversion, or the first successful test.
