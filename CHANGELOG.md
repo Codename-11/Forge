@@ -9,6 +9,12 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.20.1 · Clean-checkout deployment
+
+### Fixed
+
+- **Worker images now build from the dedicated clean deployment clone.** The Dockerfile no longer requires Next's generated, gitignored `next-env.d.ts` for the `tsx` worker stage, removing a hidden dependency on development-checkout residue.
+
 ## [2026-07-15] — v0.20.0 · Coordinated code delivery
 
 ### Added

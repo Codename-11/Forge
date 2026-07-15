@@ -2,6 +2,15 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — Clean-checkout worker image follow-up
+
+The first guarded v0.20.0 deployment correctly stopped before production when
+the new dedicated clean clone exposed that the worker Docker stage copied
+Next's generated, gitignored `next-env.d.ts`. The worker executes through
+`tsx` and does not consume that declaration file, so the Dockerfile no longer
+requires it. This makes the image reproducible from a clean exact-ref checkout;
+v0.20.1 carries the deployment-only correction.
+
 ## 2026-07-15 — Shared code-work ownership and guarded delivery
 
 Implemented the common delivery contract for Forge agents, Codex Desktop tasks,
