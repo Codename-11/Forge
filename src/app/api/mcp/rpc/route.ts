@@ -15,6 +15,7 @@ import { authenticateApiKey, ApiKeyError } from "@/server/services/api-key-auth"
 import { rateLimit } from "@/server/rate-limit";
 import { logger } from "@/server/logger";
 import { mcpServerInfo } from "@/server/build-info";
+import { FORGE_MCP_INSTRUCTIONS } from "@/server/services/mcp-instructions";
 
 /**
  * Standard MCP (Model Context Protocol) endpoint — Streamable HTTP transport
@@ -190,19 +191,26 @@ function decodeCursor(cursor: string): number | null {
   }
 }
 
-function listCursor(params: unknown): { ok: true; offset: number } | { ok: false; message: string } {
+function listCursor(
+  params: unknown,
+): { ok: true; offset: number } | { ok: false; message: string } {
   if (params == null) return { ok: true, offset: 0 };
   if (typeof params !== "object" || Array.isArray(params)) {
     return { ok: false, message: "tools/list params must be an object." };
   }
   const cursor = (params as { cursor?: unknown }).cursor;
   if (cursor == null) return { ok: true, offset: 0 };
-  if (typeof cursor !== "string") return { ok: false, message: "tools/list cursor must be a string." };
+  if (typeof cursor !== "string")
+    return { ok: false, message: "tools/list cursor must be a string." };
   const offset = decodeCursor(cursor);
-  return offset == null ? { ok: false, message: "Invalid tools/list cursor." } : { ok: true, offset };
+  return offset == null
+    ? { ok: false, message: "Invalid tools/list cursor." }
+    : { ok: true, offset };
 }
 
-function allowedMcpToolNames(auth: Awaited<ReturnType<typeof authenticateApiKey>> | null): McpToolName[] {
+function allowedMcpToolNames(
+  auth: Awaited<ReturnType<typeof authenticateApiKey>> | null,
+): McpToolName[] {
   return selectMcpToolNames({
     profile: "full",
     scopes: auth?.scopes ?? null,
@@ -242,7 +250,8 @@ async function handleCatalogTool(
       .filter((toolName) => {
         if (namespace && mcpToolNamespace(toolName) !== namespace) return false;
         if (!query) return true;
-        const haystack = `${toolName} ${compactDescription(toolName)} ${mcpTools[toolName].scopes.join(" ")}`.toLowerCase();
+        const haystack =
+          `${toolName} ${compactDescription(toolName)} ${mcpTools[toolName].scopes.join(" ")}`.toLowerCase();
         return haystack.includes(query);
       })
       .slice(0, input.limit)
@@ -308,8 +317,7 @@ async function handleRpc(
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
         serverInfo: await mcpServerInfo(),
-        instructions:
-          "Forge - project management. Tools cover issues, projects, comments, analytics, and the agent queue.",
+        instructions: FORGE_MCP_INSTRUCTIONS,
       });
 
     case "notifications/initialized":
@@ -445,7 +453,10 @@ export async function POST(req: NextRequest) {
   const listOptions: ListOptions = {
     profile: profileParam,
     namespaces: toolsParam
-      ? toolsParam.split(",").map((s) => s.trim()).filter(Boolean)
+      ? toolsParam
+          .split(",")
+          .map((s) => s.trim())
+          .filter(Boolean)
       : null,
   };
 

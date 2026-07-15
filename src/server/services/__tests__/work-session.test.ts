@@ -1,5 +1,6 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { WorkSessionSource } from "@prisma/client";
+import { DeliveryTimelinePolicy, WorkSessionSource } from "@prisma/client";
+import { FORGE_MCP_INSTRUCTIONS } from "@/server/services/mcp-instructions";
 import { mcpTools, type McpContext } from "@/server/services/mcp";
 import {
   advanceWorkSession,
@@ -98,6 +99,12 @@ describe("work session coordination", () => {
       actor: { userId: fixture.user.id },
     });
     expect(merged.status).toBe("MERGED");
+    expect(merged.timeline).toMatchObject({
+      policy: DeliveryTimelinePolicy.RECOMMEND,
+      recommended: true,
+      nextAction: "comments.create",
+      commentId: null,
+    });
     await expect(
       advanceWorkSession(prisma, {
         workspaceId: fixture.workspace.id,
@@ -146,6 +153,128 @@ describe("work session coordination", () => {
       status: "VERIFIED",
     });
     expect(verified.endedAt).not.toBeNull();
+  });
+
+  it("automatically posts one human-readable PR handoff when configured", async () => {
+    const { fixture, prisma, issue } = await setup();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { deliveryTimelinePolicy: DeliveryTimelinePolicy.AUTO_ON_PR },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/ws-auto-comment",
+      source: WorkSessionSource.CODEX_DESKTOP,
+      actor: { userId: fixture.user.id },
+    });
+    const pr = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 73,
+        url: "https://github.com/acme/forge/pull/73",
+        title: "Keep delivery visible",
+        state: "draft",
+        metadata: { draft: true, base: { ref: "main" }, head: { ref: session.branch } },
+      },
+    });
+
+    const attached = await attachPullRequest(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      externalResourceId: pr.id,
+      actor: { userId: fixture.user.id },
+    });
+    expect(attached.timeline).toMatchObject({
+      policy: DeliveryTimelinePolicy.AUTO_ON_PR,
+      recommended: false,
+      nextAction: null,
+    });
+    expect(attached.timeline.commentId).toBeTruthy();
+    expect(
+      await prisma.comment.findUniqueOrThrow({ where: { id: attached.timeline.commentId! } }),
+    ).toMatchObject({
+      issueId: issue.id,
+      authorId: fixture.user.id,
+      body: expect.stringContaining("https://github.com/acme/forge/pull/73"),
+    });
+
+    await attachPullRequest(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      externalResourceId: pr.id,
+      actor: { userId: fixture.user.id },
+    });
+    expect(await prisma.comment.count({ where: { issueId: issue.id } })).toBe(1);
+  });
+
+  it("requires an atomic timeline update under the strict PR policy", async () => {
+    const { fixture, prisma, issue } = await setup();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { deliveryTimelinePolicy: DeliveryTimelinePolicy.REQUIRE_ON_PR },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/ws-required-comment",
+      source: WorkSessionSource.CODEX_DESKTOP,
+      actor: { userId: fixture.user.id },
+    });
+    const pr = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 74,
+        url: "https://github.com/acme/forge/pull/74",
+        title: "Require the handoff",
+        state: "open",
+        metadata: { head: { ref: session.branch } },
+      },
+    });
+
+    await expect(
+      attachPullRequest(prisma, {
+        workspaceId: fixture.workspace.id,
+        sessionId: session.id,
+        externalResourceId: pr.id,
+        actor: { userId: fixture.user.id },
+      }),
+    ).rejects.toMatchObject({ code: "PRECONDITION_FAILED" });
+
+    const attached = await attachPullRequest(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      externalResourceId: pr.id,
+      actor: { userId: fixture.user.id },
+      timelineUpdate: { body: "Implemented the delivery contract. Validation: focused tests." },
+    });
+    expect(attached.timeline.commentId).toBeTruthy();
+    expect(
+      await prisma.comment.findUniqueOrThrow({ where: { id: attached.timeline.commentId! } }),
+    ).toMatchObject({ body: "Implemented the delivery contract. Validation: focused tests." });
+  });
+
+  it("advertises the human-readable delivery contract in MCP instructions", () => {
+    expect(FORGE_MCP_INSTRUCTIONS).toContain("comments.upsertStatus");
+    expect(FORGE_MCP_INSTRUCTIONS).toContain("comments.create");
+    expect(FORGE_MCP_INSTRUCTIONS).toContain("workSessions.attachPullRequest");
+    const attachTool = mcpTools["workSessions.attachPullRequest"];
+    expect(attachTool.description).toContain("human-readable issue handoff");
+    expect(
+      attachTool.input.safeParse({
+        sessionId: "cmrmh4rzz030cmm07rjd2nxe6",
+        externalResourceId: "cmrmg1qee01lzmm07dyzrutbq",
+        timelineUpdate: { body: "Implemented and verified the change." },
+      }).success,
+    ).toBe(true);
   });
 
   it("marks quiet leases stale and creates one shared action request", async () => {

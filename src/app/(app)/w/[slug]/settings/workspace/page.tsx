@@ -17,6 +17,7 @@ import { workspaceColor } from "@/lib/workspace-color";
 
 type DefaultIssueAssigneeMode = "NONE" | "CREATOR" | "USER";
 type CompletionAutomation = "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE";
+type DeliveryTimelinePolicy = "OFF" | "RECOMMEND" | "REQUIRE_ON_PR" | "AUTO_ON_PR";
 
 export default function WorkspaceSettingsPage() {
   const router = useRouter();
@@ -63,6 +64,8 @@ export default function WorkspaceSettingsPage() {
   const [completionAutomation, setCompletionAutomation] =
     useState<CompletionAutomation>("RECOMMEND");
   const [completionStatusId, setCompletionStatusId] = useState<string | null>(null);
+  const [deliveryTimelinePolicy, setDeliveryTimelinePolicy] =
+    useState<DeliveryTimelinePolicy>("RECOMMEND");
   const [defaultIssueAssigneeMode, setDefaultIssueAssigneeMode] =
     useState<DefaultIssueAssigneeMode>("NONE");
   const [defaultIssueAssigneeUserId, setDefaultIssueAssigneeUserId] = useState<string | null>(null);
@@ -111,6 +114,7 @@ export default function WorkspaceSettingsPage() {
     setReviewStatusId(current.reviewStatusId ?? null);
     setCompletionAutomation(current.completionAutomation ?? "RECOMMEND");
     setCompletionStatusId(current.completionStatusId ?? null);
+    setDeliveryTimelinePolicy(current.deliveryTimelinePolicy ?? "RECOMMEND");
     setDefaultIssueAssigneeMode(
       (current.defaultIssueAssigneeMode ?? "NONE") as DefaultIssueAssigneeMode,
     );
@@ -209,6 +213,10 @@ export default function WorkspaceSettingsPage() {
       ],
       ["completionStatusId", (completionStatusId ?? null) !== (current.completionStatusId ?? null)],
       [
+        "deliveryTimelinePolicy",
+        deliveryTimelinePolicy !== (current.deliveryTimelinePolicy ?? "RECOMMEND"),
+      ],
+      [
         "defaultIssueAssigneeMode",
         defaultIssueAssigneeMode !==
           ((current.defaultIssueAssigneeMode ?? "NONE") as DefaultIssueAssigneeMode),
@@ -255,6 +263,7 @@ export default function WorkspaceSettingsPage() {
     reviewStatusId,
     completionAutomation,
     completionStatusId,
+    deliveryTimelinePolicy,
     defaultIssueAssigneeMode,
     normalizedDefaultIssueAssigneeUserId,
   ]);
@@ -302,6 +311,7 @@ export default function WorkspaceSettingsPage() {
       reviewStatusId,
       completionAutomation,
       completionStatusId,
+      deliveryTimelinePolicy,
       defaultIssueAssigneeMode,
       defaultIssueAssigneeUserId: normalizedDefaultIssueAssigneeUserId,
     });
@@ -340,6 +350,7 @@ export default function WorkspaceSettingsPage() {
     reviewStatusId,
     completionAutomation,
     completionStatusId,
+    deliveryTimelinePolicy,
     defaultIssueAssigneeMode,
     defaultIssueAssigneeUserId,
     normalizedDefaultIssueAssigneeUserId,
@@ -861,6 +872,43 @@ export default function WorkspaceSettingsPage() {
                   instead.
                 </div>
               )}
+            </FormCard>
+          </Section>
+
+          <Section
+            title="Code delivery timeline"
+            hint="Keep issue timelines understandable when agents and contributors open implementation pull requests. Mechanical heartbeats stay in the delivery record instead of becoming comments."
+          >
+            <FormCard className="space-y-4 p-5">
+              <Field
+                label="PR handoff comment"
+                hint="Agents can include a concise implementation, validation, and caveat summary while attaching the pull request."
+              >
+                <Combobox
+                  ariaLabel="PR handoff comment policy"
+                  value={deliveryTimelinePolicy}
+                  onChange={(value) =>
+                    setDeliveryTimelinePolicy((value ?? "RECOMMEND") as DeliveryTimelinePolicy)
+                  }
+                  disabled={!canEdit}
+                  options={[
+                    { value: "OFF", label: "Off — no delivery prompt" },
+                    { value: "RECOMMEND", label: "Recommend a handoff comment" },
+                    { value: "REQUIRE_ON_PR", label: "Require a comment when attaching a PR" },
+                    { value: "AUTO_ON_PR", label: "Automatically post a concise PR comment" },
+                  ]}
+                />
+              </Field>
+              <div className="text-meta rounded-md border border-border bg-background/40 px-3 py-2 text-muted-foreground">
+                {deliveryTimelinePolicy === "OFF" &&
+                  "Forge records the PR and delivery state without prompting for an issue comment."}
+                {deliveryTimelinePolicy === "RECOMMEND" &&
+                  "Forge returns a suggested next action and comment template after the PR is attached."}
+                {deliveryTimelinePolicy === "REQUIRE_ON_PR" &&
+                  "PR attachment is rejected unless the caller supplies a human-readable timeline update in the same request."}
+                {deliveryTimelinePolicy === "AUTO_ON_PR" &&
+                  "Forge posts one agent-authored PR handoff automatically when the caller does not provide a richer update."}
+              </div>
             </FormCard>
           </Section>
 

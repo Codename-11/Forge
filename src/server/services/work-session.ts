@@ -3,6 +3,8 @@ import "server-only";
 import {
   ActionRequestKind,
   ActionRequestStatus,
+  CommentKind,
+  DeliveryTimelinePolicy,
   EventKind,
   NotificationSeverity,
   WorkSessionStatus,
@@ -11,6 +13,7 @@ import type { Prisma, PrismaClient, WorkSessionSource } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
 import { createActionRequest } from "@/server/services/action-request-service";
+import { autoWatchActor } from "@/server/services/issue-watchers";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -44,6 +47,10 @@ const STALEABLE_WORK_SESSION_STATUSES: readonly WorkSessionStatus[] = [
 export type WorkSessionActor = {
   userId: string | null;
   agentId?: string | null;
+};
+
+export type DeliveryTimelineUpdate = {
+  body: string;
 };
 
 async function resolveStaleRequest(
@@ -328,6 +335,7 @@ export async function attachPullRequest(
     sessionId: string;
     externalResourceId: string;
     actor: WorkSessionActor;
+    timelineUpdate?: DeliveryTimelineUpdate;
   },
 ) {
   const result = await db.$transaction(async (tx) => {
@@ -343,12 +351,40 @@ export async function attachPullRequest(
       },
     });
     if (!resource) throw new TRPCError({ code: "NOT_FOUND", message: "Pull request not found." });
+    const workspace = await tx.workspace.findUniqueOrThrow({
+      where: { id: input.workspaceId },
+      select: { deliveryTimelinePolicy: true },
+    });
     const head = record(record(resource.metadata).head);
     if (typeof head.ref === "string" && head.ref !== session.branch) {
       throw new TRPCError({
         code: "BAD_REQUEST",
         message: `PR branch ${head.ref} does not match work session branch ${session.branch}.`,
       });
+    }
+    const firstAttachment = session.pullRequestId !== resource.id;
+    let timelineBody = input.timelineUpdate?.body.trim() || null;
+    if (
+      firstAttachment &&
+      workspace.deliveryTimelinePolicy === DeliveryTimelinePolicy.REQUIRE_ON_PR &&
+      !timelineBody
+    ) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message:
+          "This workspace requires a human-readable timelineUpdate when attaching a pull request.",
+      });
+    }
+    if (
+      firstAttachment &&
+      workspace.deliveryTimelinePolicy === DeliveryTimelinePolicy.AUTO_ON_PR &&
+      !timelineBody
+    ) {
+      const base = record(record(resource.metadata).base);
+      const draft = record(resource.metadata).draft === true || resource.state === "draft";
+      timelineBody =
+        `Opened [${draft ? "draft " : ""}PR #${resource.number ?? "—"}: ${resource.title ?? "Implementation"}](${resource.url}) for this work session.\n\n` +
+        `Branch \`${session.branch}\` targets \`${typeof base.ref === "string" ? base.ref : session.baseBranch}\`. CI and review remain authoritative in GitHub.`;
     }
     const derived = deriveWorkSessionPrStatus(resource);
     const now = new Date();
@@ -369,8 +405,73 @@ export async function attachPullRequest(
           : {}),
       },
     });
+    let timelineCommentId: string | null = null;
+    if (firstAttachment && timelineBody) {
+      const issue = await tx.issue.findFirstOrThrow({
+        where: { id: session.issueId, workspaceId: input.workspaceId, deletedAt: null },
+        select: { id: true, number: true, title: true, workspace: { select: { key: true } } },
+      });
+      const comment = await tx.comment.create({
+        data: {
+          workspaceId: input.workspaceId,
+          issueId: issue.id,
+          authorId: input.actor.userId,
+          authoringAgentId: input.actor.agentId ?? null,
+          body: timelineBody,
+          kind: CommentKind.BODY,
+        },
+      });
+      timelineCommentId = comment.id;
+      await autoWatchActor(tx, {
+        workspaceId: input.workspaceId,
+        issueId: issue.id,
+        userId: input.actor.userId,
+        callerAgentId: input.actor.agentId ?? null,
+      });
+      await recordChange(tx, {
+        workspaceId: input.workspaceId,
+        actorId: input.actor.userId,
+        actorAgentId: input.actor.agentId ?? null,
+        entity: "Comment",
+        entityId: comment.id,
+        action: "create-delivery-update",
+        after: comment,
+        eventKind: EventKind.COMMENT_CREATED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: {
+          commentId: comment.id,
+          issueId: issue.id,
+          issuePrefix: `${issue.workspace.key}-${issue.number}`,
+          number: issue.number,
+          title: issue.title,
+          preview: timelineBody.slice(0, 120),
+          workSessionId: session.id,
+          externalResourceId: resource.id,
+          mentions: { agentIds: [], userIds: [], agents: [] },
+          mentionsCount: 0,
+          agentRequests: [],
+        },
+      });
+    }
     await auditSession(tx, session, input.actor, "work-session-pr-linked", session, updated);
-    return updated;
+    const shouldRecommend =
+      firstAttachment &&
+      !timelineCommentId &&
+      workspace.deliveryTimelinePolicy === DeliveryTimelinePolicy.RECOMMEND;
+    return {
+      ...updated,
+      timeline: {
+        policy: workspace.deliveryTimelinePolicy,
+        commentId: timelineCommentId,
+        recommended: shouldRecommend,
+        nextAction: shouldRecommend ? "comments.create" : null,
+        issueId: session.issueId,
+        suggestedComment: shouldRecommend
+          ? `Implemented work for this issue and opened [PR #${resource.number ?? "—"}: ${resource.title ?? "Implementation"}](${resource.url}).\n\nValidation: _add checks run and any caveats_.`
+          : null,
+      },
+    };
   });
   return result;
 }
@@ -465,12 +566,8 @@ export async function advanceWorkSession(
       data: {
         status: next,
         lastHeartbeatAt: now,
-        ...(next === WorkSessionStatus.RELEASED
-          ? { releasedAt: now, releasedVersion }
-          : {}),
-        ...(next === WorkSessionStatus.DEPLOYED
-          ? { deployedAt: now, deployedSha }
-          : {}),
+        ...(next === WorkSessionStatus.RELEASED ? { releasedAt: now, releasedVersion } : {}),
+        ...(next === WorkSessionStatus.DEPLOYED ? { deployedAt: now, deployedSha } : {}),
         ...(next === WorkSessionStatus.VERIFIED ? { verifiedAt: now, endedAt: now } : {}),
         ...(next === WorkSessionStatus.ABANDONED ? { endedAt: now } : {}),
       },

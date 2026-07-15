@@ -217,6 +217,15 @@ enum CompletionAutomation {
   AUTO_WHEN_SAFE
 }
 
+/// Controls whether code-delivery sessions publish a human-readable issue
+/// update when an implementation pull request is attached.
+enum DeliveryTimelinePolicy {
+  OFF
+  RECOMMEND
+  REQUIRE_ON_PR
+  AUTO_ON_PR
+}
+
 enum ScheduledTaskAction {
   CREATE_ISSUE
 }
@@ -951,6 +960,9 @@ model Workspace {
   /// verified completion evidence. RECOMMEND opens one shared actionable
   /// card; AUTO_WHEN_SAFE transitions only when the central safety gate passes.
   completionAutomation          CompletionAutomation     @default(RECOMMEND)
+  /// Human-readable issue timeline behavior when a work session attaches an
+  /// implementation PR. Mechanical heartbeats remain audit-only.
+  deliveryTimelinePolicy        DeliveryTimelinePolicy   @default(RECOMMEND)
   /// DONE-category status used by completion recommendations/automation.
   /// Null keeps completion candidates disabled until an admin chooses one.
   completionStatusId            String?

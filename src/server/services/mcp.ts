@@ -7884,6 +7884,8 @@ export const mcpTools = {
   },
 
   "workSessions.claim": {
+    description:
+      "Claim the one active code-delivery session for an issue before editing. After claiming, post meaningful human-facing phase changes with comments.upsertStatus and heartbeat the lease after commits.",
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       issueId: z.string().cuid(),
@@ -7925,6 +7927,8 @@ export const mcpTools = {
   },
 
   "workSessions.heartbeat": {
+    description:
+      "Refresh an owned code-delivery lease and optionally record its current commit. Heartbeats are mechanical coordination; use comments.upsertStatus for semantic human-facing progress.",
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       sessionId: z.string().cuid(),
@@ -7955,9 +7959,22 @@ export const mcpTools = {
   },
 
   "workSessions.attachPullRequest": {
-    scopes: ["WRITE_ISSUES"] as const,
-    input: z.object({ sessionId: z.string().cuid(), externalResourceId: z.string().cuid() }),
-    async run(input: { sessionId: string; externalResourceId: string }, ctx: McpContext) {
+    description:
+      "Attach a native implementation pull request to an owned delivery session. Include timelineUpdate for an atomic human-readable issue handoff; the workspace policy may recommend, require, or automatically create one.",
+    scopes: ["WRITE_ISSUES", "WRITE_COMMENTS"] as const,
+    input: z.object({
+      sessionId: z.string().cuid(),
+      externalResourceId: z.string().cuid(),
+      timelineUpdate: z.object({ body: z.string().trim().min(1).max(50_000) }).optional(),
+    }),
+    async run(
+      input: {
+        sessionId: string;
+        externalResourceId: string;
+        timelineUpdate?: { body: string };
+      },
+      ctx: McpContext,
+    ) {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) throw new Error("workSessions.attachPullRequest requires a linked agent key.");
       const owned = await db.workSession.findFirst({
