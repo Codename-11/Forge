@@ -13101,3 +13101,32 @@ fresh production E2E build completed. The browser run passed 35 of 38 journeys
 before Chromium crashed on a memory-saturated host; each of the three reported
 journeys passed immediately in a fresh isolated browser process. Release,
 deployment, and production smoke results follow after the pull request lands.
+
+## 2026-07-15 — First-class scheduled tasks (AXI-92)
+
+Added a ScheduledTask / ScheduledTaskRun automation domain alongside the
+unchanged legacy RecurringIssue feature. Scheduled tasks support interval,
+daily, and weekly timezone-aware schedules; create real Forge issues in the
+workspace inbox or an active project through the canonical issue creation
+service; and retain durable success/failure run history. The maintenance worker
+claims due tasks once per minute and persists the next future occurrence before
+executing, so a failed action keeps its next run visible and active.
+
+Added tenant-scoped, admin-gated tRPC lifecycle operations with audit/activity
+events, safe pause/resume and typed-name deletion, manual runs, a first-class
+Automation navigation entry and responsive management surface, schedule and
+delivery builders, failure detail, linked output issues, documentation, and
+focused schedule/router/execution coverage. Independent review then hardened
+worker-crash recovery, archived-workspace filtering, soft-deleted delivery
+target validation, and pause/resume races around in-flight runs.
+
+Verification: Prisma format, validate, generate, and migration deploy passed;
+typecheck and the production Next build passed; lint passed with only existing
+repository warnings; focused coverage passed 17/17 after review hardening; and
+the full Vitest gate
+passed 1,300 tests with one intentional live-connector skip. The new scheduled
+task Playwright lifecycle passed in an isolated single-worker run. The full
+parallel Playwright gate passed 35/40: the new lifecycle initially hit a strict
+locator ambiguity that was fixed and rerun green; three unrelated chat/browser
+failures passed immediately in isolation, while the pre-existing shared E2E
+workspace state left one dispatch-default assertion disabled on rerun.

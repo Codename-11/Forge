@@ -178,6 +178,12 @@ enum EventKind {
   PLAN_BUDGET_EXCEEDED
   /// A RUNNING plan has no valid path to make progress without operator action.
   PLAN_STALLED
+  SCHEDULED_TASK_CREATED
+  SCHEDULED_TASK_UPDATED
+  SCHEDULED_TASK_DELETED
+  SCHEDULED_TASK_RUN_STARTED
+  SCHEDULED_TASK_RUN_SUCCEEDED
+  SCHEDULED_TASK_RUN_FAILED
 }
 
 /// Operator-requested control on an in-flight AgentRun. NONE is the
@@ -209,6 +215,40 @@ enum CompletionAutomation {
   OFF
   RECOMMEND
   AUTO_WHEN_SAFE
+}
+
+enum ScheduledTaskAction {
+  CREATE_ISSUE
+}
+
+enum ScheduledTaskScheduleType {
+  INTERVAL
+  DAILY
+  WEEKLY
+}
+
+enum ScheduledTaskDeliveryType {
+  INBOX
+  PROJECT
+}
+
+enum ScheduledTaskStatus {
+  ACTIVE
+  RUNNING
+  SUCCEEDED
+  FAILED
+  PAUSED
+}
+
+enum ScheduledTaskRunStatus {
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum ScheduledTaskRunTrigger {
+  SCHEDULE
+  MANUAL
 }
 
 enum ChatRole {
@@ -619,6 +659,7 @@ model User {
   claimedIssues                     Issue[]                  @relation("IssueClaimedBy")
   defaultIssueAssigneeForWorkspaces Workspace[]              @relation("WorkspaceDefaultIssueAssignee")
   recurringCreated                  RecurringIssue[]         @relation("RecurringCreator")
+  scheduledTasksCreated             ScheduledTask[]          @relation("ScheduledTaskCreator")
   savedViews                        SavedView[]
   issueSavedViews                   IssueSavedView[]
   timeEntries                       TimeEntry[]
@@ -955,6 +996,8 @@ model Workspace {
   templates               IssueTemplate[]
   projectTemplates        ProjectTemplate[]
   recurring               RecurringIssue[]
+  scheduledTasks          ScheduledTask[]
+  scheduledTaskRuns       ScheduledTaskRun[]
   savedViews              SavedView[]
   issueSavedViews         IssueSavedView[]
   cycles                  Cycle[]
@@ -1070,6 +1113,7 @@ model Project {
   issues         Issue[]
   templates      IssueTemplate[]
   recurring      RecurringIssue[]
+  scheduledTasks ScheduledTask[]
   dispatchRules  DispatchRule[]
   artifacts      Artifact[]
   executionPlans ExecutionPlan[]
@@ -1196,31 +1240,32 @@ model Issue {
   updatedAt             DateTime        @updatedAt
   deletedAt             DateTime?
 
-  workspace      Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project        Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  parent         Issue?                 @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children       Issue[]                @relation("IssueChildren")
-  cycle          Cycle?                 @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  status         Status                 @relation(fields: [statusId], references: [id])
-  author         User                   @relation("IssueAuthor", fields: [authorId], references: [id])
-  claimedBy      User?                  @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  claimedByAgent Agent?                 @relation("IssueClaimedByAgent", fields: [claimedByAgentId], references: [id], onDelete: SetNull)
-  assignedAgent  Agent?                 @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
-  assignees      IssueAssignee[]
-  labels         IssueLabel[]
-  comments       Comment[]
-  attachments    Attachment[]
-  relationsFrom  IssueRelation[]        @relation("IssueRelationFrom")
-  relationsTo    IssueRelation[]        @relation("IssueRelationTo")
-  timeEntries    TimeEntry[]
-  agentRuns      AgentRun[]
-  watchers       IssueWatcher[]
-  artifacts      Artifact[]
-  executionPlans ExecutionPlan[]
-  executionSteps ExecutionStep[]        @relation("ExecutionStepIssue")
-  goals          Goal[]
-  actionRequests ActionRequest[]
-  externalLinks  ExternalResourceLink[]
+  workspace         Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project           Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent            Issue?                 @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children          Issue[]                @relation("IssueChildren")
+  cycle             Cycle?                 @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  status            Status                 @relation(fields: [statusId], references: [id])
+  author            User                   @relation("IssueAuthor", fields: [authorId], references: [id])
+  claimedBy         User?                  @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  claimedByAgent    Agent?                 @relation("IssueClaimedByAgent", fields: [claimedByAgentId], references: [id], onDelete: SetNull)
+  assignedAgent     Agent?                 @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  assignees         IssueAssignee[]
+  labels            IssueLabel[]
+  comments          Comment[]
+  attachments       Attachment[]
+  relationsFrom     IssueRelation[]        @relation("IssueRelationFrom")
+  relationsTo       IssueRelation[]        @relation("IssueRelationTo")
+  timeEntries       TimeEntry[]
+  agentRuns         AgentRun[]
+  watchers          IssueWatcher[]
+  artifacts         Artifact[]
+  executionPlans    ExecutionPlan[]
+  executionSteps    ExecutionStep[]        @relation("ExecutionStepIssue")
+  goals             Goal[]
+  actionRequests    ActionRequest[]
+  externalLinks     ExternalResourceLink[]
+  scheduledTaskRuns ScheduledTaskRun[]
 
   @@unique([workspaceId, number])
   @@index([workspaceId, statusId])
@@ -1299,6 +1344,68 @@ model RecurringIssue {
 
   @@index([nextRunAt, active])
   @@index([workspaceId])
+}
+
+/// Recurring automation independent from the legacy RecurringIssue feature.
+/// INTERVAL uses intervalMinutes, DAILY uses timeOfDayMinutes, and WEEKLY
+/// uses timeOfDayMinutes + dayOfWeek (0=Sunday ... 6=Saturday).
+model ScheduledTask {
+  id                  String                    @id @default(cuid())
+  workspaceId         String
+  createdById         String
+  projectId           String?
+  name                String
+  action              ScheduledTaskAction       @default(CREATE_ISSUE)
+  prompt              String                    @db.Text
+  issueTitle          String
+  issuePriority       Priority                  @default(NONE)
+  deliveryType        ScheduledTaskDeliveryType @default(INBOX)
+  scheduleType        ScheduledTaskScheduleType
+  intervalMinutes     Int?
+  timeOfDayMinutes    Int?
+  dayOfWeek           Int?
+  timezone            String
+  enabled             Boolean                   @default(true)
+  status              ScheduledTaskStatus       @default(ACTIVE)
+  nextRunAt           DateTime?
+  lastRunAt           DateTime?
+  lastSucceededAt     DateTime?
+  lastError           String?                   @db.Text
+  consecutiveFailures Int                       @default(0)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
+
+  workspace Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy User               @relation("ScheduledTaskCreator", fields: [createdById], references: [id])
+  project   Project?           @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  runs      ScheduledTaskRun[]
+
+  @@index([workspaceId, enabled, nextRunAt])
+  @@index([workspaceId, status])
+  @@index([projectId])
+}
+
+/// Durable execution attempt, created before the configured action runs.
+model ScheduledTaskRun {
+  id              String                  @id @default(cuid())
+  workspaceId     String
+  scheduledTaskId String
+  outputIssueId   String?
+  status          ScheduledTaskRunStatus  @default(RUNNING)
+  trigger         ScheduledTaskRunTrigger
+  scheduledForAt  DateTime?
+  startedAt       DateTime                @default(now())
+  completedAt     DateTime?
+  error           String?                 @db.Text
+  createdAt       DateTime                @default(now())
+
+  workspace     Workspace     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  scheduledTask ScheduledTask @relation(fields: [scheduledTaskId], references: [id], onDelete: Cascade)
+  outputIssue   Issue?        @relation(fields: [outputIssueId], references: [id], onDelete: SetNull)
+
+  @@index([scheduledTaskId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@index([outputIssueId])
 }
 
 /// Bookmarked filter preset. userId null = shared workspace view.
@@ -2267,23 +2374,23 @@ model ExternalResourceLink {
 /// stores `X-GitHub-Delivery` plus event/action so redeliveries can be
 /// acknowledged without duplicating Forge side effects.
 model ExternalWebhookEvent {
-  id                 String    @id @default(cuid())
-  workspaceId        String?
-  provider           String
-  deliveryId         String
-  event              String
-  action             String?
-  repoFullName       String?
-  externalResourceId String?
-  status             String
-  error              String?   @db.Text
-  receivedAt         DateTime  @default(now())
+  id                  String    @id @default(cuid())
+  workspaceId         String?
+  provider            String
+  deliveryId          String
+  event               String
+  action              String?
+  repoFullName        String?
+  externalResourceId  String?
+  status              String
+  error               String?   @db.Text
+  receivedAt          DateTime  @default(now())
   /// Start of the current processing lease. Failed or abandoned deliveries
   /// can be atomically reclaimed without racing an in-flight request.
   processingStartedAt DateTime?
   /// Number of processing claims, including the initial delivery.
-  attemptCount       Int       @default(1)
-  processedAt        DateTime?
+  attemptCount        Int       @default(1)
+  processedAt         DateTime?
 
   workspace Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
 

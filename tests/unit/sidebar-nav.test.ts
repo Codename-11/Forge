@@ -52,6 +52,14 @@ describe("workspace sidebar navigation", () => {
     });
   });
 
+  it("surfaces Scheduled tasks as first-class Automation navigation", () => {
+    const automation = WORKSPACE_NAV_SECTIONS.find((section) => section.id === "automation");
+    expect(automation?.items.find((item) => item.label === "Scheduled tasks")).toMatchObject({
+      path: "/scheduled-tasks",
+      chord: "q",
+    });
+  });
+
   it("does not double-assign any chord", () => {
     const chords = WORKSPACE_NAV_SECTIONS.flatMap((s) => s.items)
       .map((i) => i.chord)
