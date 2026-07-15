@@ -557,6 +557,62 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("keeps the decisive review state when a comment-only review arrives", async () => {
+    const { fixture, prisma, mapping } = await setup();
+    const resource = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Approved PR",
+        state: "open",
+        metadata: {
+          reviewDecision: "APPROVED",
+          review: { decision: "APPROVED", updatedAt: "2026-07-14T13:00:00Z" },
+        },
+      },
+    });
+
+    const result = await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("comment-only-review"),
+      event: "pull_request_review",
+      payload: {
+        action: "submitted",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest(),
+        review: {
+          id: 802,
+          state: "commented",
+          submitted_at: "2026-07-14T14:00:00Z",
+          user: { login: "reviewer" },
+        },
+      },
+    });
+
+    expect(result.processed).toBe(1);
+    await expect(
+      prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } }),
+    ).resolves.toMatchObject({
+      lastSyncedAt: null,
+      metadata: {
+        reviewDecision: "APPROVED",
+        review: {
+          decision: "APPROVED",
+          updatedAt: "2026-07-14T13:00:00Z",
+          dirty: true,
+          lastEventState: "COMMENTED",
+          lastEventAt: "2026-07-14T14:00:00Z",
+        },
+      },
+    });
+  });
+
   it("canonicalizes legacy identity before applying review hints", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await prisma.externalResource.create({

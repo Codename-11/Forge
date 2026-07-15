@@ -444,16 +444,19 @@ async function processReviewEvent(args: {
   const config = readGitHubMappingConfig(args.mapping.config);
   const snapshot = pullRequestSnapshot(args.mapping.target, args.payload.pull_request);
   const submittedAt = args.payload.review?.submitted_at ?? null;
-  const decision = args.payload.review?.state?.toUpperCase() ?? null;
-  const review = {
+  const reviewState = args.payload.review?.state?.toUpperCase() ?? null;
+  const decision =
+    reviewState === "APPROVED" || reviewState === "CHANGES_REQUESTED" ? reviewState : null;
+  const decisiveReview = {
     decision,
     source: "webhook-hint",
     reviewId: args.payload.review?.id ?? null,
     reviewer: args.payload.review?.user?.login ?? null,
     updatedAt: submittedAt ?? new Date().toISOString(),
+    dirty: false,
   };
   const rule =
-    args.payload.review?.state === "changes_requested"
+    decision === "CHANGES_REQUESTED"
       ? statusRuleForGitHubEvent(config, "prChangesRequestedStatusId")
       : null;
   const persisted = await args.db.$transaction(async (tx) => {
@@ -491,12 +494,27 @@ async function processReviewEvent(args: {
       typeof existingReview.updatedAt === "string" ? Date.parse(existingReview.updatedAt) : NaN;
     const incomingUpdatedAt = submittedAt ? Date.parse(submittedAt) : NaN;
     if (
+      decision &&
       Number.isFinite(existingUpdatedAt) &&
       Number.isFinite(incomingUpdatedAt) &&
       existingUpdatedAt > incomingUpdatedAt
     ) {
       return null;
     }
+    const persistedDecision =
+      decision ??
+      (typeof existingMetadata.reviewDecision === "string"
+        ? existingMetadata.reviewDecision
+        : null);
+    const review = decision
+      ? decisiveReview
+      : {
+          ...existingReview,
+          source: "webhook-hint",
+          dirty: true,
+          lastEventState: reviewState,
+          lastEventAt: submittedAt ?? new Date().toISOString(),
+        };
     let resource;
     if (previous) {
       resource = await tx.externalResource.update({
@@ -506,7 +524,7 @@ async function processReviewEvent(args: {
           lastSyncedAt: null,
           metadata: {
             ...existingMetadata,
-            reviewDecision: decision,
+            reviewDecision: persistedDecision,
             review,
           } as Prisma.InputJsonValue,
         },
@@ -514,7 +532,7 @@ async function processReviewEvent(args: {
     } else {
       snapshot.metadata = {
         ...(snapshot.metadata && typeof snapshot.metadata === "object" ? snapshot.metadata : {}),
-        reviewDecision: decision,
+        reviewDecision: persistedDecision,
         review,
       };
       resource = await upsertExternalResource(tx, {
