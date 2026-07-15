@@ -97,6 +97,7 @@ describe("scheduledTaskRouter", () => {
     const resumed = await caller.resume({ id: created.id });
     expect(resumed.enabled).toBe(true);
     expect(resumed.nextRunAt?.getTime()).toBeGreaterThan(Date.now());
+    await expect(caller.resume({ id: created.id })).rejects.toThrow(/already active/i);
 
     await getPrisma().scheduledTask.update({
       where: { id: created.id },

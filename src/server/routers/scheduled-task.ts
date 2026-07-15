@@ -293,13 +293,31 @@ export const scheduledTaskRouter = router({
           message: "Wait for the current run to finish before resuming this task.",
         });
       }
+      if (current.enabled) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This task is already active. Refresh to see its current schedule.",
+        });
+      }
       const schedule = scheduleFromTask(current);
       const nextRunAt = nextScheduledRunAt(schedule, new Date());
       return ctx.db.$transaction(async (tx) => {
-        const task = await tx.scheduledTask.update({
-          where: { id: current.id },
+        const updated = await tx.scheduledTask.updateMany({
+          where: {
+            id: current.id,
+            workspaceId: ctx.workspaceId,
+            enabled: false,
+            status: { not: ScheduledTaskStatus.RUNNING },
+          },
           data: { enabled: true, status: ScheduledTaskStatus.ACTIVE, nextRunAt },
         });
+        if (updated.count !== 1) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "The task is already active or running. Refresh and try again.",
+          });
+        }
+        const task = await tx.scheduledTask.findUniqueOrThrow({ where: { id: current.id } });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
