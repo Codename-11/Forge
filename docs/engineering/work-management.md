@@ -8,7 +8,9 @@ state. The same rules apply to humans, agents, and outside contributors.
 
 Before changing code:
 
-1. Start from current `origin/main`.
+1. Read the repository's `AGENTS.md` and `RELEASE.md`, then start from its
+   declared integration branch (`origin/main` for Forge, `origin/dev` for
+   Hermes Relay).
 2. Check the issue's **Delivery** card for active ownership.
 3. Claim one work session with the repository, branch, base branch, and isolated
    worktree path.
@@ -17,7 +19,31 @@ Before changing code:
 
 Branch names include the issue key and owner namespace, for example
 `codex/axi-123-short-description` or `bailey/axi-123-short-description`.
-Never work directly in `main` or in the production checkout.
+Never work directly in a long-lived integration/release branch or in the
+production checkout.
+
+## Project branch contract
+
+Branch topology is project configuration, not an Axiom-wide constant. Every
+maintained repository declares these seven facts in `AGENTS.md` or
+`RELEASE.md`:
+
+| Fact | Meaning |
+| --- | --- |
+| Integration branch | Normal feature/fix PR target |
+| Release branch | Durable released-code history |
+| Tag source | Branch/commit from which immutable release tags are cut |
+| Staging source | Exact branch SHA or tag deployed to staging |
+| Production source | Exact tag/SHA accepted by production |
+| Hotfix base | Ref used to begin an emergency fix |
+| Back-merge target | Branches that must receive the hotfix afterward |
+
+Supported shapes include trunk-based (`feature → main → tag`), an integration
+train (`feature → dev → release PR → main → tag`), upstream-tracking forks, and
+an external maintainer's contribution model. A staging environment does not by
+itself require a `dev` branch: staging can deploy an exact `main` SHA. Add a
+long-lived integration branch only when the project needs multi-change
+integration, scheduled stabilization, or an upstream convention.
 
 ## During implementation
 
@@ -51,7 +77,8 @@ serialized.
 - Every code change lands through a PR, including agent work and hotfixes.
 - CI must be green on the current head.
 - Address unresolved review threads before merge.
-- Refresh from `origin/main` when the base changed materially.
+- Refresh from the declared integration branch when the base changed
+  materially.
 - Squash-merge, delete the remote branch, then remove the local worktree.
 - The issue is not done merely because an agent stopped or a PR opened.
 
@@ -74,7 +101,7 @@ Production builds an exact tag or commit from a dedicated clean checkout. The
 development checkout is never a deployment source. A deploy is accepted only
 when:
 
-- the target commit is on `origin/main`;
+- the target commit is contained in the repository's declared release branch;
 - the checkout is clean;
 - CI/local release gates passed;
 - the deployment lock is held;

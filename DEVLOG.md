@@ -2,6 +2,21 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — Project-declared branch topology
+
+Reconciled the shared delivery policy after clarifying Forge's trunk-based flow
+against Hermes-Relay's integration train. Repository guidance now requires each
+project to declare its integration branch, release branch, tag source, staging
+and production sources, hotfix base, and back-merge target. Forge explicitly
+uses `feature → main → tag`; staging may deploy an exact `main` SHA and does not
+justify a branch by itself.
+
+The durable Obsidian Development Standards and Axiom Delivery Workflows no
+longer prescribe GitFlow-lite universally. Forge's release note mirrors its
+trunk contract, Hermes runtime integration defers to the target repository, and
+the Hermes-Relay project note now defines `feature → dev → release PR → main →
+surface tag`, including separate release ownership and hotfix back-merge rules.
+
 ## 2026-07-15 — Clean-checkout worker image follow-up
 
 The first guarded v0.20.0 deployment correctly stopped before production when

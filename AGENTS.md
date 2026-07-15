@@ -170,3 +170,9 @@ hardcoded — those should stay small regardless of Appearance.
   serialized. See `docs/engineering/work-management.md` and `RELEASE.md`.
 - Use timestamped Prisma migration directories to prevent parallel numbering
   collisions.
+- Forge's branch contract is trunk-based: integration branch `main`, release
+  branch `main`, tag source `main`, staging source an exact `main` SHA, and
+  production source an immutable `v*` tag. Hotfixes branch from and return to
+  `main`; there is no back-merge target. Other repositories may declare a
+  different contract, such as Hermes Relay's `feature → dev → main → tag`
+  release train.

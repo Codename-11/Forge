@@ -25,8 +25,21 @@ fix/<issue>-*       ← bugfix branches from main
   resumed or abandoned, never silently replaced.
 - The checkout used for production is deployment-only. Development happens in
   task-owned worktrees and never in the production or integration checkout.
-- No long-lived `dev`/`staging` branch. Reintroduce one only if/when a separate
-  **staging deploy target** exists (then: `feat/* → PR → dev (staging) → PR → main (prod)`).
+- No long-lived `dev`/`staging` branch. Staging may deploy an exact `main` SHA;
+  an environment does not require a matching branch. Introduce `dev` only if
+  Forge needs a genuine integration/stabilization train, then document the new
+  PR, release, hotfix, and back-merge rules before using it.
+
+Forge's explicit branch contract:
+
+| Setting | Value |
+| --- | --- |
+| Integration branch / normal PR base | `main` |
+| Release branch / tag source | `main` |
+| Staging source | Exact tested `main` SHA |
+| Production source | Immutable `vX.Y.Z` tag contained in `main` |
+| Hotfix base | Current production tag or `main` |
+| Back-merge target | None; `main` is the only long-lived branch |
 
 ## Versioning
 
