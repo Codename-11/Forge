@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-15 — Scheduled Tasks review follow-up
+
+Addressed the Codex reviews on AXI-92. Manual Run now treats a lost atomic
+claim as a conflict instead of reporting a false success and advances an overdue
+occurrence so the worker cannot immediately duplicate the manual run. Execution
+claims recheck workspace archival; edits reject concurrent running, pause, or
+resume changes; and stale resume calls cannot overwrite an active task's due
+occurrence. These guards use the same atomic database predicates as their
+mutations. The schedule form now exposes the runtime's full IANA timezone set
+with a compatibility fallback. The worker's global due-task sweep has an
+`enabled, nextRunAt` index matching its filter and ordering. Added focused
+regression coverage for the manual-run, archival, timezone, and lifecycle
+guards.
+
 ## 2026-07-16 — Project-declared branch topology
 
 Reconciled the shared delivery policy after clarifying Forge's trunk-based flow

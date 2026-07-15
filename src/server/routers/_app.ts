@@ -29,6 +29,7 @@ import { labelRouter } from "./label";
 import { issueTemplateRouter } from "./issue-template";
 import { projectTemplateRouter } from "./project-template";
 import { recurringRouter } from "./recurring";
+import { scheduledTaskRouter } from "./scheduled-task";
 import { viewRouter } from "./view";
 import { savedViewRouter } from "./saved-view";
 import { standupRouter } from "./standup";
@@ -105,6 +106,7 @@ export const appRouter = router({
   project: projectRouter,
   projectTemplate: projectTemplateRouter,
   recurring: recurringRouter,
+  scheduledTask: scheduledTaskRouter,
   relation: relationRouter,
   runtime: runtimeRouter,
   githubApp: githubAppRouter,

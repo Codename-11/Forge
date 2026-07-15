@@ -182,6 +182,7 @@ export default defineConfig({
         {
           text: "Automation Surfaces",
           items: [
+            { text: "Scheduled tasks", link: "/automation/scheduled-tasks.html" },
             { text: "Webhooks", link: "/automation/webhooks.html" },
             { text: "Plugins", link: "/automation/plugins.html" },
             { text: "API Keys", link: "/automation/api-keys.html" },

@@ -1,5 +1,6 @@
 import {
   CalendarRange,
+  CalendarClock,
   CircleDot,
   Clock,
   Compass,
@@ -74,6 +75,18 @@ export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
       { path: "/plans", label: "Plans", icon: ListChecks, chord: "l" },
       { path: "/crews", label: "Crews", icon: UsersRound, chord: "u" },
       { path: "/canvas", label: "Canvas", icon: Sparkles, chord: "k" },
+    ],
+  },
+  {
+    id: "automation",
+    label: "Automation",
+    items: [
+      {
+        path: "/scheduled-tasks",
+        label: "Scheduled tasks",
+        icon: CalendarClock,
+        chord: "q",
+      },
     ],
   },
   {
