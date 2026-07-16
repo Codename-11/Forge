@@ -9,6 +9,23 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-16] — v0.26.0 · Artifact Studio and trustworthy completion
+
+### Added
+
+- **Artifact Studio ships collaborative, shareable deliverables.** Teams can create and revise rich artifacts, manage revisions and previews, attach source assets, publish token-scoped read-only shares, and govern workspace defaults and API-key access.
+- **Completion recommendations expose structured verification state.** Operators can inspect ready, blocked, verifying, unavailable, and stale evidence with per-fact status, observation and retry times, diagnostics, and source links.
+- **Authorized operators can deliberately override incomplete verification.** A destructive **Mark done anyway** path lists unresolved reasons and records the structured assessment plus override decision in the issue audit trail.
+
+### Changed
+
+- **Completion evidence refreshes when its sources change.** GitHub webhooks, a deduplicated reconciliation job, scheduled sweeps, card visibility, window focus, and a manual action rebuild recommendations from current trusted evidence; realtime invalidation keeps mounted cards synchronized.
+- **Automatic completion remains fail-closed.** Only a current `READY` assessment may complete automatically, while stale or unavailable evidence requires explicit operator judgment.
+
+### Fixed
+
+- **Webhook retry draining uses BullMQ-safe dedupe keys.** Stable per-attempt job IDs no longer contain BullMQ's reserved colon delimiter, restoring automatic queueing while durable delivery rows remain authoritative in Postgres.
+
 ## [2026-07-16] — v0.25.0 · Native Hermes conversations
 
 ### Added

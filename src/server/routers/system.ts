@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import { router, protectedProcedure } from "@/server/trpc";
 import { forgeBuildIdentity } from "@/server/build-info";
+import { parseChangelog, type ChangelogEntry } from "@/server/services/changelog-parser";
 
 /**
  * System-wide read-only data — currently just the parsed CHANGELOG.md
@@ -16,22 +17,6 @@ import { forgeBuildIdentity } from "@/server/build-info";
  * so each container reads the file once per boot (and re-reads if it
  * changes on disk, e.g. a hot-reload during dev). No DB column.
  */
-
-interface ChangelogItem {
-  type: "added" | "changed" | "fixed" | "removed";
-  text: string;
-}
-
-interface ChangelogEntry {
-  version: string;
-  date: string | null;
-  /** Original `## [version] — heading-tail` so the page can show
-   *  the full release name as a heading. */
-  heading: string;
-  items: ChangelogItem[];
-  /** Raw markdown body for `whats-new/page.tsx` to render. */
-  raw: string;
-}
 
 interface CachedChangelog {
   mtimeMs: number;
@@ -71,74 +56,6 @@ async function readChangelog(): Promise<CachedChangelog> {
  * raw section is preserved on the entry for the whats-new page to
  * render with markdown.
  */
-function parseChangelog(raw: string): ChangelogEntry[] {
-  const lines = raw.split(/\r?\n/);
-  const entries: ChangelogEntry[] = [];
-  let cur: ChangelogEntry | null = null;
-  let curRaw: string[] = [];
-  let curSubtype: ChangelogItem["type"] | null = null;
-
-  const flush = () => {
-    if (cur) {
-      cur.raw = curRaw.join("\n").trim();
-      entries.push(cur);
-    }
-  };
-
-  for (const line of lines) {
-    if (line.startsWith("## ")) {
-      const heading = line.slice(3).trim();
-      const bracketMatch = heading.match(/^\[([^\]]+)\](?:\s+[—-]\s+(.+))?$/);
-      const plainMatch = bracketMatch ? null : heading.match(/^(.+?)(?:\s+[—-]\s+(.+))?$/);
-      const version = (bracketMatch?.[1] ?? plainMatch?.[1])?.trim();
-      if (!version) continue;
-      flush();
-      const tail = (bracketMatch?.[2] ?? plainMatch?.[2])?.trim() ?? "";
-      // Heuristic: a leading ISO date in version (e.g. `2026-05-04`)
-      // counts as the date; otherwise keep null.
-      const dateMatch = version.match(/^\d{4}-\d{2}-\d{2}$/);
-      cur = {
-        version,
-        date: dateMatch ? version : null,
-        heading: tail ? `${version} — ${tail}` : version,
-        items: [],
-        raw: "",
-      };
-      curRaw = [];
-      curSubtype = null;
-      continue;
-    }
-
-    if (!cur) continue;
-    curRaw.push(line);
-
-    const subMatch = line.match(/^###\s+(Added|Changed|Fixed|Removed)\b/i);
-    if (subMatch) {
-      curSubtype = subMatch[1].toLowerCase() as ChangelogItem["type"];
-      continue;
-    }
-
-    const bulletMatch = line.match(/^\s*-\s+(.+?)\s*$/);
-    if (bulletMatch && curSubtype) {
-      // First-line text only; if the bullet wraps to subsequent
-      // lines we'll lose the wrap detail — that's fine for the rail
-      // (the whats-new page renders the raw body anyway).
-      const text = bulletMatch[1]
-        // Strip simple emphasis so the rail stays compact.
-        .replace(/\*\*([^*]+)\*\*/g, "$1")
-        .replace(/`([^`]+)`/g, "$1");
-      cur.items.push({ type: curSubtype, text });
-    }
-  }
-
-  flush();
-  // Drop the "Unreleased" section from the structured entries: it's not a
-  // shipped release, so it shouldn't head the What's New rail or be counted
-  // as the latest version (buildInfo.release already filters by date). Its
-  // content still appears in the full raw body on the /whats-new page.
-  return entries.filter((e) => e.version.toLowerCase() !== "unreleased");
-}
-
 export const systemRouter = router({
   changelog: protectedProcedure
     .input(
@@ -165,15 +82,15 @@ export const systemRouter = router({
   /**
    * Build identity — the precise "what's running" anchor for support + "is my
    * fix live?". `gitSha` + `buildTime` are baked at `docker compose build`
-   * (deploy ritual); `release` is the latest curated CHANGELOG date (the
-   * human-facing version); `version` is the coarse package.json major.
+   * (deploy ritual); `release` is the latest curated CHANGELOG SemVer;
+   * `version` is the package.json version.
    */
   buildInfo: protectedProcedure.query(async () => {
     const cache = await readChangelog();
     const build = await forgeBuildIdentity();
     return {
       ...build,
-      release: cache.entries.find((e) => e.date)?.version ?? null,
+      release: cache.entries.find((e) => e.date)?.release ?? null,
     };
   }),
 });

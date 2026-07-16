@@ -228,7 +228,13 @@ export default function DashboardPage() {
         id: "whats-new",
         title: "What's new",
         defaultWidth: "half",
-        node: <WhatsNewTile slug={slug} seenAt={account?.changelogSeenAt ?? null} />,
+        node: (
+          <WhatsNewTile
+            slug={slug}
+            seenAt={account?.changelogSeenAt ?? null}
+            seenRelease={account?.changelogSeenRelease ?? null}
+          />
+        ),
       },
       ...(!showPrimarySuggestions
         ? [
@@ -266,6 +272,7 @@ export default function DashboardPage() {
     });
   }, [
     account?.changelogSeenAt,
+    account?.changelogSeenRelease,
     flowBreakpoint,
     showPrimarySuggestions,
     slug,

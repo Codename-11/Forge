@@ -33,6 +33,7 @@ const ME_SELECT = {
   dashboardView: true,
   dashboardPrefs: true,
   changelogSeenAt: true,
+  changelogSeenRelease: true,
   onboardingDismissedAt: true,
   onboardingSkippedSteps: true,
   pomodoroEnabled: true,
@@ -112,14 +113,16 @@ export const userRouter = router({
     });
   }),
 
-  /** Stamp the changelog as seen now (clears the What's New "unseen" dot). */
-  markChangelogSeen: protectedProcedure.mutation(async ({ ctx }) => {
-    return ctx.db.user.update({
-      where: { id: ctx.session.user.id },
-      data: { changelogSeenAt: new Date() },
-      select: ME_SELECT,
-    });
-  }),
+  /** Persist the exact release viewed so same-day releases remain distinguishable. */
+  markChangelogSeen: protectedProcedure
+    .input(z.object({ releaseId: z.string().trim().min(1).max(128) }))
+    .mutation(async ({ ctx, input }) => {
+      return ctx.db.user.update({
+        where: { id: ctx.session.user.id },
+        data: { changelogSeenAt: new Date(), changelogSeenRelease: input.releaseId },
+        select: ME_SELECT,
+      });
+    }),
 
   /**
    * Per-user Mission Control preferences. Default-tab can be either
