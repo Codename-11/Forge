@@ -13390,3 +13390,36 @@ top/bottom actions without mutating production records; lint and typecheck
 passed (existing repository warnings only); the isolated Vitest gate passed
 1,320 tests with one intentional live-connector skip; and the production-built
 Mission Control Playwright suite passed both journeys.
+
+---
+
+## 2026-07-15 — Mission Control attention surfaces
+
+Audited Mission Control, the cross-workspace Inbox, Activity, and top-bar
+controls against live data at the operator's 1164×698 viewport. The Activity
+pill's numeric keyboard hint read like a stuck notification count; the bell and
+help controls were inert; assigned work lacked enough context to triage in
+place; raw action-request events flooded Activity; and the capacity metric
+reported agent presence rather than concurrent run slots.
+
+Replaced the fake Activity count with an accessible shortcut description and
+wired the help control into the shared keyboard guide. The global bell now uses
+the same persisted notification and since-visit inbox lifecycle as workspace
+alerts, exposes one combined unread count, and opens a responsive right-side
+attention panel with assignments, operational alerts, recent activity, and one
+mark-all-read action.
+
+The global Inbox now excludes terminal assignments and provides a persistent
+issue inspector with description, status, priority, project, labels, agent/run
+state, latest comment, and canonical workspace links. Global Activity now uses
+the workspace timeline interpreter, turns raw events into human-readable rows,
+groups repeated action-request/watchdog updates by subject, and provides a
+source inspector. Mission Control reports active runs against configured
+finite slots while naming unlimited-capacity agents explicitly.
+
+Verification: live-data browser comparison confirmed all four updated surfaces
+and both top-bar controls; lint and typecheck passed (existing repository
+warnings only); the complete Vitest gate passed 1,323 tests with one intentional
+live-connector skip; focused notification, event grouping, and capacity
+coverage passed 12/12; and the production-built multi-workspace Playwright
+journeys passed 8/8 after making the empty-data assertion deterministic.

@@ -94,6 +94,32 @@ describe("notificationRouter", () => {
     expect(state.createdAt.toISOString()).toBe(event.createdAt.toISOString());
   });
 
+  it("shares unread alerts through the cross-workspace notification lifecycle", async () => {
+    const setupData = await setup();
+    const event = await createStalledEvent(setupData, new Date("2026-04-26T12:30:00Z"));
+
+    await expect(setupData.caller.globalUnreadCount()).resolves.toEqual({ count: 1 });
+    const alerts = await setupData.caller.globalList();
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      status: NotificationStatus.UNREAD,
+      workspace: {
+        id: setupData.fixture.workspace.id,
+        slug: setupData.fixture.workspace.slug,
+      },
+      event: { id: event.id },
+    });
+
+    await expect(setupData.caller.globalMarkRead()).resolves.toMatchObject({ count: 1 });
+    await expect(setupData.caller.globalUnreadCount()).resolves.toEqual({ count: 0 });
+    await expect(
+      setupData.prisma.user.findUniqueOrThrow({
+        where: { id: setupData.fixture.user.id },
+        select: { lastInboxVisitAt: true },
+      }),
+    ).resolves.toMatchObject({ lastInboxVisitAt: expect.any(Date) });
+  });
+
   it("persists read, acknowledge, dismiss, and resolve lifecycle state", async () => {
     const setupData = await setup();
     await createStalledEvent(setupData, new Date("2026-04-26T13:00:00Z"));

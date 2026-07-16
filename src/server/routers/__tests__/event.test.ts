@@ -200,6 +200,48 @@ describe("eventRouter", () => {
     expect(matching[0]?.detail).toContain("open the issue to choose the next step");
   });
 
+  it("turns repeated action-request status events into one useful decision row", async () => {
+    const { fixture, prisma, caller } = await setup();
+    const issue = await createIssue(fixture, { title: "Unify project lifecycle" });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        title: `${fixture.workspace.key}-${issue.number} appears ready to close`,
+        body: "The linked implementation is complete. Confirm whether this can be closed.",
+        severity: NotificationSeverity.WARNING,
+        requestedByUserId: fixture.user.id,
+      },
+    });
+    await Promise.all(
+      Array.from({ length: 4 }, (_, index) =>
+        prisma.activityEvent.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            kind: EventKind.ISSUE_UPDATED,
+            actorId: fixture.user.id,
+            subjectType: "action-request",
+            subjectId: request.id,
+            payload: { sequence: index },
+          },
+        }),
+      ),
+    );
+
+    const result = await caller.timeline({ filter: "decisions", limit: 10 });
+    const rows = result.items.filter((item) => item.subject.id === request.id);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      occurrences: 4,
+      category: "decision",
+      tone: "warning",
+      href: `/w/${fixture.workspace.slug}/i/${fixture.workspace.key}-${issue.number}`,
+    });
+    expect(rows[0]?.title).toContain("updated request");
+    expect(rows[0]?.detail).toContain("Unify project lifecycle");
+  });
+
   it("rolls up agent attention by questions and blocked runs", async () => {
     const { fixture, prisma, agent, caller } = await setup();
     const issue = await createIssue(fixture, { title: "Review runtime access" });

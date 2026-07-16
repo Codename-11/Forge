@@ -14,7 +14,6 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
-  Bell,
   HelpCircle,
   Menu,
   type LucideIcon,
@@ -25,6 +24,7 @@ import { Drawer } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
 import { VersionChip } from "./version-chip";
+import { GlobalAttentionBell } from "./global-attention-drawer";
 
 /**
  * Global "concourse" shell — the second of Forge's three shells (workspace
@@ -125,7 +125,8 @@ function ActivityPill() {
   return (
     <Link
       href="/activity"
-      title="Activity · live runs + chat (G 5)"
+      title="Activity · live runs and changes · shortcut G then 5"
+      aria-label="Open activity. Keyboard shortcut G then 5."
       className="focus-ring text-meta relative inline-flex min-h-8 items-center gap-2 rounded-full border px-2 py-0.5 font-medium transition-colors sm:min-h-0"
       style={{
         background: "hsl(var(--ember) / 0.12)",
@@ -148,10 +149,6 @@ function ActivityPill() {
         />
       </span>
       <span className="tracking-tight">Activity</span>
-      {/* keyboard hint is desktop-only */}
-      <span className="hidden md:inline-flex">
-        <Kbd>5</Kbd>
-      </span>
     </Link>
   );
 }
@@ -414,10 +411,14 @@ function GlobalTopBar({
       </span>
       <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
         <ActivityPill />
-        <button className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7">
-          <Bell size={14} />
-        </button>
-        <button className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7">
+        <GlobalAttentionBell />
+        <button
+          type="button"
+          title="Keyboard shortcuts (?)"
+          aria-label="Open keyboard shortcuts"
+          onClick={() => window.dispatchEvent(new Event("forge:open-keyboard-help"))}
+          className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7"
+        >
           <HelpCircle size={14} />
         </button>
       </div>

@@ -303,7 +303,7 @@ export const eventRouter = router({
     .query(async ({ ctx, input }) => {
       const workspace = await ctx.db.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
-        select: { slug: true, key: true },
+        select: { id: true, slug: true, name: true, key: true },
       });
       const ownedChatWhere = await ownedChatActivityWhere(ctx.db, {
         workspaceId: ctx.workspaceId,
@@ -634,14 +634,14 @@ export const eventRouter = router({
     }),
 });
 
-type TimelineReferenceHydration = Awaited<ReturnType<typeof hydrateTimelineReferences>>;
-type ActivityRow = Prisma.ActivityEventGetPayload<{
+export type TimelineReferenceHydration = Awaited<ReturnType<typeof hydrateTimelineReferences>>;
+export type ActivityRow = Prisma.ActivityEventGetPayload<{
   include: {
     actor: { select: { id: true; name: true; handle: true; image: true } };
     actorAgent: { select: { id: true; name: true; profileKey: true; avatar: true } };
   };
 }>;
-type TimelineWorkspace = { slug: string; key: string };
+export type TimelineWorkspace = { id: string; slug: string; name: string; key: string };
 
 type TimelineTone = "neutral" | "success" | "warning" | "danger" | "muted";
 type AgentAttentionItem = {
@@ -713,7 +713,7 @@ async function mineActivityWhere(
   ];
 }
 
-async function hydrateTimelineReferences(
+export async function hydrateTimelineReferences(
   db: PrismaClient | Prisma.TransactionClient,
   input: { workspaceId: string; rows: ActivityRow[] },
 ) {
@@ -723,6 +723,7 @@ async function hydrateTimelineReferences(
   const goalIds = new Set<string>();
   const planIds = new Set<string>();
   const stepIds = new Set<string>();
+  const actionRequestIds = new Set<string>();
 
   for (const row of input.rows) {
     const payload = payloadRecord(row.payload);
@@ -732,6 +733,7 @@ async function hydrateTimelineReferences(
     if (row.subjectType === "goal") goalIds.add(row.subjectId);
     if (row.subjectType === "execution-plan") planIds.add(row.subjectId);
     if (row.subjectType === "execution-step") stepIds.add(row.subjectId);
+    if (row.subjectType === "action-request") actionRequestIds.add(row.subjectId);
     addPayloadString(payload, "issueId", issueIds);
     addPayloadString(payload, "agentId", agentIds);
     addPayloadString(payload, "assignedAgentId", agentIds);
@@ -742,7 +744,7 @@ async function hydrateTimelineReferences(
     addPayloadString(payload, "stepId", stepIds);
   }
 
-  const [issues, agents, runs, goals, plans, steps] = await Promise.all([
+  const [issues, agents, runs, goals, plans, steps, actionRequests] = await Promise.all([
     issueIds.size
       ? db.issue.findMany({
           where: { workspaceId: input.workspaceId, id: { in: Array.from(issueIds) } },
@@ -814,6 +816,29 @@ async function hydrateTimelineReferences(
           },
         })
       : Promise.resolve([]),
+    actionRequestIds.size
+      ? db.actionRequest.findMany({
+          where: {
+            workspaceId: input.workspaceId,
+            id: { in: Array.from(actionRequestIds) },
+          },
+          select: {
+            id: true,
+            title: true,
+            body: true,
+            status: true,
+            severity: true,
+            issue: {
+              select: {
+                id: true,
+                number: true,
+                title: true,
+                workspace: { select: { key: true } },
+              },
+            },
+          },
+        })
+      : Promise.resolve([]),
   ]);
 
   return {
@@ -823,10 +848,11 @@ async function hydrateTimelineReferences(
     goals: new Map(goals.map((row) => [row.id, row])),
     plans: new Map(plans.map((row) => [row.id, row])),
     steps: new Map(steps.map((row) => [row.id, row])),
+    actionRequests: new Map(actionRequests.map((row) => [row.id, row])),
   };
 }
 
-function mapTimelineRow(
+export function mapTimelineRow(
   row: ActivityRow,
   refs: TimelineReferenceHydration,
   workspace: TimelineWorkspace,
@@ -868,10 +894,12 @@ function mapTimelineRow(
       : payloadString(payload, "stepId")
         ? (refs.steps.get(payloadString(payload, "stepId")!) ?? null)
         : null;
+  const actionRequest =
+    row.subjectType === "action-request" ? (refs.actionRequests.get(row.subjectId) ?? null) : null;
 
   const actor = actorLabel(row);
   const actorKind = row.actorAgent ? "agent" : row.actor ? "user" : "system";
-  const targetIssue = issue ?? run?.issue ?? step?.issue ?? null;
+  const targetIssue = issue ?? run?.issue ?? step?.issue ?? actionRequest?.issue ?? null;
   const targetAgent = agent ?? run?.agent ?? row.actorAgent ?? null;
   const targetLabel = targetIssue ? issueLabel(targetIssue) : null;
   const agentLabel = targetAgent?.profileKey ? `@${targetAgent.profileKey}` : "Agent";
@@ -903,6 +931,10 @@ function mapTimelineRow(
     href = `/w/${workspace.slug}/agents/${targetAgent.profileKey}`;
     category = "agent";
   }
+  if (actionRequest && !targetIssue) {
+    href = `/w/${workspace.slug}/command-center`;
+    category = "decision";
+  }
 
   switch (row.kind) {
     case EventKind.ISSUE_CREATED:
@@ -910,8 +942,17 @@ function mapTimelineRow(
       detail = targetIssue?.title ?? detail;
       break;
     case EventKind.ISSUE_UPDATED:
-      title = `${actor} updated ${targetLabel ?? "an issue"}`;
-      detail = targetIssue?.title ?? detail;
+      if (actionRequest) {
+        title = `${actor} updated request: ${actionRequest.title}`;
+        detail = targetIssue
+          ? `${targetLabel} · ${targetIssue.title}`
+          : (actionRequest.body ?? detail);
+        tone = actionRequest.status === "OPEN" ? "warning" : "muted";
+        category = "decision";
+      } else {
+        title = `${actor} updated ${targetLabel ?? "an issue"}`;
+        detail = targetIssue?.title ?? detail;
+      }
       break;
     case EventKind.ISSUE_STATUS_CHANGED:
       title = `${actor} moved ${targetLabel ?? "an issue"}`;
@@ -1097,21 +1138,23 @@ function mapTimelineRow(
         goal?.title ??
         plan?.title ??
         step?.title ??
+        actionRequest?.title ??
         targetAgent?.profileKey ??
         row.subjectType,
     },
     occurrences: 1,
+    workspace,
   };
 }
 
-type MappedTimelineRow = NonNullable<ReturnType<typeof mapTimelineRow>>;
+export type MappedTimelineRow = NonNullable<ReturnType<typeof mapTimelineRow>>;
 
-function collapseRecurringTimelineRows(items: MappedTimelineRow[]): MappedTimelineRow[] {
+export function collapseRecurringTimelineRows(items: MappedTimelineRow[]): MappedTimelineRow[] {
   const out: MappedTimelineRow[] = [];
   const indexByKey = new Map<string, number>();
 
   for (const item of items) {
-    if (!COLLAPSIBLE_TIMELINE_KINDS.has(item.kind)) {
+    if (!COLLAPSIBLE_TIMELINE_KINDS.has(item.kind) && item.subject.type !== "action-request") {
       out.push(item);
       continue;
     }

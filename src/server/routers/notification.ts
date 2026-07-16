@@ -59,6 +59,37 @@ const unsubscribePushInput = z.object({
   endpoint: z.string().url().max(4096),
 });
 
+async function memberWorkspaces(db: PrismaClient, userId: string) {
+  const memberships = await db.membership.findMany({
+    where: { userId, workspace: { deletedAt: null } },
+    select: {
+      workspace: { select: { id: true, slug: true, name: true, key: true } },
+    },
+  });
+  return memberships.map((membership) => membership.workspace);
+}
+
+async function materializeGlobalNotifications(
+  db: PrismaClient,
+  userId: string,
+  workspaces: Awaited<ReturnType<typeof memberWorkspaces>>,
+) {
+  await Promise.all(
+    workspaces.map(async (workspace) => {
+      await materializeRecentNotifications(db, {
+        workspaceId: workspace.id,
+        userId,
+        limit: 100,
+      });
+      await reconcileRecoveredNotifications(db, {
+        workspaceId: workspace.id,
+        userId,
+        limit: 100,
+      });
+    }),
+  );
+}
+
 export const notificationRouter = router({
   pushConfig: protectedProcedure.query(() => ({
     enabled: isWebPushConfigured(),
@@ -162,6 +193,87 @@ export const notificationRouter = router({
       },
     });
     return { count };
+  }),
+
+  /** Shared unread alert count for Mission Control's cross-workspace bell. */
+  globalUnreadCount: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.session.user.id;
+    const workspaces = await memberWorkspaces(ctx.db, userId);
+    if (workspaces.length === 0) return { count: 0 };
+    await materializeGlobalNotifications(ctx.db, userId, workspaces);
+    const count = await ctx.db.notificationState.count({
+      where: {
+        workspaceId: { in: workspaces.map((workspace) => workspace.id) },
+        userId,
+        status: NotificationStatus.UNREAD,
+      },
+    });
+    return { count };
+  }),
+
+  /** Recent actionable alerts across every workspace the caller belongs to. */
+  globalList: protectedProcedure.query(async ({ ctx }) => {
+    const userId = ctx.session.user.id;
+    const workspaces = await memberWorkspaces(ctx.db, userId);
+    if (workspaces.length === 0) return [];
+    await materializeGlobalNotifications(ctx.db, userId, workspaces);
+
+    const workspaceById = new Map(workspaces.map((workspace) => [workspace.id, workspace]));
+    const rows = await ctx.db.notificationState.findMany({
+      where: {
+        workspaceId: { in: workspaces.map((workspace) => workspace.id) },
+        userId,
+        status: { in: [...ACTIVE_NOTIFICATION_STATUSES] },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 30,
+      include: notificationStateInclude(),
+    });
+    const rowsByWorkspace = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const workspaceRows = rowsByWorkspace.get(row.workspaceId) ?? [];
+      workspaceRows.push(row);
+      rowsByWorkspace.set(row.workspaceId, workspaceRows);
+    }
+    const items = (
+      await Promise.all(
+        Array.from(rowsByWorkspace.entries()).map(async ([workspaceId, workspaceRows]) => {
+          const workspace = workspaceById.get(workspaceId)!;
+          const hydrated = await buildNotificationListItems(ctx.db, workspaceId, workspaceRows);
+          return hydrated.map((notification) => ({ ...notification, workspace }));
+        }),
+      )
+    ).flat();
+    return items
+      .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime())
+      .slice(0, 20);
+  }),
+
+  /** Atomically mark the shared alert and inbox attention queues as seen. */
+  globalMarkRead: protectedProcedure.mutation(async ({ ctx }) => {
+    const userId = ctx.session.user.id;
+    const workspaces = await memberWorkspaces(ctx.db, userId);
+    const visitedAt = new Date();
+    if (workspaces.length === 0) {
+      await ctx.db.user.update({ where: { id: userId }, data: { lastInboxVisitAt: visitedAt } });
+      return { count: 0, visitedAt };
+    }
+    await materializeGlobalNotifications(ctx.db, userId, workspaces);
+    const [result] = await ctx.db.$transaction([
+      ctx.db.notificationState.updateMany({
+        where: {
+          workspaceId: { in: workspaces.map((workspace) => workspace.id) },
+          userId,
+          status: NotificationStatus.UNREAD,
+        },
+        data: { status: NotificationStatus.READ, readAt: visitedAt },
+      }),
+      ctx.db.user.update({
+        where: { id: userId },
+        data: { lastInboxVisitAt: visitedAt },
+      }),
+    ]);
+    return { count: result.count, visitedAt };
   }),
 
   upsert: workspaceProcedure

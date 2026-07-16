@@ -4,6 +4,11 @@ import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
 import { summarizeRuntimeInfo } from "@/server/services/runtime-info";
+import {
+  collapseRecurringTimelineRows,
+  hydrateTimelineReferences,
+  mapTimelineRow,
+} from "@/server/routers/event";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -45,7 +50,11 @@ export const globalRouter = router({
         const [members, openIssues, agents, activeRuns, lastEvent] = await Promise.all([
           ctx.db.membership.count({ where: { workspaceId: ws.id } }),
           ctx.db.issue.count({
-            where: { workspaceId: ws.id, deletedAt: null, status: { category: { notIn: ["DONE", "CANCELED"] } } },
+            where: {
+              workspaceId: ws.id,
+              deletedAt: null,
+              status: { category: { notIn: ["DONE", "CANCELED"] } },
+            },
           }),
           ctx.db.agent.count({ where: { workspaceId: ws.id, archivedAt: null } }),
           ctx.db.agentRun.count({ where: { workspaceId: ws.id, status: "ACTIVE" } }),
@@ -75,12 +84,23 @@ export const globalRouter = router({
   /** Metric tiles for the Mission Control header. */
   summary: globalProcedure.query(async ({ ctx }) => {
     const wsIds = await memberWorkspaceIds(ctx.db, ctx.session.user.id);
-    const [openIssues, activeRuns, agentsOnline, runtimes] = await Promise.all([
+    const [openIssues, activeRuns, onlineAgents, runtimes] = await Promise.all([
       ctx.db.issue.count({
-        where: { workspaceId: { in: wsIds }, deletedAt: null, status: { category: { notIn: ["DONE", "CANCELED"] } } },
+        where: {
+          workspaceId: { in: wsIds },
+          deletedAt: null,
+          status: { category: { notIn: ["DONE", "CANCELED"] } },
+        },
       }),
       ctx.db.agentRun.count({ where: { workspaceId: { in: wsIds }, status: "ACTIVE" } }),
-      ctx.db.agent.count({ where: { workspaceId: { in: wsIds }, archivedAt: null, status: { in: ["ONLINE", "BUSY"] } } }),
+      ctx.db.agent.findMany({
+        where: {
+          workspaceId: { in: wsIds },
+          archivedAt: null,
+          status: { in: ["ONLINE", "BUSY"] },
+        },
+        select: { id: true, maxConcurrent: true },
+      }),
       ctx.db.runtime.findMany({
         where: { ownerId: ctx.session.user.id, archivedAt: null },
         select: {
@@ -100,12 +120,21 @@ export const globalRouter = router({
         },
       }),
     ]);
-    const runtimesOnline = runtimes.filter((r) => deriveRuntimeHealthStatus(r).kind === "online").length;
+    const runtimesOnline = runtimes.filter(
+      (r) => deriveRuntimeHealthStatus(r).kind === "online",
+    ).length;
+    const finiteRunSlots = onlineAgents.reduce(
+      (total, agent) => total + (agent.maxConcurrent > 0 ? agent.maxConcurrent : 0),
+      0,
+    );
+    const unlimitedRunAgents = onlineAgents.filter((agent) => agent.maxConcurrent === 0).length;
     return {
       workspaceCount: wsIds.length,
       openIssues,
       activeRuns,
-      agentsOnline,
+      agentsOnline: onlineAgents.length,
+      finiteRunSlots,
+      unlimitedRunAgents,
       runtimeCount: runtimes.length,
       runtimesOnline,
     };
@@ -269,7 +298,14 @@ export const globalRouter = router({
   work: globalProcedure.query(async ({ ctx }) => {
     const wsIds = await memberWorkspaceIds(ctx.db, ctx.session.user.id);
     const assignments = await ctx.db.issueAssignee.findMany({
-      where: { userId: ctx.session.user.id, issue: { workspaceId: { in: wsIds }, deletedAt: null } },
+      where: {
+        userId: ctx.session.user.id,
+        issue: {
+          workspaceId: { in: wsIds },
+          deletedAt: null,
+          status: { category: { notIn: ["DONE", "CANCELED"] } },
+        },
+      },
       take: 30,
       orderBy: { issue: { updatedAt: "desc" } },
       select: {
@@ -278,14 +314,52 @@ export const globalRouter = router({
             id: true,
             number: true,
             title: true,
+            description: true,
+            priority: true,
+            dueDate: true,
             updatedAt: true,
             status: { select: { name: true, category: true, color: true } },
+            project: { select: { id: true, name: true, key: true, color: true } },
+            labels: {
+              select: { label: { select: { id: true, name: true, color: true } } },
+            },
+            assignedAgent: { select: { id: true, name: true, profileKey: true } },
+            agentRuns: {
+              where: { status: { in: ["ACTIVE", "WAITING"] } },
+              orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+              take: 1,
+              select: {
+                id: true,
+                status: true,
+                currentStep: true,
+                agent: { select: { id: true, name: true, profileKey: true } },
+              },
+            },
+            comments: {
+              where: { deletedAt: null, kind: "BODY" },
+              orderBy: { createdAt: "desc" },
+              take: 1,
+              select: {
+                id: true,
+                body: true,
+                createdAt: true,
+                author: { select: { id: true, name: true, handle: true } },
+                authoringAgent: { select: { id: true, name: true, profileKey: true } },
+              },
+            },
             workspace: { select: { id: true, slug: true, name: true, key: true } },
           },
         },
       },
     });
-    return assignments.map((a) => a.issue);
+    return assignments.map((assignment) => ({
+      ...assignment.issue,
+      labels: assignment.issue.labels.map((row) => row.label),
+      currentRun: assignment.issue.agentRuns[0] ?? null,
+      latestComment: assignment.issue.comments[0] ?? null,
+      agentRuns: undefined,
+      comments: undefined,
+    }));
   }),
 
   /** Recent activity across all the caller's workspaces, read-only. */
@@ -293,20 +367,31 @@ export const globalRouter = router({
     const wsIds = await memberWorkspaceIds(ctx.db, ctx.session.user.id);
     const events = await ctx.db.activityEvent.findMany({
       where: { workspaceId: { in: wsIds } },
-      take: 40,
+      take: 100,
       orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        kind: true,
-        subjectType: true,
-        subjectId: true,
-        payload: true,
-        createdAt: true,
+      include: {
         actor: { select: { id: true, name: true, handle: true, image: true } },
         actorAgent: { select: { id: true, profileKey: true, name: true, avatar: true } },
         workspace: { select: { id: true, slug: true, name: true, key: true } },
       },
     });
-    return events;
+    const grouped = new Map<string, typeof events>();
+    for (const event of events) {
+      const rows = grouped.get(event.workspaceId) ?? [];
+      rows.push(event);
+      grouped.set(event.workspaceId, rows);
+    }
+    const refs = new Map(
+      await Promise.all(
+        Array.from(grouped.entries()).map(
+          async ([workspaceId, rows]) =>
+            [workspaceId, await hydrateTimelineReferences(ctx.db, { workspaceId, rows })] as const,
+        ),
+      ),
+    );
+    const mapped = events.map((event) =>
+      mapTimelineRow(event, refs.get(event.workspaceId)!, event.workspace),
+    );
+    return collapseRecurringTimelineRows(mapped).slice(0, 40);
   }),
 });

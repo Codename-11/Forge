@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { auth } from "@/server/auth";
 import { TrpcProvider } from "@/lib/trpc-provider";
 import { PushNotificationProvider } from "@/components/push-notification-provider";
+import { KeyboardHelp } from "@/components/keyboard-help";
 
 /**
  * Outer authenticated layout. Purely auth-gating + a slug-aware tRPC
@@ -20,6 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     <TrpcProvider>
       <PushNotificationProvider />
       {children}
+      <KeyboardHelp />
     </TrpcProvider>
   );
 }

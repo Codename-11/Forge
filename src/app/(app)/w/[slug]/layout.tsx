@@ -5,7 +5,6 @@ import { Sidebar } from "@/components/sidebar";
 import { TopBar } from "@/components/top-bar";
 import { CommandPalette } from "@/components/command-palette";
 import { QuickCreate } from "@/components/quick-create";
-import { KeyboardHelp } from "@/components/keyboard-help";
 import { RealtimeProvider } from "@/components/realtime-provider";
 import RealtimeToaster from "@/components/realtime-toaster";
 import { TrpcProvider } from "@/lib/trpc-provider";
@@ -150,7 +149,6 @@ export default async function WorkspaceShellLayout({
               </div>
               <CommandPalette />
               <QuickCreate />
-              <KeyboardHelp />
               <TimeTrackerWidget />
               <RealtimeProvider workspaceId={workspace.id} />
               <RealtimeToaster />
