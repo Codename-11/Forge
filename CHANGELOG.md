@@ -9,6 +9,13 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-16] — v0.26.1 · Reliable native chat startup
+
+### Fixed
+
+- **Native Hermes conversations initialize before durable delivery.** Forge now prepares the exact base and optional canvas-aware instructions before atomically writing the user message and Sessions outbox row, preventing a production-bundle initialization failure on the first interactive send.
+- **Dispatch-only chat stays lightweight.** Local and daemon-backed agents skip Forge prompt and canvas-summary preparation because their runtime owns that context.
+
 ## [2026-07-16] — v0.26.0 · Artifact Studio and trustworthy completion
 
 ### Added
