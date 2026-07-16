@@ -34,6 +34,7 @@ import { recoverGenericGitHubAttachments } from "@/server/services/github/resour
 import { sweepScheduledTasks } from "@/server/services/scheduled-task";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
 import { sweepHermesConnectorRetries } from "@/server/services/hermes-connector-retry";
+import { webhookDeliveryJobId } from "@/server/services/webhook-delivery-job-id";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -408,7 +409,7 @@ async function drainPendingDeliveries(): Promise<{ enqueued: number }> {
       "deliver",
       { deliveryId: r.id },
       {
-        jobId: `${r.id}:${r.attempt}`,
+        jobId: webhookDeliveryJobId(r.id, r.attempt),
         removeOnComplete: { age: 3600, count: 500 },
         removeOnFail: { age: 86_400, count: 2_000 },
       },

@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — v0.25.0 live delivery-drain finding
+
+The v0.25.0 production smoke found the maintenance delivery drain passing
+`WebhookDelivery.id:attempt` as a BullMQ custom job id. BullMQ reserves colons
+for its own composite keys, so the durable rows remained safe in Postgres but
+automatic queueing failed every tick. The hotfix uses a stable hyphenated
+attempt key and adds a regression contract for the reserved delimiter.
+
 ## 2026-07-16 — v0.25.0 release preparation
 
 Squash-merged AXI-112 through implementation PR #52 as
