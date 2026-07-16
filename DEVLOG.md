@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — v0.26.0 coordinated release preparation
+
+Release coordination confirmed that AXI-113 merged after v0.25.0 with no other
+active release owner. A patch tag would therefore have mislabeled an unreleased
+feature, so v0.26.0 is prepared from exact current `main` at
+`3ebceb99035a23cd173c6c2bae39c2fd78116e9f`. It combines AXI-113's structured,
+fresh completion evidence and authorized override UX with AXI-112's live-smoke
+delivery-drain hotfix. The hotfix PR passed all three GitHub CI jobs after the
+focused regression, lint, and typecheck gate.
+
 ## 2026-07-16 — v0.25.0 live delivery-drain finding
 
 The v0.25.0 production smoke found the maintenance delivery drain passing
