@@ -17,7 +17,7 @@ export default async function GlobalInboxPage() {
       user={data.user}
       workspaces={data.workspaces}
       activePath="/inbox"
-      crumbs={["Forge", "Inbox"]}
+      crumbs={[{ label: "Forge", href: "/" }, { label: "Inbox" }]}
       title="Inbox"
       subtitle="Assignments across all your workspaces"
       eyebrow="Across workspaces"

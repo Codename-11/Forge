@@ -17,12 +17,16 @@ export default async function AgentFleetPage({
       user={data.user}
       workspaces={data.workspaces}
       activePath="/agents"
-      crumbs={["Forge", "Mission Control", "Agents"]}
+      crumbs={[
+        { label: "Forge", href: "/" },
+        { label: "Mission Control", href: "/" },
+        { label: "Agents" },
+      ]}
       title="Agent fleet"
       subtitle="Define identities, connect execution, bind workspaces, and monitor live use."
       eyebrow="Mission Control"
       scope="control"
-      contentClass="overflow-hidden"
+      contentClass="flex flex-col overflow-hidden"
     >
       <AgentsContent
         isInstanceAdmin={data.user.instanceRole === "INSTANCE_ADMIN"}

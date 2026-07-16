@@ -122,7 +122,7 @@ test.describe("Mobile smoke", () => {
 
       await page.goto("/");
       await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
-      const activityPill = page.getByTitle("Activity · live runs + chat (G 5)");
+      const activityPill = page.getByTitle("Activity · live runs and changes · shortcut G then 5");
       await expect(activityPill).toBeVisible();
       await expectNoDocumentHorizontalOverflow(page, `mission control activity pill at ${width}px`);
 

@@ -20,9 +20,31 @@ test.describe.serial("Mission Control agent management", () => {
     await createDialog.getByRole("button", { name: "Create profile" }).click();
 
     await expect(page.getByText(name, { exact: true })).toBeVisible();
+    await page.setViewportSize({ width: 900, height: 650 });
+    const fleetScrollRegion = page.getByTestId("agent-fleet-scroll-region");
+    await expect
+      .poll(() =>
+        fleetScrollRegion.evaluate((element) => element.scrollHeight > element.clientHeight),
+      )
+      .toBe(true);
+    await fleetScrollRegion.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    await expect
+      .poll(() => fleetScrollRegion.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+
     await page.getByText(name, { exact: true }).click();
     await expect(page).toHaveURL(/\/agents\/[^/]+$/);
     await expect(page.getByText("Global profile", { exact: true }).first()).toBeVisible();
+    const profileScrollRegion = page.getByTestId("agent-profile-scroll-region");
+    await expect
+      .poll(() =>
+        profileScrollRegion.evaluate((element) => element.scrollHeight > element.clientHeight),
+      )
+      .toBe(true);
+    await profileScrollRegion.evaluate((element) => element.scrollTo(0, element.scrollHeight));
+    await expect
+      .poll(() => profileScrollRegion.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
 
     const detailUrl = new URL(page.url());
     const profileId = detailUrl.pathname.split("/").at(-1)!;

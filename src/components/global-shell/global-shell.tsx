@@ -14,7 +14,6 @@ import {
   ChevronDown,
   ChevronRight,
   Eye,
-  Bell,
   HelpCircle,
   Menu,
   type LucideIcon,
@@ -25,6 +24,7 @@ import { Drawer } from "@/components/ui/modal";
 import { cn } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
 import { VersionChip } from "./version-chip";
+import { GlobalAttentionBell } from "./global-attention-drawer";
 
 /**
  * Global "concourse" shell — the second of Forge's three shells (workspace
@@ -114,6 +114,11 @@ export interface GlobalShellUser {
   instanceRole: "INSTANCE_ADMIN" | "MEMBER";
 }
 
+export interface GlobalBreadcrumb {
+  label: string;
+  href?: string;
+}
+
 const GLOBAL_NAV: { href: string; icon: LucideIcon; label: string; hint: string }[] = [
   { href: "/", icon: Sparkles, label: "Mission Control", hint: "Across all workspaces" },
   { href: "/agents", icon: Bot, label: "Agents", hint: "Fleet & profiles" },
@@ -125,7 +130,8 @@ function ActivityPill() {
   return (
     <Link
       href="/activity"
-      title="Activity · live runs + chat (G 5)"
+      title="Activity · live runs and changes · shortcut G then 5"
+      aria-label="Open activity. Keyboard shortcut G then 5."
       className="focus-ring text-meta relative inline-flex min-h-8 items-center gap-2 rounded-full border px-2 py-0.5 font-medium transition-colors sm:min-h-0"
       style={{
         background: "hsl(var(--ember) / 0.12)",
@@ -148,10 +154,6 @@ function ActivityPill() {
         />
       </span>
       <span className="tracking-tight">Activity</span>
-      {/* keyboard hint is desktop-only */}
-      <span className="hidden md:inline-flex">
-        <Kbd>5</Kbd>
-      </span>
     </Link>
   );
 }
@@ -381,7 +383,7 @@ function GlobalTopBar({
   scope = "read",
   onOpenNav,
 }: {
-  crumbs: string[];
+  crumbs: GlobalBreadcrumb[];
   scope?: "read" | "control";
   onOpenNav?: () => void;
 }) {
@@ -398,15 +400,32 @@ function GlobalTopBar({
       >
         <Menu size={18} />
       </button>
-      <nav className="text-meta flex min-w-0 items-center gap-1 text-muted-foreground">
-        {crumbs.map((c, i) => (
-          <span key={i} className="flex min-w-0 items-center gap-1">
-            {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-            <span className={cn("truncate", i === crumbs.length - 1 ? "text-foreground" : "")}>
-              {c}
-            </span>
-          </span>
-        ))}
+      <nav aria-label="Breadcrumb" className="text-meta min-w-0 text-muted-foreground">
+        <ol className="flex min-w-0 items-center gap-1">
+          {crumbs.map((crumb, i) => {
+            const isCurrent = i === crumbs.length - 1;
+            return (
+              <li key={`${crumb.label}-${i}`} className="flex min-w-0 items-center gap-1">
+                {i > 0 && <ChevronRight aria-hidden size={11} className="shrink-0 opacity-60" />}
+                {crumb.href && !isCurrent ? (
+                  <Link
+                    href={crumb.href}
+                    className="focus-ring -mx-1 truncate rounded px-1 transition-colors hover:bg-subtle hover:text-foreground"
+                  >
+                    {crumb.label}
+                  </Link>
+                ) : (
+                  <span
+                    aria-current={isCurrent ? "page" : undefined}
+                    className={cn("truncate", isCurrent ? "text-foreground" : "")}
+                  >
+                    {crumb.label}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
       </nav>
       <span className="text-meta hidden items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-muted-foreground sm:ml-2 sm:inline-flex">
         {scope === "control" ? <Shield size={10} /> : <Eye size={10} />}
@@ -414,10 +433,14 @@ function GlobalTopBar({
       </span>
       <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
         <ActivityPill />
-        <button className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7">
-          <Bell size={14} />
-        </button>
-        <button className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7">
+        <GlobalAttentionBell />
+        <button
+          type="button"
+          title="Keyboard shortcuts (?)"
+          aria-label="Open keyboard shortcuts"
+          onClick={() => window.dispatchEvent(new Event("forge:open-keyboard-help"))}
+          className="focus-ring inline-flex h-10 w-10 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground sm:h-7 sm:w-7"
+        >
           <HelpCircle size={14} />
         </button>
       </div>
@@ -474,7 +497,7 @@ export function GlobalShell({
   user,
   workspaces,
   activePath,
-  crumbs = ["Forge"],
+  crumbs = [{ label: "Forge" }],
   title,
   subtitle,
   eyebrow,
@@ -487,7 +510,7 @@ export function GlobalShell({
   user: GlobalShellUser;
   workspaces: GlobalShellWorkspace[];
   activePath?: string;
-  crumbs?: string[];
+  crumbs?: GlobalBreadcrumb[];
   title?: string;
   subtitle?: string;
   eyebrow?: string;

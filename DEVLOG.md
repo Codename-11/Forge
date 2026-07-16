@@ -13369,3 +13369,65 @@ the full Vitest gate passed 1,320 tests with one intentional live-connector
 skip; the production build succeeded; the affected mobile and multi-workspace
 specs passed 13 journeys; and the complete serial Playwright gate passed all 47
 desktop, mobile, accessibility, and application journeys.
+
+---
+
+## 2026-07-15 — Mission Control agent surface scroll repair
+
+Reproduced the fleet regression against live data at a 900×650 desktop
+viewport. The `/agents` and `/agents/[id]` route shells opted into clipped
+overflow but did not establish the flex-column parent required by their nested
+scroll regions, leaving lower profiles and profile controls outside the
+reachable viewport.
+
+Restored the intended flex-column scroll contract on both routes and added
+stable fleet/profile scroll-region hooks. The Mission Control lifecycle E2E
+journey now constrains the viewport and proves that both surfaces overflow and
+can scroll before continuing through profile binding and removal.
+
+Verification: live-data browser checks confirmed wheel scrolling and clickable
+top/bottom actions without mutating production records; lint and typecheck
+passed (existing repository warnings only); the isolated Vitest gate passed
+1,320 tests with one intentional live-connector skip; and the production-built
+Mission Control Playwright suite passed both journeys.
+
+---
+
+## 2026-07-15 — Mission Control attention surfaces
+
+Audited Mission Control, the cross-workspace Inbox, Activity, and top-bar
+controls against live data at the operator's 1164×698 viewport. The Activity
+pill's numeric keyboard hint read like a stuck notification count; the bell and
+help controls were inert; assigned work lacked enough context to triage in
+place; raw action-request events flooded Activity; and the capacity metric
+reported agent presence rather than concurrent run slots.
+
+Replaced the fake Activity count with an accessible shortcut description and
+wired the help control into the shared keyboard guide. The global bell now uses
+the same persisted notification and since-visit inbox lifecycle as workspace
+alerts, exposes one combined unread count, and opens a responsive right-side
+attention panel with assignments, operational alerts, recent activity, and one
+mark-all-read action.
+
+The global Inbox now excludes terminal assignments and provides a persistent
+issue inspector with description, status, priority, project, labels, agent/run
+state, latest comment, and canonical workspace links. Global Activity now uses
+the workspace timeline interpreter, turns raw events into human-readable rows,
+groups repeated action-request/watchdog updates by subject, and provides a
+source inspector. Mission Control reports active runs against configured
+finite slots while naming unlimited-capacity agents explicitly.
+
+Verification: live-data browser comparison confirmed all four updated surfaces
+and both top-bar controls; lint and typecheck passed (existing repository
+warnings only); the complete Vitest gate passed 1,323 tests with one intentional
+live-connector skip; focused notification, event grouping, and capacity
+coverage passed 12/12; and the production-built multi-workspace Playwright
+journeys passed 8/8 after making the empty-data assertion deterministic.
+
+Follow-up: the global top bar's breadcrumb trail was visually suggestive but
+rendered as inert text. Global pages now declare explicit parent destinations,
+the shared shell renders a semantic breadcrumb landmark with keyboard-focusable
+parent links, and the current page remains non-interactive with `aria-current`.
+The live-data 1164×698 comparison preserved the existing visual hierarchy while
+proving Activity → Mission Control navigation; a fresh production build and the
+focused Playwright journey passed.

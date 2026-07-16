@@ -17,9 +17,14 @@ export default async function AgentFleetDetailPage({
       user={data.user}
       workspaces={data.workspaces}
       activePath="/agents"
-      crumbs={["Forge", "Mission Control", "Agents", "Profile"]}
+      crumbs={[
+        { label: "Forge", href: "/" },
+        { label: "Mission Control", href: "/" },
+        { label: "Agents", href: "/agents" },
+        { label: "Profile" },
+      ]}
       scope="control"
-      contentClass="overflow-hidden"
+      contentClass="flex flex-col overflow-hidden"
     >
       <AgentDetailContent
         id={id}

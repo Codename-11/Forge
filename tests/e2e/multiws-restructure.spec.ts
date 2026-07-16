@@ -22,6 +22,72 @@ test.describe("multi-workspace restructure", () => {
     await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
     // Read-only badge in the global top bar.
     await expect(page.getByText("Read-only across workspaces", { exact: true })).toBeVisible();
+    await expect(page.getByText("Run capacity", { exact: true })).toBeVisible();
+    const activityPill = page.getByRole("link", { name: /Open activity/ });
+    await expect(activityPill).toBeVisible();
+    await expect(activityPill).not.toContainText("5");
+  });
+
+  test("global notifications and help controls open useful surfaces", async ({ page }) => {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+
+    await page.getByRole("button", { name: /Open notifications/ }).click();
+    const notifications = page.getByRole("dialog", { name: "Notifications" });
+    await expect(notifications).toBeVisible();
+    await expect(notifications.getByText("One shared attention queue.")).toBeVisible();
+    await expect(notifications.getByRole("link", { name: "Open global inbox" })).toBeVisible();
+    await notifications.getByRole("button", { name: "Close" }).click();
+
+    await page.getByRole("button", { name: "Open keyboard shortcuts" }).click();
+    await expect(
+      page.getByRole("dialog").getByText("Keyboard shortcuts", { exact: true }),
+    ).toBeVisible();
+  });
+
+  test("global breadcrumbs navigate up the hierarchy", async ({ page }) => {
+    await page.goto("/activity", { waitUntil: "domcontentloaded" });
+
+    const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+    await expect(breadcrumb.getByRole("link", { name: "Forge" })).toHaveAttribute("href", "/");
+    await expect(breadcrumb.getByText("Activity", { exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(breadcrumb.getByRole("link", { name: "Activity" })).toHaveCount(0);
+
+    await breadcrumb.getByRole("link", { name: "Forge" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
+  });
+
+  test("global inbox and activity provide inspectable context", async ({ page }) => {
+    await page.goto("/inbox", { waitUntil: "domcontentloaded" });
+    const openIssue = page.getByRole("link", { name: "Open issue" });
+    const clearInbox = page.getByText("Your inbox is clear", { exact: true });
+    await expect(openIssue.or(clearInbox)).toBeVisible();
+    if (await openIssue.isVisible()) {
+      await expect(page.getByRole("heading", { name: "Active assignments" })).toBeVisible();
+      await expect(
+        page.getByText("Select a row to inspect context before opening it."),
+      ).toBeVisible();
+      await expect(openIssue).toBeVisible();
+    } else {
+      await expect(clearInbox).toBeVisible();
+    }
+
+    await page.goto("/activity", { waitUntil: "domcontentloaded" });
+    const openSource = page.getByRole("link", { name: "Open source" });
+    const noActivity = page.getByText("No activity yet", { exact: true });
+    await expect(openSource.or(noActivity)).toBeVisible();
+    if (await openSource.isVisible()) {
+      await expect(page.getByRole("heading", { name: "Recent changes" })).toBeVisible();
+      await expect(
+        page.getByText("Repeated watchdog updates are grouped by subject."),
+      ).toBeVisible();
+      await expect(openSource).toBeVisible();
+    } else {
+      await expect(noActivity).toBeVisible();
+    }
   });
 
   test("workspace switcher navigates into a workspace", async ({ page }) => {

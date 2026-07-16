@@ -18,7 +18,7 @@ export default async function MissionControlPage() {
       user={data.user}
       workspaces={data.workspaces}
       activePath="/"
-      crumbs={["Forge", "Mission Control"]}
+      crumbs={[{ label: "Forge", href: "/" }, { label: "Mission Control" }]}
       title="Mission Control"
       subtitle="Across all workspaces"
       eyebrow="Home"

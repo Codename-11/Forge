@@ -18,7 +18,7 @@ export default async function WhatsNewPage() {
       user={data.user}
       workspaces={data.workspaces}
       activePath="/whats-new"
-      crumbs={["Forge", "What's New"]}
+      crumbs={[{ label: "Forge", href: "/" }, { label: "What's New" }]}
       title="What's New"
       subtitle="Shipped changes, newest first"
       eyebrow="Release notes"

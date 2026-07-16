@@ -19,7 +19,6 @@ import {
   Workflow,
 } from "lucide-react";
 import { EmptyState, Spinner } from "@/components/ui";
-import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 import { workspaceColor } from "@/lib/workspace-color";
@@ -271,9 +270,17 @@ export function MissionControlHome() {
               />
               <SignalMetric
                 icon={Bot}
-                label="Agent capacity"
-                value={snapshot.agentsOnline}
-                detail="online across workspaces"
+                label="Run capacity"
+                value={
+                  snapshot.unlimitedRunAgents > 0
+                    ? `${snapshot.activeRuns} / ∞`
+                    : `${snapshot.activeRuns} / ${snapshot.finiteRunSlots}`
+                }
+                detail={
+                  snapshot.unlimitedRunAgents > 0
+                    ? `${snapshot.unlimitedRunAgents} unlimited ${snapshot.unlimitedRunAgents === 1 ? "agent" : "agents"}`
+                    : `${Math.max(0, snapshot.finiteRunSlots - snapshot.activeRuns)} slots open`
+                }
                 tone={snapshot.agentsOnline > 0 ? "success" : "neutral"}
               />
               <SignalMetric
@@ -611,30 +618,35 @@ function ActivityRow({
   event,
 }: {
   event: {
-    kind: string;
+    id: string;
+    title: string;
+    detail: string | null;
+    href: string;
+    occurrences: number;
     createdAt: Date | string;
-    actor: { name: string | null } | null;
-    actorAgent: { name: string | null; profileKey?: string | null } | null;
     workspace: Workspace;
   };
 }) {
-  const actor = activityActorName(event);
-  const ownerTitle = activityActorOwnerTitle(event);
-
   return (
-    <div className="text-meta flex min-h-11 items-start gap-2 px-3.5 py-2">
+    <Link
+      href={event.href}
+      className="focus-ring text-meta flex min-h-12 items-start gap-2 px-3.5 py-2 hover:bg-subtle"
+    >
       <WsChip ws={event.workspace} dense />
       <span className="min-w-0 flex-1">
-        <span className="block truncate text-foreground/90">
-          {event.kind.split(".")[1] || event.kind}
-        </span>
-        <span className="block truncate text-muted-foreground" title={ownerTitle}>
-          {actor}
-        </span>
+        <span className="block truncate text-foreground/90">{event.title}</span>
+        {event.detail && (
+          <span className="block truncate text-muted-foreground">{event.detail}</span>
+        )}
       </span>
+      {event.occurrences > 1 && (
+        <span className="rounded bg-subtle px-1 font-mono text-[10px] text-muted-foreground">
+          ×{event.occurrences}
+        </span>
+      )}
       <span className="shrink-0 tabular-nums text-muted-foreground/70">
         {relativeTime(event.createdAt)}
       </span>
-    </div>
+    </Link>
   );
 }
