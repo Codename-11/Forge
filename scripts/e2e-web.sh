@@ -18,8 +18,15 @@ PORT="${E2E_PORT:-3200}"
 # Postgres/Redis without the local docker-compose stack. `:-` = default only
 # when unset. E2E_MANAGE_STACK=0 (set in CI) skips docker compose + createdb.
 E2E_MANAGE_STACK="${E2E_MANAGE_STACK:-1}"
-export DATABASE_URL="${DATABASE_URL:-postgresql://forge:forge@localhost:55432/forge_e2e?schema=public}"
-export REDIS_URL="${REDIS_URL:-redis://localhost:56379/15}"   # logical DB 15 — isolated channels
+if [[ "$E2E_MANAGE_STACK" == "1" ]]; then
+  # Local E2E must never inherit the developer database from the invoking shell.
+  export DATABASE_URL="${E2E_DATABASE_URL:-postgresql://forge:forge@localhost:55432/forge_e2e?schema=public}"
+  export REDIS_URL="${E2E_REDIS_URL:-redis://localhost:56379/15}"
+else
+  # CI supplies isolated service-container endpoints explicitly.
+  export DATABASE_URL="${DATABASE_URL:?DATABASE_URL is required when E2E_MANAGE_STACK=0}"
+  export REDIS_URL="${REDIS_URL:?REDIS_URL is required when E2E_MANAGE_STACK=0}"
+fi
 export S3_ENDPOINT="${S3_ENDPOINT:-http://localhost:59000}"
 export S3_PUBLIC_ENDPOINT="${S3_PUBLIC_ENDPOINT:-http://localhost:59000}"
 export S3_REGION="${S3_REGION:-us-east-1}"
@@ -57,6 +64,18 @@ if [[ "$E2E_MANAGE_STACK" == "1" ]]; then
     [[ "$i" == "30" ]] && { echo "[e2e] Postgres not ready" >&2; exit 1; }
     sleep 1
   done
+
+  if [[ "${E2E_RESET_DB:-0}" == "1" ]]; then
+    if [[ "$DATABASE_URL" != *"/forge_e2e"* ]]; then
+      echo "[e2e] Refusing reset: DATABASE_URL is not the dedicated forge_e2e database." >&2
+      exit 1
+    fi
+    echo "[e2e] Resetting dedicated forge_e2e database…"
+    docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U forge -d forge -v ON_ERROR_STOP=1 -c \
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'forge_e2e' AND pid <> pg_backend_pid();" >/dev/null
+    docker compose -f "$COMPOSE_FILE" exec -T postgres dropdb -U forge --if-exists forge_e2e
+    docker compose -f "$COMPOSE_FILE" exec -T postgres createdb -U forge forge_e2e
+  fi
 
   # Dedicated DB — create if missing (separate from the shared `forge` DB).
   docker compose -f "$COMPOSE_FILE" exec -T postgres psql -U forge -d forge -tAc \
