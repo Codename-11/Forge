@@ -23,6 +23,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { HoverPreviewPortal } from "@/components/ui/hover-preview-portal";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Combobox } from "@/components/ui/combobox";
 import { ChatThreadView } from "@/components/mission-control/chat-thread";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,13 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
 import { presenceAvailability } from "@/lib/transport-display";
+import {
+  CHAT_SESSION_CLASS_FILTER_OPTIONS,
+  chatSessionClassBadgeClass,
+  chatSessionClassLabel,
+  type ChatSessionClass,
+  type ChatSessionClassFilter,
+} from "@/lib/chat-session-classification";
 import {
   chatStatusMetaFromDiagnostics,
   type ChatDiagnosticsLike,
@@ -113,6 +121,7 @@ type CollapsedRailThread = {
     hasImageAttachment?: boolean | null;
   } | null;
   diagnostics?: ChatDiagnosticsLike;
+  sessionClass: ChatSessionClass;
 };
 
 function latestMessageLabel(role: string | undefined): string {
@@ -135,6 +144,7 @@ function collapsedThreadLabel(thread: CollapsedRailThread): string {
   const meta = statusMeta({ agent: thread.agent, diagnostics: thread.diagnostics });
   return [
     conversationTitle(thread),
+    chatSessionClassLabel(thread.sessionClass),
     `${thread.agent.name} · @${thread.agent.profileKey}`,
     `${meta.label} · ${relativeTime(thread.lastMessageAt)}`,
   ].join(" | ");
@@ -177,6 +187,14 @@ function CollapsedThreadPreview({ thread }: { thread: CollapsedRailThread }) {
             <span className="truncate">{thread.agent.name}</span>
             <span className="text-id shrink-0">@{thread.agent.profileKey}</span>
           </div>
+          <span
+            className={cn(
+              "mt-1 inline-flex rounded-full border px-1.5 py-0.5 text-[0.5625rem] uppercase tracking-wider",
+              chatSessionClassBadgeClass(thread.sessionClass),
+            )}
+          >
+            {chatSessionClassLabel(thread.sessionClass)}
+          </span>
         </div>
         <span
           className={cn(
@@ -328,6 +346,7 @@ export function ChatWorkspaceSurface() {
   const draftParam = searchParams.get("draft");
   const [query, setQuery] = useState("");
   const [stateFilter, setStateFilter] = useState<ThreadStateFilter>("all");
+  const [sessionClass, setSessionClass] = useState<ChatSessionClassFilter>("all");
   const [archived, setArchived] = useState(false);
   const [mobilePickerOpen, setMobilePickerOpen] = useState(false);
   // Sub-`xl` inspector drawer (connection + status + actions). The right rail
@@ -402,8 +421,13 @@ export function ChatWorkspaceSurface() {
   );
 
   const threadsInput = useMemo(
-    () => ({ query: query.trim() || undefined, state: stateFilter, archived }),
-    [archived, query, stateFilter],
+    () => ({
+      query: query.trim() || undefined,
+      state: stateFilter,
+      sessionClass,
+      archived,
+    }),
+    [archived, query, sessionClass, stateFilter],
   );
   const { data: threads, isLoading: threadsLoading } = trpc.chat.threads.useQuery(threadsInput, {
     staleTime: 10_000,
@@ -417,6 +441,7 @@ export function ChatWorkspaceSurface() {
     onSuccess: async (result) => {
       setQuery("");
       setStateFilter("all");
+      setSessionClass("all");
       setArchived(false);
       setNewConversationOpen(false);
       setNewTitle("");
@@ -898,6 +923,7 @@ export function ChatWorkspaceSurface() {
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
+                  aria-label="Search conversations"
                   placeholder="Search chats…"
                   className="text-meta min-w-0 flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground/60"
                 />
@@ -905,6 +931,7 @@ export function ChatWorkspaceSurface() {
                   <button
                     type="button"
                     onClick={() => setQuery("")}
+                    aria-label="Clear conversation search"
                     className="text-muted-foreground hover:text-foreground"
                   >
                     <X className="h-3 w-3" />
@@ -924,6 +951,7 @@ export function ChatWorkspaceSurface() {
                     key={value}
                     type="button"
                     onClick={() => setStateFilter(value)}
+                    aria-pressed={stateFilter === value}
                     className={cn(
                       "rounded-full border px-2 py-0.5 text-[0.625rem]",
                       stateFilter === value
@@ -937,6 +965,7 @@ export function ChatWorkspaceSurface() {
                 <button
                   type="button"
                   onClick={() => setArchived((v) => !v)}
+                  aria-pressed={archived}
                   className={cn(
                     "rounded-full border px-2 py-0.5 text-[0.625rem]",
                     archived
@@ -947,6 +976,14 @@ export function ChatWorkspaceSurface() {
                   Archived
                 </button>
               </div>
+              <Combobox
+                value={sessionClass}
+                onChange={(value) => value && setSessionClass(value as ChatSessionClassFilter)}
+                options={[...CHAT_SESSION_CLASS_FILTER_OPTIONS]}
+                ariaLabel="Filter conversations by session type"
+                matchTriggerWidth
+                className="text-meta mt-2 w-full bg-background/70"
+              />
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {(threadsLoading || agentsLoading) && !hasRows ? (
@@ -1006,6 +1043,14 @@ export function ChatWorkspaceSurface() {
                                     default
                                   </span>
                                 ) : null}
+                                <span
+                                  className={cn(
+                                    "shrink-0 rounded-full border px-1.5 py-0.5 text-[0.5625rem] uppercase tracking-wider",
+                                    chatSessionClassBadgeClass(thread.sessionClass),
+                                  )}
+                                >
+                                  {chatSessionClassLabel(thread.sessionClass)}
+                                </span>
                               </div>
                               <p className="text-meta mt-0.5 truncate text-muted-foreground">
                                 {thread.agent.name} · @{thread.agent.profileKey}
@@ -1145,10 +1190,23 @@ export function ChatWorkspaceSurface() {
                 >
                   <div className="mb-3 flex items-center justify-between">
                     <div className="text-sm font-semibold text-foreground">Conversations</div>
-                    <Button variant="ghost" size="sm" onClick={() => setMobilePickerOpen(false)}>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      aria-label="Close conversations"
+                      onClick={() => setMobilePickerOpen(false)}
+                    >
                       <X className="h-3.5 w-3.5" />
                     </Button>
                   </div>
+                  <Combobox
+                    value={sessionClass}
+                    onChange={(value) => value && setSessionClass(value as ChatSessionClassFilter)}
+                    options={[...CHAT_SESSION_CLASS_FILTER_OPTIONS]}
+                    ariaLabel="Filter conversations by session type"
+                    matchTriggerWidth
+                    className="text-meta mb-3 w-full bg-background/70 py-2"
+                  />
                   <div className="max-h-[calc(100vh-4rem)] space-y-1 overflow-y-auto">
                     {(threads ?? []).map((thread) => (
                       <button
@@ -1165,6 +1223,14 @@ export function ChatWorkspaceSurface() {
                           <div className="truncate text-sm font-medium text-foreground">
                             {conversationTitle(thread)}
                           </div>
+                          <span
+                            className={cn(
+                              "mt-0.5 inline-flex rounded-full border px-1.5 py-0.5 text-[0.5625rem] uppercase tracking-wider",
+                              chatSessionClassBadgeClass(thread.sessionClass),
+                            )}
+                          >
+                            {chatSessionClassLabel(thread.sessionClass)}
+                          </span>
                           <div className="text-meta truncate text-muted-foreground">
                             {thread.agent.name} ·{" "}
                             {truncate(thread.latestMessage?.body, "No messages yet")}

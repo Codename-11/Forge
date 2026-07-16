@@ -28,7 +28,7 @@ import {
  *     local CLIs land here.
  *  4. **none** — nothing can serve a chat turn; the composer warns.
  */
-export type ChatTransportMode = "runs" | "completions" | "dispatch" | "none";
+export type ChatTransportMode = "sessions" | "runs" | "completions" | "dispatch" | "none";
 
 export type ChatRuntimeCapabilities = {
   /** Provider streams partial output back into the Forge chat surface. */
@@ -70,6 +70,8 @@ export type ChatReadiness = {
   transportLabel: string;
   /** Short machine-ish reason code (for tests / telemetry). */
   reason:
+    | "sessions-connector"
+    | "no-sessions-connector"
     | "runs-connector"
     | "no-runs-connector"
     | "runtime-probe-failed"
@@ -112,6 +114,44 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
   });
   const adapter = getRuntimeAdapter(input.runtime?.adapterKey);
   const isAvailable = input.providerAvailable ?? isProviderAvailable;
+
+  // Hermes interactive chat always uses the native Sessions API. An
+  // environment-level `/v1/runs` connector is deliberately insufficient:
+  // the runtime binding owns the durable tenant/session mapping and secret.
+  if (provider === "HERMES" && input.runtime?.adapterKey === "hermes") {
+    if (input.runtime.lastProbeAttempted && input.runtime.lastProbeReachable === false) {
+      return {
+        ready: false,
+        mode: "sessions",
+        provider,
+        transportLabel: runtimeLabel(input, adapter?.title) ?? "Hermes Sessions",
+        reason: "runtime-probe-failed",
+        capabilities: chatCapabilities("sessions", provider, false, input, adapter),
+        hint: `The attached Hermes runtime failed its last contract probe: ${input.runtime.lastProbeDetail || "probe did not succeed"}.`,
+      };
+    }
+    return {
+      ready: true,
+      mode: "sessions",
+      provider,
+      transportLabel: runtimeLabel(input, adapter?.title) ?? "Hermes Sessions",
+      reason: "sessions-connector",
+      capabilities: chatCapabilities("sessions", provider, true, input, adapter),
+      hint: "",
+    };
+  }
+  if (provider === "HERMES") {
+    return {
+      ready: false,
+      mode: "none",
+      provider,
+      transportLabel: "—",
+      reason: "no-sessions-connector",
+      capabilities: chatCapabilities("none", provider, false, input, adapter),
+      hint:
+        "Interactive Hermes chat requires a bound Hermes runtime that explicitly advertises native Sessions streaming. /v1/runs remains background-only.",
+    };
+  }
 
   // 1. RUNS with a server connector.
   if (engine === "RUNS") {
@@ -225,7 +265,8 @@ function chatCapabilities(
   adapter: ReturnType<typeof getRuntimeAdapter>,
 ): ChatRuntimeCapabilities {
   const active = ready && mode !== "none";
-  const forgeOwnedLoop = active && (mode === "runs" || mode === "completions");
+  const forgeOwnedLoop =
+    active && (mode === "sessions" || mode === "runs" || mode === "completions");
   const richRuntime = active && (provider === "HERMES" || provider === "CODEX");
   const dispatchStreaming =
     active &&
@@ -243,9 +284,9 @@ function chatCapabilities(
     thinking: forgeOwnedLoop,
     tools: forgeOwnedLoop,
     approvals: active && (mode === "completions" || runsApprovals),
-    stop: forgeOwnedLoop,
+    stop: active && (mode === "runs" || mode === "completions"),
     retry: true,
-    files: true,
+    files: mode !== "sessions",
     // Structured Runs currently receive text/history only. Image blocks are
     // passed through the Forge-owned completions loop; dispatch runtimes own
     // their attachment ingestion and advertise it independently later.

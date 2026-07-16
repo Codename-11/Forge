@@ -130,7 +130,7 @@ export const RUNTIME_ADAPTERS: RuntimeAdapter[] = [
   {
     key: "hermes",
     title: "Hermes",
-    tagline: "Profile-scoped persistent gateway. Owns the loop, streams, and approvals.",
+    tagline: "Native interactive Sessions plus background Runs execution.",
     iconKey: "Server",
     managed: true,
     // Hermes API-server processes are profile-scoped: config, credentials,
@@ -154,8 +154,8 @@ export const RUNTIME_ADAPTERS: RuntimeAdapter[] = [
     autoProvisionable: false,
     setupMarkdown: `# Hermes (managed runtime)
 
-A profile-scoped persistent daemon that owns the agent loop (\`/v1/runs\`),
-streams chat token-by-token, handles approvals, and reports presence. Each
+A profile-scoped persistent daemon. Interactive Forge chat uses native Hermes
+Sessions; \`/v1/runs\` remains the background and issue execution path. Each
 Hermes profile runs on its own gateway endpoint so credentials, tools, memory,
 and filesystem policy cannot cross profile boundaries.
 

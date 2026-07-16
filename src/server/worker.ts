@@ -33,6 +33,7 @@ import { sweepGitHubStatusReconciliation } from "@/server/services/github/reconc
 import { recoverGenericGitHubAttachments } from "@/server/services/github/resource-sync";
 import { sweepScheduledTasks } from "@/server/services/scheduled-task";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
+import { sweepHermesConnectorRetries } from "@/server/services/hermes-connector-retry";
 import { logger } from "@/server/logger";
 import { webhookQueue, maintenanceQueue } from "@/server/queues";
 
@@ -82,7 +83,15 @@ export const webhookWorker = new Worker(
       where: { id: deliveryId },
       include: { webhook: true, event: true },
     });
-    if (!delivery || !delivery.webhook.active) return;
+    if (
+      !delivery ||
+      !delivery.webhook.active ||
+      delivery.status === "SUCCESS" ||
+      delivery.status === "DEAD_LETTER" ||
+      delivery.scheduledAt.getTime() > Date.now()
+    ) {
+      return;
+    }
 
     // Agent-dispatch pseudo-webhook — resolve the real target URL from
     // either the subject issue's assignee (generic `agent:dispatch` shim)
@@ -169,13 +178,33 @@ export const webhookWorker = new Worker(
       },
     });
 
+    const workspaceRetry = !res.ok
+      ? await db.workspace.findUnique({
+          where: { id: delivery.event.workspaceId },
+          select: {
+            webhookRetryMaxAttempts: true,
+            webhookRetryInitialSeconds: true,
+            webhookRetryMaxSeconds: true,
+          },
+        })
+      : null;
+    const nextAttempt = delivery.attempt + 1;
+    const retryMaxAttempts = workspaceRetry?.webhookRetryMaxAttempts ?? 6;
+    const shouldRetry = !res.ok && nextAttempt < retryMaxAttempts;
+    const retrySeconds = shouldRetry
+      ? Math.min(
+          workspaceRetry?.webhookRetryMaxSeconds ?? 300,
+          (workspaceRetry?.webhookRetryInitialSeconds ?? 5) * 2 ** Math.max(0, nextAttempt - 1),
+        )
+      : 0;
     await db.webhookDelivery.update({
       where: { id: deliveryId },
       data: {
         attempt: { increment: 1 },
-        status: res.ok ? "SUCCESS" : delivery.attempt >= 5 ? "DEAD_LETTER" : "FAILED",
+        status: res.ok ? "SUCCESS" : shouldRetry ? "FAILED" : "DEAD_LETTER",
         responseStatus: res.status,
         responseBody: res.responseBody?.slice(0, 8_000),
+        scheduledAt: shouldRetry ? new Date(Date.now() + retrySeconds * 1_000) : new Date(),
         deliveredAt: res.ok ? new Date() : null,
       },
     });
@@ -289,8 +318,11 @@ export const maintenanceWorker = new Worker(
         return res;
       }
       case "delivery-drain": {
-        const res = await drainPendingDeliveries();
-        return res;
+        const [webhooks, connectors] = await Promise.all([
+          drainPendingDeliveries(),
+          sweepHermesConnectorRetries(),
+        ]);
+        return { ...webhooks, connectors };
       }
       case "stale-work-sweep": {
         const res = await sweepStaleWork();
@@ -365,8 +397,8 @@ export const maintenanceWorker = new Worker(
  */
 async function drainPendingDeliveries(): Promise<{ enqueued: number }> {
   const rows = await db.webhookDelivery.findMany({
-    where: { status: "PENDING" },
-    select: { id: true },
+    where: { status: { in: ["PENDING", "FAILED"] }, scheduledAt: { lte: new Date() } },
+    select: { id: true, attempt: true },
     orderBy: { scheduledAt: "asc" },
     take: DELIVERY_DRAIN_BATCH,
   });
@@ -375,12 +407,16 @@ async function drainPendingDeliveries(): Promise<{ enqueued: number }> {
     await webhookQueue.add(
       "deliver",
       { deliveryId: r.id },
-      { jobId: r.id, removeOnComplete: { age: 3600, count: 500 } },
+      {
+        jobId: `${r.id}:${r.attempt}`,
+        removeOnComplete: { age: 3600, count: 500 },
+        removeOnFail: { age: 86_400, count: 2_000 },
+      },
     );
     enqueued++;
   }
   if (enqueued > 0) {
-    logger.info({ enqueued }, "delivery-drain: enqueued PENDING rows");
+    logger.info({ enqueued }, "delivery-drain: enqueued due delivery rows");
   }
   return { enqueued };
 }

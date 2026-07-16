@@ -8,7 +8,7 @@ import {
   type TransportMode,
 } from "@/lib/transport-display";
 
-const MODES: TransportMode[] = ["runs", "completions", "dispatch", "none"];
+const MODES: TransportMode[] = ["sessions", "runs", "completions", "dispatch", "none"];
 
 describe("transport-display", () => {
   it("returns a tone for every mode", () => {
@@ -24,6 +24,7 @@ describe("transport-display", () => {
 
   it("title includes the label for active modes", () => {
     expect(transportTitle("runs", "Hermes")).toContain("Hermes");
+    expect(transportTitle("sessions", "Hermes")).toContain("Hermes");
     expect(transportTitle("dispatch", "ACP session")).toContain("ACP session");
     expect(transportTitle("completions", "OpenAI")).toContain("OpenAI");
   });
@@ -34,6 +35,7 @@ describe("transport-display", () => {
 
   it("mode word maps as expected", () => {
     expect(transportModeWord("runs")).toBe("runs");
+    expect(transportModeWord("sessions")).toBe("sessions");
     expect(transportModeWord("completions")).toBe("streaming");
     expect(transportModeWord("dispatch")).toBe("dispatch");
     expect(transportModeWord("none")).toBe("no chat");

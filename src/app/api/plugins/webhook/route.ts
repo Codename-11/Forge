@@ -9,15 +9,34 @@ import { verifyWebhookSignature } from "@/server/services/plugin-runtime";
  */
 export async function POST(req: NextRequest) {
   const slug = req.headers.get("x-forge-plugin");
+  const workspaceRef = req.headers.get("x-forge-workspace");
   const ts = req.headers.get("x-forge-timestamp");
   const sig = req.headers.get("x-forge-signature");
   if (!slug || !ts || !sig) {
     return NextResponse.json({ error: "Missing signing headers." }, { status: 400 });
   }
 
-  const plugin = await db.plugin.findFirst({
-    where: { slug, status: "APPROVED" },
+  const candidates = await db.plugin.findMany({
+    where: {
+      slug,
+      status: "APPROVED",
+      ...(workspaceRef
+        ? {
+            workspace: {
+              OR: [{ id: workspaceRef }, { slug: workspaceRef }, { key: workspaceRef }],
+            },
+          }
+        : {}),
+    },
+    take: 2,
   });
+  if (candidates.length > 1) {
+    return NextResponse.json(
+      { error: "Ambiguous plugin. Send x-forge-workspace with the workspace id, slug, or key." },
+      { status: 409 },
+    );
+  }
+  const plugin = candidates[0];
   if (!plugin?.secret) return NextResponse.json({ error: "Unknown plugin." }, { status: 404 });
 
   const body = await req.text();

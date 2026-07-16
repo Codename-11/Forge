@@ -2105,7 +2105,7 @@ export function ChatThreadView({
         try {
           const r = await utils.ai.hermesInfo.fetch({
             resource,
-            agentProfileKey: agent.profileKey,
+            threadId,
           });
           return r.markdown;
         } catch (e) {
@@ -2890,7 +2890,11 @@ export function ChatThreadView({
         contextItems={contextItems}
         onToggleContextItem={toggleContextItem}
         autoFocus={autoFocus}
-        threadId={threadId}
+        // The route-selected id is authoritative while getThread hydrates.
+        // Using a transient prior/undefined data id here can clear text the
+        // operator typed during a slow query as draft persistence switches
+        // namespaces underneath the composer.
+        threadId={selectedThreadId ?? threadId}
         mentionableAgents={mentionableAgents}
         mentionablePeople={mentionablePeople}
         fillRequest={fillRequest ?? undefined}

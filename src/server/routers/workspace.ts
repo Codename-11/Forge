@@ -106,6 +106,13 @@ export const workspaceRouter = router({
         cycleCooldownDays: true,
         timeTrackingEnabled: true,
         attachmentQuotaMb: true,
+        connectorRequestTimeoutSeconds: true,
+        connectorDeliveryMaxAttempts: true,
+        connectorRetryInitialSeconds: true,
+        connectorRetryMaxSeconds: true,
+        webhookRetryMaxAttempts: true,
+        webhookRetryInitialSeconds: true,
+        webhookRetryMaxSeconds: true,
         defaultIssueAssigneeMode: true,
         defaultIssueAssigneeUserId: true,
         defaultIssueAssigneeUser: {
@@ -292,6 +299,13 @@ export const workspaceRouter = router({
         cycleCooldownDays: z.number().int().min(0).max(30).optional(),
         timeTrackingEnabled: z.boolean().optional(),
         attachmentQuotaMb: z.number().int().min(0).max(1_024_000).optional(),
+        connectorRequestTimeoutSeconds: z.number().int().min(1).max(300).optional(),
+        connectorDeliveryMaxAttempts: z.number().int().min(1).max(25).optional(),
+        connectorRetryInitialSeconds: z.number().int().min(1).max(3600).optional(),
+        connectorRetryMaxSeconds: z.number().int().min(1).max(86400).optional(),
+        webhookRetryMaxAttempts: z.number().int().min(1).max(25).optional(),
+        webhookRetryInitialSeconds: z.number().int().min(1).max(3600).optional(),
+        webhookRetryMaxSeconds: z.number().int().min(1).max(86400).optional(),
         autoDispatch: z.boolean().optional(),
         autoDispatchMode: z.nativeEnum(AutoDispatchMode).optional(),
         defaultIssueAssigneeMode: z.nativeEnum(DefaultIssueAssigneeMode).optional(),
@@ -358,6 +372,34 @@ export const workspaceRouter = router({
           throw new TRPCError({
             code: "BAD_REQUEST",
             message: "GitHub maximum backoff must be at least the initial backoff.",
+          });
+        }
+      }
+      if (
+        input.connectorRetryInitialSeconds !== undefined ||
+        input.connectorRetryMaxSeconds !== undefined ||
+        input.webhookRetryInitialSeconds !== undefined ||
+        input.webhookRetryMaxSeconds !== undefined
+      ) {
+        const current = await ctx.db.workspace.findUniqueOrThrow({
+          where: { id: ctx.workspaceId },
+          select: {
+            connectorRetryInitialSeconds: true,
+            connectorRetryMaxSeconds: true,
+            webhookRetryInitialSeconds: true,
+            webhookRetryMaxSeconds: true,
+          },
+        });
+        const connectorInitial =
+          input.connectorRetryInitialSeconds ?? current.connectorRetryInitialSeconds;
+        const connectorMax = input.connectorRetryMaxSeconds ?? current.connectorRetryMaxSeconds;
+        const webhookInitial =
+          input.webhookRetryInitialSeconds ?? current.webhookRetryInitialSeconds;
+        const webhookMax = input.webhookRetryMaxSeconds ?? current.webhookRetryMaxSeconds;
+        if (connectorMax < connectorInitial || webhookMax < webhookInitial) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Maximum connector backoff must be at least its initial backoff.",
           });
         }
       }

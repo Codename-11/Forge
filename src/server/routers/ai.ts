@@ -755,13 +755,29 @@ export const aiRouter = router({
     .input(
       z.object({
         resource: z.enum(["skills", "memory", "health"]),
-        agentProfileKey: z.string().max(120).optional(),
+        threadId: z.string().min(1).max(40),
       }),
     )
-    .query(async ({ input }) => {
-      const base =
-        process.env.HERMES_GATEWAY_URL ??
-        `http://127.0.0.1:${process.env.HERMES_GATEWAY_PORT ?? "8642"}/v1`;
+    .query(async ({ ctx, input }) => {
+      const mapping = await ctx.db.connectorSession.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          chatThreadId: input.threadId,
+          chatThread: { userId: ctx.session.user.id },
+          connectorKey: "hermes-sessions",
+        },
+        select: {
+          memoryKey: true,
+          runtime: { select: { endpoint: true, secret: true, disabledAt: true } },
+        },
+      });
+      if (!mapping?.runtime.endpoint || mapping.runtime.disabledAt) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Open a Hermes Sessions conversation before using native Hermes commands.",
+        });
+      }
+      const base = mapping.runtime.endpoint;
       const root = base.replace(/\/v1\/?$/, "");
       const path =
         input.resource === "skills"
@@ -771,9 +787,11 @@ export const aiRouter = router({
             : "/health/detailed";
       const headers: Record<string, string> = {
         accept: "application/json",
-        authorization: `Bearer ${process.env.HERMES_GATEWAY_TOKEN ?? ""}`,
+        ...(mapping.runtime.secret
+          ? { authorization: `Bearer ${mapping.runtime.secret}` }
+          : {}),
       };
-      if (input.agentProfileKey) headers["x-session-key"] = input.agentProfileKey;
+      headers["x-hermes-session-key"] = mapping.memoryKey;
       let res: Response;
       try {
         res = await fetch(`${root}${path}`, { headers });

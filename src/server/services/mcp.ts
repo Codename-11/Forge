@@ -9,6 +9,8 @@ import {
   ApiKeyKind,
   ArtifactType,
   CommentKind,
+  ConnectorDeliveryDirection,
+  ConnectorDeliveryStatus,
   CycleStatus,
   EventKind,
   ExecutionPlanStatus,
@@ -5442,6 +5444,381 @@ export const mcpTools = {
           attachments: attachmentMap.get(m.id) ?? [],
         })),
       };
+    },
+  },
+
+  "chat.connector.negotiate": {
+    description:
+      "Negotiate the versioned Hermes Forge platform-plugin delivery contract. Native interactive chat uses Hermes Sessions separately; this handshake enables proactive, status, tool, attribution, and idempotent delivery into an existing mapping.",
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      connector: z.literal("hermes-forge-platform"),
+      versions: z.array(z.string().max(20)).min(1).max(10),
+      profileKey: z.string().min(1).max(120),
+      capabilities: z.object({
+        orderedEvents: z.boolean(),
+        idempotentDelivery: z.boolean(),
+        draftStreaming: z.boolean(),
+        proactiveDelivery: z.boolean(),
+        statusEvents: z.boolean(),
+        toolEvents: z.boolean(),
+        attribution: z.boolean(),
+        sessionMapping: z.literal("forge-owned"),
+        eventKinds: z.array(z.string().min(1).max(80)).max(40),
+      }),
+    }),
+    async run(
+      input: {
+        connector: "hermes-forge-platform";
+        versions: string[];
+        profileKey: string;
+        capabilities: {
+          orderedEvents: boolean;
+          idempotentDelivery: boolean;
+          draftStreaming: boolean;
+          proactiveDelivery: boolean;
+          statusEvents: boolean;
+          toolEvents: boolean;
+          attribution: boolean;
+          sessionMapping: "forge-owned";
+          eventKinds: string[];
+        };
+      },
+      ctx: McpContext,
+    ) {
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) {
+        throw new Error("chat.connector.negotiate requires an agent-linked API key.");
+      }
+      const agent = await db.agent.findFirst({
+        where: {
+          id: linkedAgentId,
+          workspaceId: ctx.workspaceId,
+          profileKey: input.profileKey,
+          archivedAt: null,
+        },
+        select: { id: true, profileKey: true },
+      });
+      if (!agent) throw new Error("Connector profile does not match the linked Forge agent.");
+      if (!input.versions.includes("1.0")) {
+        throw new Error("No mutually supported Hermes Forge connector protocol version.");
+      }
+      const mappings = await db.connectorSession.findMany({
+        where: { workspaceId: ctx.workspaceId, agentId: agent.id, connectorKey: "hermes-sessions" },
+        select: { id: true, chatThreadId: true, capabilities: true },
+      });
+      if (mappings.length > 0) {
+        await db.$transaction(async (tx) => {
+          for (const mapping of mappings) {
+            const current =
+              mapping.capabilities &&
+              typeof mapping.capabilities === "object" &&
+              !Array.isArray(mapping.capabilities)
+                ? (mapping.capabilities as Prisma.JsonObject)
+                : {};
+            await tx.connectorSession.update({
+              where: { id: mapping.id },
+              data: {
+                capabilities: {
+                  ...current,
+                  proactiveDelivery: true,
+                  orderedDelivery: true,
+                  statusEvents: true,
+                  toolEvents: true,
+                  attribution: true,
+                  platformProtocolVersion: "1.0",
+                },
+              },
+            });
+            if (mapping.chatThreadId) {
+              await recordChange(tx, {
+                workspaceId: ctx.workspaceId,
+                actorId: null,
+                actorAgentId: agent.id,
+                entity: "ConnectorSession",
+                entityId: mapping.id,
+                action: "platform-negotiate",
+                eventKind: EventKind.CHAT_CONNECTOR_EVENT,
+                subjectType: "chat-thread-state",
+                subjectId: mapping.chatThreadId,
+                payload: { connectorSessionId: mapping.id, platformProtocolVersion: "1.0" },
+              });
+            }
+          }
+        });
+      }
+      return {
+        selectedVersion: "1.0" as const,
+        connectorId: agent.id,
+        capabilities: {
+          orderedEvents: true,
+          idempotentDelivery: true,
+          draftStreaming: true,
+          proactiveDelivery: true,
+          statusEvents: true,
+          toolEvents: true,
+          attribution: true,
+          sessionMapping: "forge-owned" as const,
+          eventKinds: input.capabilities.eventKinds,
+        },
+      };
+    },
+  },
+
+  "chat.connector.deliver": {
+    description:
+      "Deliver one ordered, idempotent Hermes platform-plugin event into an existing Forge-owned ChatThread↔Hermes session mapping.",
+    scopes: ["WRITE_COMMENTS"] as const,
+    input: z.object({
+      envelope: z.object({
+        protocolVersion: z.literal("1.0"),
+        connector: z.literal("hermes-forge-platform"),
+        connectorId: z.string().max(120).optional(),
+        eventId: z.string().min(1).max(240),
+        sequence: z.number().int().nonnegative(),
+        direction: z.literal("hermes_to_forge"),
+        kind: z.enum([
+          "message.started",
+          "message.delta",
+          "message.final",
+          "message.proactive",
+          "status.changed",
+          "tool.started",
+          "tool.completed",
+          "tool.failed",
+          "approval.requested",
+          "approval.resolved",
+          "delivery.error",
+        ]),
+        occurredAt: z.string().datetime(),
+        threadId: z.string().min(1).max(40),
+        sessionId: z.string().min(1).max(256).optional(),
+        replyToMessageId: z.string().min(1).max(40).optional(),
+        attribution: z.object({
+          actorType: z.literal("agent"),
+          profileKey: z.string().min(1).max(120),
+          agentId: z.string().max(120).optional(),
+          displayName: z.string().max(160).optional(),
+          hermesMessageId: z.string().max(240).optional(),
+        }),
+        idempotency: z.object({
+          key: z.string().min(1).max(240),
+          scope: z.literal("connector-event"),
+        }),
+        payload: z.record(z.unknown()),
+      }),
+    }),
+    async run(input: { envelope: unknown }, ctx: McpContext) {
+      const envelope = input.envelope as {
+        protocolVersion: "1.0";
+        connector: "hermes-forge-platform";
+        connectorId?: string;
+        eventId: string;
+        sequence: number;
+        direction: "hermes_to_forge";
+        kind: string;
+        occurredAt: string;
+        threadId: string;
+        sessionId?: string;
+        replyToMessageId?: string;
+        attribution: {
+          actorType: "agent";
+          profileKey: string;
+          agentId?: string;
+          displayName?: string;
+          hermesMessageId?: string;
+        };
+        idempotency: { key: string; scope: "connector-event" };
+        payload: Record<string, unknown>;
+      };
+      const linkedAgentId = ctx.apiKey?.linkedAgentId;
+      if (!linkedAgentId) throw new Error("chat.connector.deliver requires an agent-linked key.");
+      if (envelope.connectorId && envelope.connectorId !== linkedAgentId) {
+        throw new Error("Connector id does not match the linked Forge agent.");
+      }
+      return db.$transaction(async (tx) => {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${ctx.workspaceId}:${linkedAgentId}:${envelope.idempotency.key}`}))`;
+        const mapping = await tx.connectorSession.findFirst({
+          where: {
+            workspaceId: ctx.workspaceId,
+            agentId: linkedAgentId,
+            chatThreadId: envelope.threadId,
+            connectorKey: "hermes-sessions",
+            chatThread: { agentId: linkedAgentId },
+            ...(envelope.sessionId ? { externalSessionId: envelope.sessionId } : {}),
+          },
+          select: { id: true, externalSessionId: true, capabilities: true },
+        });
+        if (!mapping) {
+          throw new Error("No tenant-scoped Forge-owned Hermes session mapping matches this event.");
+        }
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${envelope.threadId}))`;
+        const duplicate = await tx.connectorDelivery.findUnique({
+          where: {
+            connectorSessionId_direction_externalEventId: {
+              connectorSessionId: mapping.id,
+              direction: ConnectorDeliveryDirection.INBOUND,
+              externalEventId: envelope.idempotency.key,
+            },
+          },
+          select: { chatMessageId: true },
+        });
+        if (duplicate) {
+          return { accepted: true, duplicate: true, messageId: duplicate.chatMessageId ?? undefined };
+        }
+        const prior = await tx.connectorDelivery.findFirst({
+          where: {
+            connectorSessionId: mapping.id,
+            direction: ConnectorDeliveryDirection.INBOUND,
+            kind: { startsWith: "plugin:" },
+          },
+          orderBy: { sequence: "desc" },
+          select: { sequence: true },
+        });
+        if (prior?.sequence !== null && prior?.sequence !== undefined && envelope.sequence <= prior.sequence) {
+          throw new Error("Connector event sequence is stale for this mapped session.");
+        }
+        const expectedSequence = (prior?.sequence ?? 0) + 1;
+        if (envelope.sequence !== expectedSequence) {
+          throw new Error(
+            `Connector event sequence gap: expected ${expectedSequence}, received ${envelope.sequence}. Retry after replaying missing events.`,
+          );
+        }
+
+        const delivery = await tx.connectorDelivery.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            connectorSessionId: mapping.id,
+            direction: ConnectorDeliveryDirection.INBOUND,
+            externalEventId: envelope.idempotency.key,
+            sequence: envelope.sequence,
+            kind: `plugin:${envelope.kind}`,
+            status: ConnectorDeliveryStatus.DELIVERED,
+            payload: envelope as unknown as Prisma.InputJsonObject,
+            deliveredAt: new Date(),
+          },
+        });
+
+        const isFinal =
+          envelope.kind === "message.final" || envelope.kind === "message.proactive";
+        let messageId: string | undefined;
+        if (isFinal) {
+          const bodyValue = envelope.payload.body ?? envelope.payload.content ?? envelope.payload.text;
+          const body = typeof bodyValue === "string" ? bodyValue.trim() : "";
+          if (!body) throw new Error("Final/proactive connector messages require payload body/content/text.");
+          if (envelope.replyToMessageId) {
+            const target = await tx.chatMessage.findFirst({
+              where: {
+                id: envelope.replyToMessageId,
+                workspaceId: ctx.workspaceId,
+                threadId: envelope.threadId,
+                role: "USER",
+              },
+              select: { id: true, acknowledgedAt: true },
+            });
+            if (!target) throw new Error("Reply target was not found in this mapped thread.");
+            const now = new Date();
+            await tx.chatMessage.update({
+              where: { id: target.id },
+              data: { acknowledgedAt: target.acknowledgedAt ?? now, outputStartedAt: now },
+            });
+          }
+          const aggregate = await tx.chatMessage.aggregate({
+            where: { workspaceId: ctx.workspaceId, threadId: envelope.threadId },
+            _max: { sequence: true },
+          });
+          const message = await tx.chatMessage.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              threadId: envelope.threadId,
+              role: "AGENT",
+              body,
+              sequence: (aggregate._max.sequence ?? 0) + 1,
+              replyToMessageId: envelope.replyToMessageId ?? null,
+              externalMessageId:
+                envelope.attribution.hermesMessageId ?? envelope.idempotency.key,
+              connectorSessionId: mapping.id,
+              contextSnapshot: {
+                proactive: envelope.kind === "message.proactive",
+                connectorEventId: envelope.eventId,
+                attribution: envelope.attribution,
+              } as Prisma.InputJsonObject,
+            },
+          });
+          messageId = message.id;
+          await tx.connectorDelivery.update({
+            where: { id: delivery.id },
+            data: { chatMessageId: message.id },
+          });
+          await tx.chatThread.update({
+            where: { id: envelope.threadId },
+            data: { lastMessageAt: new Date(envelope.occurredAt) },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: null,
+            actorAgentId: linkedAgentId,
+            entity: "ChatMessage",
+            entityId: message.id,
+            action: "connector-deliver",
+            eventKind: EventKind.CHAT_MESSAGE_POSTED,
+            subjectType: "chat-thread",
+            subjectId: envelope.threadId,
+            payload: {
+              threadId: envelope.threadId,
+              messageId: message.id,
+              agentId: linkedAgentId,
+              role: "AGENT",
+              connectorEventId: envelope.eventId,
+              proactive: envelope.kind === "message.proactive",
+            },
+          });
+        } else {
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: null,
+            actorAgentId: linkedAgentId,
+            entity: "ConnectorDelivery",
+            entityId: delivery.id,
+            action: envelope.kind,
+            eventKind: EventKind.CHAT_CONNECTOR_EVENT,
+            subjectType: "chat-thread-state",
+            subjectId: envelope.threadId,
+            payload: {
+              phase: envelope.kind,
+              threadId: envelope.threadId,
+              connectorEventId: envelope.eventId,
+              sequence: envelope.sequence,
+              attribution: envelope.attribution,
+            },
+          });
+        }
+        await tx.connectorSession.update({
+          where: { id: mapping.id },
+          data: {
+            lastExternalSequence: envelope.sequence,
+            lastEventAt: new Date(envelope.occurredAt),
+            lastDeliveryAt: new Date(),
+            lifecycle: "ACTIVE",
+            capabilities: {
+              ...((mapping.capabilities &&
+              typeof mapping.capabilities === "object" &&
+              !Array.isArray(mapping.capabilities)
+                ? mapping.capabilities
+                : {}) as Prisma.JsonObject),
+              proactiveDelivery: true,
+              orderedDelivery: true,
+              statusEvents: true,
+              toolEvents: true,
+              attribution: true,
+              platformProtocolVersion: envelope.protocolVersion,
+            },
+            lastError: envelope.kind === "delivery.error" ? String(envelope.payload.error ?? "Delivery error") : null,
+            lastErrorAt: envelope.kind === "delivery.error" ? new Date() : null,
+          },
+        });
+        return { accepted: true, duplicate: false, messageId };
+      });
     },
   },
 

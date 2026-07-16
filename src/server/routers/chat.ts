@@ -5,6 +5,8 @@ import {
   AgentRunStatus,
   ChatContextMode,
   ChatRole,
+  ChatSessionClass,
+  ConnectorSessionLifecycle,
   EventKind,
 } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
@@ -19,12 +21,19 @@ import { workspaceChatProviderAvailability } from "@/server/services/ai-provider
 import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
 import { finishRun } from "@/server/services/agent-run";
 import { deleteAttachment } from "@/server/services/storage";
+import {
+  buildHermesMemoryKey,
+  HermesSessionsError,
+  makeHermesSessionsClient,
+  redactConnectorDiagnostic,
+} from "@/server/services/hermes-sessions";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // the same loose validator the rest of the codebase uses for entity ids.
 const idString = z.string().min(1).max(40);
 
 const ThreadStateSchema = z.enum(["all", "waiting", "stalled", "has_attachments"]);
+const ThreadSessionClassSchema = z.union([z.literal("all"), z.nativeEnum(ChatSessionClass)]);
 const ChatContextModeSchema = z.nativeEnum(ChatContextMode);
 
 const ChatContextSchema = z
@@ -132,6 +141,35 @@ type ChatThreadDiagnostics = {
     lastError: string | null;
     updatedAt: Date;
   } | null;
+  connectorSession: {
+    id: string;
+    externalSessionId: string;
+    sessionClass: ChatSessionClass;
+    lifecycle: string;
+    ownership: string;
+    protocolVersion: string | null;
+    capabilities: Prisma.JsonValue | null;
+    negotiatedAt: Date | null;
+    lastConnectedAt: Date | null;
+    lastEventAt: Date | null;
+    lastDeliveryAt: Date | null;
+    lastErrorAt: Date | null;
+    lastError: string | null;
+    retryCount: number;
+    nextRetryAt: Date | null;
+    lastExternalSequence: number | null;
+    lastConnectorDelivery: {
+      id: string;
+      direction: string;
+      kind: string;
+      status: string;
+      attempt: number;
+      sequence: number | null;
+      nextAttemptAt: Date | null;
+      deliveredAt: Date | null;
+      lastError: string | null;
+    } | null;
+  } | null;
   /**
    * Canonical dispatch state derived from the latest USER message's
    * lifecycle fields. Drives the chat panel's typing/wake/stalled UI
@@ -207,7 +245,7 @@ async function buildThreadDiagnostics(
   workspaceId: string,
   threadId: string,
 ): Promise<ChatThreadDiagnostics> {
-  const [latestUser, latestAgent, latestSourceMessage, lastEvent] = await Promise.all([
+  const [latestUser, latestAgent, latestSourceMessage, lastEvent, connectorSession] = await Promise.all([
     tx.chatMessage.findFirst({
       where: { workspaceId, threadId, role: ChatRole.USER, dispatchedAt: { not: null } },
       orderBy: { createdAt: "desc" },
@@ -252,6 +290,43 @@ async function buildThreadDiagnostics(
             responseStatus: true,
             scheduledAt: true,
             deliveredAt: true,
+          },
+        },
+      },
+    }),
+    tx.connectorSession.findFirst({
+      where: { workspaceId, chatThreadId: threadId },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        id: true,
+        externalSessionId: true,
+        sessionClass: true,
+        lifecycle: true,
+        ownership: true,
+        protocolVersion: true,
+        capabilities: true,
+        negotiatedAt: true,
+        lastConnectedAt: true,
+        lastEventAt: true,
+        lastDeliveryAt: true,
+        lastErrorAt: true,
+        lastError: true,
+        retryCount: true,
+        nextRetryAt: true,
+        lastExternalSequence: true,
+        deliveries: {
+          orderBy: { updatedAt: "desc" },
+          take: 1,
+          select: {
+            id: true,
+            direction: true,
+            kind: true,
+            status: true,
+            attempt: true,
+            sequence: true,
+            nextAttemptAt: true,
+            deliveredAt: true,
+            lastError: true,
           },
         },
       },
@@ -523,7 +598,20 @@ async function buildThreadDiagnostics(
                         outputStartedAt: latestUser.outputStartedAt,
                         waitingMs,
                         runId: run?.id ?? null,
-                      };
+                    };
+
+  const connectorDiagnostics = connectorSession
+    ? (() => {
+        const { deliveries, ...session } = connectorSession;
+        return {
+          ...session,
+          lastError: redactDiagnosticText(session.lastError),
+          lastConnectorDelivery: deliveries[0]
+            ? { ...deliveries[0], lastError: redactDiagnosticText(deliveries[0].lastError) }
+            : null,
+        };
+      })()
+    : null;
 
   return {
     latestUserMessageId: latestUser?.id ?? null,
@@ -557,6 +645,7 @@ async function buildThreadDiagnostics(
           updatedAt: delivery.deliveredAt ?? delivery.scheduledAt,
         }
       : null,
+    connectorSession: connectorDiagnostics,
     dispatchState,
     turnStatus,
     latestUserMessage: latestUser
@@ -756,6 +845,7 @@ export const chatRouter = router({
           archived: z.boolean().optional(),
           query: z.string().trim().max(200).optional(),
           state: ThreadStateSchema.default("all"),
+          sessionClass: ThreadSessionClassSchema.default("all"),
         })
         .optional(),
     )
@@ -829,6 +919,7 @@ export const chatRouter = router({
         );
         enriched.push({
           ...thread,
+          sessionClass: diagnostics.connectorSession?.sessionClass ?? ChatSessionClass.OTHER,
           lastReadAt: reads[0]?.readAt ?? null,
           diagnostics,
           hasAttachments,
@@ -849,7 +940,9 @@ export const chatRouter = router({
         });
       }
       const state = input?.state ?? "all";
+      const sessionClass = input?.sessionClass ?? "all";
       return enriched.filter((thread) => {
+        if (sessionClass !== "all" && thread.sessionClass !== sessionClass) return false;
         if (state === "waiting") return thread.diagnostics.waitingForReply;
         if (state === "stalled") {
           return (
@@ -1224,6 +1317,72 @@ export const chatRouter = router({
         select: { id: true },
       });
       const messageIds = messages.map((message) => message.id);
+      const connectorSession = await ctx.db.connectorSession.findFirst({
+        where: { workspaceId: ctx.workspaceId, chatThreadId: thread.id },
+        select: {
+          id: true,
+          externalSessionId: true,
+          memoryKey: true,
+          capabilities: true,
+          runtimeId: true,
+          agentId: true,
+          runtime: { select: { endpoint: true, secret: true, disabledAt: true } },
+          workspace: { select: { connectorRequestTimeoutSeconds: true } },
+        },
+      });
+      let replacementMemoryKey: string | null = null;
+      let replacementSessionId: string | null = null;
+      if (connectorSession && (!connectorSession.runtime.endpoint || connectorSession.runtime.disabledAt)) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Reconnect the Hermes runtime before clearing this conversation.",
+        });
+      }
+      if (connectorSession?.runtime.endpoint && !connectorSession.runtime.disabledAt) {
+        const newMemoryKey = buildHermesMemoryKey({
+          runtimeId: connectorSession.runtimeId,
+          workspaceId: ctx.workspaceId,
+          userId: ctx.session.user.id,
+          agentId: connectorSession.agentId,
+          chatThreadId: thread.id,
+          generation: randomUUID(),
+        });
+        const newSessionId = `forge_${newMemoryKey.split(":").at(-1)!.slice(0, 48)}`;
+        replacementMemoryKey = newMemoryKey;
+        replacementSessionId = newSessionId;
+        const client = makeHermesSessionsClient({
+          baseUrl: connectorSession.runtime.endpoint,
+          token: connectorSession.runtime.secret,
+          requestTimeoutMs: connectorSession.workspace.connectorRequestTimeoutSeconds * 1000,
+        });
+        try {
+          // Provision the replacement before retiring the active session. If
+          // creation fails the durable mapping still points at a live remote
+          // resource, so a retry is safe and does not lose chat history.
+          await client.createSession({
+            sessionId: newSessionId,
+            memoryKey: newMemoryKey,
+            title: thread.title,
+            idempotencyKey: `forge-clear:${thread.id}:${newMemoryKey.slice(-12)}`,
+          });
+          try {
+            await client.deleteSession(connectorSession.externalSessionId, connectorSession.memoryKey);
+          } catch (error) {
+            if (!(error instanceof HermesSessionsError) || error.status !== 404) {
+              // Avoid leaking the unbound replacement when the old session
+              // could not be retired. Cleanup is best-effort; the operator can
+              // retry safely because createSession is idempotent.
+              await client.deleteSession(newSessionId, newMemoryKey).catch(() => undefined);
+              throw error;
+            }
+          }
+        } catch (error) {
+          throw new TRPCError({
+            code: "BAD_GATEWAY",
+            message: `Hermes session could not be reset: ${redactConnectorDiagnostic(error)}`,
+          });
+        }
+      }
       const purgedAttachments = await purgeChatMessageAttachments(
         ctx.db,
         ctx.workspaceId,
@@ -1271,6 +1430,11 @@ export const chatRouter = router({
             where: { workspaceId: ctx.workspaceId, threadId: thread.id },
           });
         }
+        if (connectorSession && replacementSessionId) {
+          await tx.connectorDelivery.deleteMany({
+            where: { connectorSessionId: connectorSession.id },
+          });
+        }
         await tx.chatThread.update({
           where: { id: thread.id },
           data: {
@@ -1280,6 +1444,23 @@ export const chatRouter = router({
             lastMessageAt: now,
           },
         });
+        if (connectorSession && replacementMemoryKey && replacementSessionId) {
+          await tx.connectorSession.update({
+            where: { id: connectorSession.id },
+            data: {
+              memoryKey: replacementMemoryKey,
+              externalSessionId: replacementSessionId,
+              lifecycle: ConnectorSessionLifecycle.ACTIVE,
+              lastConnectedAt: now,
+              lastEventAt: null,
+              lastDeliveryAt: null,
+              lastError: null,
+              lastErrorAt: null,
+              retryCount: 0,
+              nextRetryAt: null,
+            },
+          });
+        }
         await tx.auditLog.create({
           data: {
             workspaceId: ctx.workspaceId,
@@ -1674,6 +1855,124 @@ export const chatRouter = router({
       return buildThreadDiagnostics(ctx.db, ctx.workspaceId, thread.id);
     }),
 
+  reconnectConnector: workspaceProcedure
+    .input(z.object({ threadId: idString }))
+    .mutation(async ({ ctx, input }) => {
+      const mapping = await ctx.db.connectorSession.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          chatThreadId: input.threadId,
+          chatThread: { userId: ctx.session.user.id },
+        },
+        select: {
+          id: true,
+          externalSessionId: true,
+          memoryKey: true,
+          capabilities: true,
+          agentId: true,
+          chatThread: { select: { title: true } },
+          runtime: { select: { endpoint: true, secret: true, disabledAt: true } },
+          workspace: { select: { connectorRequestTimeoutSeconds: true } },
+        },
+      });
+      if (!mapping) throw new TRPCError({ code: "NOT_FOUND", message: "Connector session not found" });
+      if (!mapping.runtime.endpoint || mapping.runtime.disabledAt) {
+        throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Hermes runtime is unavailable" });
+      }
+      const client = makeHermesSessionsClient({
+        baseUrl: mapping.runtime.endpoint,
+        token: mapping.runtime.secret,
+        requestTimeoutMs: mapping.workspace.connectorRequestTimeoutSeconds * 1000,
+      });
+      const now = new Date();
+      try {
+        const capabilities = await client.negotiateCapabilities();
+        if (!capabilities.sessions || !capabilities.streaming || !capabilities.protocolVersion) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Hermes does not advertise the required native Sessions streaming contract",
+          });
+        }
+        try {
+          await client.getSession(mapping.externalSessionId, mapping.memoryKey);
+        } catch (error) {
+          if (!(error instanceof HermesSessionsError) || error.status !== 404) throw error;
+          await client.createSession({
+            sessionId: mapping.externalSessionId,
+            memoryKey: mapping.memoryKey,
+            title: mapping.chatThread?.title ?? "Forge conversation",
+            idempotencyKey: `forge-reconnect:${mapping.id}`,
+          });
+        }
+        await ctx.db.$transaction(async (tx) => {
+          const priorCapabilities =
+            mapping.capabilities &&
+            typeof mapping.capabilities === "object" &&
+            !Array.isArray(mapping.capabilities)
+              ? (mapping.capabilities as Prisma.JsonObject)
+              : {};
+          await tx.connectorSession.update({
+            where: { id: mapping.id },
+            data: {
+              lifecycle: ConnectorSessionLifecycle.ACTIVE,
+              protocolVersion: capabilities.protocolVersion,
+              capabilities: {
+                ...capabilities,
+                ...(typeof priorCapabilities.platformProtocolVersion === "string"
+                  ? {
+                      platformProtocolVersion: priorCapabilities.platformProtocolVersion,
+                      proactiveDelivery: priorCapabilities.proactiveDelivery === true,
+                      orderedDelivery: priorCapabilities.orderedDelivery === true,
+                      statusEvents: priorCapabilities.statusEvents === true,
+                      toolEvents: priorCapabilities.toolEvents === true,
+                      attribution: priorCapabilities.attribution === true,
+                    }
+                  : {}),
+              } as unknown as Prisma.InputJsonValue,
+              negotiatedAt: now,
+              negotiationError: null,
+              lastConnectedAt: now,
+              lastErrorAt: null,
+              lastError: null,
+              retryCount: 0,
+              nextRetryAt: null,
+            },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "ConnectorSession",
+            entityId: mapping.id,
+            action: "reconnect",
+            eventKind: EventKind.CHAT_CONNECTOR_EVENT,
+            subjectType: "chat-thread",
+            subjectId: input.threadId,
+            payload: {
+              connectorSessionId: mapping.id,
+              externalSessionId: mapping.externalSessionId,
+              protocolVersion: capabilities.protocolVersion,
+              lifecycle: ConnectorSessionLifecycle.ACTIVE,
+            },
+          });
+        });
+        return { ok: true, message: "Hermes session reconnected and capabilities refreshed" };
+      } catch (error) {
+        const detail = redactConnectorDiagnostic(error);
+        await ctx.db.connectorSession.update({
+          where: { id: mapping.id },
+          data: {
+            lifecycle: ConnectorSessionLifecycle.ERROR,
+            negotiationError: detail,
+            lastErrorAt: now,
+            lastError: detail,
+          },
+        });
+        if (error instanceof TRPCError) throw error;
+        throw new TRPCError({ code: "BAD_GATEWAY", message: detail });
+      }
+    }),
+
   /**
    * Whether a chat turn for this agent will actually reach a model — so the
    * composer can steer the operator (attach a chat-capable runtime / set a
@@ -2064,6 +2363,50 @@ export const chatRouter = router({
         }
       }
 
+      // Forge-owned native sessions share the hard-delete lifecycle. Archive
+      // and clear have separate semantics, but deleting the mapping without
+      // deleting its remote resource would leave an unreachable transcript.
+      let deletedConnectorSession = false;
+      const connectorSession = await ctx.db.connectorSession.findFirst({
+        where: { workspaceId: ctx.workspaceId, chatThreadId: thread.id },
+        select: {
+          externalSessionId: true,
+          memoryKey: true,
+          ownership: true,
+          runtime: { select: { endpoint: true, secret: true, disabledAt: true } },
+          workspace: { select: { connectorRequestTimeoutSeconds: true } },
+        },
+      });
+      if (connectorSession?.ownership === "FORGE") {
+        if (!connectorSession.runtime.endpoint || connectorSession.runtime.disabledAt) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: "Reconnect the Hermes runtime before permanently deleting this conversation.",
+          });
+        }
+        const client = makeHermesSessionsClient({
+          baseUrl: connectorSession.runtime.endpoint,
+          token: connectorSession.runtime.secret,
+          requestTimeoutMs: connectorSession.workspace.connectorRequestTimeoutSeconds * 1000,
+        });
+        try {
+          await client.deleteSession(
+            connectorSession.externalSessionId,
+            connectorSession.memoryKey,
+          );
+          deletedConnectorSession = true;
+        } catch (error) {
+          if (error instanceof HermesSessionsError && error.status === 404) {
+            deletedConnectorSession = true;
+          } else {
+            throw new TRPCError({
+              code: "BAD_GATEWAY",
+              message: `Hermes session could not be deleted: ${redactConnectorDiagnostic(error)}`,
+            });
+          }
+        }
+      }
+
       // (2) Purge chat-message attachments (MinIO object + row). Polymorphic,
       // so no FK cascade reaches them.
       const messages = await ctx.db.chatMessage.findMany({
@@ -2099,6 +2442,7 @@ export const chatRouter = router({
         ok: true,
         deleted: true,
         stoppedRun,
+        deletedConnectorSession,
         purgedAttachments,
         messageCount: messages.length,
       } as const;

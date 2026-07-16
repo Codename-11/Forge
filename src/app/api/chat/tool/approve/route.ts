@@ -42,6 +42,18 @@ export async function POST(req: NextRequest) {
       { status: 404 },
     );
   }
+  const membership = await db.membership.findUnique({
+    where: {
+      userId_workspaceId: {
+        userId: session.user.id,
+        workspaceId: pending.workspaceId,
+      },
+    },
+    select: { id: true },
+  });
+  if (!membership) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const message = await db.chatMessage.findFirst({
     where: {

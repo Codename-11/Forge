@@ -4,6 +4,10 @@ import Link from "next/link";
 import { Bot, MessageSquare, SquareArrowOutUpRight } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
+import {
+  chatSessionClassBadgeClass,
+  chatSessionClassLabel,
+} from "@/lib/chat-session-classification";
 
 function conversationTitle(thread: {
   title?: string | null;
@@ -75,6 +79,14 @@ export function ChatPreviewTab({ slug }: { slug: string }) {
                     <span className="text-id shrink-0 text-muted-foreground">
                       @{thread.agent.profileKey}
                     </span>
+                  </span>
+                  <span
+                    className={cn(
+                      "mt-1 inline-flex rounded-full border px-1 py-0 text-[0.5rem] uppercase tracking-wider",
+                      chatSessionClassBadgeClass(thread.sessionClass),
+                    )}
+                  >
+                    {chatSessionClassLabel(thread.sessionClass)}
                   </span>
                   <span className="mt-0.5 block line-clamp-2 text-meta text-muted-foreground">
                     {latest?.body ?? "No messages yet."}

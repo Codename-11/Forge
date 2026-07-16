@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { randomUUID } from "node:crypto";
-import { ChatRole, EventKind } from "@prisma/client";
+import {
+  ChatRole,
+  ConnectorDeliveryDirection,
+  ConnectorDeliveryStatus,
+  ConnectorSessionLifecycle,
+  EventKind,
+} from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
@@ -35,6 +41,17 @@ import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { logger } from "@/server/logger";
 import { publish } from "@/server/realtime";
+import {
+  buildHermesMemoryKey,
+  connectorRetryDecision,
+  hermesSessionExternalEventId,
+  HERMES_SESSIONS_CONNECTOR_KEY,
+  makeHermesSessionsClient,
+  redactConnectorDiagnostic,
+  type HermesNegotiatedCapabilities,
+  type HermesSessionEvent,
+  type HermesSessionsClient,
+} from "@/server/services/hermes-sessions";
 
 /**
  * Interactive chat streaming endpoint.
@@ -119,6 +136,153 @@ function readContextSnapshot(value: unknown): Prisma.InputJsonObject {
   return value as Prisma.InputJsonObject;
 }
 
+type PreparedHermesSession = {
+  client: HermesSessionsClient;
+  capabilities: HermesNegotiatedCapabilities;
+  mapping: {
+    id: string;
+    externalSessionId: string;
+    memoryKey: string;
+  };
+};
+
+async function prepareHermesSession(input: {
+  workspaceId: string;
+  userId: string;
+  agentId: string;
+  runtimeId: string;
+  runtimeEndpoint: string;
+  runtimeSecret: string | null;
+  threadId: string;
+  threadTitle: string | null;
+  model: string | null;
+  requestTimeoutSeconds: number;
+}): Promise<PreparedHermesSession> {
+  const client = makeHermesSessionsClient({
+    baseUrl: input.runtimeEndpoint,
+    token: input.runtimeSecret,
+    requestTimeoutMs: input.requestTimeoutSeconds * 1_000,
+  });
+  const capabilities = await client.negotiateCapabilities();
+  if (!capabilities.sessions || !capabilities.streaming || !capabilities.protocolVersion) {
+    throw new Error(
+      "This Hermes runtime does not advertise the native Sessions streaming contract required for interactive chat.",
+    );
+  }
+
+  const existing = await db.connectorSession.findUnique({
+    where: {
+      chatThreadId_connectorKey: {
+        chatThreadId: input.threadId,
+        connectorKey: HERMES_SESSIONS_CONNECTOR_KEY,
+      },
+    },
+  });
+  const memoryKey =
+    existing?.memoryKey ??
+    buildHermesMemoryKey({
+      runtimeId: input.runtimeId,
+      workspaceId: input.workspaceId,
+      userId: input.userId,
+      agentId: input.agentId,
+      chatThreadId: input.threadId,
+    });
+  const deterministicSessionId = `forge_${memoryKey.split(":").at(-1)!.slice(0, 48)}`;
+  let externalSessionId =
+    existing?.runtimeId === input.runtimeId
+      ? existing.externalSessionId
+      : deterministicSessionId;
+
+  try {
+    if (existing?.runtimeId === input.runtimeId) {
+      await client.getSession(externalSessionId, memoryKey);
+    } else {
+      const created = await client.createSession({
+        sessionId: deterministicSessionId,
+        title: input.threadTitle,
+        model: input.model,
+        memoryKey,
+        idempotencyKey: `forge-session:${input.threadId}`,
+      });
+      externalSessionId = created.id;
+    }
+  } catch (error) {
+    const missing =
+      error && typeof error === "object" && "status" in error && error.status === 404;
+    if (!missing) throw error;
+    const created = await client.createSession({
+      sessionId: deterministicSessionId,
+      title: input.threadTitle,
+      model: input.model,
+      memoryKey,
+      idempotencyKey: `forge-session:${input.threadId}`,
+    });
+    externalSessionId = created.id;
+  }
+
+  const now = new Date();
+  const priorCapabilities =
+    existing?.capabilities &&
+    typeof existing.capabilities === "object" &&
+    !Array.isArray(existing.capabilities)
+      ? (existing.capabilities as Prisma.JsonObject)
+      : {};
+  const mergedCapabilities = {
+    ...capabilities,
+    ...(typeof priorCapabilities.platformProtocolVersion === "string"
+      ? {
+          platformProtocolVersion: priorCapabilities.platformProtocolVersion,
+          proactiveDelivery: priorCapabilities.proactiveDelivery === true,
+          orderedDelivery: priorCapabilities.orderedDelivery === true,
+          statusEvents: priorCapabilities.statusEvents === true,
+          toolEvents: priorCapabilities.toolEvents === true,
+          attribution: priorCapabilities.attribution === true,
+        }
+      : {}),
+  };
+  const mapping = await db.connectorSession.upsert({
+    where: {
+      chatThreadId_connectorKey: {
+        chatThreadId: input.threadId,
+        connectorKey: HERMES_SESSIONS_CONNECTOR_KEY,
+      },
+    },
+    create: {
+      workspaceId: input.workspaceId,
+      runtimeId: input.runtimeId,
+      agentId: input.agentId,
+      chatThreadId: input.threadId,
+      connectorKey: HERMES_SESSIONS_CONNECTOR_KEY,
+      externalSessionId,
+      memoryKey,
+      lifecycle: ConnectorSessionLifecycle.ACTIVE,
+      protocolVersion: capabilities.protocolVersion,
+      capabilities: mergedCapabilities as unknown as Prisma.InputJsonValue,
+      negotiatedAt: now,
+      lastConnectedAt: now,
+    },
+    update: {
+      runtimeId: input.runtimeId,
+      agentId: input.agentId,
+      externalSessionId,
+      memoryKey,
+      lifecycle: ConnectorSessionLifecycle.ACTIVE,
+      protocolVersion: capabilities.protocolVersion,
+      capabilities: mergedCapabilities as unknown as Prisma.InputJsonValue,
+      negotiatedAt: now,
+      negotiationError: null,
+      lastConnectedAt: now,
+      lastError: null,
+      lastErrorAt: null,
+      retryCount: 0,
+      nextRetryAt: null,
+      closedAt: null,
+    },
+    select: { id: true, externalSessionId: true, memoryKey: true },
+  });
+  return { client, capabilities, mapping };
+}
+
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session?.user) {
@@ -174,6 +338,7 @@ export async function POST(req: NextRequest) {
           capabilities: true,
           runtime: {
             select: {
+              id: true,
               adapterKey: true,
               endpoint: true,
               secret: true,
@@ -194,14 +359,21 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Chat thread not found" }, { status: 404 });
   }
   const workspaceId = thread.workspaceId;
+  const membership = await db.membership.findUnique({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    select: { id: true },
+  });
+  if (!membership) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
   const agent = thread.agent;
   // Per-thread overrides win over the agent's default provider/model.
   const effectiveProvider = thread.providerOverride ?? agent.provider;
   const effectiveModel = thread.modelOverride ?? undefined;
   const yoloModeOverride = thread.yoloModeOverride ?? undefined;
-  // Resolve the chat engine. RUNS delegates to the provider's structured
-  // agent-run API (Hermes /v1/runs) instead of Forge's own completions
-  // loop; falls back to completions when the provider has no runs connector.
+  // Interactive Hermes traffic has its own native Sessions contract. RUNS
+  // remains the issue/background execution lane and is never selected here
+  // for Hermes, even when Agent.runEngine is RUNS for dispatch purposes.
   const runEngine = resolveRunEngine({
     runEngine: agent.runEngine,
     provider: effectiveProvider,
@@ -213,7 +385,74 @@ export async function POST(req: NextRequest) {
     provider: effectiveProvider,
     runtime: agent.runtime,
   });
-  const useRuns = runEngine === "RUNS" && runsConnector != null;
+  const useHermesSessions =
+    effectiveProvider === "HERMES" &&
+    agent.runtime?.adapterKey === "hermes" &&
+    Boolean(agent.runtime.id && agent.runtime.endpoint) &&
+    !agent.runtime.disabledAt;
+  const useRuns =
+    effectiveProvider !== "HERMES" && runEngine === "RUNS" && runsConnector != null;
+
+  if (effectiveProvider === "HERMES" && !useHermesSessions) {
+    return NextResponse.json(
+      {
+        error:
+          "Interactive Hermes chat requires a bound, enabled Hermes runtime with native Sessions support. /v1/runs is reserved for background issue execution.",
+      },
+      { status: 503 },
+    );
+  }
+
+  let hermesSession: PreparedHermesSession | null = null;
+  let connectorRetrySettings = { maxAttempts: 6, initialSeconds: 2, maxSeconds: 300 };
+  if (useHermesSessions && agent.runtime?.id && agent.runtime.endpoint) {
+    const connectorSettings = await db.workspace.findUnique({
+      where: { id: workspaceId },
+      select: {
+        connectorRequestTimeoutSeconds: true,
+        connectorDeliveryMaxAttempts: true,
+        connectorRetryInitialSeconds: true,
+        connectorRetryMaxSeconds: true,
+      },
+    });
+    if (connectorSettings) {
+      connectorRetrySettings = {
+        maxAttempts: connectorSettings.connectorDeliveryMaxAttempts,
+        initialSeconds: connectorSettings.connectorRetryInitialSeconds,
+        maxSeconds: connectorSettings.connectorRetryMaxSeconds,
+      };
+    }
+    try {
+      hermesSession = await prepareHermesSession({
+        workspaceId,
+        userId,
+        agentId: agent.id,
+        runtimeId: agent.runtime.id,
+        runtimeEndpoint: agent.runtime.endpoint,
+        runtimeSecret: agent.runtime.secret,
+        threadId: thread.id,
+        threadTitle: thread.title,
+        model: effectiveModel ?? null,
+        requestTimeoutSeconds: connectorSettings?.connectorRequestTimeoutSeconds ?? 15,
+      });
+    } catch (error) {
+      const diagnostic = redactConnectorDiagnostic(error);
+      await db.connectorSession.updateMany({
+        where: {
+          workspaceId,
+          chatThreadId: thread.id,
+          connectorKey: HERMES_SESSIONS_CONNECTOR_KEY,
+        },
+        data: {
+          lifecycle: ConnectorSessionLifecycle.ERROR,
+          negotiationError: diagnostic,
+          lastError: diagnostic,
+          lastErrorAt: new Date(),
+        },
+      });
+      return NextResponse.json({ error: diagnostic }, { status: 502 });
+    }
+  }
 
   // Resolve how this agent's chat is actually served. When it's `dispatch`
   // (no server model — answered by the agent's runtime/daemon via chat drafts
@@ -236,7 +475,7 @@ export async function POST(req: NextRequest) {
     daemonLinked,
     providerAvailable: await workspaceChatProviderAvailability(db, workspaceId),
   });
-  const useDispatch = !useRuns && transport.mode === "dispatch";
+  const useDispatch = !useRuns && !useHermesSessions && transport.mode === "dispatch";
 
   // Resolve + verify attachments before opening the stream so we don't
   // leave a half-written user message if one points outside the workspace.
@@ -299,6 +538,26 @@ export async function POST(req: NextRequest) {
       { status: 400 },
     );
   }
+  if (imageBlocks.length > 0 && hermesSession && !hermesSession.capabilities.attachments) {
+    return NextResponse.json(
+      {
+        error:
+          "This Hermes Sessions contract does not explicitly advertise attachments. Remove the image or upgrade the connector.",
+      },
+      { status: 400 },
+    );
+  }
+  const hermesMessage: string | Array<Record<string, unknown>> =
+    imageBlocks.length > 0
+      ? [
+          ...(body.trim() ? [{ type: "input_text", text: body }] : []),
+          ...imageBlocks.flatMap((image) =>
+            image.type === "image_url"
+              ? [{ type: "input_image", image_url: image.image_url.url }]
+              : [],
+          ),
+        ]
+      : body;
 
   // Persist the USER row and the audit/event in one transaction. Mirrors
   // `chat.send` so the inbox lifecycle stays honest. Forge-owned streaming
@@ -315,7 +574,9 @@ export async function POST(req: NextRequest) {
     // A JSON field cannot carry a unique constraint without a migration, so
     // serialize retries for this thread/client id with a transaction-scoped
     // advisory lock before looking up or creating the turn.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${thread.id}:${clientTurnId}`}))`;
+    // Serialize every writer for this thread so the durable sequence remains
+    // gap-safe even when separate browser tabs submit different turn ids.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${thread.id}))`;
     const existingUser = await tx.chatMessage.findFirst({
       where: {
         workspaceId,
@@ -408,6 +669,11 @@ export async function POST(req: NextRequest) {
     }
 
     const now = new Date();
+    const sequenceAggregate = await tx.chatMessage.aggregate({
+      where: { workspaceId, threadId: thread.id },
+      _max: { sequence: true },
+    });
+    const userSequence = (sequenceAggregate._max.sequence ?? 0) + 1;
     await tx.chatThread.update({
       where: { id: thread.id },
       data: { lastMessageAt: now },
@@ -420,6 +686,8 @@ export async function POST(req: NextRequest) {
         body,
         contextSnapshot,
         dispatchedAt: now,
+        sequence: userSequence,
+        connectorSessionId: hermesSession?.mapping.id ?? null,
       },
     });
     const placeholder = useDispatch
@@ -431,6 +699,9 @@ export async function POST(req: NextRequest) {
             role: ChatRole.AGENT,
             body: "",
             outputStartedAt: agentStartedAt,
+            sequence: userSequence + 1,
+            replyToMessageId: message.id,
+            connectorSessionId: hermesSession?.mapping.id ?? null,
             contextSnapshot: {
               streamed: true,
               turnId: clientTurnId,
@@ -498,6 +769,30 @@ export async function POST(req: NextRequest) {
         })) as unknown as Prisma.InputJsonArray,
       },
     });
+    if (hermesSession) {
+      await tx.connectorDelivery.create({
+        data: {
+          workspaceId,
+          connectorSessionId: hermesSession.mapping.id,
+          direction: ConnectorDeliveryDirection.OUTBOUND,
+          externalEventId: clientTurnId,
+          kind: "user.message",
+          status: ConnectorDeliveryStatus.PROCESSING,
+          chatMessageId: message.id,
+          attempt: 1,
+          lastAttemptAt: now,
+          payload: {
+            threadId: thread.id,
+            messageId: message.id,
+            body,
+            message: hermesMessage as unknown as Prisma.InputJsonValue,
+            instructions: systemPrompt,
+            model: effectiveModel ?? null,
+            attachmentIds,
+          } as Prisma.InputJsonObject,
+        },
+      });
+    }
     return {
       userMessageId: message.id,
       agentMessageId: placeholder?.id ?? null,
@@ -711,6 +1006,7 @@ export async function POST(req: NextRequest) {
         // Provider-side run id when streaming via the RUNS engine — lets the
         // Stop button interrupt the live Hermes run, not just the local read.
         let runExternalId: string | null = null;
+        let hermesExternalMessageId: string | null = null;
         let clientDetached = false;
         let stopObserved = false;
         let stopPollBusy = false;
@@ -976,6 +1272,214 @@ export async function POST(req: NextRequest) {
             }),
           );
           return exec;
+        };
+
+        const streamViaHermesSessions = async () => {
+          if (!hermesSession) throw new Error("Hermes session mapping was not prepared.");
+          let completedFinalText: string | null = null;
+          const persistEvent = async (event: HermesSessionEvent) => {
+            const externalEventId = hermesSessionExternalEventId(event);
+            const inserted = await db.connectorDelivery.createMany({
+              data: [
+                {
+                  workspaceId,
+                  connectorSessionId: hermesSession.mapping.id,
+                  direction: ConnectorDeliveryDirection.INBOUND,
+                  externalEventId,
+                  sequence: event.sequence,
+                  kind: event.name,
+                  status: ConnectorDeliveryStatus.DELIVERED,
+                  payload: event.data as Prisma.InputJsonObject,
+                  deliveredAt: new Date(),
+                },
+              ],
+              skipDuplicates: true,
+            });
+            if (inserted.count === 0) return false;
+            const now = new Date();
+            await db.connectorSession.update({
+              where: { id: hermesSession.mapping.id },
+              data: {
+                lifecycle: ConnectorSessionLifecycle.ACTIVE,
+                ...(event.sessionId && event.sessionId !== hermesSession.mapping.externalSessionId
+                  ? { externalSessionId: event.sessionId }
+                  : {}),
+                lastExternalSequence: event.sequence,
+                lastEventAt: now,
+                lastDeliveryAt: now,
+                lastError: null,
+                lastErrorAt: null,
+              },
+            });
+            return true;
+          };
+
+          try {
+            for await (const event of hermesSession.client.streamMessage({
+              sessionId: hermesSession.mapping.externalSessionId,
+              memoryKey: hermesSession.mapping.memoryKey,
+              message: hermesMessage,
+              instructions: systemPrompt,
+              model: effectiveModel,
+              idempotencyKey: clientTurnId,
+              signal: abortController.signal,
+            })) {
+              if (!(await persistEvent(event))) continue;
+              if (event.messageId) hermesExternalMessageId = event.messageId;
+              const eventData = event.data;
+              switch (event.name) {
+                case "assistant.delta": {
+                  const delta = typeof eventData.delta === "string" ? eventData.delta : "";
+                  if (delta) {
+                    assembled.push(delta);
+                    queueCheckpoint();
+                    enqueue(sse("content", { delta }));
+                  }
+                  break;
+                }
+                case "tool.progress": {
+                  const delta = typeof eventData.delta === "string" ? eventData.delta : "";
+                  const toolName =
+                    typeof eventData.tool_name === "string" ? eventData.tool_name : "tool";
+                  if (delta && toolName === "_thinking") {
+                    thinkingChunks.push(delta);
+                    queueCheckpoint();
+                    enqueue(sse("thinking", { delta }));
+                  }
+                  break;
+                }
+                case "tool.started": {
+                  const id = event.messageId ?? `session_tool_${event.sequence ?? toolCalls.length}`;
+                  const name =
+                    typeof eventData.tool_name === "string" ? eventData.tool_name : "tool";
+                  if (!toolCalls.some((call) => call.id === id)) {
+                    toolCalls.push({
+                      id,
+                      name,
+                      args:
+                        eventData.args && typeof eventData.args === "object"
+                          ? (eventData.args as Record<string, unknown>)
+                          : {},
+                      status: "pending",
+                      requiresConfirm: false,
+                    });
+                  }
+                  queueCheckpoint();
+                  enqueue(sse("tool_call_started", { id, name, args: eventData.args ?? {} }));
+                  break;
+                }
+                case "tool.completed":
+                case "tool.failed": {
+                  const name =
+                    typeof eventData.tool_name === "string" ? eventData.tool_name : "tool";
+                  const rec = [...toolCalls].reverse().find((call) => call.name === name);
+                  if (rec) rec.status = event.name === "tool.completed" ? "executed" : "error";
+                  queueCheckpoint();
+                  if (rec) {
+                    enqueue(
+                      sse("tool_result", {
+                        id: rec.id,
+                        ok: event.name === "tool.completed",
+                        summary: event.name === "tool.completed" ? "done" : "failed",
+                      }),
+                    );
+                  }
+                  break;
+                }
+                case "assistant.completed": {
+                  if (typeof eventData.content === "string" && eventData.content) {
+                    completedFinalText = eventData.content;
+                  }
+                  break;
+                }
+                case "run.completed": {
+                  const rawUsage =
+                    eventData.usage && typeof eventData.usage === "object"
+                      ? (eventData.usage as Record<string, unknown>)
+                      : {};
+                  usage = {
+                    tokensIn:
+                      typeof rawUsage.input_tokens === "number" ? rawUsage.input_tokens : undefined,
+                    tokensOut:
+                      typeof rawUsage.output_tokens === "number" ? rawUsage.output_tokens : undefined,
+                    tokensCached:
+                      typeof rawUsage.cache_read_tokens === "number"
+                        ? rawUsage.cache_read_tokens
+                        : undefined,
+                  };
+                  queueCheckpoint();
+                  break;
+                }
+                case "error": {
+                  errored = true;
+                  streamError = redactStreamDiagnostic(
+                    typeof eventData.message === "string"
+                      ? eventData.message
+                      : "Hermes session stream failed.",
+                  );
+                  queueCheckpoint(true);
+                  enqueue(sse("error", { message: streamError }));
+                  break;
+                }
+              }
+            }
+            if (assembled.length === 0 && completedFinalText) {
+              assembled.push(completedFinalText);
+              enqueue(sse("content", { delta: completedFinalText }));
+            }
+            await db.connectorDelivery.updateMany({
+              where: {
+                connectorSessionId: hermesSession.mapping.id,
+                direction: ConnectorDeliveryDirection.OUTBOUND,
+                externalEventId: clientTurnId,
+              },
+              data: {
+                status: ConnectorDeliveryStatus.DELIVERED,
+                deliveredAt: new Date(),
+                lastError: null,
+              },
+            });
+          } catch (error) {
+            const diagnostic = redactConnectorDiagnostic(error);
+            const now = new Date();
+            const retry = connectorRetryDecision({
+              attempt: 1,
+              maxAttempts: connectorRetrySettings.maxAttempts,
+              initialSeconds: connectorRetrySettings.initialSeconds,
+              maxSeconds: connectorRetrySettings.maxSeconds,
+              now,
+            });
+            await db.$transaction([
+              db.connectorSession.update({
+                where: { id: hermesSession.mapping.id },
+                data: {
+                  lifecycle: abortController.signal.aborted
+                    ? ConnectorSessionLifecycle.DISCONNECTED
+                    : ConnectorSessionLifecycle.ERROR,
+                  lastError: diagnostic,
+                  lastErrorAt: now,
+                  retryCount: { increment: 1 },
+                  nextRetryAt: retry.nextAttemptAt,
+                },
+              }),
+              db.connectorDelivery.updateMany({
+                where: {
+                  connectorSessionId: hermesSession.mapping.id,
+                  direction: ConnectorDeliveryDirection.OUTBOUND,
+                  externalEventId: clientTurnId,
+                },
+                data: {
+                  status: retry.deadLetter
+                    ? ConnectorDeliveryStatus.DEAD_LETTER
+                    : ConnectorDeliveryStatus.RETRY_SCHEDULED,
+                  lastError: diagnostic,
+                  lastAttemptAt: now,
+                  nextAttemptAt: retry.nextAttemptAt,
+                },
+              }),
+            ]);
+            throw error;
+          }
         };
 
         // RUNS engine: delegate the whole turn to the provider's structured
@@ -1276,7 +1780,9 @@ export async function POST(req: NextRequest) {
         };
 
         try {
-          if (useRuns && runsConnector) {
+          if (useHermesSessions && hermesSession) {
+            await streamViaHermesSessions();
+          } else if (useRuns && runsConnector) {
             await streamViaRuns();
           } else if (useDispatch) {
             // The agent's runtime/daemon owns this turn — it replies via chat
@@ -1403,6 +1909,9 @@ export async function POST(req: NextRequest) {
               where: { id: agentMessageId },
               data: {
                 body: persistedBody,
+                replyToMessageId: userMessageId,
+                externalMessageId: hermesExternalMessageId,
+                connectorSessionId: hermesSession?.mapping.id ?? undefined,
                 contextSnapshot: {
                   ...currentSnapshot,
                   streamed: true,
@@ -1418,6 +1927,9 @@ export async function POST(req: NextRequest) {
                   stopped: wasStopped || undefined,
                   clientDetached: clientDetached || undefined,
                   runExternalId: runExternalId ?? undefined,
+                  connectorSessionId: hermesSession?.mapping.id ?? undefined,
+                  externalSessionId: hermesSession?.mapping.externalSessionId ?? undefined,
+                  protocolVersion: hermesSession?.capabilities.protocolVersion ?? undefined,
                   usage,
                   running: false,
                   status: wasStopped ? "stopped" : errored ? "failed" : "completed",

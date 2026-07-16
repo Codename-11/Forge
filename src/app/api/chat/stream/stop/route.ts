@@ -90,6 +90,18 @@ export async function POST(req: NextRequest) {
   if (!message) {
     return NextResponse.json({ error: "Streaming reply not found" }, { status: 404 });
   }
+  const membership = await db.membership.findUnique({
+    where: {
+      userId_workspaceId: {
+        userId: session.user.id,
+        workspaceId: message.thread.workspaceId,
+      },
+    },
+    select: { id: true },
+  });
+  if (!membership) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   const currentSnapshot =
     message.contextSnapshot &&
