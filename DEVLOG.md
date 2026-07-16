@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — v0.26.1 release preparation
+
+Prepared the patch release from exact `main` at
+`33aa6470` after hotfix PR #58 passed all three GitHub CI jobs and updated
+Codex review. The release fixes the native Sessions production-bundle
+initialization failure found by the authenticated v0.26.0 smoke while keeping
+dispatch-only turns free of unused prompt/canvas work. The v0.26.0
+release-identity migration ensures this second same-day release is independently
+visible and persisted in What's New.
+
 ## 2026-07-16 — Native Sessions production initialization hotfix
 
 The authenticated v0.26.0 live smoke reached Forge but the first native Hermes
