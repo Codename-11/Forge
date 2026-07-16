@@ -13741,3 +13741,17 @@ refreshing the lockfile-specified dependencies; the focused navigation suite
 passed 12 tests; the production build passed; and the isolated personal
 Playwright journey passed the task/note flow, both profile transitions, and the
 Notes shortcut contract.
+
+---
+
+## 2026-07-16 — v0.27.0 release assembly
+
+Prepared the serialized v0.27.0 release from `main` after AXI-114 (PR #59) and
+AXI-115 (PR #62) both passed GitHub's lint, typecheck, unit, and Playwright
+gates with their review threads resolved. This minor release packages the
+personal workspace experience alongside canonical agent execution connections,
+transport-aware lifecycle evidence, delivery ownership, and actionable
+activity provenance.
+
+The immutable tag will be cut only from the merged release commit, then
+deployed through the clean-checkout production path and verified live.

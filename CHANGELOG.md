@@ -9,6 +9,23 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-16] — v0.27.0 · Personal work and canonical delivery
+
+### Added
+
+- **Personal workspaces get a calm Today-first experience.** Personal profiles provide focused task capture, notes, routines, an optional agent companion, and profile-aware navigation without fragmenting Forge's underlying tenant and agent model.
+- **Agent execution connections are explicit and durable.** Managed runtime, MCP, webhook, and on-demand work now carries connection provenance, participant roles, delivery ownership, and transport-aware evidence across Agent Profile, Delivery, Command Center, and policy surfaces.
+
+### Changed
+
+- **Activity distinguishes people, agents, workers, automation, and connectors.** Issue updates now present meaningful action or field summaries when their payload contains evidence instead of an opaque generic update row.
+- **MCP lifecycle confidence is transport-aware.** Quiet MCP clients create recoverable operator attention without being misrepresented as failed runtime heartbeats, and active legacy sessions can safely adopt their authenticated connection identity.
+
+### Fixed
+
+- **Personal profile changes take effect immediately.** Workspace navigation and dashboard context refresh after a Team ↔ Personal change, while Notes no longer advertises the reserved `G N` shortcut.
+- **Delivery ownership remains coherent during recovery.** Primary connections cannot be demoted by joining, and resumed MCP work clears its obsolete quiet-recovery requests.
+
 ## [2026-07-16] — v0.26.1 · Reliable native chat startup
 
 ### Fixed
