@@ -791,6 +791,80 @@ describe("GitHub webhook hardening", () => {
     });
   });
 
+  it("does not apply PR lifecycle or failed-check status rules to a related mention", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const automatedStatus = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "CANCELED" },
+    });
+    await prisma.connectionMapping.update({
+      where: { id: mapping.id },
+      data: {
+        config: {
+          github: {
+            statusRules: {
+              prOpenedStatusId: automatedStatus.id,
+              checksFailedStatusId: automatedStatus.id,
+            },
+          },
+        },
+      },
+    });
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("related-pr-opened"),
+      event: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        pull_request: pullRequest({
+          body: `Related ${fixture.workspace.key}-${issue.number}`,
+        }),
+      },
+    });
+
+    const resource = await prisma.externalResource.findFirstOrThrow({
+      where: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        number: 42,
+      },
+    });
+    await expect(
+      prisma.externalResourceLink.findUniqueOrThrow({
+        where: {
+          issueId_externalResourceId: {
+            issueId: issue.id,
+            externalResourceId: resource.id,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ kind: "RELATES_TO" });
+
+    await processGitHubWebhook({
+      db: prisma,
+      deliveryId: delivery("related-pr-checks-failed"),
+      event: "check_run",
+      payload: {
+        action: "completed",
+        installation: { id: 101 },
+        repository: { full_name: "acme/forge" },
+        check_run: {
+          head_sha: "head-new",
+          status: "completed",
+          conclusion: "failure",
+          pull_requests: [{ number: 42 }],
+        },
+      },
+    });
+
+    await expect(
+      prisma.issue.findUniqueOrThrow({ where: { id: issue.id }, include: { status: true } }),
+    ).resolves.toMatchObject({ status: { category: "IN_PROGRESS" } });
+  });
+
   it("ignores an older review hint instead of replacing a newer decision", async () => {
     const { fixture, prisma, mapping } = await setup();
     const resource = await upsertExternalResource(prisma, {

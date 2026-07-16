@@ -28,7 +28,11 @@ import {
   upsertExternalResourceFromWebhook,
   type ActorMeta,
 } from "@/server/services/github/resource-sync";
-import { GITHUB_PROVIDER, type GitHubResourceSnapshot } from "@/server/services/github/types";
+import {
+  GITHUB_PROVIDER,
+  IMPLEMENTATION_LINK_KINDS,
+  type GitHubResourceSnapshot,
+} from "@/server/services/github/types";
 import { derivePullRequestIssueRelations } from "@/server/services/github/relation";
 
 type GitHubWebhookRepository = {
@@ -793,7 +797,11 @@ async function processCheckEvent(args: {
       const changedIssueIds = new Set<string>();
       if (status) {
         const links = await tx.externalResourceLink.findMany({
-          where: { workspaceId, externalResourceId: resource.id },
+          where: {
+            workspaceId,
+            externalResourceId: resource.id,
+            kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+          },
           select: { issueId: true },
         });
         for (const link of links) {

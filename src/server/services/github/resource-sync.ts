@@ -32,6 +32,7 @@ import {
 import {
   EXTERNAL_LINK_KINDS,
   GITHUB_PROVIDER,
+  IMPLEMENTATION_LINK_KINDS,
   type ExternalLinkKind,
   type GitHubResourceSnapshot,
   type GitHubResourceType,
@@ -1264,12 +1265,17 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
   });
   const changedIssueIds = new Set<string>();
   for (const link of links) {
+    const statusId =
+      args.snapshot.resourceType === "PULL_REQUEST" &&
+      !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === link.kind)
+        ? null
+        : (args.statusRuleId ?? null);
     const changed = await applyIssuePatchFromGitHub({
       tx: args.tx,
       workspaceId: args.workspaceId,
       issueId: link.issueId,
       title: config.syncTitle && link.kind === "SOURCE" ? args.snapshot.title : undefined,
-      statusId: args.statusRuleId ?? null,
+      statusId,
       actor: args.actor,
       payload: {
         source: "github",

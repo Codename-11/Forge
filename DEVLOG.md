@@ -23,6 +23,8 @@ stale mergeability and suppresses pending-check contradictions, while merged
 implementation evidence continues reconciliation until its final checks
 aggregate is trusted and still participates in completion readiness. Passing
 completion evidence and READY state now use the semantic success token.
+PR lifecycle and failed-check status automation is limited to implementation
+relations, so related mentions and release-containment links remain contextual.
 
 Verification passed lint (existing warnings only), typecheck, a production
 Next build, 1,399 Vitest tests with one intentional skip, focused relation and
