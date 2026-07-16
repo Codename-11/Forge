@@ -6,11 +6,13 @@
  * (kept as a standalone string-literal here so client code doesn't pull the
  * `server-only` module).
  */
-export type TransportMode = "runs" | "completions" | "dispatch" | "none";
+export type TransportMode = "sessions" | "runs" | "completions" | "dispatch" | "none";
 
 /** Tailwind classes for the chip, by mode. Uses warm-earthy / semantic tokens. */
 export function transportTone(mode: TransportMode): string {
   switch (mode) {
+    case "sessions":
+      return "border-success/30 bg-success/10 text-success";
     case "runs":
       return "border-ember/30 bg-ember/10 text-ember";
     case "dispatch":
@@ -25,6 +27,8 @@ export function transportTone(mode: TransportMode): string {
 /** Tooltip explaining what the transport means for this agent. */
 export function transportTitle(mode: TransportMode, label: string): string {
   switch (mode) {
+    case "sessions":
+      return `Native Sessions — ${label} owns durable interactive state while Forge preserves the mapping and delivery ledger.`;
     case "runs":
       return `Runs engine — ${label} owns the loop; the agent answers as itself (its own memory + tools). Replies still stream.`;
     case "dispatch":
@@ -115,6 +119,8 @@ export function presenceAvailability(input: {
 /** One-word qualifier for compact surfaces (roster rows, etc.). */
 export function transportModeWord(mode: TransportMode): string {
   switch (mode) {
+    case "sessions":
+      return "sessions";
     case "runs":
       return "runs";
     case "completions":

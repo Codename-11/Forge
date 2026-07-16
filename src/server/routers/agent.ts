@@ -158,6 +158,7 @@ export const agentRouter = router({
               heartbeatAt: true,
               adapterKey: true,
               endpoint: true,
+              runtimeInfo: true,
             },
           },
         },
@@ -187,7 +188,12 @@ export const agentRouter = router({
           provider: a.provider,
           runEngine: a.runEngine,
           runtime: a.runtime
-            ? { adapterKey: a.runtime.adapterKey, endpoint: a.runtime.endpoint, secret: null }
+            ? {
+                adapterKey: a.runtime.adapterKey,
+                endpoint: a.runtime.endpoint,
+                secret: null,
+                runtimeInfo: a.runtime.runtimeInfo,
+              }
             : null,
           webhookUrl: a.webhookUrl,
           runtimeKind: a.runtime?.kind ?? null,
@@ -252,7 +258,7 @@ export const agentRouter = router({
       const runtime = input.runtimeId
         ? await ctx.db.runtime.findFirst({
             where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
-            select: { adapterKey: true, endpoint: true, kind: true },
+            select: { adapterKey: true, endpoint: true, kind: true, runtimeInfo: true },
           })
         : null;
       const providerAvailable = await workspaceChatProviderAvailability(
@@ -263,7 +269,12 @@ export const agentRouter = router({
         provider: input.provider,
         runEngine: input.runEngine ?? null,
         runtime: runtime
-          ? { adapterKey: runtime.adapterKey, endpoint: runtime.endpoint, secret: null }
+          ? {
+              adapterKey: runtime.adapterKey,
+              endpoint: runtime.endpoint,
+              secret: null,
+              runtimeInfo: runtime.runtimeInfo,
+            }
           : null,
         webhookUrl: input.webhookUrl || null,
         runtimeKind: runtime?.kind ?? null,
@@ -371,6 +382,7 @@ export const agentRouter = router({
               lastProbeAttempted: true,
               lastProbeReachable: true,
               lastProbeDetail: true,
+              runtimeInfo: true,
             },
           },
         },
@@ -388,7 +400,12 @@ export const agentRouter = router({
         provider: agent.provider,
         runEngine: agent.runEngine,
         runtime: agent.runtime
-          ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: agent.runtime.secret }
+          ? {
+              adapterKey: agent.runtime.adapterKey,
+              endpoint: agent.runtime.endpoint,
+              secret: agent.runtime.secret,
+              runtimeInfo: agent.runtime.runtimeInfo,
+            }
           : null,
         webhookUrl: agent.webhookUrl,
         runtimeKind: agent.runtime?.kind ?? null,
@@ -396,7 +413,7 @@ export const agentRouter = router({
         providerAvailable,
       });
       const probe =
-        readiness.mode === "runs"
+        readiness.mode === "runs" || readiness.mode === "sessions"
           ? await probeRuntime({
               adapterKey: agent.runtime?.adapterKey,
               endpoint: agent.runtime?.endpoint,
@@ -433,6 +450,7 @@ export const agentRouter = router({
               adapterKey: true,
               disabledAt: true,
               endpoint: true,
+              runtimeInfo: true,
             },
           },
         },
@@ -453,7 +471,12 @@ export const agentRouter = router({
         provider: agent.provider,
         runEngine: agent.runEngine,
         runtime: agent.runtime
-          ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: null }
+          ? {
+              adapterKey: agent.runtime.adapterKey,
+              endpoint: agent.runtime.endpoint,
+              secret: null,
+              runtimeInfo: agent.runtime.runtimeInfo,
+            }
           : null,
         webhookUrl: agent.webhookUrl,
         runtimeKind: agent.runtime?.kind ?? null,

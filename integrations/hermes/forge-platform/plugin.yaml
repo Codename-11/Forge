@@ -1,0 +1,27 @@
+name: forge-platform
+label: Forge
+kind: platform
+version: 2.0.0
+description: >
+  Versioned Hermes-to-Forge interactive and proactive delivery adapter. Uses
+  Forge MCP connector envelopes when available and retains the legacy chat
+  draft tools for older Forge deployments.
+author: Axiom-Labs
+requires_env:
+  - name: FORGE_API_KEY
+    description: "Forge agent API key with chat connector permissions"
+    prompt: "Forge API key"
+    password: true
+optional_env:
+  - name: FORGE_BASE_URL
+    description: "Forge base URL"
+    prompt: "Forge base URL"
+    password: false
+  - name: FORGE_CONNECTOR_MAX_RETRIES
+    description: "Maximum idempotent MCP delivery attempts (default: 4)"
+    prompt: "Connector retry attempts"
+    password: false
+  - name: FORGE_CONNECTOR_RETRY_BASE_MS
+    description: "Initial exponential backoff in milliseconds (default: 250)"
+    prompt: "Connector retry delay"
+    password: false

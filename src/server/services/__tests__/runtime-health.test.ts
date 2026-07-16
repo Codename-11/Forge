@@ -30,10 +30,7 @@ afterAll(async () => {
   await disconnectPrisma();
 });
 
-async function makeRuntime(
-  workspaceId: string,
-  endpoint: string,
-): Promise<{ id: string }> {
+async function makeRuntime(workspaceId: string, endpoint: string): Promise<{ id: string }> {
   return getPrisma().runtime.create({
     data: {
       workspaceId,
@@ -46,10 +43,7 @@ async function makeRuntime(
   });
 }
 
-async function makeAgent(
-  workspaceId: string,
-  runtimeId: string,
-): Promise<{ id: string }> {
+async function makeAgent(workspaceId: string, runtimeId: string): Promise<{ id: string }> {
   return getPrisma().agent.create({
     data: {
       workspaceId,
@@ -132,6 +126,30 @@ describe("runtime-health — sweepRuntimeHealth", () => {
         res.end(JSON.stringify({ status: "ok", platform: "hermes-agent", version: "0.18.2" }));
         return;
       }
+      if (req.url?.startsWith("/v1/capabilities")) {
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(
+          JSON.stringify({
+            object: "hermes.api_server.capabilities",
+            platform: "hermes-agent",
+            features: {
+              session_resources: true,
+              session_chat: true,
+              session_chat_streaming: true,
+            },
+            endpoints: {
+              sessions: { method: "GET", path: "/api/sessions" },
+              session_create: { method: "POST", path: "/api/sessions" },
+              session: { method: "GET", path: "/api/sessions/{session_id}" },
+              session_chat_stream: {
+                method: "POST",
+                path: "/api/sessions/{session_id}/chat/stream",
+              },
+            },
+          }),
+        );
+        return;
+      }
       if (req.url?.startsWith("/v1/runs")) {
         res.writeHead(405, { "content-type": "text/plain" });
         res.end("Method Not Allowed");
@@ -184,6 +202,11 @@ describe("runtime-health — sweepRuntimeHealth", () => {
         runtimeName: "hermes-agent",
         runtimeVersion: "0.18.2",
         transport: "runs-api",
+        protocolVersion: "hermes.sessions.v1",
+        details: {
+          hermesSessions: "true",
+          hermesSessionsStreaming: "true",
+        },
       });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));

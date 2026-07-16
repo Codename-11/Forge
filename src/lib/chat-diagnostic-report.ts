@@ -95,6 +95,23 @@ type DiagnosticsLike = {
   latestUserMessage?: LatestUserMessageLike | null;
   lastRun?: LastRunLike | null;
   lastDelivery?: LastDeliveryLike | null;
+  connectorSession?: {
+    id?: string | null;
+    externalSessionId?: string | null;
+    sessionClass?: string | null;
+    lifecycle?: string | null;
+    ownership?: string | null;
+    protocolVersion?: string | null;
+    capabilities?: unknown;
+    negotiatedAt?: Dateish;
+    lastConnectedAt?: Dateish;
+    lastDeliveryAt?: Dateish;
+    lastErrorAt?: Dateish;
+    lastError?: string | null;
+    retryCount?: number | null;
+    nextRetryAt?: Dateish;
+    lastExternalSequence?: number | null;
+  } | null;
 };
 
 type LinkedIssueLike = {
@@ -162,6 +179,7 @@ export function buildChatDiagnosticReport(input: ChatDiagnosticReportInput): str
   const user = diagnostics?.latestUserMessage;
   const run = diagnostics?.lastRun;
   const delivery = diagnostics?.lastDelivery;
+  const connector = diagnostics?.connectorSession;
   const health = runtime?.health;
 
   const lines: string[] = [
@@ -252,6 +270,34 @@ export function buildChatDiagnosticReport(input: ChatDiagnosticReportInput): str
     ["attempts", delivery?.attempts],
     ["updated", fmtDate(delivery?.updatedAt)],
     ["last error", delivery?.lastError],
+  ]);
+
+  section(lines, "Native Connector Session", [
+    ["mapping id", connector?.id],
+    ["external session id", connector?.externalSessionId],
+    ["class", connector?.sessionClass],
+    ["lifecycle", connector?.lifecycle],
+    ["ownership", connector?.ownership],
+    ["protocol", connector?.protocolVersion],
+    [
+      "capabilities",
+      connector?.capabilities &&
+      typeof connector.capabilities === "object" &&
+      !Array.isArray(connector.capabilities)
+        ? Object.entries(connector.capabilities as Record<string, unknown>)
+            .filter(([, value]) => value === true)
+            .map(([key]) => key)
+            .join(", ")
+        : null,
+    ],
+    ["negotiated", fmtDate(connector?.negotiatedAt)],
+    ["last connected", fmtDate(connector?.lastConnectedAt)],
+    ["last delivery", fmtDate(connector?.lastDeliveryAt)],
+    ["last external sequence", connector?.lastExternalSequence],
+    ["retry count", connector?.retryCount],
+    ["next retry", fmtDate(connector?.nextRetryAt)],
+    ["last error at", fmtDate(connector?.lastErrorAt)],
+    ["last error", connector?.lastError],
   ]);
 
   section(lines, "Linked Work", [

@@ -1,6 +1,7 @@
 import "server-only";
 import WebSocket from "ws";
 import type { Prisma } from "@prisma/client";
+import { negotiateHermesCapabilities } from "@/server/services/hermes-sessions";
 import { extractRuntimeInfoFromInitializeResult } from "@/server/services/runtime-info";
 
 /**
@@ -64,7 +65,8 @@ function probeCodexWs(
       resolve(r);
     };
     const timer = setTimeout(
-      () => finish({ attempted: true, reachable: false, detail: `No response within ${timeoutMs}ms.` }),
+      () =>
+        finish({ attempted: true, reachable: false, detail: `No response within ${timeoutMs}ms.` }),
       timeoutMs,
     );
     try {
@@ -162,11 +164,46 @@ async function probeHermesHttp(
       };
     }
 
+    let sessionsDetail = "Sessions capability endpoint unavailable";
+    let negotiatedSessions: ReturnType<typeof negotiateHermesCapabilities> | null = null;
+    try {
+      const capabilities = await fetch(hermesProbeUrl(endpoint, "capabilities"), {
+        method: "GET",
+        headers,
+        signal: ctrl.signal,
+      });
+      if (capabilities.ok) {
+        negotiatedSessions = negotiateHermesCapabilities(await capabilities.json());
+        sessionsDetail =
+          negotiatedSessions.sessions && negotiatedSessions.streaming
+            ? `Sessions ${negotiatedSessions.protocolVersion ?? "unversioned"}`
+            : "native Sessions streaming not advertised";
+      } else {
+        sessionsDetail = `capabilities HTTP ${capabilities.status}`;
+      }
+    } catch {
+      // `/v1/runs` remains independently usable for background execution.
+    }
+
     // Health metadata is optional and non-authoritative for reachability, but
     // current Hermes exposes a safe platform/version payload. Harvest it so
     // runtime settings and the chat status rail can identify the gateway build
     // just like the Codex initialize handshake does.
-    let runtimeInfo: Prisma.JsonObject | null = null;
+    let runtimeInfo: Prisma.JsonObject | null = negotiatedSessions
+      ? {
+          adapterKey: "hermes",
+          transport: "runs-api",
+          protocolVersion: negotiatedSessions.protocolVersion,
+          details: {
+            hermesSessions: negotiatedSessions.sessions,
+            hermesSessionsStreaming: negotiatedSessions.streaming,
+            hermesSessionApprovals: negotiatedSessions.approvals,
+            hermesSessionAttachments: negotiatedSessions.attachments,
+            hermesSessionResume: negotiatedSessions.resume,
+            hermesSessionProactiveDelivery: negotiatedSessions.proactiveDelivery,
+          },
+        }
+      : null;
     try {
       const health = await fetch(hermesProbeUrl(endpoint, "health"), {
         method: "GET",
@@ -176,13 +213,11 @@ async function probeHermesHttp(
       if (health.ok) {
         const payload = (await health.json()) as Record<string, unknown>;
         runtimeInfo = {
+          ...(runtimeInfo ?? {}),
           adapterKey: "hermes",
           transport: "runs-api",
-          runtimeName:
-            typeof payload.platform === "string" ? payload.platform : "hermes-agent",
-          ...(typeof payload.version === "string"
-            ? { runtimeVersion: payload.version }
-            : {}),
+          runtimeName: typeof payload.platform === "string" ? payload.platform : "hermes-agent",
+          ...(typeof payload.version === "string" ? { runtimeVersion: payload.version } : {}),
         };
       }
     } catch {
@@ -220,7 +255,7 @@ async function probeHermesHttp(
     return {
       attempted: true,
       reachable: true,
-      detail: `Gateway contract ok (models HTTP ${models.status}; runs route HTTP ${runs.status}).`,
+      detail: `Gateway contract ok (models HTTP ${models.status}; runs route HTTP ${runs.status}; ${sessionsDetail}).`,
       runtimeInfo,
     };
   } catch (err) {
@@ -234,7 +269,10 @@ async function probeHermesHttp(
   }
 }
 
-function hermesProbeUrl(endpoint: string, suffix: "models" | "runs" | "health"): string {
+function hermesProbeUrl(
+  endpoint: string,
+  suffix: "models" | "runs" | "health" | "capabilities",
+): string {
   try {
     const url = new URL(endpoint);
     const path = url.pathname.replace(/\/+$/, "");

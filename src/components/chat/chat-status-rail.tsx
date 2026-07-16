@@ -242,6 +242,13 @@ export function ChatStatusRail({
     },
     onError: (err) => toast.error(err.message),
   });
+  const reconnectConnector = trpc.chat.reconnectConnector.useMutation({
+    onSuccess: async (result) => {
+      toast.success(result.message);
+      await invalidate();
+    },
+    onError: (err) => toast.error(err.message),
+  });
   const stop = trpc.chat.stopThreadRun.useMutation({
     onSuccess: async (result) => {
       if (result.ok) toast.success(result.message);
@@ -291,7 +298,7 @@ export function ChatStatusRail({
     onError: (err) => toast.error(err.message),
   });
 
-  const engine = readiness?.mode ?? null; // "runs" | "completions"
+  const engine = readiness?.mode ?? null;
   const effectiveProvider = readiness?.provider ?? agent?.provider ?? null;
   const runtime = agent?.runtime ?? null;
   const runtimeHealth = runtime?.health ?? null;
@@ -299,9 +306,6 @@ export function ChatStatusRail({
     ? readiness.ready &&
       (!runtimeHealth || runtimeHealth.tone === "success" || runtimeHealth.tone === "muted")
     : null;
-  const usesHermesEnvFallback = Boolean(
-    readiness?.ready && readiness.mode === "runs" && effectiveProvider === "HERMES" && !runtime,
-  );
   const hasOpenTurn = Boolean(diagnostics?.waitingForReply);
   const runStale = Boolean(
     hasOpenTurn &&
@@ -312,6 +316,10 @@ export function ChatStatusRail({
   const runActive = hasOpenTurn && diagnostics?.lastRun?.status === "ACTIVE";
   const runBad = hasOpenTurn && (diagnostics?.lastRun?.status === "STALLED" || runStale);
   const deliveryBad = hasOpenTurn && diagnostics?.lastDelivery?.status === "FAILED";
+  const connectorBad = Boolean(
+    diagnostics?.connectorSession &&
+      ["ERROR", "DISCONNECTED"].includes(diagnostics.connectorSession.lifecycle),
+  );
   const streamBad = Boolean(
     diagnostics?.lastAgentStreamError ||
     (diagnostics?.lastAgentStreamAborted && diagnostics.turnStatus?.phase !== "stopped"),
@@ -571,10 +579,6 @@ export function ChatStatusRail({
                 </Link>{" "}
                 · {runtimeKindLabel(runtime.kind)}
               </span>
-            ) : usesHermesEnvFallback ? (
-              <span className="text-amber-600 dark:text-amber-400">
-                Hermes env gateway fallback
-              </span>
             ) : (
               <span className="italic text-muted-foreground/80">no managed runtime attached</span>
             )}
@@ -627,6 +631,92 @@ export function ChatStatusRail({
           )}
         </div>
       </div>
+
+      {diagnostics?.connectorSession && (
+        <div
+          className={cn(
+            "text-meta rounded-lg border p-2",
+            rowTone(connectorBad ? false : diagnostics.connectorSession.lifecycle === "ACTIVE"),
+          )}
+        >
+          <div className="flex items-center justify-between gap-2 font-medium text-foreground">
+            <span className="flex items-center gap-2">
+              <PlugZap className="h-3.5 w-3.5" /> Hermes session
+            </span>
+            <span className="rounded bg-card/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase">
+              {diagnostics.connectorSession.lifecycle.toLowerCase()}
+            </span>
+          </div>
+          <div className="mt-1 space-y-1 text-muted-foreground">
+            <button
+              type="button"
+              className="block max-w-full truncate font-mono hover:text-foreground"
+              title={diagnostics.connectorSession.externalSessionId}
+              onClick={() =>
+                void copyDiagnosticId(
+                  diagnostics.connectorSession!.externalSessionId,
+                  "Hermes session",
+                )
+              }
+            >
+              session · {diagnostics.connectorSession.externalSessionId}
+            </button>
+            <button
+              type="button"
+              className="block max-w-full truncate font-mono hover:text-foreground"
+              title={diagnostics.connectorSession.id}
+              onClick={() =>
+                void copyDiagnosticId(diagnostics.connectorSession!.id, "Connector mapping")
+              }
+            >
+              mapping · {diagnostics.connectorSession.id}
+            </button>
+            <div>
+              protocol · {diagnostics.connectorSession.protocolVersion ?? "not negotiated"} · class ·{" "}
+              {diagnostics.connectorSession.sessionClass.toLowerCase()}
+            </div>
+            <div>
+              ownership · {diagnostics.connectorSession.ownership.toLowerCase()} · retries ·{" "}
+              {diagnostics.connectorSession.retryCount}
+            </div>
+            {diagnostics.connectorSession.lastConnectorDelivery && (
+              <div>
+                last event · {diagnostics.connectorSession.lastConnectorDelivery.kind} ·{" "}
+                {diagnostics.connectorSession.lastConnectorDelivery.status.toLowerCase()} · attempt{" "}
+                {diagnostics.connectorSession.lastConnectorDelivery.attempt}
+              </div>
+            )}
+            {diagnostics.connectorSession.capabilities && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {Object.entries(
+                  diagnostics.connectorSession.capabilities as Record<string, unknown>,
+                )
+                  .filter(([, enabled]) => enabled === true)
+                  .slice(0, 8)
+                  .map(([capability]) => (
+                    <span key={capability} className="rounded bg-card/40 px-1.5 py-0.5 text-[0.625rem]">
+                      {capability}
+                    </span>
+                  ))}
+              </div>
+            )}
+          </div>
+          {diagnostics.connectorSession.lastError && (
+            <div className="mt-1 line-clamp-3 text-[0.625rem] text-amber-600 dark:text-amber-400">
+              {diagnostics.connectorSession.lastError}
+            </div>
+          )}
+          <Button
+            variant="subtle"
+            size="sm"
+            className="mt-2 w-full justify-start"
+            disabled={reconnectConnector.isPending}
+            onClick={() => reconnectConnector.mutate({ threadId })}
+          >
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Reconnect &amp; renegotiate
+          </Button>
+        </div>
+      )}
 
       <div
         className={cn("text-meta rounded-lg border p-2", toneClass(diagnostics?.turnStatus?.tone))}

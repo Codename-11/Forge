@@ -24,6 +24,89 @@ operators don't carry a mental translation table.
 have a `victor` agent with no collision; that's fine and intentional.
 :::
 
+`profileKey` alone is therefore never a safe Hermes memory or session key.
+Forge derives tenant-safe keys from the workspace, user identity, agent,
+runtime, and thread lane. The durable ChatThread-to-Hermes-session mapping is
+also workspace-scoped; a session ID learned in one workspace is never resolved
+or resumed from another.
+
+## Interactive chat: native Sessions API
+
+Interactive Hermes chat uses the API server's native Sessions resources:
+
+```text
+POST /api/sessions
+GET  /api/sessions/{session_id}
+GET  /api/sessions/{session_id}/messages
+POST /api/sessions/{session_id}/chat/stream
+```
+
+Forge lazily creates one Hermes session for a ChatThread and stores the mapping
+durably. Subsequent turns reuse that session ID so reconnecting the drawer or
+restarting Forge does not manufacture a new conversation. Forge owns mapping
+and UI lifecycle; Hermes owns the native transcript. Archiving a Forge thread
+does not delete a Hermes session unless an explicit, ownership-checked cleanup
+operation is requested.
+
+`/v1/runs` is intentionally unchanged. It remains the asynchronous execution
+path for issues, scheduled work, and other background tasks. A Hermes run ID is
+not a conversation ID and must never be stored in the thread/session mapping.
+
+### Conservative capability negotiation
+
+Forge probes authenticated `GET /v1/capabilities` and requires explicit
+`features.session_resources` plus `features.session_chat_streaming` (or their
+declared endpoint entries) before selecting Sessions. A successful `/health`,
+`/v1/models`, guessed Hermes version, or route name is not proof of support.
+
+The current upstream capability response does not promise in-flight SSE replay,
+tool approval for session chat, proactive delivery, or arbitrary file inputs.
+Forge treats each as unavailable unless a versioned connector negotiation says
+otherwise. In particular, reusing a session ID resumes the durable conversation
+on the next turn; it does not imply that a disconnected in-flight stream can be
+reattached with `Last-Event-ID`.
+
+### Proactive platform connector
+
+Install the distributable plugin from `integrations/hermes/forge-platform` in
+the Hermes profile that owns the Forge agent. It negotiates the versioned
+`chat.connector.*` MCP contract and delivers agent replies, status/tool events,
+and unsolicited messages into the mapped Forge thread. Its SQLite state below
+`HERMES_HOME` stores both per-session sequence counters and a durable outbox;
+an ambiguous failure is retried with the same idempotency key and later events
+wait behind the missing sequence. Older Forge servers use the legacy draft
+tools only when the negotiation tool is genuinely absent.
+
+The API key must be agent-linked and workspace scoped. If two workspaces expose
+the same webhook secret, callers must also send `X-Forge-Workspace`; Forge
+rejects an ambiguous secret rather than guessing a tenant.
+
+### Operations and recovery
+
+The chat status rail shows the redacted connector lifecycle, negotiated native
+and platform capabilities, Forge mapping ID, Hermes session ID, latest ordered
+delivery, retry count, next retry, and last error. **Reconnect & renegotiate**
+revalidates the remote session, recreates a missing Forge-owned session with
+the same tenant-safe memory lane, and refreshes capability truth. Copying the
+diagnostic report includes these identifiers and states but never the runtime
+secret or raw endpoint.
+
+Delivery behavior is workspace-configurable through `workspace.update`:
+`connectorRequestTimeoutSeconds`, `connectorDeliveryMaxAttempts`,
+`connectorProcessingLeaseSeconds`, `connectorRetryInitialSeconds`, and
+`connectorRetryMaxSeconds`. The stream heartbeat renews the processing lease;
+after a process crash, the worker atomically reclaims the expired delivery.
+Generic webhook
+delivery has the parallel `webhookRetry*` settings. Maximum backoff must be at
+least the initial value. The maintenance worker drains due connector outbox
+rows even when the initiating browser has gone away.
+
+Archiving preserves the mapping and Hermes transcript. Clearing creates a new
+Hermes session and tenant-safe memory generation before purging Forge content,
+so old memory cannot bleed back into the cleared thread. Hard delete removes a
+Forge-owned remote session first; if the runtime is unavailable, Forge blocks
+the destructive operation instead of silently orphaning the transcript.
+
 ## The push direction: dispatch via webhook (wake signal only)
 
 When the dispatcher selects an agent for an issue, Forge POSTs an envelope
@@ -354,11 +437,7 @@ export function verifyForgeWebhook(
   if (Number.isNaN(skew) || skew > TOLERANCE_SECONDS) return false;
 
   const expected =
-    "sha256=" +
-    crypto
-      .createHmac("sha256", secret)
-      .update(`${ts}.${rawBody}`)
-      .digest("hex");
+    "sha256=" + crypto.createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex");
 
   return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
 }
@@ -370,20 +449,27 @@ the timestamp tolerance, and never log the secret. The constant-time compare
 matters; a naïve `===` leaks bytes.
 :::
 
-## Chat integration
+## Proactive and event delivery plugin
 
-When a user sends a chat message addressed to a Hermes-backed agent, the flow is:
+The native Sessions API is request/response. Unsolicited agent messages, status
+changes, and tool lifecycle events return through the distributable plugin at
+`integrations/hermes/forge-platform/`.
 
-1. Forge persists the `ChatMessage` (role: USER) and emits `CHAT_MESSAGE_POSTED`.
-2. `recordChange` (audit branch d in `src/server/audit.ts`) enqueues a
-   `WebhookDelivery` to `agent:dispatch:{agentId}`.
-3. The BullMQ worker resolves the synthetic URL to the agent's real `webhookUrl`
-   and POSTs the signed envelope.
-4. Hermes' `forge-dispatch` webhook handler receives the event, routes it to the
-   addressed profile, and runs the agent loop.
-5. If Hermes is wired to the Forge platform adapter
-   (`gateway/platforms/forge.py` in Bailey's fork at `~/.hermes/hermes-agent/`),
-   the response streams token-by-token:
+At startup it calls `chat.connector.negotiate` with supported protocol versions
+and capabilities. Forge returns one selected version and only capabilities it
+actually implements. The plugin then sends ordered, idempotent envelopes through
+`chat.connector.deliver`. Each envelope carries a stable `eventId`, durable lane
+sequence, direction, kind, occurrence time, `threadId`, optional `sessionId` and
+`replyToMessageId`, attribution, idempotency metadata, and a kind-specific
+payload. Forge deduplicates the event and commits the event, message/state
+mutation, audit row, and activity publication together.
+
+See the plugin README for the exact request and response schemas. Supported
+kinds cover streamed and final replies, proactive replies, connector status,
+tool lifecycle, approvals, and delivery errors.
+
+Older Forge servers that do not implement negotiation retain the established
+draft flow:
 
 ```
 Agent → chat.startDraft({ threadId })        → { draftId }
@@ -395,8 +481,7 @@ The client listens on the `chat-thread-stream` SSE channel and renders progressi
 deltas. When `finalizeDraft` fires, the draft bubble is swapped for the committed
 message without flicker (the `draftId` carries through for the swap).
 
-Agents that have not yet been wired to the platform adapter fall back to the single-shot
-path:
+Single-shot legacy delivery remains available as:
 
 ```
 Agent → chat.appendMessage({ threadId, body }) → persisted ChatMessage
@@ -404,27 +489,27 @@ Agent → chat.appendMessage({ threadId, body }) → persisted ChatMessage
 
 ## Runtime contract diagnostics
 
-Forge probes managed Hermes runtimes against the contract it actually uses for
-chat and dispatch:
+Forge probes managed Hermes runtimes against the contracts it actually uses:
 
 - `GET /v1/models` verifies the configured gateway base and bearer token.
+- `GET /v1/capabilities` advertises native session resources and streaming
+  endpoints. Forge records the sanitized negotiated snapshot for diagnostics.
 - `GET /v1/runs` verifies the structured runs route exists without starting a
   run. Current Hermes returns `405 Method Not Allowed` for this probe, which is
   healthy because `POST /v1/runs` is the mutating operation.
+- `chat.connector.negotiate` separately versions proactive delivery. The
+  optional Hermes-Relay `/relay/info` capability surface is not used for chat;
+  native chat must continue to work without the Relay plugin.
 
 A successful Hermes probe is diagnostic-only. It proves the gateway contract is
 reachable, but it does **not** mark Victor/Mizu online; presence still comes
 from `forge-presence`, `agents.heartbeat`, or delivery-derived activity. That
 keeps "chat can reach Hermes" separate from "the profile heartbeat is fresh."
 
-::: info Implementation note
-The Hermes chat integration relies on patches to Hermes core in Bailey's fork of
-NousResearch/hermes-agent at `~/.hermes/hermes-agent/`: specifically a `Platform` enum
-extension, `run.py` adapter-creation logic, and `webhook.py` re-stamp logic. The new
-platform adapter file (`gateway/platforms/forge.py`) is a clean addition. The core
-patches are specific to this fork and would need generalization before they could be
-contributed upstream. For internal Axiom-Labs use this is fine.
-:::
+The diagnostics surface must not expose bearer keys, webhook secrets, or raw
+provider errors. It may show connector health, selected protocol version,
+explicit capabilities, sanitized mapping/session identifiers, last delivery,
+retry count, and recovery actions.
 
 See [Chat](/agents/chat.html) for the full chat surface documentation.
 

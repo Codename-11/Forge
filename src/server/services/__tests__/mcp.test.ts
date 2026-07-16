@@ -5243,4 +5243,99 @@ describe("mcp — orchestration loop tools", () => {
     expect(got.status).toBe("PLANNING");
     expect(got.plans.some((p) => p.id === decomp.planId)).toBe(true);
   });
+
+  it("Hermes connector delivery is tenant-scoped, ordered, and idempotent", async () => {
+    const f = await createWorkspaceFixture({ keyPrefix: "HSC" });
+    fixtures.push(f);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: { workspaceId: f.workspace.id, profileKey: "hermes-test", name: "Hermes Test" },
+    });
+    const runtime = await prisma.runtime.create({
+      data: {
+        workspaceId: f.workspace.id,
+        ownerId: f.user.id,
+        name: "Hermes Test",
+        kind: "REMOTE_HTTP",
+        adapterKey: "hermes",
+      },
+    });
+    const thread = await prisma.chatThread.create({
+      data: {
+        workspaceId: f.workspace.id,
+        userId: f.user.id,
+        agentId: agent.id,
+        title: "Mapped conversation",
+      },
+    });
+    await prisma.connectorSession.create({
+      data: {
+        workspaceId: f.workspace.id,
+        runtimeId: runtime.id,
+        agentId: agent.id,
+        chatThreadId: thread.id,
+        externalSessionId: "hermes-session-1",
+        memoryKey: "forge:v2:test",
+        lifecycle: "ACTIVE",
+      },
+    });
+    const { ctx } = buildMcpCtx(f, { linkedAgentId: agent.id });
+    const negotiated = (await call(
+      "chat.connector.negotiate",
+      {
+        connector: "hermes-forge-platform",
+        versions: ["1.0"],
+        profileKey: agent.profileKey,
+        capabilities: {
+          orderedEvents: true,
+          idempotentDelivery: true,
+          draftStreaming: true,
+          proactiveDelivery: true,
+          statusEvents: true,
+          toolEvents: true,
+          attribution: true,
+          sessionMapping: "forge-owned",
+          eventKinds: ["message.proactive"],
+        },
+      },
+      ctx,
+    )) as { selectedVersion: string };
+    expect(negotiated.selectedVersion).toBe("1.0");
+
+    const envelope = {
+      protocolVersion: "1.0",
+      connector: "hermes-forge-platform",
+      eventId: "evt-proactive-1",
+      sequence: 1,
+      direction: "hermes_to_forge",
+      kind: "message.proactive",
+      occurredAt: new Date().toISOString(),
+      threadId: thread.id,
+      sessionId: "hermes-session-1",
+      attribution: { actorType: "agent", profileKey: agent.profileKey, hermesMessageId: "hm-1" },
+      idempotency: { key: "proactive-1", scope: "connector-event" },
+      payload: { body: "Unsolicited update" },
+    };
+    const first = (await call("chat.connector.deliver", { envelope }, ctx)) as {
+      duplicate: boolean;
+      messageId: string;
+    };
+    const duplicate = (await call("chat.connector.deliver", { envelope }, ctx)) as {
+      duplicate: boolean;
+      messageId: string;
+    };
+    expect(first.duplicate).toBe(false);
+    expect(duplicate).toEqual(expect.objectContaining({ duplicate: true, messageId: first.messageId }));
+    expect(await prisma.chatMessage.count({ where: { threadId: thread.id, body: "Unsolicited update" } })).toBe(1);
+
+    const other = await createWorkspaceFixture({ keyPrefix: "HSX" });
+    fixtures.push(other);
+    const otherAgent = await prisma.agent.create({
+      data: { workspaceId: other.workspace.id, profileKey: "hermes-test", name: "Other Hermes" },
+    });
+    const { ctx: otherCtx } = buildMcpCtx(other, { linkedAgentId: otherAgent.id });
+    await expect(call("chat.connector.deliver", { envelope }, otherCtx)).rejects.toThrow(
+      /tenant-scoped Forge-owned Hermes session mapping/,
+    );
+  });
 });

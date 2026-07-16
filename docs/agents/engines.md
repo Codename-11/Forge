@@ -1,14 +1,15 @@
 # Chat & Dispatch Engines
 
-Every agent in Forge runs through one of two **execution engines**. The
-engine decides *who owns the agent loop* — Forge, or the agent's own
-runtime (e.g. Hermes).
+Forge separates interactive conversation transport from background execution.
+For Hermes, interactive chat uses the native Sessions API so one Forge thread
+resumes one durable Hermes conversation. Issue work and other background
+execution continue to use the asynchronous Runs API.
 
 You pick the engine per agent in **Settings → Agents → (create or edit) →
-Chat engine**. The default comes from the integration — **Hermes defaults to
-Runs** (you're talking to *your* agent, with its own memory and tools) —
-and any agent can override it. Flip an agent to **Completions** for a
-stateless, Forge-owned loop.
+Chat engine**. Hermes uses Sessions when the runtime explicitly advertises the
+required session resources and streaming endpoint. A non-Hermes agent can use
+Completions for a stateless, Forge-owned loop. `/v1/runs` remains an execution
+engine rather than being overloaded into a conversation transport.
 
 ::: warning Completions needs a configured chat model
 **Completions** calls an OpenAI-compatible endpoint, so it only works when a
@@ -24,25 +25,22 @@ See **[Providers & transports](./providers-and-transports.md)** for the full
 model.
 :::
 
-| | **Completions** | **Runs** (Hermes default) |
-|---|---|---|
-| Underlying API | OpenAI-compat `/v1/chat/completions` | Provider agent-run API (Hermes `/v1/runs`) |
-| Who owns the loop | **Forge** | **The agent's runtime** |
-| Tools | Forge's chat-tool allowlist, with approval cards | The agent's own tools |
-| Context injection | Forge injects page/canvas/issue context | Sent as run input; the agent decides |
-| Agent memory / persona | None (stateless model call) | Full — the agent runs as itself |
-| Streaming | Yes (token deltas) | Yes (`message.delta` + lifecycle events) |
-| First-token latency | Lowest | Slightly higher (run setup) |
-| Model flexibility | Any OpenAI-compatible model | Provider-specific |
+| | **Completions** | **Hermes Sessions** | **Runs** |
+|---|---|---|---|
+| Underlying API | OpenAI-compat `/v1/chat/completions` | `/api/sessions/{id}/chat/stream` | Provider agent-run API (`/v1/runs`) |
+| Intended use | Stateless utility chat | Interactive agent conversation | Issue and background execution |
+| Lifecycle owner | **Forge** | **Forge mapping + Hermes transcript** | **The agent runtime** |
+| Agent memory / persona | None | Durable per-session identity | Run-scoped runtime identity |
+| Streaming | Token deltas | Session lifecycle SSE | Run lifecycle SSE + status polling |
+| Reconnect | Forge stream checkpoints | Resume the mapped session on the next turn; in-flight replay only when explicitly advertised | Poll run status after stream loss |
+| Model flexibility | Any OpenAI-compatible model | Hermes runtime | Provider-specific |
 
 ## When to use which
 
-**Hermes agents default to Runs** — when you chat with Victor or Mizu you
-want *that agent*, with its own long-term memory, persona and native
-tools, not a stateless model. Chat still streams token-by-token; you also
-get structured tool/approval/lifecycle events and a native stop/approval
-control plane. Assigned work uses Runs too, so chat and dispatch behave
-consistently.
+**Hermes interactive chat uses Sessions.** Reusing the mapped Hermes session ID
+preserves the runtime's transcript, memory scope, persona, and native tools
+without manufacturing a new background run for every message. Forge owns the
+mapping and display record; Hermes owns the native transcript.
 
 **Switch an agent to Completions for a general, stateless chat surface.**
 It's fast and predictable, and Forge stays in control of the tools the
@@ -58,13 +56,16 @@ utility assistant where agent memory/identity doesn't matter.
 - ⛔ No agent memory or identity continuity between turns.
 - ⛔ The agent can't use its own (Hermes) tools — only Forge's chat allowlist.
 
+**Hermes Sessions**
+- ✅ One durable Hermes conversation per mapped Forge thread.
+- ✅ Native transcript history, persona, memory scope, and streaming events.
+- ⛔ Current upstream streaming does not imply in-flight replay, tool approval,
+  proactive delivery, or attachments beyond explicitly advertised image input.
+
 **Runs**
-- ✅ The agent runs as itself: memory, persona, its own tools.
-- ✅ Structured lifecycle events + native approval / stop.
-- ✅ Same engine that powers dispatched (assigned) work — consistent behaviour.
-- ⛔ Slightly higher first-token latency and more operational surface.
-- ⛔ Forge's canvas/issue context injection and chat-tool allowlist don't
-  apply — the agent's runtime owns that.
+- ✅ Durable asynchronous execution status, stop, and approval controls.
+- ✅ Appropriate for assignment and background work that must outlive a browser.
+- ⛔ Not an interactive session transport and must not own a ChatThread mapping.
 
 ## Who owns chat vs. the run
 
@@ -75,11 +76,13 @@ the UI. The engine only changes who owns the *loop* and the agent's
 - **Completions** — Forge runs the loop: it builds the prompt, injects
   context, calls the model, executes any approved tools, and persists the
   reply. The model is stateless.
-- **Runs** — the provider runs the loop with the agent's own memory and
-  tools. Forge sends the turn as run input, streams the result back, and
-  persists the reply.
+- **Hermes Sessions** — Forge persists its ChatThread and a tenant-scoped
+  mapping to the Hermes session. Hermes persists the native transcript and
+  runs each interactive turn.
+- **Runs** — the provider owns an asynchronous execution. Forge mirrors its
+  progress into AgentRun and does not treat the run ID as a chat session ID.
 
-## Dispatch (assigned work) always uses Runs
+## Dispatch and background work use Runs
 
 When you **assign an issue** to an agent whose engine is **Runs**, Forge
 drives the work through the provider's agent-run API instead of a webhook:
@@ -120,7 +123,8 @@ run via `/v1/runs/{id}/stop`.
 
 ## Switching engines
 
-Changing an agent's engine takes effect on the **next** chat turn or
-assignment. In-flight runs finish on the engine they started with. The
-choice is per-agent, so you can run some agents on Completions and others
-on Runs in the same workspace.
+Changing an agent's execution configuration takes effect on the next turn or
+assignment. In-flight sessions and runs finish on the transport they started
+with. A Hermes interactive fallback is selected only from a successful,
+versioned capability negotiation; Forge does not guess from server version,
+endpoint naming, or a successful health check.

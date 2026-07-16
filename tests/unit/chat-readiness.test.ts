@@ -4,10 +4,14 @@ import { resolveChatReadiness } from "@/server/services/chat-readiness";
 /**
  * Readiness mirrors what /api/chat/stream does at send time. These tests pin
  * the steering behaviour that stops a pull/act CLI connection from looking
- * like a chat backend, and confirm Hermes only presents an env-fallback runs
- * connector when that fallback is explicitly configured.
+ * like a chat backend, and confirm Hermes never presents the background Runs
+ * connector as an interactive transport.
  */
 describe("resolveChatReadiness", () => {
+  const sessionsRuntimeInfo = {
+    protocolVersion: "hermes.sessions.v1",
+    details: { hermesSessions: "true", hermesSessionsStreaming: "true" },
+  };
   const saved = { ...process.env };
   beforeEach(() => {
     // Start from a clean slate — no direct model keys configured.
@@ -25,41 +29,54 @@ describe("resolveChatReadiness", () => {
   it("Hermes RUNS agent without runtime or env gateway is not ready", () => {
     const r = resolveChatReadiness({ provider: "HERMES", runEngine: "RUNS", runtime: null });
     expect(r.ready).toBe(false);
-    expect(r.reason).toBe("no-runs-connector");
-    expect(r.hint).toMatch(/HERMES_GATEWAY_TOKEN/);
+    expect(r.reason).toBe("no-sessions-connector");
+    expect(r.hint).toMatch(/native Sessions/);
   });
 
-  it("Hermes RUNS agent is ready with an explicit env gateway fallback", () => {
+  it("Hermes env Runs credentials do not become an interactive fallback", () => {
     process.env.HERMES_GATEWAY_TOKEN = "test-token";
     const r = resolveChatReadiness({ provider: "HERMES", runEngine: "RUNS", runtime: null });
-    expect(r.ready).toBe(true);
-    expect(r.mode).toBe("runs");
-    expect(r.reason).toBe("runs-connector");
-    expect(r.transportLabel).toBe("Hermes env");
-    expect(r.capabilities).toMatchObject({
-      streaming: true,
-      thinking: true,
-      tools: true,
-      approvals: true,
-      stop: true,
-      runs: true,
-      dispatch: false,
-      vision: false,
-      memory: true,
-      diagnostics: true,
-    });
+    expect(r.ready).toBe(false);
+    expect(r.mode).toBe("none");
+    expect(r.reason).toBe("no-sessions-connector");
   });
 
-  it("Hermes RUNS agent is ready with a bound runtime", () => {
+  it("Hermes interactive agent uses native Sessions with a bound runtime", () => {
     const r = resolveChatReadiness({
       provider: "HERMES",
       runEngine: "RUNS",
-      runtime: { adapterKey: "hermes", endpoint: "https://gw.example/v1", secret: "tok" },
+      runtime: {
+        adapterKey: "hermes",
+        endpoint: "https://gw.example/v1",
+        secret: "tok",
+        runtimeInfo: sessionsRuntimeInfo,
+      },
     });
     expect(r.ready).toBe(true);
-    expect(r.mode).toBe("runs");
-    expect(r.reason).toBe("runs-connector");
+    expect(r.mode).toBe("sessions");
+    expect(r.reason).toBe("sessions-connector");
     expect(r.transportLabel).toBe("Hermes");
+  });
+
+  it("Hermes remains not ready until a probe explicitly negotiates Sessions streaming", () => {
+    const r = resolveChatReadiness({
+      provider: "HERMES",
+      runEngine: "RUNS",
+      runtime: {
+        adapterKey: "hermes",
+        endpoint: "https://gw.example/v1",
+        secret: "tok",
+        lastProbeAttempted: true,
+        lastProbeReachable: true,
+        runtimeInfo: {
+          details: { hermesSessions: "false", hermesSessionsStreaming: "false" },
+        },
+      },
+    });
+    expect(r.ready).toBe(false);
+    expect(r.mode).toBe("sessions");
+    expect(r.reason).toBe("no-sessions-connector");
+    expect(r.hint).toMatch(/has not passed native Sessions streaming negotiation/);
   });
 
   it("Hermes RUNS agent is not ready when the bound runtime failed its contract probe", () => {
@@ -76,7 +93,7 @@ describe("resolveChatReadiness", () => {
       },
     });
     expect(r.ready).toBe(false);
-    expect(r.mode).toBe("runs");
+    expect(r.mode).toBe("sessions");
     expect(r.reason).toBe("runtime-probe-failed");
     expect(r.hint).toMatch(/runs API missing/);
   });
@@ -106,18 +123,18 @@ describe("resolveChatReadiness", () => {
     expect(r.hint).toMatch(/OPENAI_API_KEY/);
   });
 
-  it("Hermes completions with no runtime + no gateway token reports a Hermes no-model reason", () => {
+  it("Hermes completions without a bound runtime still requires Sessions", () => {
     const r = resolveChatReadiness({ provider: "HERMES", runEngine: "COMPLETIONS", runtime: null });
     expect(r.ready).toBe(false);
-    expect(r.reason).toBe("no-model");
-    expect(r.hint).toMatch(/HERMES_GATEWAY_TOKEN/);
+    expect(r.reason).toBe("no-sessions-connector");
+    expect(r.hint).toMatch(/native Sessions/);
   });
 
-  it("Hermes completions allows explicit unauthenticated local gateway opt-in", () => {
+  it("Hermes unauthenticated completions opt-in does not bypass Sessions", () => {
     process.env.HERMES_GATEWAY_ALLOW_UNAUTH = "1";
     const r = resolveChatReadiness({ provider: "HERMES", runEngine: "COMPLETIONS", runtime: null });
-    expect(r.ready).toBe(true);
-    expect(r.reason).toBe("model-configured");
+    expect(r.ready).toBe(false);
+    expect(r.reason).toBe("no-sessions-connector");
   });
 
   it("CODEX completions becomes ready once OPENAI_API_KEY is set", () => {
@@ -217,11 +234,11 @@ describe("resolveChatReadiness", () => {
     expect(r.mode).toBe("completions");
   });
 
-  it("runs agents report a transport label", () => {
+  it("unbound Hermes agents do not report Runs as chat transport", () => {
     process.env.HERMES_GATEWAY_TOKEN = "test-token";
     const r = resolveChatReadiness({ provider: "HERMES", runEngine: "RUNS", runtime: null });
-    expect(r.mode).toBe("runs");
-    expect(r.transportLabel.length).toBeGreaterThan(0);
+    expect(r.mode).toBe("none");
+    expect(r.transportLabel).toBe("—");
   });
 
   it("uses the configured runtime name instead of only the adapter title", () => {
@@ -233,6 +250,7 @@ describe("resolveChatReadiness", () => {
         endpoint: "https://gw.example/v1",
         secret: "tok",
         name: "Hermes East",
+        runtimeInfo: sessionsRuntimeInfo,
       },
     });
     expect(r.transportLabel).toBe("Hermes East");
@@ -240,7 +258,7 @@ describe("resolveChatReadiness", () => {
 
   it("a thread provider override is honoured", () => {
     process.env.HERMES_GATEWAY_TOKEN = "test-token";
-    // Agent is CODEX (no key), but the thread overrides to HERMES → ready.
+    // Agent is CODEX, but a Hermes override still requires a bound runtime.
     const r = resolveChatReadiness({
       provider: "CODEX",
       runEngine: "COMPLETIONS",
@@ -248,6 +266,7 @@ describe("resolveChatReadiness", () => {
       providerOverride: "HERMES",
     });
     expect(r.provider).toBe("HERMES");
-    expect(r.ready).toBe(true);
+    expect(r.ready).toBe(false);
+    expect(r.reason).toBe("no-sessions-connector");
   });
 });

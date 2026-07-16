@@ -16,8 +16,15 @@ import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
 import { useChatThreadReadMarker } from "@/hooks/use-chat-read-state";
 import { Tooltip } from "@/components/ui/tooltip";
+import { Combobox } from "@/components/ui/combobox";
 import { ChatThreadView } from "./chat-thread";
 import { ChatStatusRail } from "@/components/chat/chat-status-rail";
+import {
+  CHAT_SESSION_CLASS_FILTER_OPTIONS,
+  chatSessionClassBadgeClass,
+  chatSessionClassLabel,
+  type ChatSessionClassFilter,
+} from "@/lib/chat-session-classification";
 
 type ThreadStateFilter = "all" | "waiting" | "stalled" | "has_attachments";
 
@@ -35,11 +42,13 @@ export function ChatTab({
 }) {
   const [threadQuery, setThreadQuery] = useState("");
   const [threadState, setThreadState] = useState<ThreadStateFilter>("all");
+  const [sessionClass, setSessionClass] = useState<ChatSessionClassFilter>("all");
   const normalizedThreadQuery = threadQuery.trim().toLowerCase();
   const { data: threads } = trpc.chat.threads.useQuery(
     {
       query: threadQuery.trim() || undefined,
       state: threadState,
+      sessionClass,
     },
     { staleTime: 30_000 },
   );
@@ -108,7 +117,7 @@ export function ChatTab({
     }
   }
   for (const a of agents ?? []) {
-    if (threadState !== "all") continue;
+    if (threadState !== "all" || sessionClass !== "all") continue;
     if (!agentMatchesQuery(a)) continue;
     if (byAgentId.has(a.id)) continue;
     byAgentId.set(a.id, {
@@ -191,6 +200,7 @@ export function ChatTab({
                 key={value}
                 type="button"
                 onClick={() => setThreadState(value)}
+                aria-pressed={threadState === value}
                 className={cn(
                   "rounded-full border px-1.5 py-0.5 text-[0.5625rem]",
                   threadState === value
@@ -203,10 +213,20 @@ export function ChatTab({
               </button>
             ))}
           </div>
+          <Combobox
+            value={sessionClass}
+            onChange={(value) => value && setSessionClass(value as ChatSessionClassFilter)}
+            options={[...CHAT_SESSION_CLASS_FILTER_OPTIONS]}
+            ariaLabel="Filter Mission Control chats by session type"
+            matchTriggerWidth
+            className="mt-1 w-full bg-background/65 text-[0.625rem]"
+          />
         </div>
         {railAgents.length === 0 && (
           <div className="w-32 shrink-0 px-2 py-3 text-center text-[0.625rem] text-muted-foreground sm:w-full">
-            {threadQuery || threadState !== "all" ? "No matching chats" : "No agents yet"}
+            {threadQuery || threadState !== "all" || sessionClass !== "all"
+              ? "No matching chats"
+              : "No agents yet"}
           </div>
         )}
         {railAgents.map((a) => {
@@ -270,14 +290,22 @@ export function ChatTab({
                       setSelectedThreadId(t.id);
                     }}
                     className={cn(
-                      "min-h-8 max-w-[10rem] shrink-0 truncate rounded px-1.5 py-0.5 text-[0.625rem] sm:min-h-0",
+                      "inline-flex min-h-8 max-w-[14rem] shrink-0 items-center rounded px-1.5 py-0.5 text-[0.625rem] sm:min-h-0",
                       active
                         ? "bg-ember/15 text-ember"
                         : "text-muted-foreground hover:bg-subtle/60",
                     )}
-                    title={t.title ?? (t.isDefault ? "Main thread" : "Conversation")}
+                    title={`${t.title ?? (t.isDefault ? "Main thread" : "Conversation")} · ${chatSessionClassLabel(t.sessionClass)}`}
                   >
-                    {t.title || (t.isDefault ? "Main" : "Chat")}
+                    <span className="truncate">{t.title || (t.isDefault ? "Main" : "Chat")}</span>
+                    <span
+                      className={cn(
+                        "ml-1 shrink-0 rounded-full border px-1 py-0 text-[0.5rem] uppercase tracking-wider",
+                        chatSessionClassBadgeClass(t.sessionClass),
+                      )}
+                    >
+                      {chatSessionClassLabel(t.sessionClass)}
+                    </span>
                   </button>
                 );
               })}

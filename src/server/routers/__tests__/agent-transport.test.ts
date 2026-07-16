@@ -25,14 +25,15 @@ async function setup() {
 }
 
 describe("agent.previewTransport", () => {
-  it("a HERMES agent (no runtime) previews as runs (env gateway fallback)", async () => {
+  it("a HERMES agent without a bound Sessions runtime is not interactive-ready", async () => {
     const previousAllowUnauth = process.env.HERMES_GATEWAY_ALLOW_UNAUTH;
     process.env.HERMES_GATEWAY_ALLOW_UNAUTH = "1";
     const { caller } = await setup();
     try {
       const p = await caller.previewTransport({ provider: "HERMES" });
-      expect(p.mode).toBe("runs");
-      expect(p.ready).toBe(true);
+      expect(p.mode).toBe("none");
+      expect(p.ready).toBe(false);
+      expect(p.hint).toContain("Sessions");
     } finally {
       if (previousAllowUnauth === undefined) delete process.env.HERMES_GATEWAY_ALLOW_UNAUTH;
       else process.env.HERMES_GATEWAY_ALLOW_UNAUTH = previousAllowUnauth;

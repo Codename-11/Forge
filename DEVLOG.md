@@ -2,6 +2,50 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — Hermes native interactive sessions
+
+Implemented AXI-112 as a complete native Hermes Sessions integration while
+leaving `/v1/runs` unchanged for issue and background execution. Forge now
+negotiates the versioned Hermes capability document fail-closed, creates and
+resumes one durable Forge-owned Hermes session per ChatThread, and namespaces
+Hermes memory with opaque versioned keys derived from runtime, workspace,
+operator, agent, thread, and reset generation identities. Clear and hard-delete
+operations now honor remote session ownership; reconnect can recreate a missing
+remote resource and renegotiate capabilities without exposing credentials.
+
+Added tenant-scoped `ConnectorSession` and `ConnectorDelivery` ledgers with
+ordered sequence/idempotency constraints, transactional message attribution,
+bounded settings-driven retry and dead-letter behavior, replay through the
+maintenance worker, redacted diagnostics, and dedicated audit/activity events.
+The connector accepts proactive replies, streaming/status/tool/approval events,
+and unsolicited agent messages through versioned MCP tools, rejects sequence
+gaps and cross-tenant mappings, and preserves delivery identity across retries.
+The existing webhook retry policy is now workspace-configurable as well.
+
+Chat and Mission Control classify and filter interactive, background, issue,
+and other sessions. The diagnostics rail shows lifecycle, safe mapping/session
+identifiers, negotiated capabilities, last delivery, error, and retry state,
+with an explicit reconnect/renegotiate recovery action. The composer also uses
+the route-selected thread as its draft namespace during slow hydration, fixing
+the `/clear` browser race found by the full gate.
+
+Added a distributable Hermes Forge platform plugin with a SQLite-backed ordered
+outbox and conservative legacy fallback, operator/developer documentation, a
+timestamped migration, unit and real Postgres/Redis integration coverage, and a
+Playwright classification journey. Verification passed lint and typecheck,
+**1,341/1,341** serial Vitest tests (one intentional live-connector skip),
+**8/8** Python adapter tests, the complete docs plus production Next.js build,
+and **51/51** serial Playwright journeys on the disposable E2E stack.
+
+The PR review then found three recovery boundary gaps. Hermes chat readiness
+now stays disabled until a sanitized probe explicitly records native Sessions
+streaming support. In-flight deliveries carry a workspace-configurable lease
+renewed by stream checkpoints, allowing the worker to atomically reclaim a
+crash-stranded `PROCESSING` row. The platform plugin also retains a failed
+final draft and reuses its original event id, preventing duplicate final
+messages on retry. Focused review coverage passes **33/33** TypeScript tests and
+**8/8** Python adapter tests.
+
 ## 2026-07-15 — v0.23.0 production verification
 
 Merged the Mission Control agent fleet implementation through PR #46 and the
