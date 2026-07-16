@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Sparkles } from "lucide-react";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
+import { hasUnseenChangelog } from "@/lib/changelog";
 
 /**
  * What's New tile — a compact list of the most recent CHANGELOG
@@ -18,17 +19,23 @@ import { cn } from "@/lib/utils";
 export function WhatsNewTile({
   slug,
   seenAt = null,
+  seenRelease = null,
 }: {
   slug: string;
   /** User's `changelogSeenAt`. When the latest dated entry is newer (or
    *  this is null), an "unseen" dot shows until they open /whats-new. */
   seenAt?: string | Date | null;
+  seenRelease?: string | null;
 }) {
   const { data, isLoading } = trpc.system.changelog.useQuery({ limit: 5 });
 
   // Newest dated entry vs. last-seen timestamp → "unseen" indicator.
-  const latestDate = data?.entries.find((e) => e.date)?.date ?? null;
-  const hasUnseen = !!latestDate && (!seenAt || new Date(latestDate) > new Date(seenAt));
+  const latest = data?.entries.find((entry) => entry.date) ?? null;
+  // Release identity is authoritative. A null value after this migration is
+  // intentionally unseen once, including for users who viewed an earlier
+  // release on the same day; the timestamp remains a legacy fallback only
+  // for old changelog entries without a release identity.
+  const hasUnseen = hasUnseenChangelog(latest, seenRelease, seenAt);
 
   if (isLoading || !data) {
     return (
@@ -84,9 +91,9 @@ export function WhatsNewTile({
 
       {rest.length > 0 && (
         <ul className="mt-3 flex flex-col gap-0.5 border-t border-border pt-2">
-          {rest.slice(0, 3).map((entry, i) => (
+          {rest.slice(0, 3).map((entry) => (
             <li
-              key={`${entry.version}-${entry.heading}-${i}`}
+              key={entry.id}
               className="text-meta truncate text-muted-foreground"
               title={entry.heading}
               data-whats-new-history

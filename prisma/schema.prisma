@@ -756,6 +756,9 @@ model User {
   /// Drives the "unseen entries" dot — when the latest changelog date
   /// is newer than this, the dot shows. Null = never seen.
   changelogSeenAt          DateTime?
+  /// Stable release identity last viewed by this user. Unlike the date above,
+  /// this distinguishes multiple releases shipped on the same calendar day.
+  changelogSeenRelease     String?
   /// Instance-wide role. Default MEMBER; the bootstrap operator (matching
   /// `ADMIN_EMAIL`) is promoted to INSTANCE_ADMIN on sign-in and by the
   /// backfill script. Gates the /admin shell and global AgentProfile

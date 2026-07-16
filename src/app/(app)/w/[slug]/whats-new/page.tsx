@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
  */
 export default function WhatsNewPage() {
   const { data, isLoading } = trpc.system.changelogFull.useQuery();
+  const latestReleaseId = data?.entries[0]?.id;
 
   // Opening this page is the "I've seen the changes" signal — stamp it
   // once on mount so the dashboard tile's unseen dot clears. Invalidate
@@ -25,9 +26,9 @@ export default function WhatsNewPage() {
     onSuccess: () => utils.user.me.invalidate(),
   });
   useEffect(() => {
-    markSeen.mutate();
+    if (latestReleaseId) markSeen.mutate({ releaseId: latestReleaseId });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [latestReleaseId]);
 
   return (
     <>
@@ -57,11 +58,9 @@ export default function WhatsNewPage() {
             </div>
           ) : (
             data.entries.map((entry) => (
-              <section key={entry.version} className="space-y-3">
+              <section key={entry.id} className="space-y-3">
                 <header className="flex items-baseline gap-2 border-b border-border pb-1">
-                  <h2 className="text-base font-semibold tracking-tight">
-                    {entry.heading}
-                  </h2>
+                  <h2 className="text-base font-semibold tracking-tight">{entry.heading}</h2>
                 </header>
                 {entry.items.length === 0 ? (
                   <div className="text-meta italic text-muted-foreground">

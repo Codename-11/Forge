@@ -7,10 +7,18 @@
 Release coordination confirmed that AXI-113 merged after v0.25.0 with no other
 active release owner. A patch tag would therefore have mislabeled an unreleased
 feature, so v0.26.0 is prepared from exact current `main` at
-`3ebceb99035a23cd173c6c2bae39c2fd78116e9f`. It combines AXI-113's structured,
-fresh completion evidence and authorized override UX with AXI-112's live-smoke
-delivery-drain hotfix. The hotfix PR passed all three GitHub CI jobs after the
-focused regression, lint, and typecheck gate.
+`3ebceb99035a23cd173c6c2bae39c2fd78116e9f`. While release review was running,
+AXI-86 merged to `main` as `ae431384a24a6cccc2aa3d8bbfb5364f4098bdc3`;
+serialization therefore rebases the release onto that exact newer tip and
+includes Artifact Studio alongside AXI-113's structured completion evidence
+and AXI-112's live-smoke delivery-drain hotfix.
+
+Release review found that the What's New feed used only the bracketed calendar
+date as its persisted identity, so two same-day releases could collide and the
+newer release could incorrectly appear already seen. Changelog entries now
+carry a release-unique SemVer identity, account preferences persist the exact
+release viewed, legacy users receive one safe unseen notification, and parser
+coverage locks in distinct v0.25.0/v0.26.0 behavior on the same date.
 
 ## 2026-07-16 — v0.25.0 live delivery-drain finding
 

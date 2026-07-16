@@ -9,10 +9,11 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
-## [2026-07-16] — v0.26.0 · Trustworthy completion evidence
+## [2026-07-16] — v0.26.0 · Artifact Studio and trustworthy completion
 
 ### Added
 
+- **Artifact Studio ships collaborative, shareable deliverables.** Teams can create and revise rich artifacts, manage revisions and previews, attach source assets, publish token-scoped read-only shares, and govern workspace defaults and API-key access.
 - **Completion recommendations expose structured verification state.** Operators can inspect ready, blocked, verifying, unavailable, and stale evidence with per-fact status, observation and retry times, diagnostics, and source links.
 - **Authorized operators can deliberately override incomplete verification.** A destructive **Mark done anyway** path lists unresolved reasons and records the structured assessment plus override decision in the issue audit trail.
 
