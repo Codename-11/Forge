@@ -31,7 +31,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "ci:local": "pnpm lint && pnpm typecheck && pnpm test --no-file-parallelism && flock /tmp/forge-e2e.lock -c 'E2E_RESET_DB=1 E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1'",
+    "ci:local": "pnpm lint && pnpm typecheck && pnpm test --no-file-parallelism && flock /tmp/forge-e2e.lock -c 'bash scripts/prepare-e2e-port.sh && E2E_FORCE_FRESH_SERVER=1 E2E_RESET_DB=1 E2E_FORCE_BUILD=1 pnpm exec playwright test --workers=1'",
     "worker": "NODE_OPTIONS='--require ./scripts/ignore-server-only.cjs' tsx src/server/worker.ts",
     "worker:live": "./scripts/worker-live.sh",
     "worker:live:watch": "./scripts/worker-live.sh --watch",
@@ -46,7 +46,7 @@
     "build:cli": "tsc -p tools/forge-cli",
     "forge": "node tools/forge-cli/dist/index.js",
     "changelog": "tsx tools/scripts/changelog-scaffold.ts",
-    "e2e": "flock /tmp/forge-e2e.lock -c 'E2E_RESET_DB=1 E2E_FORCE_BUILD=1 playwright test'",
+    "e2e": "flock /tmp/forge-e2e.lock -c 'bash scripts/prepare-e2e-port.sh && E2E_FORCE_FRESH_SERVER=1 E2E_RESET_DB=1 E2E_FORCE_BUILD=1 playwright test'",
     "e2e:web": "bash scripts/e2e-web.sh",
     "test:lifecycle": "playwright test --config=playwright.lifecycle.config.ts"
   },

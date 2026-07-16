@@ -20,6 +20,11 @@ semantics instead of idempotently seeding mutation residue from an earlier run
 or displacing another run's web server. Local E2E refuses to inherit a caller's
 development `DATABASE_URL`; CI continues to use its explicitly provided
 isolated service-container endpoints.
+Release review additionally caught Playwright's local server-reuse default.
+The release commands now acquire the lock before replacing port 3200 and set an
+explicit fresh-server flag, so a stale `e2e:web` process cannot bypass reset or
+rebuild. A bounded port-preparation helper also waits for the Next wrapper to
+finish releasing its child listener before the replacement server starts.
 
 ## 2026-07-16 — Hermes native interactive sessions
 

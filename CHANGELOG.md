@@ -26,7 +26,7 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 - **Interrupted interactive turns no longer strand or duplicate replies.** Expired processing leases are atomically reclaimed, Hermes readiness fails closed until Sessions streaming is probed, and final plugin events retain their original idempotency key across retry.
 - **Chat drafts remain attached to the route-selected thread during hydration.** Clear-and-resend flows no longer race the initial client query.
-- **The local release gate starts from isolated disposable state.** `pnpm ci:local` now matches GitHub CI's serial file execution, serializes local browser runs with a shared lock, refuses to inherit the developer database, and recreates only the explicitly named `forge_e2e` database so suites cannot inherit prior mutations or displace each other's web server.
+- **The local release gate starts from isolated disposable state.** `pnpm ci:local` now matches GitHub CI's serial file execution, acquires shared browser-server ownership, waits for stale listener teardown, disables server reuse, refuses to inherit the developer database, and recreates only the explicitly named `forge_e2e` database.
 
 ## [2026-07-15] — v0.24.0 · Actionable Mission Control
 
