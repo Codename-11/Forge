@@ -142,7 +142,7 @@ export function AgentsContent({
 
   return (
     <>
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="agent-fleet-scroll-region">
         <div className="mx-auto max-w-4xl space-y-5 p-6">
           <div className="grid gap-2 sm:grid-cols-4" aria-label="Agent lifecycle">
             {[

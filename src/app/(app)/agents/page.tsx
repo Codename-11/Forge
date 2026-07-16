@@ -22,7 +22,7 @@ export default async function AgentFleetPage({
       subtitle="Define identities, connect execution, bind workspaces, and monitor live use."
       eyebrow="Mission Control"
       scope="control"
-      contentClass="overflow-hidden"
+      contentClass="flex flex-col overflow-hidden"
     >
       <AgentsContent
         isInstanceAdmin={data.user.instanceRole === "INSTANCE_ADMIN"}

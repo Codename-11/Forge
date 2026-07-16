@@ -19,7 +19,7 @@ export default async function AgentFleetDetailPage({
       activePath="/agents"
       crumbs={["Forge", "Mission Control", "Agents", "Profile"]}
       scope="control"
-      contentClass="overflow-hidden"
+      contentClass="flex flex-col overflow-hidden"
     >
       <AgentDetailContent
         id={id}

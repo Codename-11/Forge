@@ -13369,3 +13369,24 @@ the full Vitest gate passed 1,320 tests with one intentional live-connector
 skip; the production build succeeded; the affected mobile and multi-workspace
 specs passed 13 journeys; and the complete serial Playwright gate passed all 47
 desktop, mobile, accessibility, and application journeys.
+
+---
+
+## 2026-07-15 — Mission Control agent surface scroll repair
+
+Reproduced the fleet regression against live data at a 900×650 desktop
+viewport. The `/agents` and `/agents/[id]` route shells opted into clipped
+overflow but did not establish the flex-column parent required by their nested
+scroll regions, leaving lower profiles and profile controls outside the
+reachable viewport.
+
+Restored the intended flex-column scroll contract on both routes and added
+stable fleet/profile scroll-region hooks. The Mission Control lifecycle E2E
+journey now constrains the viewport and proves that both surfaces overflow and
+can scroll before continuing through profile binding and removal.
+
+Verification: live-data browser checks confirmed wheel scrolling and clickable
+top/bottom actions without mutating production records; lint and typecheck
+passed (existing repository warnings only); the isolated Vitest gate passed
+1,320 tests with one intentional live-connector skip; and the production-built
+Mission Control Playwright suite passed both journeys.

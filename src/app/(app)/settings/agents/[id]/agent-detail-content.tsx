@@ -328,7 +328,7 @@ export function AgentDetailContent({
           "Identity-level agent profile — applies in every workspace you bind it to."
         }
       />
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto" data-testid="agent-profile-scroll-region">
         <div className="mx-auto max-w-4xl space-y-6 p-6">
           <div>
             <Link
