@@ -119,6 +119,7 @@ crash-stranded `PROCESSING` row. The platform plugin also retains a failed
 final draft and reuses its original event id, preventing duplicate final
 messages on retry. Focused review coverage passes **33/33** TypeScript tests and
 **8/8** Python adapter tests.
+
 ## 2026-07-16 — AXI-86 Artifact Studio
 
 Implemented Forge as the artifact control plane for people and agents. The
@@ -482,6 +483,7 @@ Verification: focused dispatcher and operator-attention coverage passed
 passed; the full Vitest suite passed (**1,211 passed; 1 skipped**); a fresh
 production build and the responsive Command Center Playwright contract passed
 (**1/1** across desktop, tablet, and mobile); and `git diff --check` passed.
+
 ## 2026-07-13 — Artifacts system research and implementation brief
 
 Created a documentation-only Artifacts audit in an isolated worktree using
@@ -13592,11 +13594,25 @@ surfaces with connection type, confidence, last-seen evidence, participants,
 ownership conflicts, and audited reconciliation. Updated the operator and
 transport documentation and refreshed the Agent Studio audit captures.
 
+Release review tightened the migration and recovery edges: a connectionless
+legacy lease can now be adopted only by a valid connection for the same linked
+agent, self-join preserves or repairs the primary participant, and both explicit
+delivery heartbeats and generic authenticated MCP signals resolve obsolete
+quiet-client recovery asks. The compact runtime tool profile keeps the complete
+agent chat loop while moving connector-only negotiation/delivery behind the
+catalog, preserving its combined sub-50 provider budget.
+
+The issue Activity surface now classifies unattributed worker, automation, and
+connector events instead of rendering a bare `system` actor. Generic issue
+updates use payload evidence to summarize delivery actions, changed fields, and
+label deltas, falling back to compact “Updated” copy only when no meaningful
+detail exists.
+
 Verification: Prisma validation passed; lint and typecheck passed (existing
-lint warnings only); the focused connection, stale-run, work-session, and
-dispatcher integration suite passed 28/28; the complete Vitest suite passed;
-the production Next.js build passed; and all 52 Playwright journeys passed
-against the migrated production-mode E2E stack.
+lint warnings only); focused release-review coverage passed 27/27; the complete
+Vitest suite passed 1,386 tests with one intentional live-connector skip; the
+fresh production Next.js build passed; and the final production-mode Playwright
+run passed all 52 journeys.
 
 ---
 

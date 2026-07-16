@@ -15169,7 +15169,16 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
   runtime: [
     "issues",
     "comments",
-    "chat",
+    // Keep the agent-facing chat loop direct, but leave connector transport
+    // negotiation/delivery discoverable through catalog.call. Those two
+    // server-to-server tools are not runtime essentials and would consume the
+    // provider headroom this compact default exists to protect.
+    "chat.getThread",
+    "chat.kickThread",
+    "chat.appendMessage",
+    "chat.startDraft",
+    "chat.appendDraftChunk",
+    "chat.finalizeDraft",
     "runs",
     "workSessions",
     "actionRequests.list",

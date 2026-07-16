@@ -43,10 +43,31 @@ export async function joinWorkSession(
   return db.$transaction(async (tx) => {
     const session = await tx.workSession.findFirst({
       where: { id: input.sessionId, workspaceId: input.workspaceId, endedAt: null },
-      select: { id: true, issueId: true },
+      select: { id: true, issueId: true, ownerConnectionId: true },
     });
     if (!session) throw new TRPCError({ code: "NOT_FOUND", message: "Work session not found." });
     const connection = await requireConnection(tx, input.workspaceId, input.connectionId);
+    if (session.ownerConnectionId === connection.id) {
+      // Joining is collaboration-only. If the lease owner calls it, preserve
+      // (and repair, for legacy rows) the canonical PRIMARY participant rather
+      // than demoting the owner to the requested secondary role.
+      return tx.workSessionParticipant.upsert({
+        where: {
+          workSessionId_connectionId: {
+            workSessionId: session.id,
+            connectionId: connection.id,
+          },
+        },
+        create: {
+          workspaceId: input.workspaceId,
+          workSessionId: session.id,
+          connectionId: connection.id,
+          agentId: connection.agentId,
+          role: "PRIMARY",
+        },
+        update: { agentId: connection.agentId, role: "PRIMARY", leftAt: null },
+      });
+    }
     const participant = await tx.workSessionParticipant.upsert({
       where: {
         workSessionId_connectionId: {

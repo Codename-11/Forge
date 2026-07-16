@@ -55,7 +55,7 @@ export type DeliveryTimelineUpdate = {
   body: string;
 };
 
-async function resolveStaleRequest(
+async function resolveRecoveryRequests(
   db: PrismaClient,
   workspaceId: string,
   sessionId: string,
@@ -64,7 +64,9 @@ async function resolveStaleRequest(
   await db.actionRequest.updateMany({
     where: {
       workspaceId,
-      dedupeKey: `work-session-stale:${sessionId}`,
+      dedupeKey: {
+        in: [`work-session-stale:${sessionId}`, `work-session-mcp-quiet:${sessionId}`],
+      },
       status: ActionRequestStatus.OPEN,
     },
     data: {
@@ -73,6 +75,46 @@ async function resolveStaleRequest(
       resolution,
     },
   });
+}
+
+/**
+ * Any authenticated signal from an MCP connection renews its observation
+ * lease. Clear delivery recovery asks for sessions that connection still owns,
+ * even when the signal was a generic MCP ping/tool call rather than an explicit
+ * workSessions heartbeat.
+ */
+export async function resolveMcpQuietRequestsForConnection(
+  db: PrismaClient,
+  workspaceId: string,
+  connectionId: string,
+  resolution = "MCP connection resumed.",
+) {
+  const sessions = await db.workSession.findMany({
+    where: {
+      workspaceId,
+      ownerConnectionId: connectionId,
+      endedAt: null,
+      status: { in: [...ACTIVE_WORK_SESSION_STATUSES] },
+    },
+    select: { id: true },
+  });
+  if (sessions.length === 0) return 0;
+  const now = new Date();
+  const result = await db.actionRequest.updateMany({
+    where: {
+      workspaceId,
+      status: ActionRequestStatus.OPEN,
+      dedupeKey: {
+        in: sessions.map((session) => `work-session-mcp-quiet:${session.id}`),
+      },
+    },
+    data: {
+      status: ActionRequestStatus.RESOLVED,
+      resolvedAt: now,
+      resolution,
+    },
+  });
+  return result.count;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -221,13 +263,40 @@ export async function claimWorkSession(
       // A concrete endpoint is the delivery lease owner. Two runtimes/MCP
       // clients bound to the same Agent are distinct and must explicitly hand
       // off instead of silently sharing primary execution authority.
+      const exactConnectionOwner = Boolean(
+        active.ownerConnectionId &&
+        input.actor.connectionId &&
+        active.ownerConnectionId === input.actor.connectionId,
+      );
+      // Legacy FORGE_AGENT sessions predate connection ownership. The first
+      // concrete connection for the already-linked logical agent may resume
+      // and atomically adopt that lease; a different agent still conflicts.
+      const resumableLegacyAgentOwner = Boolean(
+        !active.ownerConnectionId &&
+        input.actor.connectionId &&
+        input.actor.agentId &&
+        active.ownerAgentId === input.actor.agentId,
+      );
+      if (resumableLegacyAgentOwner) {
+        const actorConnection = await tx.agentConnection.findFirst({
+          where: {
+            id: input.actor.connectionId!,
+            workspaceId: input.workspaceId,
+            agentId: input.actor.agentId!,
+            revokedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!actorConnection) {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "The connection does not belong to the work-session agent.",
+          });
+        }
+      }
       const connectionScoped = Boolean(active.ownerConnectionId || input.actor.connectionId);
       const sameOwner = connectionScoped
-        ? Boolean(
-            active.ownerConnectionId &&
-            input.actor.connectionId &&
-            active.ownerConnectionId === input.actor.connectionId,
-          )
+        ? exactConnectionOwner || resumableLegacyAgentOwner
         : input.actor.agentId
           ? active.ownerAgentId === input.actor.agentId
           : active.ownerUserId === input.actor.userId;
@@ -241,6 +310,32 @@ export async function claimWorkSession(
           data: {
             lastHeartbeatAt: new Date(),
             staleAt: null,
+            ...(resumableLegacyAgentOwner
+              ? {
+                  ownerConnectionId: input.actor.connectionId,
+                  participants: {
+                    upsert: {
+                      where: {
+                        workSessionId_connectionId: {
+                          workSessionId: active.id,
+                          connectionId: input.actor.connectionId!,
+                        },
+                      },
+                      create: {
+                        workspaceId: input.workspaceId,
+                        agentId: input.actor.agentId!,
+                        connectionId: input.actor.connectionId!,
+                        role: "PRIMARY",
+                      },
+                      update: {
+                        agentId: input.actor.agentId!,
+                        role: "PRIMARY",
+                        leftAt: null,
+                      },
+                    },
+                  },
+                }
+              : {}),
             status:
               active.status === WorkSessionStatus.STALE
                 ? WorkSessionStatus.IN_PROGRESS
@@ -290,7 +385,7 @@ export async function claimWorkSession(
     await auditSession(tx, created, input.actor, "work-session-claimed", undefined, created);
     return created;
   });
-  await resolveStaleRequest(db, input.workspaceId, result.id, "Work session resumed.");
+  await resolveRecoveryRequests(db, input.workspaceId, result.id, "Work session resumed.");
   return result;
 }
 
@@ -479,7 +574,7 @@ export async function touchWorkSession(
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
     },
   });
-  await resolveStaleRequest(db, input.workspaceId, session.id, "Work session resumed.");
+  await resolveRecoveryRequests(db, input.workspaceId, session.id, "Work session resumed.");
   return updated;
 }
 
@@ -756,7 +851,7 @@ export async function advanceWorkSession(
     return updated;
   });
   if (input.status === "ABANDONED" || input.status === "VERIFIED") {
-    await resolveStaleRequest(
+    await resolveRecoveryRequests(
       db,
       input.workspaceId,
       input.sessionId,

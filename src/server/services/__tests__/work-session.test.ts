@@ -6,12 +6,11 @@ import {
   advanceWorkSession,
   attachPullRequest,
   claimWorkSession,
+  resolveMcpQuietRequestsForConnection,
   sweepStaleWorkSessions,
+  touchWorkSession,
 } from "@/server/services/work-session";
-import {
-  handoffWorkSession,
-  joinWorkSession,
-} from "@/server/services/work-session-participant";
+import { handoffWorkSession, joinWorkSession } from "@/server/services/work-session-participant";
 import {
   createIssue,
   createWorkspaceFixture,
@@ -100,6 +99,15 @@ describe("work session coordination", () => {
       actor: { userId: fixture.user.id, agentId: agent.id, connectionId: primary!.id },
     });
     await expect(
+      joinWorkSession(prisma, {
+        workspaceId: fixture.workspace.id,
+        sessionId: session.id,
+        connectionId: primary!.id,
+        role: "REVIEWER",
+        actor: { userId: fixture.user.id, agentId: agent.id },
+      }),
+    ).resolves.toMatchObject({ connectionId: primary!.id, role: "PRIMARY", leftAt: null });
+    await expect(
       claimWorkSession(prisma, {
         workspaceId: fixture.workspace.id,
         issueId: issue.id,
@@ -133,10 +141,80 @@ describe("work session coordination", () => {
     });
     expect(participants).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ connectionId: primary!.id, role: "PRIMARY", leftAt: expect.any(Date) }),
+        expect.objectContaining({
+          connectionId: primary!.id,
+          role: "PRIMARY",
+          leftAt: expect.any(Date),
+        }),
         expect.objectContaining({ connectionId: second!.id, role: "PRIMARY", leftAt: null }),
       ]),
     );
+  });
+
+  it("lets the same linked agent adopt and resume a legacy connectionless lease", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `legacy-connection-${Date.now()}`,
+        name: "Legacy connection agent",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        instanceKey: `legacy-adopter-${Date.now()}`,
+      },
+    });
+    const legacy = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/legacy-connectionless",
+      source: WorkSessionSource.FORGE_AGENT,
+      actor: { userId: fixture.user.id, agentId: agent.id },
+    });
+    await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "MCP status is unconfirmed",
+        issueId: issue.id,
+        dedupeKey: `work-session-mcp-quiet:${legacy.id}`,
+      },
+    });
+
+    await expect(
+      claimWorkSession(prisma, {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        repoFullName: "acme/forge",
+        branch: "codex/legacy-connectionless",
+        source: WorkSessionSource.FORGE_AGENT,
+        actor: {
+          userId: fixture.user.id,
+          agentId: agent.id,
+          connectionId: connection.id,
+        },
+      }),
+    ).resolves.toMatchObject({ id: legacy.id, ownerConnectionId: connection.id });
+    await expect(
+      prisma.workSessionParticipant.findUniqueOrThrow({
+        where: {
+          workSessionId_connectionId: {
+            workSessionId: legacy.id,
+            connectionId: connection.id,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ agentId: agent.id, role: "PRIMARY", leftAt: null });
+    await expect(
+      prisma.actionRequest.findFirstOrThrow({
+        where: { dedupeKey: `work-session-mcp-quiet:${legacy.id}` },
+      }),
+    ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Work session resumed." });
   });
 
   it("derives merge state from a native implementation PR and gates delivery milestones", async () => {
@@ -586,5 +664,29 @@ describe("work session coordination", () => {
         where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
       }),
     ).toBe(1);
+
+    expect(
+      await resolveMcpQuietRequestsForConnection(prisma, fixture.workspace.id, connection.id),
+    ).toBe(1);
+    await expect(
+      prisma.actionRequest.findFirstOrThrow({
+        where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+      }),
+    ).resolves.toMatchObject({ status: "RESOLVED", resolution: "MCP connection resumed." });
+
+    await prisma.actionRequest.updateMany({
+      where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+      data: { status: "OPEN", resolvedAt: null, resolution: null },
+    });
+    await touchWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      actor: { userId: fixture.user.id, agentId: agent.id, connectionId: connection.id },
+    });
+    await expect(
+      prisma.actionRequest.findFirstOrThrow({
+        where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+      }),
+    ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Work session resumed." });
   });
 });

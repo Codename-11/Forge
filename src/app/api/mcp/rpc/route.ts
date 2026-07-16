@@ -19,6 +19,7 @@ import { mcpServerInfo } from "@/server/build-info";
 import { FORGE_MCP_INSTRUCTIONS } from "@/server/services/mcp-instructions";
 import { db } from "@/server/db";
 import { touchAgentConnection, upsertAgentConnection } from "@/server/services/agent-connection";
+import { resolveMcpQuietRequestsForConnection } from "@/server/services/work-session";
 
 /**
  * Standard MCP (Model Context Protocol) endpoint — Streamable HTTP transport
@@ -215,6 +216,7 @@ async function resolveMcpConnection(
   const initialize = initializeClient(body);
   const sessionId = suppliedSessionId?.trim().slice(0, 255) || null;
 
+  let connection: Awaited<ReturnType<typeof upsertAgentConnection>> | null = null;
   if (!initialize && sessionId) {
     const existing = await db.agentConnection.findFirst({
       where: {
@@ -225,27 +227,31 @@ async function resolveMcpConnection(
         revokedAt: null,
       },
     });
-    if (existing) return touchAgentConnection(db, existing.id);
+    if (existing) connection = await touchAgentConnection(db, existing.id);
   }
 
-  const clientName = initialize?.clientInfo?.name ?? null;
-  return upsertAgentConnection(db, {
-    workspaceId: auth.workspaceId,
-    agentId,
-    kind: "MCP_CLIENT",
-    livenessModel: "LEASE",
-    apiKeyId: auth.keyId,
-    instanceKey: sessionId ?? (initialize ? `mcp-${randomUUID()}` : `legacy-${auth.keyId}`),
-    displayName: clientName || "Unidentified MCP client",
-    clientName,
-    clientVersion: initialize?.clientInfo?.version ?? null,
-    capabilities: ["TOOL_ACTIVITY"],
-    metadata: {
-      transport: "streamable-http",
-      protocolVersion: initialize?.protocol ?? PROTOCOL_VERSION,
-      identified: Boolean(clientName),
-    },
-  });
+  if (!connection) {
+    const clientName = initialize?.clientInfo?.name ?? null;
+    connection = await upsertAgentConnection(db, {
+      workspaceId: auth.workspaceId,
+      agentId,
+      kind: "MCP_CLIENT",
+      livenessModel: "LEASE",
+      apiKeyId: auth.keyId,
+      instanceKey: sessionId ?? (initialize ? `mcp-${randomUUID()}` : `legacy-${auth.keyId}`),
+      displayName: clientName || "Unidentified MCP client",
+      clientName,
+      clientVersion: initialize?.clientInfo?.version ?? null,
+      capabilities: ["TOOL_ACTIVITY"],
+      metadata: {
+        transport: "streamable-http",
+        protocolVersion: initialize?.protocol ?? PROTOCOL_VERSION,
+        identified: Boolean(clientName),
+      },
+    });
+  }
+  await resolveMcpQuietRequestsForConnection(db, auth.workspaceId, connection.id);
+  return connection;
 }
 
 function toolContent(result: unknown, isError = false) {
