@@ -13816,3 +13816,6 @@ The shared Markdown renderer now recognizes compact GitHub
 `owner/repository#number` references before Forge issue keys, preventing
 hyphenated owners from becoming partial links in issue comments, Command
 Center decisions, and every other shared rich-text surface.
+Prepared the reviewed change as patch release `v0.27.1`; the immutable tag is
+cut only after the release-ready commit lands on `main` with all required CI
+checks green.

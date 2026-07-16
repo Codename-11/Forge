@@ -71,9 +71,9 @@ test.describe("Issue flow", () => {
       "No concrete client or runtime connection is attached to this delivery session.",
     );
     await delivery.getByText("Delivery evidence", { exact: true }).click();
-    await expect(delivery.getByText("Agent", { exact: true })).toBeVisible();
-    await expect(delivery.getByText("Operator", { exact: true })).toBeVisible();
-    await expect(delivery.getByText("Actor", { exact: true })).toHaveCount(0);
+    await expect(delivery.getByRole("term", { name: "Agent" })).toBeVisible();
+    await expect(delivery.getByRole("term", { name: "Operator" })).toBeVisible();
+    await expect(delivery.getByRole("term", { name: "Actor" })).toHaveCount(0);
     await expect(delivery.getByText("no dispatched run recorded", { exact: true })).toBeVisible();
 
     // Move status on the detail page and confirm it sticks.
