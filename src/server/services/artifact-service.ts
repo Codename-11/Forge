@@ -1,8 +1,18 @@
 import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { ArtifactStatus, ArtifactType, EventKind } from "@prisma/client";
+import {
+  ArtifactContentType,
+  ArtifactStatus,
+  ArtifactType,
+  ArtifactVisibility,
+  EventKind,
+} from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
+import {
+  buildArtifactAssetManifest,
+  checksumArtifactContent,
+} from "@/server/services/artifact-studio";
 
 const SLUG_MAX = 64;
 
@@ -66,6 +76,8 @@ export interface CreateArtifactInput {
   slug?: string;
   type?: ArtifactType;
   status?: ArtifactStatus;
+  visibility?: ArtifactVisibility;
+  contentType?: ArtifactContentType;
   body: string;
   summary?: string | null;
   sourceType?: string | null;
@@ -87,6 +99,13 @@ export async function createArtifact(
   db: PrismaClient,
   input: CreateArtifactInput,
 ): Promise<{ id: string; slug: string }> {
+  if (input.status === ArtifactStatus.ACCEPTED || input.status === ArtifactStatus.ARCHIVED) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        "Create artifacts as a draft; use the review or archive workflow for lifecycle transitions.",
+    });
+  }
   const slug =
     input.slug?.toLowerCase().trim() ||
     (await pickUniqueArtifactSlug(db, input.workspaceId, input.title));
@@ -117,6 +136,7 @@ export async function createArtifact(
     }
   }
 
+  const assetManifest = await buildArtifactAssetManifest(db, input.workspaceId, input.body);
   const { id } = await db.$transaction(async (tx) => {
     const artifact = await tx.artifact.create({
       data: {
@@ -125,6 +145,7 @@ export async function createArtifact(
         slug,
         type: input.type ?? ArtifactType.DOCUMENT,
         status: input.status ?? ArtifactStatus.DRAFT,
+        visibility: input.visibility ?? ArtifactVisibility.PRIVATE,
         body: input.body,
         summary: input.summary ?? null,
         createdById: input.actorId,
@@ -145,6 +166,14 @@ export async function createArtifact(
         body: input.body,
         summary: input.summary ?? null,
         changelog: "Initial version",
+        contentType: input.contentType ?? ArtifactContentType.MARKDOWN,
+        contentChecksum: checksumArtifactContent({
+          title: artifact.title,
+          body: input.body,
+          summary: input.summary ?? null,
+          contentType: input.contentType ?? ArtifactContentType.MARKDOWN,
+        }),
+        assetManifest,
         createdById: input.actorId,
         createdByAgentId: input.actorAgentId ?? null,
       },
@@ -198,6 +227,11 @@ export interface UpdateArtifactInput {
   type?: ArtifactType;
   status?: ArtifactStatus;
   changelog?: string;
+  contentType?: ArtifactContentType;
+  /** Optimistic-concurrency guard supplied by editors. */
+  baseVersionId?: string | null;
+  /** When set, the new revision records its restore provenance. */
+  restoredFromVersionId?: string | null;
   /** When true, append a new ArtifactVersion row. Defaults true on body change. */
   publish?: boolean;
 }
@@ -220,6 +254,7 @@ export async function updateArtifact(
       summary: true,
       type: true,
       status: true,
+      currentVersionId: true,
       versions: {
         orderBy: { version: "desc" },
         take: 1,
@@ -233,9 +268,27 @@ export async function updateArtifact(
       message: `Artifact ${input.artifactId} not found in this workspace.`,
     });
   }
+  if (input.status === ArtifactStatus.ACCEPTED || input.status === ArtifactStatus.ARCHIVED) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message:
+        input.status === ArtifactStatus.ACCEPTED
+          ? "Use acceptVersion to accept an immutable artifact version."
+          : "Use the artifact archive operation.",
+    });
+  }
+  if (input.baseVersionId !== undefined && input.baseVersionId !== existing.currentVersionId) {
+    throw new TRPCError({
+      code: "CONFLICT",
+      message: "A newer artifact version exists. Refresh before saving your changes.",
+    });
+  }
   const nextVersion = (existing.versions[0]?.version ?? 0) + 1;
   const bodyChanged = input.body !== undefined && input.body !== existing.body;
   const shouldPublish = bodyChanged && (input.publish ?? true);
+  const assetManifest = shouldPublish
+    ? await buildArtifactAssetManifest(db, input.workspaceId, input.body!)
+    : undefined;
   return db.$transaction(async (tx) => {
     let newVersionId: string | null = null;
     if (shouldPublish) {
@@ -248,6 +301,15 @@ export async function updateArtifact(
           body: input.body!,
           summary: input.summary ?? existing.summary,
           changelog: input.changelog ?? null,
+          contentType: input.contentType ?? ArtifactContentType.MARKDOWN,
+          contentChecksum: checksumArtifactContent({
+            title: input.title ?? existing.title,
+            body: input.body!,
+            summary: input.summary === undefined ? existing.summary : input.summary,
+            contentType: input.contentType ?? ArtifactContentType.MARKDOWN,
+          }),
+          restoredFromVersionId: input.restoredFromVersionId ?? null,
+          assetManifest,
           createdById: input.actorId,
           createdByAgentId: input.actorAgentId ?? null,
         },
@@ -262,7 +324,18 @@ export async function updateArtifact(
         body: bodyChanged ? input.body : undefined,
         summary: input.summary === undefined ? undefined : input.summary,
         type: input.type ?? undefined,
-        status: input.status ?? undefined,
+        status:
+          input.status ??
+          (bodyChanged && existing.status === ArtifactStatus.ACCEPTED
+            ? ArtifactStatus.DRAFT
+            : undefined),
+        reviewRequestedAt:
+          input.status === ArtifactStatus.IN_REVIEW
+            ? new Date()
+            : input.status === ArtifactStatus.DRAFT ||
+                (bodyChanged && existing.status === ArtifactStatus.ACCEPTED)
+              ? null
+              : undefined,
         currentVersionId: newVersionId ?? undefined,
       },
     });
@@ -291,7 +364,48 @@ export async function updateArtifact(
         version: shouldPublish ? nextVersion : undefined,
       } as Prisma.InputJsonValue,
     });
-    return { id: input.artifactId, version: shouldPublish ? nextVersion : existing.versions[0]?.version ?? 1 };
+    return {
+      id: input.artifactId,
+      version: shouldPublish ? nextVersion : (existing.versions[0]?.version ?? 1),
+    };
+  });
+}
+
+/** Restore a historical snapshot by creating a new head revision. */
+export async function restoreArtifactVersion(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    artifactId: string;
+    versionId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+    baseVersionId?: string | null;
+  },
+) {
+  const version = await db.artifactVersion.findFirst({
+    where: {
+      id: params.versionId,
+      artifactId: params.artifactId,
+      workspaceId: params.workspaceId,
+    },
+    select: { id: true, version: true, title: true, body: true, summary: true, contentType: true },
+  });
+  if (!version) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Artifact version not found." });
+  }
+  return updateArtifact(db, {
+    workspaceId: params.workspaceId,
+    artifactId: params.artifactId,
+    actorId: params.actorId,
+    actorAgentId: params.actorAgentId,
+    title: version.title,
+    body: version.body,
+    summary: version.summary,
+    contentType: version.contentType,
+    changelog: `Restored from v${version.version}`,
+    baseVersionId: params.baseVersionId,
+    restoredFromVersionId: version.id,
   });
 }
 
@@ -352,12 +466,7 @@ export async function archiveArtifact(
  * make sense as artifact provenance — adding a new one means adding
  * a hydration branch here.
  */
-export type ArtifactSourceType =
-  | "chat-message"
-  | "comment"
-  | "note"
-  | "agent-run"
-  | "issue";
+export type ArtifactSourceType = "chat-message" | "comment" | "note" | "agent-run" | "issue";
 
 export async function promoteToArtifact(
   db: PrismaClient,
@@ -411,7 +520,8 @@ async function fetchSource(
         select: { body: true, thread: { select: { title: true, topic: true } } },
       });
       if (!row) return null;
-      const title = row.thread.title || row.thread.topic || row.body.slice(0, 60) || "Chat artifact";
+      const title =
+        row.thread.title || row.thread.topic || row.body.slice(0, 60) || "Chat artifact";
       return { title, body: row.body, summary: null, issueId: null };
     }
     case "comment": {

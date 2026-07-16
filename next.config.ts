@@ -122,6 +122,19 @@ const config: NextConfig = {
           { key: "Service-Worker-Allowed", value: "/" },
         ],
       },
+      {
+        source: "/shared/artifacts/:path*",
+        headers: [
+          { key: "Cache-Control", value: "private, no-store" },
+          { key: "Referrer-Policy", value: "no-referrer" },
+          { key: "X-Robots-Tag", value: "noindex, nofollow, noarchive" },
+          {
+            key: "Content-Security-Policy",
+            value:
+              "default-src 'self'; base-uri 'none'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'",
+          },
+        ],
+      },
       // Override for the in-app VitePress docs at /docs/*. The workspace
       // /docs route iframes this path; SAMEORIGIN keeps clickjacking
       // guards in place while letting the Forge shell embed it.

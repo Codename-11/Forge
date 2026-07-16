@@ -16,6 +16,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { randomUUID } from "node:crypto";
+import { Prisma } from "@prisma/client";
 import { assertSafeExternalUrl } from "@/lib/url-safety";
 import { db } from "@/server/db";
 
@@ -608,6 +609,23 @@ export async function deleteAttachment(attachmentId: string): Promise<void> {
   const row = await db.attachment.findUniqueOrThrow({
     where: { id: attachmentId },
   });
+  const versionRefs = await db.artifactVersion.findMany({
+    where: { workspaceId: row.workspaceId, assetManifest: { not: Prisma.JsonNull } },
+    select: { id: true, version: true, artifact: { select: { title: true } }, assetManifest: true },
+  });
+  const referencedBy = versionRefs.find(
+    (version) =>
+      Array.isArray(version.assetManifest) &&
+      version.assetManifest.some(
+        (entry) =>
+          typeof entry === "object" && entry !== null && "id" in entry && entry.id === attachmentId,
+      ),
+  );
+  if (referencedBy) {
+    throw new Error(
+      `Attachment is retained by ${referencedBy.artifact.title} v${referencedBy.version}; remove the reference in a new artifact revision instead.`,
+    );
+  }
   const ws = await loadWorkspace(row.workspaceId);
   const bucket = bucketNameFromSlug(ws.slug);
   const s3 = getS3Client();

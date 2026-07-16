@@ -7,7 +7,11 @@ import {
   AgentRunStatus,
   AgentStatus,
   ApiKeyKind,
+  ArtifactContentType,
+  ArtifactPublicationAudience,
+  ArtifactRole,
   ArtifactType,
+  ArtifactVisibility,
   CommentKind,
   ConnectorDeliveryDirection,
   ConnectorDeliveryStatus,
@@ -75,6 +79,7 @@ import {
   hasApiKeyNarrowing,
   type ApiKeyContext,
 } from "@/server/services/api-key-auth";
+import { artifactActorReadWhere, assertArtifactActorRole } from "@/server/services/artifact-access";
 import {
   ALLOWED_MIME_TYPES,
   ALLOWED_TARGET_TYPES,
@@ -8922,6 +8927,7 @@ export const mcpTools = {
         .optional(),
       issueId: z.string().cuid().optional(),
       projectId: z.string().cuid().optional(),
+      search: z.string().trim().max(200).optional(),
       includeArchived: z.boolean().default(false),
       limit: z.number().int().min(1).max(100).default(20),
     }),
@@ -8931,6 +8937,7 @@ export const mcpTools = {
         type?: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
         issueId?: string;
         projectId?: string;
+        search?: string;
         includeArchived: boolean;
         limit: number;
       },
@@ -8938,12 +8945,25 @@ export const mcpTools = {
     ) {
       return db.artifact.findMany({
         where: {
-          workspaceId: ctx.workspaceId,
-          ...buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+          AND: [
+            buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+            artifactActorReadWhere({
+              workspaceId: ctx.workspaceId,
+              userId: ctx.userId,
+              agentId: ctx.apiKey?.linkedAgentId,
+            }),
+          ],
           status: input.status,
           type: input.type,
           issueId: input.issueId,
           projectId: input.projectId,
+          OR: input.search
+            ? [
+                { title: { contains: input.search, mode: "insensitive" } },
+                { summary: { contains: input.search, mode: "insensitive" } },
+                { body: { contains: input.search, mode: "insensitive" } },
+              ]
+            : undefined,
           archivedAt: input.includeArchived ? undefined : null,
         },
         orderBy: { updatedAt: "desc" },
@@ -8954,6 +8974,7 @@ export const mcpTools = {
           title: true,
           type: true,
           status: true,
+          visibility: true,
           summary: true,
           issueId: true,
           projectId: true,
@@ -8979,13 +9000,25 @@ export const mcpTools = {
         where: input.id
           ? {
               id: input.id,
-              workspaceId: ctx.workspaceId,
-              ...buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+              AND: [
+                buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+                artifactActorReadWhere({
+                  workspaceId: ctx.workspaceId,
+                  userId: ctx.userId,
+                  agentId: ctx.apiKey?.linkedAgentId,
+                }),
+              ],
             }
           : {
               slug: input.slug!,
-              workspaceId: ctx.workspaceId,
-              ...buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+              AND: [
+                buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+                artifactActorReadWhere({
+                  workspaceId: ctx.workspaceId,
+                  userId: ctx.userId,
+                  agentId: ctx.apiKey?.linkedAgentId,
+                }),
+              ],
             },
         include: {
           versions: {
@@ -8997,6 +9030,8 @@ export const mcpTools = {
               title: true,
               summary: true,
               changelog: true,
+              contentType: true,
+              contentChecksum: true,
               createdAt: true,
             },
           },
@@ -9022,6 +9057,8 @@ export const mcpTools = {
         .enum(["DOCUMENT", "DECISION", "RUNBOOK", "REPORT", "SPEC", "BRIEF", "VERIFICATION"])
         .default("DOCUMENT"),
       status: z.enum(["DRAFT", "IN_REVIEW", "ACCEPTED", "ARCHIVED"]).default("DRAFT"),
+      visibility: z.nativeEnum(ArtifactVisibility).default(ArtifactVisibility.PRIVATE),
+      contentType: z.nativeEnum(ArtifactContentType).default(ArtifactContentType.MARKDOWN),
       summary: z.string().max(2_000).nullable().optional(),
       issueId: z.string().cuid().optional(),
       projectId: z.string().cuid().optional(),
@@ -9033,6 +9070,8 @@ export const mcpTools = {
         slug?: string;
         type: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
         status: "DRAFT" | "IN_REVIEW" | "ACCEPTED" | "ARCHIVED";
+        visibility: ArtifactVisibility;
+        contentType: ArtifactContentType;
         summary?: string | null;
         issueId?: string;
         projectId?: string;
@@ -9054,6 +9093,8 @@ export const mcpTools = {
         body: input.body,
         type: input.type,
         status: input.status,
+        visibility: input.visibility,
+        contentType: input.contentType,
         summary: input.summary ?? null,
         issueId: input.issueId ?? null,
         projectId: input.projectId ?? null,
@@ -9073,6 +9114,8 @@ export const mcpTools = {
         .optional(),
       status: z.enum(["DRAFT", "IN_REVIEW", "ACCEPTED", "ARCHIVED"]).optional(),
       changelog: z.string().max(1_000).optional(),
+      contentType: z.nativeEnum(ArtifactContentType).optional(),
+      baseVersionId: z.string().cuid().nullable().optional(),
       publish: z.boolean().optional(),
     }),
     async run(
@@ -9084,6 +9127,8 @@ export const mcpTools = {
         type?: "DOCUMENT" | "DECISION" | "RUNBOOK" | "REPORT" | "SPEC" | "BRIEF" | "VERIFICATION";
         status?: "DRAFT" | "IN_REVIEW" | "ACCEPTED" | "ARCHIVED";
         changelog?: string;
+        contentType?: ArtifactContentType;
+        baseVersionId?: string | null;
         publish?: boolean;
       },
       ctx: McpContext,
@@ -9095,6 +9140,13 @@ export const mcpTools = {
       await assertArtifactKeyScope(scopeCtx(ctx), {
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.EDITOR,
       });
       if (artifact?.issueId) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: artifact.issueId });
@@ -9112,6 +9164,8 @@ export const mcpTools = {
         type: input.type,
         status: input.status,
         changelog: input.changelog,
+        contentType: input.contentType,
+        baseVersionId: input.baseVersionId,
         publish: input.publish,
       });
     },
@@ -9129,6 +9183,13 @@ export const mcpTools = {
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
       });
+      await assertArtifactActorRole(db, {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.EDITOR,
+      });
       if (artifact?.issueId) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: artifact.issueId });
         await assertAgentIssueMutationAllowed(ctx, artifact.issueId, "artifacts.archive");
@@ -9140,6 +9201,344 @@ export const mcpTools = {
         artifactId: input.id,
       });
       return { ok: true };
+    },
+  },
+
+  "artifacts.requestReview": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid() }),
+    async run(input: { id: string }, ctx: McpContext) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.EDITOR,
+      });
+      const { requestArtifactReview } = await import("@/server/services/artifact-studio");
+      return requestArtifactReview(db, {
+        workspaceId: ctx.workspaceId,
+        artifactId: input.id,
+        actorId: await resolveActorId(ctx),
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+      });
+    },
+  },
+
+  "artifacts.restoreVersion": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      versionId: z.string().cuid(),
+      baseVersionId: z.string().cuid().nullable().optional(),
+    }),
+    async run(
+      input: { id: string; versionId: string; baseVersionId?: string | null },
+      ctx: McpContext,
+    ) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.EDITOR,
+      });
+      const { restoreArtifactVersion } = await import("@/server/services/artifact-service");
+      return restoreArtifactVersion(db, {
+        workspaceId: ctx.workspaceId,
+        artifactId: input.id,
+        versionId: input.versionId,
+        baseVersionId: input.baseVersionId,
+        actorId: ctx.userId ?? null,
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+      });
+    },
+  },
+
+  "artifacts.getVersion": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({ artifactId: z.string().cuid(), versionId: z.string().cuid() }),
+    async run(input: { artifactId: string; versionId: string }, ctx: McpContext) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.VIEWER,
+      });
+      const version = await db.artifactVersion.findFirst({
+        where: { id: input.versionId, artifactId: input.artifactId, workspaceId: ctx.workspaceId },
+      });
+      if (!version) throw new Error("Artifact version not found.");
+      return version;
+    },
+  },
+
+  "artifacts.comments.list": {
+    scopes: ["READ_ISSUES"] as const,
+    input: z.object({
+      artifactId: z.string().cuid(),
+      versionId: z.string().cuid().optional(),
+      includeResolved: z.boolean().default(true),
+    }),
+    async run(
+      input: { artifactId: string; versionId?: string; includeResolved: boolean },
+      ctx: McpContext,
+    ) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.VIEWER,
+      });
+      return db.artifactComment.findMany({
+        where: {
+          artifactId: input.artifactId,
+          workspaceId: ctx.workspaceId,
+          versionId: input.versionId,
+          deletedAt: null,
+          status: input.includeResolved ? undefined : "OPEN",
+        },
+        orderBy: { createdAt: "asc" },
+        include: {
+          author: { select: { id: true, name: true } },
+          authoringAgent: { select: { id: true, name: true, profileKey: true } },
+        },
+      });
+    },
+  },
+
+  "artifacts.comments.create": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      artifactId: z.string().cuid(),
+      versionId: z.string().cuid().optional(),
+      parentId: z.string().cuid().optional(),
+      body: z.string().trim().min(1).max(20_000),
+      anchor: z.unknown().optional(),
+      quotedText: z.string().max(2_000).optional(),
+    }),
+    async run(
+      input: {
+        artifactId: string;
+        versionId?: string;
+        parentId?: string;
+        body: string;
+        anchor?: unknown;
+        quotedText?: string;
+      },
+      ctx: McpContext,
+    ) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.COMMENTER,
+      });
+      if (input.versionId) {
+        const version = await db.artifactVersion.findFirst({
+          where: {
+            id: input.versionId,
+            artifactId: input.artifactId,
+            workspaceId: ctx.workspaceId,
+          },
+          select: { id: true },
+        });
+        if (!version) throw new Error("Version does not belong to this artifact.");
+      }
+      const actorId = await resolveActorId(ctx);
+      return db.$transaction(async (tx) => {
+        const comment = await tx.artifactComment.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            artifactId: input.artifactId,
+            versionId: input.versionId ?? null,
+            parentId: input.parentId ?? null,
+            authorId: ctx.apiKey?.linkedAgentId ? null : actorId,
+            authoringAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            body: input.body,
+            anchor: input.anchor as Prisma.InputJsonValue | undefined,
+            quotedText: input.quotedText ?? null,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "artifactComment",
+          entityId: comment.id,
+          action: "created",
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "artifact",
+          subjectId: input.artifactId,
+          payload: { action: "comment-added", versionId: input.versionId ?? null },
+        });
+        return comment;
+      });
+    },
+  },
+
+  "artifacts.comments.resolve": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      artifactId: z.string().cuid(),
+      commentId: z.string().cuid(),
+      resolved: z.boolean().default(true),
+    }),
+    async run(
+      input: { artifactId: string; commentId: string; resolved: boolean },
+      ctx: McpContext,
+    ) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.artifactId,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.EDITOR,
+      });
+      const actorId = await resolveActorId(ctx);
+      return db.$transaction(async (tx) => {
+        const result = await tx.artifactComment.updateMany({
+          where: {
+            id: input.commentId,
+            artifactId: input.artifactId,
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+          },
+          data: input.resolved
+            ? {
+                status: "RESOLVED",
+                resolvedAt: new Date(),
+                resolvedById: ctx.apiKey?.linkedAgentId ? null : actorId,
+              }
+            : { status: "OPEN", resolvedAt: null, resolvedById: null },
+        });
+        if (!result.count) throw new Error("Artifact comment not found.");
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "artifactComment",
+          entityId: input.commentId,
+          action: input.resolved ? "resolved" : "reopened",
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "artifact",
+          subjectId: input.artifactId,
+          payload: { action: input.resolved ? "comment-resolved" : "comment-reopened" },
+        });
+        return { ok: true };
+      });
+    },
+  },
+
+  "artifacts.accept": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ id: z.string().cuid(), versionId: z.string().cuid().optional() }),
+    async run(input: { id: string; versionId?: string }, ctx: McpContext) {
+      if (ctx.apiKey?.linkedAgentId) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Artifact acceptance requires a human owner.",
+        });
+      }
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        minimum: ArtifactRole.OWNER,
+      });
+      const { acceptArtifactVersion } = await import("@/server/services/artifact-studio");
+      return acceptArtifactVersion(db, {
+        workspaceId: ctx.workspaceId,
+        artifactId: input.id,
+        versionId: input.versionId,
+        actorId: await resolveActorId(ctx),
+      });
+    },
+  },
+
+  "artifacts.publish": {
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      id: z.string().cuid(),
+      versionId: z.string().cuid().optional(),
+      expiresAt: z.coerce.date().nullable().optional(),
+    }),
+    async run(input: { id: string; versionId?: string; expiresAt?: Date | null }, ctx: McpContext) {
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+      });
+      await assertArtifactActorRole(db, {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+        userId: ctx.userId,
+        agentId: ctx.apiKey?.linkedAgentId,
+        minimum: ArtifactRole.OWNER,
+      });
+      const workspace = await db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: {
+          artifactExternalSharingEnabled: true,
+          artifactAgentPublishPolicy: true,
+          artifactDefaultLinkExpiryDays: true,
+        },
+      });
+      if (!workspace.artifactExternalSharingEnabled)
+        throw new Error("External artifact sharing is disabled.");
+      if (ctx.apiKey?.linkedAgentId && workspace.artifactAgentPublishPolicy !== "ALLOW") {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            workspace.artifactAgentPublishPolicy === "NEVER"
+              ? "Agent artifact publishing is disabled."
+              : "A human owner must approve and publish this artifact.",
+        });
+      }
+      const expiresAt =
+        input.expiresAt === undefined
+          ? new Date(Date.now() + workspace.artifactDefaultLinkExpiryDays * 86_400_000)
+          : input.expiresAt;
+      const { publishArtifactVersion } = await import("@/server/services/artifact-studio");
+      return publishArtifactVersion(db, {
+        workspaceId: ctx.workspaceId,
+        artifactId: input.id,
+        versionId: input.versionId,
+        audience: ArtifactPublicationAudience.LINK,
+        expiresAt,
+        actorId: await resolveActorId(ctx),
+        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+      });
     },
   },
 
