@@ -13431,3 +13431,13 @@ parent links, and the current page remains non-interactive with `aria-current`.
 The live-data 1164×698 comparison preserved the existing visual hierarchy while
 proving Activity → Mission Control navigation; a fresh production build and the
 focused Playwright journey passed.
+
+---
+
+## 2026-07-15 — v0.24.0 release assembly
+
+Prepared the next serialized Forge release from `main` commit `da22bfc9` after
+PR #49 passed GitHub's lint, typecheck, unit, and both Playwright shards. Bumped
+the application version to 0.24.0 and curated the in-app changelog around the
+Mission Control attention lifecycle, inspectable cross-workspace surfaces,
+concurrent run capacity, agent-page scrolling, and semantic navigation.
