@@ -13648,3 +13648,13 @@ passed 1,322 of 1,323 runnable tests with one intentional live skip; its single
 parallel stale-work failure passed immediately in isolation (9/9), confirming
 test interference rather than a feature regression. Desktop and 390px mobile
 captures passed design QA against the selected mockup; see `design-qa.md`.
+
+Review follow-up made workspace settings propagate committed shell fields into
+the live workspace context before refreshing the server component tree, so a
+Personal ↔ Team profile change updates navigation and dashboard behavior
+immediately. Personal Notes no longer advertises the shell-reserved `G N`
+initiative chord. Lint passed with existing warnings; typecheck passed after
+refreshing the lockfile-specified dependencies; the focused navigation suite
+passed 12 tests; the production build passed; and the isolated personal
+Playwright journey passed the task/note flow, both profile transitions, and the
+Notes shortcut contract.

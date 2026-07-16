@@ -13,7 +13,7 @@ import { Confirm } from "@/components/ui/modal";
 import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { cn } from "@/lib/utils";
-import { useWorkspace } from "@/hooks/use-workspace";
+import { useUpdateWorkspaceContext, useWorkspace } from "@/hooks/use-workspace";
 import { workspaceColor } from "@/lib/workspace-color";
 
 type DefaultIssueAssigneeMode = "NONE" | "CREATOR" | "USER";
@@ -24,8 +24,9 @@ type DeliveryTimelinePolicy = "OFF" | "RECOMMEND" | "REQUIRE_ON_PR" | "AUTO_ON_P
 export default function WorkspaceSettingsPage() {
   const router = useRouter();
   const ws = useWorkspace();
+  const updateWorkspaceContext = useUpdateWorkspaceContext();
   const utils = trpc.useUtils();
-  const { data: current, refetch } = trpc.workspace.current.useQuery();
+  const { data: current } = trpc.workspace.current.useQuery();
   const { data: members } = trpc.workspace.members.useQuery();
 
   const canEdit = ws.role === "OWNER" || ws.role === "ADMIN";
@@ -132,11 +133,27 @@ export default function WorkspaceSettingsPage() {
   }, [resetFromCurrent]);
 
   const update = trpc.workspace.update.useMutation({
-    onSuccess: () => {
+    onSuccess: (updated) => {
       toast.success("Workspace updated.");
-      utils.workspace.current.invalidate();
-      utils.workspace.list.invalidate();
-      refetch();
+      updateWorkspaceContext({
+        name: updated.name,
+        avatarUrl: updated.avatarUrl,
+        experienceProfile: updated.experienceProfile,
+        cycleLengthDays: updated.cycleLengthDays,
+        cycleCooldownDays: updated.cycleCooldownDays,
+        timeTrackingEnabled: updated.timeTrackingEnabled,
+        attachmentQuotaMb: updated.attachmentQuotaMb,
+        agentProgressUpdateMinutes: updated.agentProgressUpdateMinutes,
+        agentRunQuietMinutes: updated.agentRunQuietMinutes,
+      });
+      // The workspace provider is seeded by the server layout rather than the
+      // tRPC cache. Update it from the committed mutation result above, then
+      // refresh the RSC tree so server-owned dashboard branches agree too.
+      router.refresh();
+      void Promise.all([
+        utils.workspace.current.invalidate(),
+        utils.workspace.list.invalidate(),
+      ]);
     },
     onError: (e) => toast.error(e.message),
   });

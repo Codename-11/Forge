@@ -112,7 +112,7 @@ export const PERSONAL_WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
       { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
       { path: "/issues", label: "Tasks", icon: CircleDot, chord: "s" },
       { path: "/dashboard#upcoming", label: "Upcoming", icon: CalendarDays, chord: "c" },
-      { path: "/dashboard#personal-notes", label: "Notes", icon: NotebookPen, chord: "n" },
+      { path: "/dashboard#personal-notes", label: "Notes", icon: NotebookPen },
     ],
   },
   {

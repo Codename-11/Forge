@@ -50,5 +50,22 @@ test("creates a personal workspace and supports the Today flow", async ({ page }
   await page.getByTitle("Collapse agent companion").click();
   await expect(page.getByRole("heading", { name: "Agent companion" })).toBeHidden();
   await expect(page.getByRole("button", { name: "Agent", exact: true })).toBeVisible();
+
+  const workspaceSettingsLoaded = page.waitForResponse(
+    (response) => response.url().includes("workspace.current") && response.ok(),
+  );
+  await page.goto(`/w/${slug}/settings/workspace`);
+  await workspaceSettingsLoaded;
+  await page.getByRole("button", { name: /Project & team/ }).click();
+  await page.keyboard.press("Control+s");
+  await expect(page.getByRole("link", { name: /^Dashboard/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: /^Today/ })).toBeHidden();
+
+  await page.getByRole("button", { name: /^Personal/ }).click();
+  await page.keyboard.press("Control+s");
+  await expect(page.getByRole("link", { name: /^Today/ })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Notes", exact: true })).not.toHaveAttribute(
+    "data-tooltip-kbd",
+  );
   expect(browserErrors).toEqual([]);
 });

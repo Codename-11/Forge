@@ -94,4 +94,12 @@ describe("personal workspace sidebar navigation", () => {
       .filter((chord): chord is string => Boolean(chord));
     expect(new Set(chords).size).toBe(chords.length);
   });
+
+  it("does not advertise chords reserved by the workspace shell", () => {
+    const chords = PERSONAL_WORKSPACE_NAV_SECTIONS.flatMap((section) => section.items)
+      .map((item) => item.chord)
+      .filter((chord): chord is string => Boolean(chord));
+
+    expect(chords).not.toContain("n");
+  });
 });

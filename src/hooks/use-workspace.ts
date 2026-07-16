@@ -28,6 +28,9 @@ export type WorkspaceContextValue = {
 };
 
 export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
+export const WorkspaceContextUpdater = createContext<
+  ((patch: Partial<WorkspaceContextValue>) => void) | null
+>(null);
 
 /**
  * Reads the current workspace from the provider seeded by the RSC shell.
@@ -44,6 +47,15 @@ export function useWorkspace(): WorkspaceContextValue {
 
 export function useMaybeWorkspace(): WorkspaceContextValue | null {
   return useContext(WorkspaceContext);
+}
+
+/** Update shell-owned workspace fields after a successful client mutation. */
+export function useUpdateWorkspaceContext(): (patch: Partial<WorkspaceContextValue>) => void {
+  const update = useContext(WorkspaceContextUpdater);
+  if (!update) {
+    throw new Error("useUpdateWorkspaceContext must be used within a WorkspaceProvider.");
+  }
+  return update;
 }
 
 /** Build a URL under the current workspace. Pass `/foo/bar` (leading slash). */
