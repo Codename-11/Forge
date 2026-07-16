@@ -13336,6 +13336,22 @@ follows after tagging and deployment.
 
 ---
 
+## 2026-07-15 — v0.24.0 production verification
+
+Merged the actionable Mission Control implementation in PR #49 and the
+v0.24.0 release assembly in PR #50. Tagged the exact `main` commit
+`3dad3d69a7770ebdab64c0d0dbfc49e76766cb0b` as `v0.24.0` and deployed that
+immutable tag through the serialized production release path.
+
+Production reports version `0.24.0`, Git SHA `3dad3d6`, and the expected build
+timestamp. Post-deploy checks confirmed the sign-in route, authenticated build
+metadata, functional Mission Control breadcrumbs, the shared notification
+drawer, keyboard help, and a genuinely scrollable constrained Agent Studio
+fleet. Forge and worker containers are healthy, all migrations are applied,
+and runtime health reports all three configured runtimes reachable.
+
+---
+
 ## 2026-07-15 — Mission Control agent fleet management
 
 Promoted Mission Control from a read-only agent summary to the primary fleet
