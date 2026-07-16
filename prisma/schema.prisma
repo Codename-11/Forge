@@ -159,6 +159,10 @@ enum EventKind {
   MEMBERSHIP_CREATED
   MEMBERSHIP_ROLE_CHANGED
   MEMBERSHIP_REMOVED
+  INVITATION_CREATED
+  INVITATION_RESENT
+  INVITATION_REVOKED
+  INVITATION_ACCEPTED
   ISSUE_STALLED
   AGENT_NOACK
   ISSUE_SLA_BREACH
@@ -193,6 +197,13 @@ enum EventKind {
   SCHEDULED_TASK_RUN_STARTED
   SCHEDULED_TASK_RUN_SUCCEEDED
   SCHEDULED_TASK_RUN_FAILED
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  REVOKED
+  EXPIRED
 }
 
 /// Operator-requested control on an in-flight AgentRun. NONE is the
@@ -832,6 +843,8 @@ model User {
   accounts               Account[]
   sessions               Session[]
   memberships            Membership[]
+  invitationsSent        WorkspaceInvitation[]  @relation("InvitationSender")
+  invitationsAccepted    WorkspaceInvitation[]  @relation("InvitationAcceptor")
   agentProfiles          AgentProfile[]
   requestedAgentProfiles AgentProfile[]         @relation("AgentProfileRequester")
   connections            Connection[]
@@ -1194,6 +1207,9 @@ model Workspace {
   /// Null until the admin generates one; rotating it invalidates any
   /// outstanding inbound integrations.
   emailIngestSecret               String?
+  /// Lifetime of a newly-issued workspace invite link. Resends rotate the
+  /// token and restart this window. Kept tenant-configurable for self-hosters.
+  inviteExpiryHours               Int                        @default(168)
   /// Artifact sharing is internal-only unless this workspace setting is on.
   artifactExternalSharingEnabled  Boolean                    @default(false)
   /// Public discoverable publishing is a separate, higher-risk capability.
@@ -1211,6 +1227,7 @@ model Workspace {
   defaultIssueAssigneeUser User? @relation("WorkspaceDefaultIssueAssignee", fields: [defaultIssueAssigneeUserId], references: [id], onDelete: SetNull)
 
   memberships             Membership[]
+  invitations             WorkspaceInvitation[]
   projects                Project[]
   issues                  Issue[]
   statuses                Status[]
@@ -1309,6 +1326,36 @@ model Membership {
 
   @@unique([userId, workspaceId])
   @@index([workspaceId, role])
+}
+
+model WorkspaceInvitation {
+  id             String           @id @default(cuid())
+  workspaceId    String
+  email          String
+  role           Role             @default(MEMBER)
+  status         InvitationStatus @default(PENDING)
+  /// SHA-256 digest only. The bearer token is sent once and never persisted.
+  tokenHash      String           @unique
+  note           String?          @db.Text
+  invitedById    String
+  acceptedById   String?
+  expiresAt      DateTime
+  lastSentAt     DateTime?
+  sendCount      Int              @default(0)
+  lastSendError  String?          @db.Text
+  deliveryLockAt DateTime?
+  acceptedAt     DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  workspace  Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  invitedBy  User      @relation("InvitationSender", fields: [invitedById], references: [id], onDelete: Restrict)
+  acceptedBy User?     @relation("InvitationAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, status, createdAt])
+  @@index([workspaceId, email, status])
+  @@index([email, status])
 }
 
 // ----------------------------------------------------------------------------

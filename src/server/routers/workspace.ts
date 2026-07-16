@@ -10,13 +10,28 @@ import {
   DeliveryTimelinePolicy,
   EngagementMode,
   EventKind,
+  InvitationStatus,
   MentionEngagementPolicy,
+  Prisma,
   Role,
   RunBudgetAction,
   WorkspaceExperienceProfile,
 } from "@prisma/client";
-import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import {
+  router,
+  protectedProcedure,
+  workspaceProcedure,
+  adminProcedure,
+} from "@/server/trpc";
+import { rateLimit } from "@/server/rate-limit";
 import { recordChange } from "@/server/audit";
+import {
+  deliverWorkspaceInvitation,
+  expireWorkspaceInvitations,
+  invitationExpiry,
+  invitationTokenHash,
+  newInvitationToken,
+} from "@/server/services/workspace-invitations";
 
 /**
  * Crypto-strong random token for shared secrets (email-ingest HMAC,
@@ -44,6 +59,26 @@ const keySchema = z
   .min(2)
   .max(6)
   .regex(/^[A-Z]+$/, "Key must be uppercase letters.");
+
+async function enforceInvitationRateLimit(
+  workspaceId: string,
+  userId: string,
+  action: "send" | "resend",
+  limit: number,
+  windowSec: number,
+) {
+  const [workspaceBucket, userBucket] = await Promise.all([
+    rateLimit(`workspace-invitations:${action}:${workspaceId}`, limit * 3, windowSec),
+    rateLimit(`workspace-invitations:${action}:${workspaceId}:${userId}`, limit, windowSec),
+  ]);
+  if (!workspaceBucket.ok || !userBucket.ok) {
+    const resetAt = Math.max(workspaceBucket.resetAt, userBucket.resetAt);
+    throw new TRPCError({
+      code: "TOO_MANY_REQUESTS",
+      message: `Invitation rate limit exceeded. Retry after ${new Date(resetAt).toISOString()}.`,
+    });
+  }
+}
 
 export const workspaceRouter = router({
   list: protectedProcedure.query(async ({ ctx }) => {
@@ -175,6 +210,7 @@ export const workspaceRouter = router({
         mentionEngagementPolicy: true,
         mentionDefaultMode: true,
         emailIngestEnabled: true,
+        inviteExpiryHours: true,
         // emailIngestSecret intentionally omitted — see note above.
         createdAt: true,
         updatedAt: true,
@@ -387,6 +423,7 @@ export const workspaceRouter = router({
         mentionEngagementPolicy: z.nativeEnum(MentionEngagementPolicy).optional(),
         mentionDefaultMode: z.nativeEnum(EngagementMode).optional(),
         emailIngestEnabled: z.boolean().optional(),
+        inviteExpiryHours: z.number().int().min(1).max(720).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -716,21 +753,282 @@ export const workspaceRouter = router({
   }),
 
   /**
-   * Self-service email invites are disabled in this deployment — Authelia
-   * owns identity and the `/api/auth/authelia-bridge` upserts the `User`
-   * row on first login. Admin-gated member management replaces the flow:
-   * use `workspace.addMember` / `workspace.setMemberRole` / `workspace.removeMember`.
-   *
-   * Kept as a stub (rather than deleted) so old clients get a crisp error
-   * instead of `NOT_FOUND`. Safe to delete once no callers remain.
+   * Issue a secure, expiring workspace invitation. Membership is not granted
+   * until the recipient proves control of the invited email through sign-in.
+   * A second invite for the same pending email is returned as a duplicate so
+   * admins can choose the explicit resend action rather than silently rotating
+   * a link the recipient may already be using.
    */
   invite: adminProcedure
-    .input(z.object({ email: z.string().email(), role: z.nativeEnum(Role) }))
-    .mutation(() => {
-      throw new TRPCError({
-        code: "PRECONDITION_FAILED",
-        message:
-          "Self-service invites are disabled — use admin member management (workspace.addMember).",
+    .input(
+      z.object({
+        email: z.string().email(),
+        role: z.nativeEnum(Role).refine((role) => role !== Role.OWNER, {
+          message: "Workspace ownership cannot be granted through an invitation.",
+        }),
+        note: z.string().max(2000).optional(),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await enforceInvitationRateLimit(ctx.workspaceId, ctx.session.user.id, "send", 20, 3600);
+      const email = input.email.trim().toLowerCase();
+      await expireWorkspaceInvitations(ctx.workspaceId);
+
+      const member = await ctx.db.membership.findFirst({
+        where: { workspaceId: ctx.workspaceId, user: { email } },
+        select: { id: true },
+      });
+      if (member) {
+        throw new TRPCError({ code: "CONFLICT", message: "That email already belongs to this workspace." });
+      }
+      const duplicate = await ctx.db.workspaceInvitation.findFirst({
+        where: { workspaceId: ctx.workspaceId, email, status: InvitationStatus.PENDING },
+        orderBy: { createdAt: "desc" },
+      });
+      if (duplicate) return { outcome: "duplicate" as const, invitation: duplicate };
+
+      const workspace = await ctx.db.workspace.findUniqueOrThrow({
+        where: { id: ctx.workspaceId },
+        select: { inviteExpiryHours: true },
+      });
+      const token = newInvitationToken();
+      let invitation;
+      try {
+        invitation = await ctx.db.$transaction(async (tx) => {
+          const created = await tx.workspaceInvitation.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              email,
+              role: input.role,
+              note: input.note?.trim() || null,
+              invitedById: ctx.session.user.id,
+              tokenHash: invitationTokenHash(token),
+              expiresAt: invitationExpiry(workspace.inviteExpiryHours),
+            },
+          });
+          await recordChange(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.session.user.id,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+            entity: "WorkspaceInvitation",
+            entityId: created.id,
+            action: "create",
+            after: { email, role: created.role, expiresAt: created.expiresAt.toISOString() },
+            eventKind: EventKind.INVITATION_CREATED,
+            subjectType: "invitation",
+            subjectId: created.id,
+            payload: { email, role: created.role, expiresAt: created.expiresAt.toISOString() },
+            ip: ctx.ip,
+            userAgent: ctx.userAgent,
+          });
+          return created;
+        });
+      } catch (error) {
+        if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+          const raced = await ctx.db.workspaceInvitation.findFirst({
+            where: { workspaceId: ctx.workspaceId, email, status: InvitationStatus.PENDING },
+            orderBy: { createdAt: "desc" },
+          });
+          if (raced) return { outcome: "duplicate" as const, invitation: raced };
+        }
+        throw error;
+      }
+      try {
+        await deliverWorkspaceInvitation({ invitationId: invitation.id, token });
+      } catch (error) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: error instanceof Error ? error.message : "Invitation email delivery failed.",
+          cause: error,
+        });
+      }
+      return {
+        outcome: "sent" as const,
+        invitation: await ctx.db.workspaceInvitation.findUniqueOrThrow({ where: { id: invitation.id } }),
+      };
+    }),
+
+  listInvitations: adminProcedure.query(async ({ ctx }) => {
+    await expireWorkspaceInvitations(ctx.workspaceId);
+    const select = {
+      id: true,
+      email: true,
+      role: true,
+      status: true,
+      expiresAt: true,
+      lastSentAt: true,
+      sendCount: true,
+      lastSendError: true,
+      acceptedAt: true,
+      revokedAt: true,
+      createdAt: true,
+      invitedBy: { select: { name: true, email: true } },
+      acceptedBy: { select: { name: true, email: true } },
+    } as const;
+    const [pending, history] = await Promise.all([
+      ctx.db.workspaceInvitation.findMany({
+        where: { workspaceId: ctx.workspaceId, status: InvitationStatus.PENDING },
+        orderBy: { createdAt: "desc" },
+        select,
+      }),
+      ctx.db.workspaceInvitation.findMany({
+        where: { workspaceId: ctx.workspaceId, status: { not: InvitationStatus.PENDING } },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+        select,
+      }),
+    ]);
+    return [...pending, ...history];
+  }),
+
+  resendInvitation: adminProcedure
+    .input(z.object({ invitationId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      await enforceInvitationRateLimit(ctx.workspaceId, ctx.session.user.id, "resend", 10, 600);
+      await expireWorkspaceInvitations(ctx.workspaceId);
+      const existing = await ctx.db.workspaceInvitation.findFirst({
+        where: { id: input.invitationId, workspaceId: ctx.workspaceId },
+        include: { workspace: { select: { inviteExpiryHours: true } } },
+      });
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found." });
+      if (existing.status !== InvitationStatus.PENDING) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Only pending invitations can be resent. This invitation is ${existing.status.toLowerCase()}.`,
+        });
+      }
+
+      const lockAt = new Date();
+      const staleLock = new Date(lockAt.getTime() - 5 * 60_000);
+      const lock = await ctx.db.workspaceInvitation.updateMany({
+        where: {
+          id: existing.id,
+          workspaceId: ctx.workspaceId,
+          status: InvitationStatus.PENDING,
+          OR: [{ deliveryLockAt: null }, { deliveryLockAt: { lt: staleLock } }],
+        },
+        data: { deliveryLockAt: lockAt, lastSendError: null },
+      });
+      if (lock.count !== 1) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "This invitation is already being resent. Wait a moment and refresh.",
+        });
+      }
+
+      const token = newInvitationToken();
+      const expiresAt = invitationExpiry(existing.workspace.inviteExpiryHours);
+      try {
+        // Keep the currently-working token active until the provider accepts
+        // the replacement message. A delivery failure therefore never burns
+        // the old link. The delivery lock serializes concurrent resends.
+        await deliverWorkspaceInvitation({
+          invitationId: existing.id,
+          token,
+          expiresAt,
+          trackDelivery: false,
+        });
+      } catch (error) {
+        await ctx.db.workspaceInvitation.updateMany({
+          where: { id: existing.id, deliveryLockAt: lockAt },
+          data: {
+            deliveryLockAt: null,
+            lastSendError: (error instanceof Error ? error.message : "Invitation email delivery failed.").slice(
+              0,
+              2000,
+            ),
+          },
+        });
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: error instanceof Error ? error.message : "Invitation email delivery failed.",
+          cause: error,
+        });
+      }
+
+      await ctx.db.$transaction(async (tx) => {
+        const activated = await tx.workspaceInvitation.updateMany({
+          where: {
+            id: existing.id,
+            workspaceId: ctx.workspaceId,
+            status: InvitationStatus.PENDING,
+            tokenHash: existing.tokenHash,
+            deliveryLockAt: lockAt,
+          },
+          data: {
+            tokenHash: invitationTokenHash(token),
+            expiresAt,
+            lastSentAt: new Date(),
+            sendCount: { increment: 1 },
+            lastSendError: null,
+            deliveryLockAt: null,
+          },
+        });
+        if (activated.count !== 1) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "The invitation changed while the resend was in flight; the newer state was preserved.",
+          });
+        }
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "WorkspaceInvitation",
+          entityId: existing.id,
+          action: "resend",
+          before: { expiresAt: existing.expiresAt.toISOString() },
+          after: { expiresAt: expiresAt.toISOString() },
+          eventKind: EventKind.INVITATION_RESENT,
+          subjectType: "invitation",
+          subjectId: existing.id,
+          payload: { email: existing.email, expiresAt: expiresAt.toISOString() },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+      });
+      return ctx.db.workspaceInvitation.findUniqueOrThrow({ where: { id: existing.id } });
+    }),
+
+  revokeInvitation: adminProcedure
+    .input(z.object({ invitationId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const existing = await ctx.db.workspaceInvitation.findFirst({
+        where: { id: input.invitationId, workspaceId: ctx.workspaceId },
+      });
+      if (!existing) throw new TRPCError({ code: "NOT_FOUND", message: "Invitation not found." });
+      if (existing.status !== InvitationStatus.PENDING) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Only pending invitations can be revoked. This invitation is ${existing.status.toLowerCase()}.`,
+        });
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const revoked = await tx.workspaceInvitation.update({
+          where: { id: existing.id },
+          data: {
+            status: InvitationStatus.REVOKED,
+            revokedAt: new Date(),
+            deliveryLockAt: null,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: ctx.workspaceId,
+          actorId: ctx.session.user.id,
+          actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          entity: "WorkspaceInvitation",
+          entityId: revoked.id,
+          action: "revoke",
+          before: { status: existing.status },
+          after: { status: revoked.status },
+          eventKind: EventKind.INVITATION_REVOKED,
+          subjectType: "invitation",
+          subjectId: revoked.id,
+          payload: { email: revoked.email },
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+        });
+        return revoked;
       });
     }),
 

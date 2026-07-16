@@ -1,6 +1,23 @@
+<<<<<<< HEAD
 # Forge DEVLOG
 
 > Append-only session log. Read at session start. Update at session end.
+
+## 2026-07-14 — AXI-2 email invitation recovery snapshot
+
+Replaced the disabled invite stub with a tenant-scoped invitation lifecycle:
+hashed expiring tokens, authenticated email matching, SMTP/Resend delivery,
+accepted/expired/revoked/duplicate states, admin history with resend/revoke,
+configurable expiry, audit events, and delivery/race safeguards. Added the
+invitation UI and acceptance route plus integration coverage for duplicate
+creation, token rotation, failed delivery, simultaneous acceptance, expiry,
+and revocation behavior.
+
+The preserved branch recorded successful migration application, lint,
+typecheck, production build, a 28-test focused suite, and a 1,267-test full
+suite before the final race-hardening changes. Those results are recovery
+provenance only; the reconciled branch must be regenerated and revalidated
+against current `main` before merge.
 
 ## 2026-07-16 — AXI-119 shared issue search semantics
 
@@ -13859,3 +13876,6 @@ Center decisions, and every other shared rich-text surface.
 Prepared the reviewed change as patch release `v0.27.1`; the immutable tag is
 cut only after the release-ready commit lands on `main` with all required CI
 checks green.
+=======
+2026-07-14 — AXI-2 email invitations: replaced the disabled invite stub with a tenant-scoped invitation lifecycle (hashed expiring tokens, authenticated email matching, SMTP/Resend delivery, accepted/expired/revoked/duplicate states, admin history/resend/revoke, configurable expiry, audit events, and delivery/race safeguards). Added invitation UI and acceptance route plus integration coverage for duplicate creation, token rotation, failed delivery, simultaneous acceptance, expiry, and revocation behavior. Verification: Prisma migrations applied to the development database; typecheck/lint/build passed; focused suite 28/28 and full suite 1,267/1,267 passed before the final race-hardening tests.
+>>>>>>> e620527 (wip: preserve AXI-2 email invitation snapshot)

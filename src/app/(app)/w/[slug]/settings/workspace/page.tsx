@@ -41,6 +41,7 @@ export default function WorkspaceSettingsPage() {
   const [cycleCooldownDays, setCycleCooldownDays] = useState(ws.cycleCooldownDays);
   const [timeTrackingEnabled, setTimeTrackingEnabled] = useState(ws.timeTrackingEnabled);
   const [attachmentQuotaMb, setAttachmentQuotaMb] = useState(ws.attachmentQuotaMb);
+  const [inviteExpiryHours, setInviteExpiryHours] = useState(168);
   const [agentIdleTimeoutMinutes, setAgentIdleTimeoutMinutes] = useState(0);
   const [assignmentSlaMinutes, setAssignmentSlaMinutes] = useState(0);
   const [agentRunStaleMinutes, setAgentRunStaleMinutes] = useState(0);
@@ -96,6 +97,7 @@ export default function WorkspaceSettingsPage() {
     setCycleCooldownDays(current.cycleCooldownDays);
     setTimeTrackingEnabled(current.timeTrackingEnabled);
     setAttachmentQuotaMb(current.attachmentQuotaMb);
+    setInviteExpiryHours(current.inviteExpiryHours);
     setAgentIdleTimeoutMinutes(current.agentIdleTimeoutMinutes);
     setAssignmentSlaMinutes(current.assignmentSlaMinutes);
     setAgentRunStaleMinutes(current.agentRunStaleMinutes);
@@ -196,6 +198,7 @@ export default function WorkspaceSettingsPage() {
       ["cycleCooldownDays", cycleCooldownDays !== current.cycleCooldownDays],
       ["timeTrackingEnabled", timeTrackingEnabled !== current.timeTrackingEnabled],
       ["attachmentQuotaMb", attachmentQuotaMb !== current.attachmentQuotaMb],
+      ["inviteExpiryHours", inviteExpiryHours !== current.inviteExpiryHours],
       ["agentIdleTimeoutMinutes", agentIdleTimeoutMinutes !== current.agentIdleTimeoutMinutes],
       ["assignmentSlaMinutes", assignmentSlaMinutes !== current.assignmentSlaMinutes],
       ["agentRunStaleMinutes", agentRunStaleMinutes !== current.agentRunStaleMinutes],
@@ -263,6 +266,7 @@ export default function WorkspaceSettingsPage() {
     cycleCooldownDays,
     timeTrackingEnabled,
     attachmentQuotaMb,
+    inviteExpiryHours,
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
@@ -310,6 +314,7 @@ export default function WorkspaceSettingsPage() {
       cycleCooldownDays,
       timeTrackingEnabled,
       attachmentQuotaMb,
+      inviteExpiryHours,
       agentIdleTimeoutMinutes,
       assignmentSlaMinutes,
       agentRunStaleMinutes,
@@ -352,6 +357,7 @@ export default function WorkspaceSettingsPage() {
     cycleCooldownDays,
     timeTrackingEnabled,
     attachmentQuotaMb,
+    inviteExpiryHours,
     agentIdleTimeoutMinutes,
     assignmentSlaMinutes,
     agentRunStaleMinutes,
@@ -513,7 +519,7 @@ export default function WorkspaceSettingsPage() {
                 label="Enable time tracking"
                 hint="Exposes per-issue start/stop timers in the issue rail and the aggregated time-entry report."
               />
-              <div className="grid grid-cols-1 gap-5 border-t border-border/60 pt-5 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-5 border-t border-border/60 pt-5 sm:grid-cols-3">
                 <Field
                   label="Attachment quota (MB)"
                   hint="MB per workspace. Counts file size of finalized attachments only — drafts and aborted uploads don't count."
@@ -523,6 +529,19 @@ export default function WorkspaceSettingsPage() {
                     min={0}
                     value={attachmentQuotaMb}
                     onChange={(e) => setAttachmentQuotaMb(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Invite expiry (hours)"
+                  hint="Lifetime of a secure invite link. Resending rotates the token and restarts this window."
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    max={720}
+                    value={inviteExpiryHours}
+                    onChange={(e) => setInviteExpiryHours(Number(e.target.value) || 1)}
                     disabled={!canEdit}
                   />
                 </Field>
