@@ -1,6 +1,6 @@
 # Forge Artifacts: enhancement and delivery brief
 
-Status: research and static code audit complete
+Status: research complete; AXI-86 implementation is documented in `docs/artifacts.md`
 
 Branch: codex/artifacts-system-audit
 

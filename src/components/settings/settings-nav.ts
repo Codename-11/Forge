@@ -2,6 +2,7 @@ import {
   Bot,
   ClipboardList,
   DatabaseBackup,
+  FileStack,
   Github,
   Key,
   Layers,
@@ -73,6 +74,14 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         icon: Users,
         badge: "admin only",
         description: "Add teammates by email, change roles, remove access.",
+      },
+      {
+        path: "/artifacts",
+        label: "Artifacts",
+        icon: FileStack,
+        badge: "admin only",
+        description:
+          "Control artifact collaboration, expiring share links, agent publishing, and the Artifact Preview renderer.",
       },
     ],
   },

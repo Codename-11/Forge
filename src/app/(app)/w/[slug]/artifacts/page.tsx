@@ -64,16 +64,22 @@ export default function ArtifactsPage() {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
   const [tab, setTab] = useState<Tab>("active");
+  const [query, setQuery] = useState("");
+  const [serverQuery, setServerQuery] = useState("");
   const { data, isLoading } = trpc.artifact.list.useQuery(
     tab === "archived"
-      ? { archivedOnly: true }
-      : { includeArchived: false },
+      ? { archivedOnly: true, search: serverQuery || undefined }
+      : { includeArchived: false, search: serverQuery || undefined },
   );
   const [creating, setCreating] = useState(false);
   const [draftTitle, setDraftTitle] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ArtifactRow | null>(null);
   const [typeFilter, setTypeFilter] = useState<ArtifactType | "all">("all");
-  const [query, setQuery] = useState("");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setServerQuery(query.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [query]);
 
   const items = useMemo(() => data?.items ?? [], [data]);
 
@@ -81,9 +87,7 @@ export default function ArtifactsPage() {
   // chip row only offers filters that match real rows.
   const availableTypes = useMemo(() => {
     const present = new Set(items.map((r) => r.type));
-    return (Object.keys(TYPE_LABEL) as ArtifactType[]).filter((t) =>
-      present.has(t),
-    );
+    return (Object.keys(TYPE_LABEL) as ArtifactType[]).filter((t) => present.has(t));
   }, [items]);
 
   // Reset a type filter that no longer matches anything (e.g. tab switch).
@@ -157,9 +161,7 @@ export default function ArtifactsPage() {
       <Topbar
         title="Artifacts"
         subtitle={
-          data
-            ? `${items.length} ${tab === "archived" ? "archived" : "active"}`
-            : undefined
+          data ? `${items.length} ${tab === "archived" ? "archived" : "active"}` : undefined
         }
         actions={
           <Button variant="ember" size="sm" onClick={() => setCreating(true)}>
@@ -209,7 +211,7 @@ export default function ArtifactsPage() {
         </div>
 
         {availableTypes.length > 0 && (
-          <div className="mb-3 flex flex-wrap items-center gap-1.5 text-meta">
+          <div className="text-meta mb-3 flex flex-wrap items-center gap-1.5">
             <TypeChip
               label="All types"
               active={typeFilter === "all"}
@@ -236,8 +238,8 @@ export default function ArtifactsPage() {
               title="No archived artifacts"
               description={
                 <span>
-                  Archived artifacts show up here. Restore to bring one
-                  back, or hard-delete with a type-to-confirm gate.
+                  Archived artifacts show up here. Restore to bring one back, or hard-delete with a
+                  type-to-confirm gate.
                 </span>
               }
             />
@@ -248,9 +250,8 @@ export default function ArtifactsPage() {
               title="No artifacts yet"
               description={
                 <span>
-                  Capture durable outputs — specs, decisions, runbooks,
-                  reports — that outlive a single issue. Promote a chat
-                  message, comment, or note into an artifact via the
+                  Capture durable outputs — specs, decisions, runbooks, reports — that outlive a
+                  single issue. Promote a chat message, comment, or note into an artifact via the
                   source&apos;s menu, or create a new one from scratch.
                 </span>
               }
@@ -270,7 +271,7 @@ export default function ArtifactsPage() {
             {visibleItems.map((row, idx) => (
               <li
                 key={row.id}
-                className="relative forge-row-rise"
+                className="forge-row-rise relative"
                 style={{ "--row-i": idx } as React.CSSProperties}
               >
                 <Link
@@ -281,7 +282,7 @@ export default function ArtifactsPage() {
                   )}
                 >
                   <div className="flex items-start justify-between gap-2 pr-7">
-                    <div className="flex items-center gap-2 text-meta uppercase tracking-wide text-muted-foreground">
+                    <div className="text-meta flex items-center gap-2 uppercase tracking-wide text-muted-foreground">
                       <FileText className="h-3 w-3" />
                       {TYPE_LABEL[row.type]}
                     </div>
@@ -295,15 +296,12 @@ export default function ArtifactsPage() {
                     {row.title}
                   </div>
                   {row.summary ? (
-                    <p className="line-clamp-3 text-meta text-muted-foreground">
-                      {row.summary}
-                    </p>
+                    <p className="text-meta line-clamp-3 text-muted-foreground">{row.summary}</p>
                   ) : null}
                   <div className="mt-auto flex items-center gap-2 pt-1 text-[10px] text-muted-foreground">
                     {row.sourceType ? (
                       <span className="inline-flex items-center gap-1">
-                        <Sparkles className="h-3 w-3" /> from{" "}
-                        {row.sourceType.replace("-", " ")}
+                        <Sparkles className="h-3 w-3" /> from {row.sourceType.replace("-", " ")}
                       </span>
                     ) : null}
                     <span
@@ -384,8 +382,8 @@ export default function ArtifactsPage() {
         description={
           deleteTarget ? (
             <>
-              This permanently removes the artifact and every version of
-              its body. Type the artifact&apos;s title to confirm.
+              This permanently removes the artifact and every version of its body. Type the
+              artifact&apos;s title to confirm.
             </>
           ) : null
         }

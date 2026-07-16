@@ -101,6 +101,33 @@ crash-stranded `PROCESSING` row. The platform plugin also retains a failed
 final draft and reuses its original event id, preventing duplicate final
 messages on retry. Focused review coverage passes **33/33** TypeScript tests and
 **8/8** Python adapter tests.
+## 2026-07-16 — AXI-86 Artifact Studio
+
+Implemented Forge as the artifact control plane for people and agents. The
+artifact model now separates mutable draft head, accepted revision, published
+revision, share publication, and renderer deployment. New artifacts are
+private by default; existing artifacts migrate as workspace-visible. Explicit
+user/agent grants provide viewer, commenter, editor, and owner roles.
+
+Added optimistic revision saves, SHA-256 render checksums, explicit content
+types, version comparison, restore-as-new, focused source/preview/split editing
+with local recovery, version-bound asset manifests, anchored review comments,
+review/accept/request-changes transitions, expiring hashed share tokens,
+revocation, safe reduced public pages and asset proxying, immutable Markdown or
+HTML export, server-side permission-filtered search, and optional pinned
+deployments to the existing Artifact Preview service. Workspace settings govern
+external sharing, default expiry, public publishing, preview deployment, and
+agent publish authority. MCP gained the corresponding read, revision, review,
+comment, restore, accept, and policy-gated publish tools.
+
+Vault/Synology/Obsidian integration is intentionally not part of the artifact
+core. It remains a future Forge plugin/connector that can import or synchronize
+authorized documents without coupling artifact correctness to a local mount.
+
+Validation included a from-zero 114-migration replay on fresh Postgres, Prisma
+validation/generation, focused security and artifact suites, TypeScript, and a
+production Next.js build. The full lint/test/Playwright release gate is recorded
+with the release handoff.
 
 ## 2026-07-15 — v0.23.0 production verification
 
