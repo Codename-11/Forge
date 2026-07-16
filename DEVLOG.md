@@ -19,7 +19,8 @@ enforces the singular relation invariant. Generic URL recovery preserves a
 stronger existing relation, and migration dedupe keeps implementation evidence
 ahead of source/context rows. Terminal PR synchronization clears
 stale mergeability and suppresses pending-check contradictions, while merged
-implementation evidence still participates in completion readiness. Passing
+implementation evidence continues reconciliation until its final checks
+aggregate is trusted and still participates in completion readiness. Passing
 completion evidence and READY state now use the semantic success token.
 
 Verification passed lint (existing warnings only), typecheck, a production

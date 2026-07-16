@@ -1,7 +1,7 @@
 import type { ExternalLinkKind } from "@/server/services/github/types";
 
 const IMPLEMENTS_PATTERN = /\bimplements?\s*[:#-]?\s*$/i;
-const FIXES_PATTERN = /\b(?:fix(?:e[sd])?|clos(?:e[sd])?|resolv(?:e[sd])?)\s*[:#-]?\s*$/i;
+const FIXES_PATTERN = /\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)\s*[:#-]?\s*$/i;
 const RELEASE_TITLE_PATTERN = /^\s*release\s+v?\d/i;
 const RELEASE_BRANCH_PATTERN = /(?:^|\/)release(?:[-/]|$)/i;
 

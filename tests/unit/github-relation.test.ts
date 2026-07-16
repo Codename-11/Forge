@@ -9,12 +9,14 @@ describe("GitHub native relation derivation", () => {
     const relations = derivePullRequestIssueRelations({
       workspaceKey: "AXI",
       title: "Improve delivery cards (AXI-117)",
-      body: "Related context AXI-63. Implements AXI-117. Closes AXI-118.",
+      body: "Related context AXI-63. Implements AXI-117. Closes AXI-118. Close AXI-119. Resolve AXI-120.",
     });
     expect(Object.fromEntries(relations)).toEqual({
       63: "RELATES_TO",
       117: "IMPLEMENTS",
       118: "FIXES",
+      119: "FIXES",
+      120: "FIXES",
     });
   });
 

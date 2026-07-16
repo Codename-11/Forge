@@ -243,9 +243,10 @@ export async function sweepGitHubStatusReconciliation(
           checks.source !== "api-aggregate" ||
           checks.status === "unknown" ||
           checks.partial === true;
-        // Unknown/partial checks only block actionable open/draft PRs. A merged
-        // or closed PR is terminal regardless of a stale checks aggregate.
-        if (untrustedChecks && resource.state !== "closed" && resource.state !== "merged") {
+        // Merged implementation PRs still require trusted completion evidence;
+        // keep retrying partial/unknown aggregates even though merge state is a
+        // separate terminal GitHub fact. Closed, unmerged PRs do not.
+        if (untrustedChecks && resource.state !== "closed") {
           const failureCount = candidate.syncFailureCount + 1;
           const exponential = retryAtForFailure({
             error: new Error(

@@ -615,10 +615,10 @@ async function upsertExternalResourceInTransaction(
     ...existingMetadata,
     ...snapshotMetadata,
   };
-  const terminal =
+  const terminalState =
     args.snapshot.resourceType === "PULL_REQUEST" &&
     (args.snapshot.state === "closed" || args.snapshot.state === "merged");
-  if (terminal) metadata.mergeableState = null;
+  if (terminalState) metadata.mergeableState = null;
   const existingHead =
     existingMetadata.head &&
     typeof existingMetadata.head === "object" &&
@@ -643,6 +643,12 @@ async function upsertExternalResourceInTransaction(
     metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
       ? (metadata.checks as Record<string, unknown>)
       : {};
+  const trustedCompletedChecks =
+    checks.source === "api-aggregate" && checks.status === "completed" && checks.partial !== true;
+  // A merged PR is a terminal GitHub fact, but its synchronization row must
+  // stay eligible for reconciliation until the final checks aggregate is
+  // trusted and complete. Closed, unmerged PRs need no completion evidence.
+  const terminal = terminalState && (args.snapshot.state === "closed" || trustedCompletedChecks);
   const checksDiagnostic =
     !terminal && checks.partial === true && typeof checks.diagnostic === "string"
       ? checks.diagnostic.slice(0, 2_000)
