@@ -44,6 +44,22 @@ test.describe("multi-workspace restructure", () => {
     ).toBeVisible();
   });
 
+  test("global breadcrumbs navigate up the hierarchy", async ({ page }) => {
+    await page.goto("/activity", { waitUntil: "domcontentloaded" });
+
+    const breadcrumb = page.getByRole("navigation", { name: "Breadcrumb" });
+    await expect(breadcrumb.getByRole("link", { name: "Forge" })).toHaveAttribute("href", "/");
+    await expect(breadcrumb.getByText("Activity", { exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect(breadcrumb.getByRole("link", { name: "Activity" })).toHaveCount(0);
+
+    await breadcrumb.getByRole("link", { name: "Forge" }).click();
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
+  });
+
   test("global inbox and activity provide inspectable context", async ({ page }) => {
     await page.goto("/inbox", { waitUntil: "domcontentloaded" });
     const openIssue = page.getByRole("link", { name: "Open issue" });

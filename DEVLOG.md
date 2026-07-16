@@ -13423,3 +13423,11 @@ warnings only); the complete Vitest gate passed 1,323 tests with one intentional
 live-connector skip; focused notification, event grouping, and capacity
 coverage passed 12/12; and the production-built multi-workspace Playwright
 journeys passed 8/8 after making the empty-data assertion deterministic.
+
+Follow-up: the global top bar's breadcrumb trail was visually suggestive but
+rendered as inert text. Global pages now declare explicit parent destinations,
+the shared shell renders a semantic breadcrumb landmark with keyboard-focusable
+parent links, and the current page remains non-interactive with `aria-current`.
+The live-data 1164×698 comparison preserved the existing visual hierarchy while
+proving Activity → Mission Control navigation; a fresh production build and the
+focused Playwright journey passed.

@@ -114,6 +114,11 @@ export interface GlobalShellUser {
   instanceRole: "INSTANCE_ADMIN" | "MEMBER";
 }
 
+export interface GlobalBreadcrumb {
+  label: string;
+  href?: string;
+}
+
 const GLOBAL_NAV: { href: string; icon: LucideIcon; label: string; hint: string }[] = [
   { href: "/", icon: Sparkles, label: "Mission Control", hint: "Across all workspaces" },
   { href: "/agents", icon: Bot, label: "Agents", hint: "Fleet & profiles" },
@@ -378,7 +383,7 @@ function GlobalTopBar({
   scope = "read",
   onOpenNav,
 }: {
-  crumbs: string[];
+  crumbs: GlobalBreadcrumb[];
   scope?: "read" | "control";
   onOpenNav?: () => void;
 }) {
@@ -395,15 +400,32 @@ function GlobalTopBar({
       >
         <Menu size={18} />
       </button>
-      <nav className="text-meta flex min-w-0 items-center gap-1 text-muted-foreground">
-        {crumbs.map((c, i) => (
-          <span key={i} className="flex min-w-0 items-center gap-1">
-            {i > 0 && <ChevronRight size={11} className="opacity-60" />}
-            <span className={cn("truncate", i === crumbs.length - 1 ? "text-foreground" : "")}>
-              {c}
-            </span>
-          </span>
-        ))}
+      <nav aria-label="Breadcrumb" className="text-meta min-w-0 text-muted-foreground">
+        <ol className="flex min-w-0 items-center gap-1">
+          {crumbs.map((crumb, i) => {
+            const isCurrent = i === crumbs.length - 1;
+            return (
+              <li key={`${crumb.label}-${i}`} className="flex min-w-0 items-center gap-1">
+                {i > 0 && <ChevronRight aria-hidden size={11} className="shrink-0 opacity-60" />}
+                {crumb.href && !isCurrent ? (
+                  <Link
+                    href={crumb.href}
+                    className="focus-ring -mx-1 truncate rounded px-1 transition-colors hover:bg-subtle hover:text-foreground"
+                  >
+                    {crumb.label}
+                  </Link>
+                ) : (
+                  <span
+                    aria-current={isCurrent ? "page" : undefined}
+                    className={cn("truncate", isCurrent ? "text-foreground" : "")}
+                  >
+                    {crumb.label}
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ol>
       </nav>
       <span className="text-meta hidden items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-muted-foreground sm:ml-2 sm:inline-flex">
         {scope === "control" ? <Shield size={10} /> : <Eye size={10} />}
@@ -475,7 +497,7 @@ export function GlobalShell({
   user,
   workspaces,
   activePath,
-  crumbs = ["Forge"],
+  crumbs = [{ label: "Forge" }],
   title,
   subtitle,
   eyebrow,
@@ -488,7 +510,7 @@ export function GlobalShell({
   user: GlobalShellUser;
   workspaces: GlobalShellWorkspace[];
   activePath?: string;
-  crumbs?: string[];
+  crumbs?: GlobalBreadcrumb[];
   title?: string;
   subtitle?: string;
   eyebrow?: string;

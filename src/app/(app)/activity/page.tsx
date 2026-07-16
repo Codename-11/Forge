@@ -17,7 +17,7 @@ export default async function GlobalActivityPage() {
       user={data.user}
       workspaces={data.workspaces}
       activePath="/activity"
-      crumbs={["Forge", "Activity"]}
+      crumbs={[{ label: "Forge", href: "/" }, { label: "Activity" }]}
       title="Activity"
       subtitle="Live run & event feed across all your workspaces"
       eyebrow="Across workspaces"
