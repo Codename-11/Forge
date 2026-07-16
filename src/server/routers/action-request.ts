@@ -12,6 +12,7 @@ import {
   transitionActionRequest,
   voteOnActionRequest,
 } from "@/server/services/action-request-service";
+import { enqueueGitHubResourceReconciliation } from "@/server/services/github/reconciliation-queue";
 
 /**
  * Zod-side mirror of `ActionRequestKind` so the router can accept the
@@ -105,6 +106,53 @@ export const actionRequestRouter = router({
         throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
       }
       return row;
+    }),
+
+  refreshCompletionEvidence: workspaceProcedure
+    .input(z.object({ id: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const request = await ctx.db.actionRequest.findFirst({
+        where: {
+          id: input.id,
+          workspaceId: ctx.workspaceId,
+          status: ActionRequestStatus.OPEN,
+          sourceType: "completion-candidate",
+          issueId: { not: null },
+        },
+        select: {
+          issue: {
+            select: {
+              externalLinks: {
+                where: {
+                  kind: "IMPLEMENTS",
+                  externalResource: { provider: "GITHUB", resourceType: "PULL_REQUEST" },
+                },
+                select: { externalResourceId: true },
+              },
+            },
+          },
+        },
+      });
+      if (!request) {
+        throw new TRPCError({
+          code: "NOT_FOUND",
+          message: "Open completion recommendation not found.",
+        });
+      }
+      const resourceIds = [
+        ...new Set(request.issue?.externalLinks.map((link) => link.externalResourceId) ?? []),
+      ];
+      await Promise.all(
+        resourceIds.map((externalResourceId) =>
+          enqueueGitHubResourceReconciliation({
+            workspaceId: ctx.workspaceId,
+            externalResourceId,
+            actorId: ctx.session?.user?.id ?? null,
+            actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+          }),
+        ),
+      );
+      return { queued: resourceIds.length };
     }),
 
   /**

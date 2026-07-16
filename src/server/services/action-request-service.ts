@@ -33,21 +33,36 @@ import { agentIdSchema } from "@/server/validators";
  * state through `payload`. Each shape's referenced ids are
  * cross-tenant-validated inside `createActionRequest` before persist.
  */
+const completionEvidencePayload = z.object({
+  label: z.string().trim().min(1).max(120),
+  value: z.string().trim().min(1).max(500),
+  tone: z.enum(["SUCCESS", "WARNING", "NEUTRAL"]).optional(),
+});
+const completionFactPayload = z.object({
+  key: z.string().trim().min(1).max(200),
+  label: z.string().trim().min(1).max(200),
+  summary: z.string().trim().min(1).max(500),
+  status: z.enum(["PASS", "FAIL", "VERIFYING", "UNAVAILABLE", "STALE"]),
+  detail: z.string().trim().max(2_000).optional(),
+  observedAt: z.string().datetime().optional(),
+  nextRetryAt: z.string().datetime().optional(),
+  diagnostic: z.string().trim().max(2_000).optional(),
+  href: z.string().url().max(2_000).optional(),
+});
+const completionAssessmentPayload = z.object({
+  version: z.literal(1),
+  state: z.enum(["READY", "BLOCKED", "VERIFYING", "UNAVAILABLE", "STALE"]),
+  evaluatedAt: z.string().datetime(),
+  facts: z.array(completionFactPayload).max(24),
+});
 const transitionPayload = z.object({
   statusId: z.string().cuid(),
   intent: z.enum(["COMPLETE", "RECOVER"]).optional(),
   sourceLabel: z.string().trim().max(300).optional(),
   sourceUrl: z.string().url().max(2_000).optional(),
-  evidence: z
-    .array(
-      z.object({
-        label: z.string().trim().min(1).max(120),
-        value: z.string().trim().min(1).max(500),
-        tone: z.enum(["SUCCESS", "WARNING", "NEUTRAL"]).optional(),
-      }),
-    )
-    .max(12)
-    .optional(),
+  assessment: completionAssessmentPayload.optional(),
+  sourceEvidence: z.array(completionEvidencePayload).max(12).optional(),
+  evidence: z.array(completionEvidencePayload).max(12).optional(),
   autoHeldReasons: z.array(z.string().trim().min(1).max(300)).max(12).optional(),
 });
 const setLabelsPayload = z.object({
@@ -473,9 +488,7 @@ export async function createActionRequest(
           const nextPayload =
             parsedPayload === null ? null : (parsedPayload as Prisma.InputJsonValue);
           const nextOptions =
-            parsedOptions === null
-              ? null
-              : (parsedOptions as unknown as Prisma.InputJsonValue);
+            parsedOptions === null ? null : (parsedOptions as unknown as Prisma.InputJsonValue);
           const unchanged =
             existing.title === input.title.trim() &&
             existing.body === (input.body ?? null) &&
@@ -819,6 +832,12 @@ async function dispatchActionRequestKind(
         statusId: p.statusId,
         via: "action-request",
         actionRequestId: request.id,
+        ...(p.intent === "COMPLETE"
+          ? {
+              completionAssessment: p.assessment ?? null,
+              completionOverride: p.assessment?.state !== "READY",
+            }
+          : {}),
       },
     });
     return;

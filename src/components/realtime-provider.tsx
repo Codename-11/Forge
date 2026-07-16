@@ -106,6 +106,15 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
         void utils.initiative.list.invalidate();
         void utils.initiative.get.invalidate();
       }
+      if (evt.subjectType === "action-request") {
+        void utils.actionRequest.list.invalidate();
+        void utils.inbox.actionRequestsForMe.invalidate();
+        void utils.commandCenter.summary.invalidate();
+        void utils.commandCenter.decisionsCount.invalidate();
+        if (evt.subjectId) {
+          void utils.actionRequest.get.invalidate({ id: evt.subjectId });
+        }
+      }
       // Agent presence + metadata changes. The agent router publishes with
       // `subjectType: "agent"` on create/update/archive/heartbeat paths;
       // a future AGENT_STATUS_CHANGED event fires here too. We also need

@@ -22,6 +22,29 @@ export type CompletionEvidence = {
   tone?: "SUCCESS" | "WARNING" | "NEUTRAL";
 };
 
+export type CompletionFactStatus = "PASS" | "FAIL" | "VERIFYING" | "UNAVAILABLE" | "STALE";
+
+export type CompletionAssessmentState = "READY" | "BLOCKED" | "VERIFYING" | "UNAVAILABLE" | "STALE";
+
+export type CompletionFact = {
+  key: string;
+  label: string;
+  summary: string;
+  status: CompletionFactStatus;
+  detail?: string;
+  observedAt?: string;
+  nextRetryAt?: string;
+  diagnostic?: string;
+  href?: string;
+};
+
+export type CompletionAssessment = {
+  version: 1;
+  state: CompletionAssessmentState;
+  evaluatedAt: string;
+  facts: CompletionFact[];
+};
+
 export type CompletionCandidateResult =
   | { outcome: "DISABLED" | "TERMINAL" | "NO_STATUS" }
   | { outcome: "AUTO_COMPLETED"; statusId: string }
@@ -50,6 +73,32 @@ function checkConclusion(metadata: unknown): string | null {
 
 function checksArePassing(conclusion: string | null): boolean {
   return conclusion !== null && ["success", "neutral", "skipped"].includes(conclusion);
+}
+
+function metadataString(value: Record<string, unknown>, key: string): string | null {
+  return typeof value[key] === "string" ? value[key] : null;
+}
+
+function metadataNumber(value: Record<string, unknown>, key: string): number | null {
+  return typeof value[key] === "number" && Number.isFinite(value[key])
+    ? (value[key] as number)
+    : null;
+}
+
+function pluralCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, nested]) => [key, canonicalJson(nested)]),
+    );
+  }
+  return value ?? null;
 }
 
 async function dismissOpenRequests(
@@ -100,6 +149,8 @@ async function completionContext(db: PrismaClient, workspaceId: string, issueId:
           completionAutomation: true,
           completionStatusId: true,
           startedStatusId: true,
+          githubSyncStaleMinutes: true,
+          githubClosedReprobeMinutes: true,
         },
       },
       agentRuns: { select: { id: true, status: true } },
@@ -183,8 +234,156 @@ async function completionContext(db: PrismaClient, workspaceId: string, issueId:
   };
 }
 
+function pullRequestCheckFact(
+  pr: NonNullable<Awaited<ReturnType<typeof completionContext>>>["pullRequests"][number],
+  staleMinutes: number,
+  now: Date,
+): CompletionFact {
+  const checks = metadataRecord(metadataRecord(pr.metadata).checks);
+  const source = metadataString(checks, "source");
+  const status = metadataString(checks, "status");
+  const conclusion = source === "api-aggregate" ? metadataString(checks, "conclusion") : null;
+  const observedAt = metadataString(checks, "updatedAt");
+  const nextRetryAt = metadataString(checks, "retryAt");
+  const diagnostic = metadataString(checks, "diagnostic");
+  const suiteCount = metadataNumber(checks, "suiteCount");
+  const statusCount = metadataNumber(checks, "statusCount");
+  const totalSignals = (suiteCount ?? 0) + (statusCount ?? 0);
+  const prefix = totalSignals > 0 ? `${pluralCount(totalSignals, "check signal")} · ` : "";
+  const parsedObservedAt = observedAt ? Date.parse(observedAt) : Number.NaN;
+  const stale =
+    source === "api-aggregate" &&
+    staleMinutes > 0 &&
+    Number.isFinite(parsedObservedAt) &&
+    now.getTime() - parsedObservedAt > staleMinutes * 60_000;
+  const unavailable =
+    source !== "api-aggregate" ||
+    status === "unknown" ||
+    checks.partial === true ||
+    checks.permissionDenied === true ||
+    checks.rateLimited === true ||
+    checks.timedOut === true;
+
+  let factStatus: CompletionFactStatus;
+  let summary: string;
+  if (stale) {
+    factStatus = "STALE";
+    summary = `${prefix}last trusted result is stale`;
+  } else if (source === "webhook-hint" || status === "pending") {
+    factStatus = "VERIFYING";
+    summary = `${prefix}verification in progress`;
+  } else if (conclusion !== null && !checksArePassing(conclusion)) {
+    factStatus = "FAIL";
+    summary = `${prefix}checks ${conclusion}`;
+  } else if (unavailable || conclusion === null) {
+    factStatus = "UNAVAILABLE";
+    summary = `${prefix}could not verify all checks`;
+  } else {
+    factStatus = "PASS";
+    summary = `${prefix}checks passed`;
+  }
+
+  return {
+    key: `checks:${pr.id}`,
+    label: `Checks · ${pr.repoFullName}#${pr.number}`,
+    summary,
+    status: factStatus,
+    ...(observedAt ? { observedAt } : {}),
+    ...(nextRetryAt ? { nextRetryAt } : {}),
+    ...(diagnostic ? { diagnostic } : {}),
+    href: pr.url,
+  };
+}
+
+function completionAssessment(
+  context: NonNullable<Awaited<ReturnType<typeof completionContext>>>,
+  now = new Date(),
+): CompletionAssessment {
+  const facts: CompletionFact[] = [];
+  for (const pr of context.pullRequests) {
+    facts.push({
+      key: `pull-request:${pr.id}`,
+      label: "Pull request",
+      summary: `${pr.repoFullName}#${pr.number} ${pr.state}`,
+      status: pr.state === "merged" ? "PASS" : "FAIL",
+      href: pr.url,
+    });
+    if (pr.state === "merged") {
+      facts.push(pullRequestCheckFact(pr, context.issue.workspace.githubClosedReprobeMinutes, now));
+    }
+  }
+  facts.push(
+    {
+      key: "agent-runs",
+      label: "Agent runs",
+      summary:
+        context.liveRuns === 0
+          ? "No active runs"
+          : `${pluralCount(context.liveRuns, "run")} still active`,
+      status: context.liveRuns === 0 ? "PASS" : "FAIL",
+    },
+    {
+      key: "review-gates",
+      label: "Review gates",
+      summary:
+        context.pendingGates === 0
+          ? "No pending gates"
+          : `${pluralCount(context.pendingGates, "gate")} pending`,
+      status: context.pendingGates === 0 ? "PASS" : "FAIL",
+    },
+    {
+      key: "decisions",
+      label: "Open decisions",
+      summary:
+        context.otherRequests === 0
+          ? "No other decisions"
+          : `${pluralCount(context.otherRequests, "decision")} open`,
+      status: context.otherRequests === 0 ? "PASS" : "FAIL",
+    },
+    {
+      key: "blockers",
+      label: "Blocking issues",
+      summary:
+        context.unresolvedBlockers === 0
+          ? "No unresolved blockers"
+          : `${pluralCount(context.unresolvedBlockers, "blocker")} unresolved`,
+      status: context.unresolvedBlockers === 0 ? "PASS" : "FAIL",
+    },
+  );
+
+  const statuses = new Set(facts.map((fact) => fact.status));
+  const state: CompletionAssessmentState = statuses.has("FAIL")
+    ? "BLOCKED"
+    : statuses.has("VERIFYING")
+      ? "VERIFYING"
+      : statuses.has("STALE")
+        ? "STALE"
+        : statuses.has("UNAVAILABLE")
+          ? "UNAVAILABLE"
+          : "READY";
+  return { version: 1, state, evaluatedAt: now.toISOString(), facts };
+}
+
+function assessmentWithStableTimestamp(
+  next: CompletionAssessment,
+  payload: unknown,
+): CompletionAssessment {
+  const previous = metadataRecord(metadataRecord(payload).assessment);
+  const previousEvaluatedAt = metadataString(previous, "evaluatedAt");
+  if (
+    previous.version === 1 &&
+    previous.state === next.state &&
+    previousEvaluatedAt &&
+    JSON.stringify(canonicalJson(previous.facts)) === JSON.stringify(canonicalJson(next.facts))
+  ) {
+    return { ...next, evaluatedAt: previousEvaluatedAt };
+  }
+  return next;
+}
+
 function autoHeldReasons(
   context: NonNullable<Awaited<ReturnType<typeof completionContext>>>,
+  assessment: CompletionAssessment,
 ): string[] {
   const reasons: string[] = [];
   if (context.liveRuns > 0)
@@ -208,13 +407,11 @@ function autoHeldReasons(
     reasons.push(
       `${unmerged.length} implementation PR${unmerged.length === 1 ? " is" : "s are"} not merged`,
     );
-  const checksUnknownOrFailed = context.pullRequests.filter(
-    (pr) => pr.state === "merged" && !checksArePassing(checkConclusion(pr.metadata)),
-  );
-  if (checksUnknownOrFailed.length > 0) {
-    reasons.push(
-      `${checksUnknownOrFailed.length} merged PR${checksUnknownOrFailed.length === 1 ? " has" : "s have"} unconfirmed checks`,
-    );
+  for (const fact of assessment.facts.filter((item) => item.key.startsWith("checks:"))) {
+    if (fact.status === "VERIFYING") reasons.push(`${fact.label} are still verifying`);
+    if (fact.status === "FAIL") reasons.push(`${fact.label} failed`);
+    if (fact.status === "STALE") reasons.push(`${fact.label} are stale`);
+    if (fact.status === "UNAVAILABLE") reasons.push(`${fact.label} could not be confirmed`);
   }
   return reasons;
 }
@@ -230,6 +427,7 @@ async function autoCompleteIssue(
     sourceType: string;
     sourceId: string;
     evidence: CompletionEvidence[];
+    assessment: CompletionAssessment;
   },
 ): Promise<void> {
   await db.$transaction(async (tx) => {
@@ -266,6 +464,7 @@ async function autoCompleteIssue(
         statusId: status.id,
         completionAutomation: CompletionAutomation.AUTO_WHEN_SAFE,
         evidence: params.evidence,
+        assessment: params.assessment,
       },
     });
   });
@@ -289,8 +488,6 @@ export async function evaluateIssueCompletionCandidate(
     sourceLabel: string;
     sourceUrl?: string | null;
     evidence?: CompletionEvidence[];
-    /** Internal reconciler hint: persisted evidence already contains PR rows. */
-    evidenceIncludesPullRequests?: boolean;
   },
 ): Promise<CompletionCandidateResult> {
   const context = await completionContext(db, params.workspaceId, params.issueId);
@@ -315,26 +512,39 @@ export async function evaluateIssueCompletionCandidate(
   }
   if (!context.completionStatus) return { outcome: "NO_STATUS" };
 
-  const prEvidence: CompletionEvidence[] = context.pullRequests.map((pr) => {
-    const conclusion = checkConclusion(pr.metadata);
-    return {
-      label: `${pr.repoFullName}#${pr.number}`,
-      value: `${pr.state}${conclusion ? ` · checks ${conclusion}` : " · checks unknown"}`,
-      tone:
-        pr.state === "merged" && checksArePassing(conclusion)
-          ? "SUCCESS"
-          : pr.state === "merged"
-            ? "NEUTRAL"
-            : "WARNING",
-    };
+  const existingRequest = await db.actionRequest.findFirst({
+    where: {
+      workspaceId: params.workspaceId,
+      dedupeKey: completionDedupeKey(params.issueId),
+      status: ActionRequestStatus.OPEN,
+    },
+    select: { payload: true },
   });
-  const evidence = [
-    ...(params.evidence ?? []),
-    ...(params.evidenceIncludesPullRequests ? [] : prEvidence),
+  const assessment = assessmentWithStableTimestamp(
+    completionAssessment(context),
+    existingRequest?.payload,
+  );
+  const sourceEvidence = (params.evidence ?? []).slice(0, 12);
+  const evidence: CompletionEvidence[] = [
+    ...sourceEvidence,
+    ...assessment.facts.map((fact) => ({
+      label: fact.label,
+      value: fact.summary,
+      tone:
+        fact.status === "PASS"
+          ? ("SUCCESS" as const)
+          : fact.status === "FAIL"
+            ? ("WARNING" as const)
+            : ("NEUTRAL" as const),
+    })),
   ].slice(0, 12);
-  const held = autoHeldReasons(context);
+  const held = autoHeldReasons(context, assessment);
 
-  if (context.automation === CompletionAutomation.AUTO_WHEN_SAFE && held.length === 0) {
+  if (
+    context.automation === CompletionAutomation.AUTO_WHEN_SAFE &&
+    assessment.state === "READY" &&
+    held.length === 0
+  ) {
     await autoCompleteIssue(db, {
       workspaceId: params.workspaceId,
       issueId: params.issueId,
@@ -344,27 +554,53 @@ export async function evaluateIssueCompletionCandidate(
       sourceType: params.sourceType,
       sourceId: params.sourceId,
       evidence,
+      assessment,
     });
     return { outcome: "AUTO_COMPLETED", statusId: context.completionStatus.id };
   }
 
   const issueKey = `${context.issue.workspace.key}-${context.issue.number}`;
+  const title =
+    assessment.state === "READY"
+      ? `${issueKey} is ready to close`
+      : assessment.state === "VERIFYING"
+        ? `${issueKey} readiness is being verified`
+        : assessment.state === "BLOCKED"
+          ? `${issueKey} is not ready to close`
+          : assessment.state === "STALE"
+            ? `${issueKey} readiness evidence is stale`
+            : `${issueKey} readiness could not be verified`;
+  const body =
+    assessment.state === "READY"
+      ? `${params.sourceLabel} recommends completion. All current safety evidence passes.`
+      : assessment.state === "VERIFYING"
+        ? `${params.sourceLabel} recommends completion. Forge is verifying the remaining evidence before enabling normal completion.`
+        : assessment.state === "BLOCKED"
+          ? `${params.sourceLabel} recommends completion, but ${held.join("; ")}. Resolve the blockers or use the authorized override.`
+          : assessment.state === "STALE"
+            ? `${params.sourceLabel} recommends completion, but the last trusted evidence is stale. Refresh it before closing or use the authorized override.`
+            : `${params.sourceLabel} recommends completion, but Forge could not verify all required evidence. Retry verification or use the authorized override.`;
+  const severity =
+    assessment.state === "READY"
+      ? NotificationSeverity.SUCCESS
+      : assessment.state === "VERIFYING"
+        ? NotificationSeverity.INFO
+        : NotificationSeverity.WARNING;
   const request = await createActionRequest(db, {
     workspaceId: params.workspaceId,
     actorId: params.actorId,
     actorAgentId: params.actorAgentId ?? null,
-    title: `${issueKey} appears ready to close`,
-    body:
-      held.length > 0
-        ? `${params.sourceLabel} recommends completion. Automatic completion was held because ${held.join("; ")}. Review the evidence before marking the issue done.`
-        : `${params.sourceLabel} recommends completion. Review the evidence, then mark the issue done or keep it in review.`,
-    severity: NotificationSeverity.SUCCESS,
+    title,
+    body,
+    severity,
     kind: ActionRequestKind.TRANSITION,
     payload: {
       statusId: context.completionStatus.id,
       intent: "COMPLETE",
       sourceLabel: params.sourceLabel,
       ...(params.sourceUrl ? { sourceUrl: params.sourceUrl } : {}),
+      assessment,
+      sourceEvidence,
       evidence,
       autoHeldReasons: held,
     },
@@ -433,7 +669,6 @@ export async function reconcileGitHubPullRequestCompletion(
         sourceId: resource.id,
         sourceLabel: `Merged PR ${sourceLabel}`,
         sourceUrl: resource.url,
-        evidence: [{ label: "Pull request", value: `${sourceLabel} merged`, tone: "SUCCESS" }],
       });
       continue;
     }
@@ -558,8 +793,8 @@ export async function sweepCompletionCandidates(
       sourceLabel:
         typeof payload.sourceLabel === "string" ? payload.sourceLabel : "Completion evidence",
       sourceUrl,
-      evidence: Array.isArray(payload.evidence)
-        ? payload.evidence.flatMap((item) => {
+      evidence: Array.isArray(payload.sourceEvidence)
+        ? payload.sourceEvidence.flatMap((item) => {
             const evidence = metadataRecord(item);
             if (typeof evidence.label !== "string" || typeof evidence.value !== "string") {
               return [];
@@ -576,7 +811,6 @@ export async function sweepCompletionCandidates(
             ];
           })
         : [],
-      evidenceIncludesPullRequests: true,
     });
     reconciled += 1;
   }

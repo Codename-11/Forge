@@ -1,5 +1,5 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -12,6 +12,7 @@ import {
   ShieldCheck,
   ExternalLink,
   GitPullRequest,
+  RefreshCw,
 } from "lucide-react";
 import type {
   ActionRequestKind,
@@ -25,6 +26,8 @@ import { MarkdownWithAttachments } from "@/components/markdown/attachment-render
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
+import { useConfirm } from "@/components/ui/modal";
 
 /**
  * Inline ActionRequest card rendered above an agent comment. Reads
@@ -115,6 +118,27 @@ function ActionRequestCardForRequest({
   );
   const [showDeclineReason, setShowDeclineReason] = useState(false);
   const [declineReason, setDeclineReason] = useState("");
+  const autoRefreshStarted = useRef(false);
+  const refreshEvidence = trpc.actionRequest.refreshCompletionEvidence.useMutation();
+  useRealtime((event) => {
+    if (event.subjectType !== "action-request" || event.subjectId !== requestId) return;
+    void utils.actionRequest.get.invalidate({ id: requestId });
+  });
+  useEffect(() => {
+    if (!request || autoRefreshStarted.current || !completionNeedsRefresh(request.payload)) return;
+    autoRefreshStarted.current = true;
+    refreshEvidence.mutate({ id: requestId });
+  }, [request, requestId, refreshEvidence]);
+  useEffect(() => {
+    const refreshOnFocus = () => {
+      const current = utils.actionRequest.get.getData({ id: requestId });
+      if (current && completionNeedsRefresh(current.payload)) {
+        refreshEvidence.mutate({ id: requestId });
+      }
+    };
+    window.addEventListener("focus", refreshOnFocus);
+    return () => window.removeEventListener("focus", refreshOnFocus);
+  }, [refreshEvidence, requestId, utils]);
   const settle = () => {
     void utils.actionRequest.get.invalidate({ id: requestId });
     void utils.actionRequest.list.invalidate();
@@ -157,6 +181,19 @@ function ActionRequestCardForRequest({
         setDeclineReason("");
       }}
       pending={accept.isPending || decline.isPending}
+      refreshingEvidence={refreshEvidence.isPending}
+      onRefreshEvidence={() =>
+        refreshEvidence.mutate(
+          { id: requestId },
+          {
+            onSuccess: ({ queued }) => {
+              if (queued > 0) toast.success("Verification queued.");
+              else toast.info("No linked GitHub pull request needs verification.");
+            },
+            onError: (error) => toast.error(error.message),
+          },
+        )
+      }
       issueId={issueId}
       workspaceSlug={ws.slug}
     />
@@ -396,6 +433,8 @@ function ActionRequestCardView({
   onDecline,
   onCancelDecline,
   pending,
+  refreshingEvidence,
+  onRefreshEvidence,
   issueId,
   workspaceSlug,
 }: {
@@ -423,12 +462,15 @@ function ActionRequestCardView({
   onDecline: () => void;
   onCancelDecline: () => void;
   pending: boolean;
+  refreshingEvidence?: boolean;
+  onRefreshEvidence?: () => void;
   issueId?: string;
   workspaceSlug: string;
 }) {
   const isOpen = request.status === "OPEN";
   const isResolved = request.status === "RESOLVED";
   const isRejected = request.status === "REJECTED";
+  const { confirm, confirmElement } = useConfirm();
 
   const tone = useMemo(() => severityToTone(request.severity), [request.severity]);
   const kindChip = useMemo(
@@ -449,169 +491,205 @@ function ActionRequestCardView({
     : request.requestedByUser?.handle
       ? `@${request.requestedByUser.handle}`
       : (request.requestedByUser?.name ?? "system");
+  const completionOverride =
+    completion?.intent === "COMPLETE" && completion.assessment?.state !== "READY";
+
+  const acceptWithConfirmation = async () => {
+    if (completionOverride) {
+      const ok = await confirm({
+        title: "Mark done without verified evidence?",
+        description: (
+          <div className="space-y-2">
+            <p>
+              Forge has not confirmed every close-out check. This override will mark the issue done
+              anyway.
+            </p>
+            {completion.autoHeldReasons.length > 0 && (
+              <ul className="list-disc space-y-1 pl-4">
+                {completion.autoHeldReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ),
+        primaryLabel: "Mark done anyway",
+        secondaryLabel: "Keep reviewing",
+        variant: "destructive",
+      });
+      if (!ok) return;
+    }
+    onAccept();
+  };
 
   return (
-    <div
-      role="article"
-      aria-label={`Action request: ${request.title}`}
-      className={[
-        "rounded-md border-y border-l-2 border-r p-3",
-        "border-y-border border-r-border",
-        isOpen ? tone.borderClass : "border-l-border/60",
-        isOpen ? tone.bgClass : "bg-card/30",
-        !isOpen ? "opacity-80" : "",
-      ].join(" ")}
-    >
-      <div className="flex items-start gap-2">
-        <span
-          className={[
-            "mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
-            isOpen ? tone.iconBgClass : "bg-muted/40",
-            isOpen && completion ? "motion-safe:animate-pulse motion-reduce:animate-none" : "",
-          ].join(" ")}
-        >
-          {isResolved ? (
-            <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />
-          ) : isRejected ? (
-            <XCircle className="h-3 w-3 text-danger" />
-          ) : (
-            tone.icon
-          )}
-        </span>
-        <div className="min-w-0 flex-1 space-y-1.5">
-          <div className="text-meta flex flex-wrap items-center gap-1.5">
-            <span className="font-semibold text-foreground">{request.title}</span>
-            <Badge color="#6366f1" className="font-mono text-[0.625rem] uppercase tracking-wider">
-              recommendation
-            </Badge>
-            {kindChip && (
-              <span title={kindChip.title} className="inline-flex">
-                <Badge
-                  color="#d97706"
-                  className="font-mono text-[0.625rem] uppercase tracking-wider"
-                >
-                  {kindChip.label}
-                </Badge>
-              </span>
+    <>
+      <div
+        role="article"
+        aria-label={`Action request: ${request.title}`}
+        className={[
+          "rounded-md border-y border-l-2 border-r p-3",
+          "border-y-border border-r-border",
+          isOpen ? tone.borderClass : "border-l-border/60",
+          isOpen ? tone.bgClass : "bg-card/30",
+          !isOpen ? "opacity-80" : "",
+        ].join(" ")}
+      >
+        <div className="flex items-start gap-2">
+          <span
+            className={[
+              "mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full",
+              isOpen ? tone.iconBgClass : "bg-muted/40",
+            ].join(" ")}
+          >
+            {isResolved ? (
+              <CheckCircle2 className="h-3 w-3 text-green-600 dark:text-green-400" />
+            ) : isRejected ? (
+              <XCircle className="h-3 w-3 text-danger" />
+            ) : (
+              tone.icon
             )}
-            <span className="text-muted-foreground">
-              · {requesterName} · {relativeTime(request.createdAt)}
-            </span>
-          </div>
-          {request.body && (
-            <MarkdownWithAttachments
-              body={request.body}
-              className="text-[0.8125rem] text-foreground/90"
-            />
-          )}
-          {runtimeGrant && <RuntimeToolGrantSummary grant={runtimeGrant} />}
-          {completion && (
-            <CompletionEvidenceSummary
-              completion={completion}
-              issueId={issueId}
-              workspaceSlug={workspaceSlug}
-            />
-          )}
-
-          {isOpen && visibleCanResolve && !showDeclineReason && (
-            <div className="flex gap-2 pt-1">
-              <Button
-                variant="ember"
-                size="sm"
-                onClick={onAccept}
-                disabled={pending}
-                aria-label={
-                  request.kind === "RUNTIME_TOOL_GRANT"
-                    ? "Grant runtime tool access and rerun"
-                    : "Accept this action request"
-                }
-              >
-                {pending ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : request.kind === "RUNTIME_TOOL_GRANT" ? (
-                  <ShieldCheck className="h-3 w-3" />
-                ) : (
-                  <Sparkles className="h-3 w-3" />
-                )}
-                {request.kind === "RUNTIME_TOOL_GRANT"
-                  ? "Grant and rerun"
-                  : completion?.intent === "COMPLETE"
-                    ? "Mark done"
-                    : completion?.intent === "RECOVER"
-                      ? "Return to in progress"
-                      : "Accept"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onDecline}
-                disabled={pending}
-                aria-label="Decline this action request"
-              >
-                {completion?.intent === "COMPLETE"
-                  ? "Keep in review"
-                  : completion?.intent === "RECOVER"
-                    ? "Keep current status"
-                    : "Decline"}
-              </Button>
+          </span>
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <div className="text-meta flex flex-wrap items-center gap-1.5">
+              <span className="font-semibold text-foreground">{request.title}</span>
+              <Badge color="#6366f1" className="font-mono text-[0.625rem] uppercase tracking-wider">
+                recommendation
+              </Badge>
+              {kindChip && (
+                <span title={kindChip.title} className="inline-flex">
+                  <Badge
+                    color="#d97706"
+                    className="font-mono text-[0.625rem] uppercase tracking-wider"
+                  >
+                    {kindChip.label}
+                  </Badge>
+                </span>
+              )}
+              <span className="text-muted-foreground">
+                · {requesterName} · {relativeTime(request.createdAt)}
+              </span>
             </div>
-          )}
-
-          {isOpen && visibleCanResolve && showDeclineReason && (
-            <div className="space-y-1.5 pt-1">
-              <input
-                autoFocus
-                type="text"
-                value={declineReason}
-                onChange={(e) => onDeclineReasonChange(e.target.value)}
-                placeholder={
-                  completion?.intent === "COMPLETE"
-                    ? "Why should this stay in review? (optional)"
-                    : completion?.intent === "RECOVER"
-                      ? "Why keep the current status? (optional)"
-                      : "Reason (optional)"
-                }
-                maxLength={2_000}
-                className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-[0.8125rem]"
-                aria-label="Decline reason"
+            {request.body && (
+              <MarkdownWithAttachments
+                body={request.body}
+                className="text-[0.8125rem] text-foreground/90"
               />
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" onClick={onDecline} disabled={pending}>
+            )}
+            {runtimeGrant && <RuntimeToolGrantSummary grant={runtimeGrant} />}
+            {completion && (
+              <CompletionEvidenceSummary
+                completion={completion}
+                issueId={issueId}
+                workspaceSlug={workspaceSlug}
+                refreshing={refreshingEvidence}
+                onRefresh={onRefreshEvidence}
+              />
+            )}
+
+            {isOpen && visibleCanResolve && !showDeclineReason && (
+              <div className="flex gap-2 pt-1">
+                <Button
+                  variant={completionOverride ? "outline" : "ember"}
+                  size="sm"
+                  onClick={() => void acceptWithConfirmation()}
+                  disabled={pending}
+                  aria-label={
+                    request.kind === "RUNTIME_TOOL_GRANT"
+                      ? "Grant runtime tool access and rerun"
+                      : "Accept this action request"
+                  }
+                >
                   {pending ? (
                     <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : request.kind === "RUNTIME_TOOL_GRANT" ? (
+                    <ShieldCheck className="h-3 w-3" />
                   ) : (
-                    <XCircle className="h-3 w-3" />
+                    <Sparkles className="h-3 w-3" />
                   )}
+                  {request.kind === "RUNTIME_TOOL_GRANT"
+                    ? "Grant and rerun"
+                    : completion?.intent === "COMPLETE"
+                      ? completionOverride
+                        ? "Mark done anyway"
+                        : "Mark done"
+                      : completion?.intent === "RECOVER"
+                        ? "Return to in progress"
+                        : "Accept"}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onDecline}
+                  disabled={pending}
+                  aria-label="Decline this action request"
+                >
                   {completion?.intent === "COMPLETE"
                     ? "Keep in review"
                     : completion?.intent === "RECOVER"
                       ? "Keep current status"
                       : "Decline"}
                 </Button>
-                <Button variant="ghost" size="sm" onClick={onCancelDecline} disabled={pending}>
-                  Cancel
-                </Button>
               </div>
-            </div>
-          )}
+            )}
 
-          {isOpen && !visibleCanResolve && (
-            <div className="text-meta italic text-muted-foreground">
-              Awaiting decision from an authorized reviewer.
-            </div>
-          )}
+            {isOpen && visibleCanResolve && showDeclineReason && (
+              <div className="space-y-1.5 pt-1">
+                <input
+                  autoFocus
+                  type="text"
+                  value={declineReason}
+                  onChange={(e) => onDeclineReasonChange(e.target.value)}
+                  placeholder={
+                    completion?.intent === "COMPLETE"
+                      ? "Why should this stay in review? (optional)"
+                      : completion?.intent === "RECOVER"
+                        ? "Why keep the current status? (optional)"
+                        : "Reason (optional)"
+                  }
+                  maxLength={2_000}
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-[0.8125rem]"
+                  aria-label="Decline reason"
+                />
+                <div className="flex gap-2">
+                  <Button variant="outline" size="sm" onClick={onDecline} disabled={pending}>
+                    {pending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <XCircle className="h-3 w-3" />
+                    )}
+                    {completion?.intent === "COMPLETE"
+                      ? "Keep in review"
+                      : completion?.intent === "RECOVER"
+                        ? "Keep current status"
+                        : "Decline"}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={onCancelDecline} disabled={pending}>
+                    Cancel
+                  </Button>
+                </div>
+              </div>
+            )}
 
-          {!isOpen && (
-            <div className="text-meta text-muted-foreground">
-              {request.resolution ?? "Resolved."}
-              {request.resolvedAt && (
-                <span className="ml-1">· {relativeTime(request.resolvedAt)}</span>
-              )}
-            </div>
-          )}
+            {isOpen && !visibleCanResolve && (
+              <div className="text-meta italic text-muted-foreground">
+                Awaiting decision from an authorized reviewer.
+              </div>
+            )}
+
+            {!isOpen && (
+              <div className="text-meta text-muted-foreground">
+                {request.resolution ?? "Resolved."}
+                {request.resolvedAt && (
+                  <span className="ml-1">· {relativeTime(request.resolvedAt)}</span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
-    </div>
+      {confirmElement}
+    </>
   );
 }
 
@@ -625,7 +703,82 @@ type CompletionTransitionPayload = {
     tone: "SUCCESS" | "WARNING" | "NEUTRAL";
   }>;
   autoHeldReasons: string[];
+  assessment: CompletionAssessmentPayload | null;
 };
+
+type CompletionFactStatus = "PASS" | "FAIL" | "VERIFYING" | "UNAVAILABLE" | "STALE";
+
+type CompletionAssessmentPayload = {
+  version: 1;
+  state: "READY" | "BLOCKED" | "VERIFYING" | "UNAVAILABLE" | "STALE";
+  evaluatedAt: string;
+  facts: Array<{
+    key: string;
+    label: string;
+    summary: string;
+    status: CompletionFactStatus;
+    detail: string | null;
+    observedAt: string | null;
+    nextRetryAt: string | null;
+    diagnostic: string | null;
+    href: string | null;
+  }>;
+};
+
+function readCompletionAssessment(value: unknown): CompletionAssessmentPayload | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const row = value as Record<string, unknown>;
+  const states = ["READY", "BLOCKED", "VERIFYING", "UNAVAILABLE", "STALE"];
+  if (row.version !== 1 || typeof row.state !== "string" || !states.includes(row.state)) {
+    return null;
+  }
+  const facts: CompletionAssessmentPayload["facts"] = Array.isArray(row.facts)
+    ? row.facts.flatMap((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const fact = item as Record<string, unknown>;
+        const statuses = ["PASS", "FAIL", "VERIFYING", "UNAVAILABLE", "STALE"];
+        if (
+          typeof fact.key !== "string" ||
+          typeof fact.label !== "string" ||
+          typeof fact.summary !== "string" ||
+          typeof fact.status !== "string" ||
+          !statuses.includes(fact.status)
+        ) {
+          return [];
+        }
+        return [
+          {
+            key: fact.key,
+            label: fact.label,
+            summary: fact.summary,
+            status: fact.status as CompletionFactStatus,
+            detail: typeof fact.detail === "string" ? fact.detail : null,
+            observedAt: typeof fact.observedAt === "string" ? fact.observedAt : null,
+            nextRetryAt: typeof fact.nextRetryAt === "string" ? fact.nextRetryAt : null,
+            diagnostic: typeof fact.diagnostic === "string" ? fact.diagnostic : null,
+            href: typeof fact.href === "string" ? fact.href : null,
+          },
+        ];
+      })
+    : [];
+  return {
+    version: 1,
+    state: row.state as CompletionAssessmentPayload["state"],
+    evaluatedAt: typeof row.evaluatedAt === "string" ? row.evaluatedAt : new Date(0).toISOString(),
+    facts,
+  };
+}
+
+function completionNeedsRefresh(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const value = payload as Record<string, unknown>;
+  if (value.intent !== "COMPLETE") return false;
+  const assessment = readCompletionAssessment(value.assessment);
+  if (!assessment) return true;
+  return Boolean(
+    assessment?.facts.some((fact) => fact.key.startsWith("checks:") && fact.status !== "PASS"),
+  );
+}
 
 function readCompletionTransitionPayload(payload: unknown): CompletionTransitionPayload | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
@@ -654,6 +807,7 @@ function readCompletionTransitionPayload(payload: unknown): CompletionTransition
     autoHeldReasons: Array.isArray(value.autoHeldReasons)
       ? value.autoHeldReasons.filter((reason): reason is string => typeof reason === "string")
       : [],
+    assessment: readCompletionAssessment(value.assessment),
   };
 }
 
@@ -661,17 +815,39 @@ function CompletionEvidenceSummary({
   completion,
   issueId,
   workspaceSlug,
+  refreshing,
+  onRefresh,
 }: {
   completion: CompletionTransitionPayload;
   issueId?: string;
   workspaceSlug: string;
+  refreshing?: boolean;
+  onRefresh?: () => void;
 }) {
+  const assessment = completion.assessment;
+  const [evidenceOpen, setEvidenceOpen] = useState(assessment?.state !== "READY");
+  useEffect(() => {
+    if (assessment && assessment.state !== "READY") setEvidenceOpen(true);
+  }, [assessment]);
+  const passingFacts = assessment?.facts.filter((fact) => fact.status === "PASS").length ?? 0;
   return (
-    <div className="text-meta rounded-md border border-border bg-background/40 px-2.5 py-2">
+    <div
+      className="text-meta rounded-md border border-border bg-background/40 px-2.5 py-2"
+      aria-live="polite"
+    >
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium text-foreground">
           {completion.intent === "COMPLETE" ? "Ready-to-close evidence" : "Recovery options"}
         </span>
+        {assessment && (
+          <>
+            <CompletionStateBadge state={assessment.state} />
+            <span className="text-muted-foreground">
+              {passingFacts}/{assessment.facts.length} passed · checked{" "}
+              {relativeTime(assessment.evaluatedAt)}
+            </span>
+          </>
+        )}
         {completion.sourceUrl && (
           <a
             href={completion.sourceUrl}
@@ -692,8 +868,71 @@ function CompletionEvidenceSummary({
             Link replacement PR
           </Link>
         )}
+        {completion.intent === "COMPLETE" && onRefresh && (
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshing}
+            className="focus-ring ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-card/60 hover:text-foreground disabled:opacity-60"
+            aria-label="Refresh completion evidence"
+          >
+            <RefreshCw className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Queued" : "Refresh"}
+          </button>
+        )}
       </div>
-      {(completion.evidence.length > 0 || completion.autoHeldReasons.length > 0) && (
+      {assessment && assessment.facts.length > 0 ? (
+        <details
+          className="mt-1.5"
+          open={evidenceOpen}
+          onToggle={(event) => setEvidenceOpen(event.currentTarget.open)}
+        >
+          <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
+            Evidence details
+            {completion.autoHeldReasons.length > 0
+              ? ` · ${completion.autoHeldReasons.length} hold${completion.autoHeldReasons.length === 1 ? "" : "s"}`
+              : ""}
+          </summary>
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+            {assessment.facts.map((fact) => (
+              <div
+                key={fact.key}
+                className="rounded border border-border/70 bg-card/40 px-2 py-1.5"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
+                    {fact.label}
+                  </div>
+                  <CompletionFactBadge status={fact.status} />
+                </div>
+                <div className="mt-0.5 text-foreground/90">{fact.summary}</div>
+                {fact.observedAt && (
+                  <div className="mt-0.5 text-muted-foreground">
+                    Observed {relativeTime(fact.observedAt)}
+                  </div>
+                )}
+                {fact.nextRetryAt && (
+                  <div className="mt-0.5 text-muted-foreground">
+                    Retry {relativeTime(fact.nextRetryAt)}
+                  </div>
+                )}
+                {fact.diagnostic && (
+                  <div className="mt-1 rounded border border-warning/20 bg-warning/[0.04] px-1.5 py-1 text-warning">
+                    {fact.diagnostic}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          {completion.autoHeldReasons.length > 0 && (
+            <ul className="mt-2 list-disc space-y-0.5 pl-4 text-warning">
+              {completion.autoHeldReasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          )}
+        </details>
+      ) : completion.evidence.length > 0 || completion.autoHeldReasons.length > 0 ? (
         <details className="mt-1.5">
           <summary className="cursor-pointer select-none text-muted-foreground hover:text-foreground">
             View evidence
@@ -732,8 +971,67 @@ function CompletionEvidenceSummary({
             </ul>
           )}
         </details>
-      )}
+      ) : null}
     </div>
+  );
+}
+
+function CompletionStateBadge({ state }: { state: CompletionAssessmentPayload["state"] }) {
+  const label =
+    state === "READY"
+      ? "Ready"
+      : state === "VERIFYING"
+        ? "Verifying"
+        : state === "BLOCKED"
+          ? "Blocked"
+          : state === "STALE"
+            ? "Stale"
+            : "Unavailable";
+  const className =
+    state === "READY"
+      ? "border-ember/30 bg-ember/10 text-ember"
+      : state === "VERIFYING"
+        ? "border-warning/30 bg-warning/10 text-warning"
+        : state === "BLOCKED"
+          ? "border-danger/30 bg-danger/10 text-danger"
+          : "border-border bg-card/60 text-muted-foreground";
+  return (
+    <span
+      className={`rounded border px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider ${className}`}
+    >
+      {label}
+    </span>
+  );
+}
+
+function CompletionFactBadge({ status }: { status: CompletionFactStatus }) {
+  const label =
+    status === "PASS"
+      ? "Pass"
+      : status === "FAIL"
+        ? "Fail"
+        : status === "VERIFYING"
+          ? "Verifying"
+          : status === "STALE"
+            ? "Stale"
+            : "Unavailable";
+  const className =
+    status === "PASS"
+      ? "border-ember/30 bg-ember/10 text-ember"
+      : status === "FAIL"
+        ? "border-danger/30 bg-danger/10 text-danger"
+        : status === "VERIFYING"
+          ? "border-warning/30 bg-warning/10 text-warning"
+          : "border-border bg-background/50 text-muted-foreground";
+  return (
+    <span
+      className={`shrink-0 rounded border px-1 py-0.5 font-mono text-[0.5625rem] uppercase tracking-wider ${className}`}
+    >
+      {status === "VERIFYING" && (
+        <Loader2 className="mr-1 inline h-2.5 w-2.5 motion-safe:animate-spin motion-reduce:animate-none" />
+      )}
+      {label}
+    </span>
   );
 }
 

@@ -30,7 +30,11 @@ import { purgeExpiredSessionKeys } from "@/server/services/api-key-purge";
 import { sweepIdleEphemeralAgents } from "@/server/services/ephemeral-idle";
 import { sweepCompletionCandidates } from "@/server/services/completion-candidate";
 import { sweepGitHubStatusReconciliation } from "@/server/services/github/reconciliation";
-import { recoverGenericGitHubAttachments } from "@/server/services/github/resource-sync";
+import {
+  recoverGenericGitHubAttachments,
+  syncGitHubExternalResource,
+} from "@/server/services/github/resource-sync";
+import type { GitHubResourceReconcileJob } from "@/server/services/github/reconciliation-queue";
 import { sweepScheduledTasks } from "@/server/services/scheduled-task";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
 import { sweepHermesConnectorRetries } from "@/server/services/hermes-connector-retry";
@@ -367,6 +371,16 @@ export const maintenanceWorker = new Worker(
         const recoveredAttachments = await recoverGenericGitHubAttachments(db);
         const reconciliation = await sweepGitHubStatusReconciliation(db);
         return { recoveredAttachments, reconciliation };
+      }
+      case "github-resource-reconcile": {
+        const input = job.data as GitHubResourceReconcileJob;
+        return syncGitHubExternalResource({
+          db,
+          workspaceId: input.workspaceId,
+          externalResourceId: input.externalResourceId,
+          actor: { actorId: input.actorId, actorAgentId: input.actorAgentId ?? null },
+          skipCollisionGuard: true,
+        });
       }
       case "scheduled-task-sweep": {
         return sweepScheduledTasks();
