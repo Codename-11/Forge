@@ -26,6 +26,14 @@ describe("MarkdownWithAttachments URL safety", () => {
     expect(html).not.toContain('target="_blank"');
   });
 
+  it("renders the complete compact GitHub reference instead of splitting at the slash", () => {
+    const html = renderMarkdown("Merged PR CODENAME-11/Forge#56 recommends completion.");
+
+    expect(html).toContain('href="https://github.com/CODENAME-11/Forge/issues/56"');
+    expect(html).toContain(">CODENAME-11/Forge#56</a>");
+    expect(html).not.toContain("/issues/CODENAME-11");
+  });
+
   it("does not render javascript or data markdown links as clickable hrefs", () => {
     const jsHtml = renderMarkdown("[bad](javascript:alert(1))");
     const dataHtml = renderMarkdown("[bad](data:text/html,<h1>x</h1>)");

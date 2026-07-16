@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  ChevronDown,
   GitBranch,
   CheckCircle2,
   CircleDot,
@@ -17,8 +18,10 @@ import type { inferRouterOutputs } from "@trpc/server";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
+import { Tooltip } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
+import { resolveDeliveryIdentity } from "@/lib/delivery-identity";
 import { useWorkspace } from "@/hooks/use-workspace";
 import type { AppRouter } from "@/server/routers/_app";
 
@@ -101,9 +104,7 @@ export function WorkCoordinationPanel({
     onError: (error) => toast.error(error.message),
   });
 
-  const owner = latest?.ownerAgent
-    ? `${latest.ownerAgent.name} · @${latest.ownerAgent.profileKey}`
-    : (latest?.ownerUser?.name ?? latest?.ownerUser?.email ?? "Unassigned");
+  const identity = latest ? resolveDeliveryIdentity(latest) : null;
   const status = latest ? (STATUS_COPY[latest.status] ?? STATUS_COPY.CLAIMED) : null;
   const provenance = latest ? deliveryProvenance(latest) : null;
   const connectionMismatch = Boolean(
@@ -150,7 +151,14 @@ export function WorkCoordinationPanel({
                 <CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-ember" />
               )}
               <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-medium">{owner}</div>
+                <div className="truncate text-xs font-medium">
+                  {identity?.primaryLabel ?? "Unassigned"}
+                </div>
+                {identity?.summary && (
+                  <div className="text-meta mt-0.5 truncate text-muted-foreground">
+                    {identity.summary}
+                  </div>
+                )}
                 {provenance && (
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <span className="rounded border border-border/70 bg-subtle/60 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
@@ -161,9 +169,17 @@ export function WorkCoordinationPanel({
                         {provenance.connectorLabel}
                       </span>
                     )}
-                    <span className={cn("text-meta", provenance.tone)}>
-                      {provenance.statusLabel}
-                    </span>
+                    <Tooltip content={provenance.statusDescription}>
+                      <span
+                        tabIndex={0}
+                        className={cn(
+                          "inline-flex items-center rounded-full border px-1.5 py-0.5 text-[0.625rem] font-medium",
+                          provenance.badgeTone,
+                        )}
+                      >
+                        {provenance.statusLabel}
+                      </span>
+                    </Tooltip>
                   </div>
                 )}
                 <div
@@ -172,13 +188,20 @@ export function WorkCoordinationPanel({
                 >
                   {latest.repoFullName}:{latest.branch}
                 </div>
-                <details className="group mt-1.5 text-muted-foreground">
-                  <summary className="focus-ring cursor-pointer list-none text-[0.6875rem] hover:text-foreground">
-                    Delivery evidence
+                <details className="group mt-2 text-muted-foreground">
+                  <summary className="focus-ring flex cursor-pointer list-none items-center justify-between rounded border border-border/70 bg-subtle/30 px-2 py-1 text-[0.6875rem] font-medium transition-colors hover:border-border hover:bg-subtle/70 hover:text-foreground group-open:border-border group-open:bg-subtle/60 [&::-webkit-details-marker]:hidden">
+                    <span>Delivery evidence</span>
+                    <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
                   </summary>
                   <dl className="mt-1.5 grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-[0.6875rem]">
-                    <dt>Actor</dt>
-                    <dd className="min-w-0 truncate text-foreground">{owner}</dd>
+                    <dt>Agent</dt>
+                    <dd className="min-w-0 truncate text-foreground">
+                      {identity?.agentLabel ?? "none recorded"}
+                    </dd>
+                    <dt>Operator</dt>
+                    <dd className="min-w-0 truncate text-foreground">
+                      {identity?.operatorLabel ?? "none recorded"}
+                    </dd>
                     <dt>Invocation</dt>
                     <dd>{provenance?.invocationLabel ?? "unknown"}</dd>
                     <dt>Connector</dt>
@@ -490,7 +513,8 @@ function deliveryProvenance(session: DeliverySession): {
   connectorLabel: string | null;
   runtimeLabel: string | null;
   statusLabel: string;
-  tone: string;
+  statusDescription: string;
+  badgeTone: string;
   unconfirmedMcp: boolean;
 } {
   const connection = session.ownerConnection;
@@ -521,7 +545,9 @@ function deliveryProvenance(session: DeliverySession): {
       connectorLabel: null,
       runtimeLabel,
       statusLabel: "provenance not registered",
-      tone: "text-muted-foreground",
+      statusDescription:
+        "No concrete client or runtime connection is attached to this delivery session.",
+      badgeTone: "border-border bg-subtle/60 text-muted-foreground",
       unconfirmedMcp: session.source === "MCP",
     };
   }
@@ -534,20 +560,35 @@ function deliveryProvenance(session: DeliverySession): {
       : connection.status === "QUIET" && unconfirmedMcp
         ? "quiet · status unconfirmed"
         : connection.status.toLowerCase();
-  const tone =
+  const badgeTone =
     connection.status === "DISCONNECTED" || connection.status === "REVOKED"
-      ? "text-danger"
+      ? "border-danger/30 bg-danger/10 text-danger"
       : connection.status === "QUIET"
-        ? "text-warning"
+        ? "border-warning/30 bg-warning/10 text-warning"
         : connection.status === "ACTIVE" && connection.confidence === "CONFIRMED"
-          ? "text-success"
-          : "text-muted-foreground";
+          ? "border-success/30 bg-success/10 text-success"
+          : "border-border bg-subtle/60 text-muted-foreground";
+  const statusDescription =
+    connection.status === "ACTIVE" && connection.confidence === "CONFIRMED"
+      ? "Forge has direct, current evidence that this delivery connection is active."
+      : connection.status === "ACTIVE"
+        ? "Recent activity was observed, but live connection presence is not fully confirmed."
+        : connection.status === "QUIET" && unconfirmedMcp
+          ? "The MCP client has not sent a recent signal. Silence does not prove that it is offline."
+          : connection.status === "QUIET"
+            ? "This connection has not produced a recent activity signal."
+            : connection.status === "DISCONNECTED"
+              ? "The client or runtime explicitly disconnected from Forge."
+              : connection.status === "REVOKED"
+                ? "This delivery connection was revoked and can no longer act."
+                : "Forge has recorded this connection state from the latest available evidence.";
   return {
     invocationLabel,
     connectorLabel: connectionKindLabel(connection.kind, connection),
     runtimeLabel,
     statusLabel,
-    tone,
+    statusDescription,
+    badgeTone,
     unconfirmedMcp,
   };
 }

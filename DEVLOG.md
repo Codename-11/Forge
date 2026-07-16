@@ -13786,3 +13786,33 @@ activity provenance.
 
 The immutable tag will be cut only from the merged release commit, then
 deployed through the clean-checkout production path and verified live.
+
+---
+
+## 2026-07-16 — Delivery agent and operator identity
+
+Refined the issue Delivery card so execution identity and human ownership are
+not collapsed into one ambiguous Actor label. Registered agents now remain the
+primary identity with their operator shown as supporting context. Manual work
+shows the operator explicitly, while legacy Codex Desktop, MCP, dispatch, and
+scheduled sessions without a registered agent connection are labeled as
+unverified instead of being falsely attributed to the credential owner.
+
+Expanded Delivery evidence now lists Agent and Operator independently alongside
+invocation, connector, and runtime facts. The agent transport documentation and
+the issue-flow Playwright contract were updated to preserve the distinction.
+Connection state now uses a semantic status badge with a hover/focus explanation,
+and the evidence disclosure uses a bordered control and rotating chevron so its
+interactivity is visible without adding density to the collapsed card.
+GitHub PR state now follows the same semantic badge and explanatory tooltip
+pattern, while GitHub evidence uses the same recognizable disclosure control.
+The issue claim card now separates owner identity, active state, expiry, and the
+release action into a clearer compact hierarchy.
+The issue Activity rail now groups only adjacent equivalent events, preserving
+audit order while reducing repeated metadata noise. It shows eight recent
+groups by default and provides an explicit event-counted show-more/show-less
+control for the remaining history.
+The shared Markdown renderer now recognizes compact GitHub
+`owner/repository#number` references before Forge issue keys, preventing
+hyphenated owners from becoming partial links in issue comments, Command
+Center decisions, and every other shared rich-text surface.

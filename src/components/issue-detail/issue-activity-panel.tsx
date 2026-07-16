@@ -1,5 +1,6 @@
 "use client";
-import { Activity as ActivityIcon } from "lucide-react";
+import { useState } from "react";
+import { Activity as ActivityIcon, ChevronDown, ChevronUp } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
@@ -9,8 +10,11 @@ import {
   activityActorOwnerTitle,
 } from "@/lib/activity-actor";
 import { issueUpdateCopy } from "@/lib/activity-update-summary";
+import { groupConsecutive } from "@/lib/activity-grouping";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
+
+const COLLAPSED_GROUP_LIMIT = 8;
 
 /**
  * Activity tab body — the audit-backed event stream for a single issue.
@@ -268,6 +272,7 @@ function activityCopy(
 }
 
 export function IssueActivityPanel({ issueId }: { issueId: string }) {
+  const [showAll, setShowAll] = useState(false);
   const { data, isLoading } = trpc.issue.activity.useQuery(
     { issueId, limit: 50 },
     // Activity changes in bursts as the issue is edited; no need to refetch
@@ -290,6 +295,19 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
   }
 
   const rows = data ?? [];
+  const preparedRows = rows.map((event) => {
+    const copy = activityCopy(event.kind, event.payload, event.actorAgent?.profileKey ?? null);
+    const actorKey = event.actorAgent?.id ?? event.actor?.id ?? "system";
+    return {
+      event,
+      copy,
+      groupKey: JSON.stringify([actorKey, event.kind, copy.label, copy.detail, copy.phase]),
+    };
+  });
+  const groups = groupConsecutive(preparedRows, (row) => row.groupKey);
+  const visibleGroups = showAll ? groups : groups.slice(0, COLLAPSED_GROUP_LIMIT);
+  const hiddenGroups = groups.slice(COLLAPSED_GROUP_LIMIT);
+  const hiddenEventCount = hiddenGroups.reduce((total, group) => total + group.count, 0);
 
   return (
     <section className="rounded-lg border border-border bg-card/40">
@@ -305,60 +323,97 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
           No activity yet. Status changes, assignments, and comments will show up here.
         </p>
       ) : (
-        <ul className="divide-y divide-border">
-          {rows.map((e) => {
-            const agent = e.actorAgent;
-            const actorLabel = activityActorName(e);
-            const actorKind = activityActorKind(e);
-            const actorOwnerTitle = activityActorOwnerTitle(e);
-            const copy = activityCopy(e.kind, e.payload, agent?.profileKey ?? null);
-            return (
-              <li key={e.id} className="flex items-start gap-2 px-3 py-2">
-                {agent ? (
-                  <AgentAvatar
-                    agent={{
-                      name: agent.name,
-                      profileKey: agent.profileKey,
-                      avatar: agent.avatar,
-                    }}
-                    size="xs"
-                  />
-                ) : (
-                  <Avatar name={actorLabel} image={e.actor?.image ?? null} size={18} />
-                )}
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
-                    <span className="truncate font-medium" title={actorOwnerTitle}>
-                      {actorLabel}
-                    </span>
-                    {actorKind !== "human" && (
-                      <Badge
-                        color="#6366f1"
-                        className="font-mono text-[0.6875rem] uppercase tracking-wider"
-                      >
-                        {actorKind}
-                      </Badge>
-                    )}
-                    {copy.phase && (
-                      <span className="rounded-sm border border-border bg-subtle px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
-                        {copy.phase}
-                      </span>
-                    )}
-                    <span className="truncate text-muted-foreground">{copy.label}</span>
-                  </div>
-                  {copy.detail && (
-                    <div className="text-meta mt-0.5 line-clamp-2 text-foreground/70">
-                      {copy.detail}
-                    </div>
+        <>
+          <ul className="divide-y divide-border">
+            {visibleGroups.map((group) => {
+              const { event: e, copy } = group.newest;
+              const newestTime = relativeTime(e.createdAt);
+              const oldestTime = relativeTime(group.oldest.event.createdAt);
+              const agent = e.actorAgent;
+              const actorLabel = activityActorName(e);
+              const actorKind = activityActorKind(e);
+              const actorOwnerTitle = activityActorOwnerTitle(e);
+              return (
+                <li key={e.id} className="flex items-start gap-2 px-3 py-2">
+                  {agent ? (
+                    <AgentAvatar
+                      agent={{
+                        name: agent.name,
+                        profileKey: agent.profileKey,
+                        avatar: agent.avatar,
+                      }}
+                      size="xs"
+                    />
+                  ) : (
+                    <Avatar name={actorLabel} image={e.actor?.image ?? null} size={18} />
                   )}
-                  <div className="text-meta mt-0.5 text-muted-foreground">
-                    {relativeTime(e.createdAt)}
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
+                      <span className="truncate font-medium" title={actorOwnerTitle}>
+                        {actorLabel}
+                      </span>
+                      {actorKind !== "human" && (
+                        <Badge
+                          color="#6366f1"
+                          className="font-mono text-[0.6875rem] uppercase tracking-wider"
+                        >
+                          {actorKind}
+                        </Badge>
+                      )}
+                      {copy.phase && (
+                        <span className="rounded-sm border border-border bg-subtle px-1 py-0 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                          {copy.phase}
+                        </span>
+                      )}
+                      {group.count > 1 && (
+                        <span
+                          className="rounded-full bg-subtle px-1.5 py-px font-mono text-[0.5625rem] font-medium tabular-nums text-muted-foreground"
+                          title={`${group.count} consecutive equivalent events`}
+                        >
+                          ×{group.count}
+                        </span>
+                      )}
+                      <span className="truncate text-muted-foreground">{copy.label}</span>
+                    </div>
+                    {copy.detail && (
+                      <div className="text-meta mt-0.5 line-clamp-2 text-foreground/70">
+                        {copy.detail}
+                      </div>
+                    )}
+                    <div className="text-meta mt-0.5 text-muted-foreground">
+                      {group.count > 1 && oldestTime !== newestTime
+                        ? `${oldestTime} – ${newestTime}`
+                        : newestTime}
+                    </div>
                   </div>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                </li>
+              );
+            })}
+          </ul>
+          {groups.length > COLLAPSED_GROUP_LIMIT && (
+            <button
+              type="button"
+              className="focus-ring flex w-full items-center justify-center gap-1.5 border-t border-border px-3 py-2 text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-subtle/50 hover:text-foreground"
+              onClick={() => setShowAll((current) => !current)}
+              aria-expanded={showAll}
+            >
+              {showAll ? (
+                <>
+                  <ChevronUp className="h-3 w-3" />
+                  Show recent only
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="h-3 w-3" />
+                  Show {hiddenGroups.length} more group{hiddenGroups.length === 1 ? "" : "s"}
+                  <span className="font-normal text-muted-foreground/70">
+                    · {hiddenEventCount} event{hiddenEventCount === 1 ? "" : "s"}
+                  </span>
+                </>
+              )}
+            </button>
+          )}
+        </>
       )}
     </section>
   );

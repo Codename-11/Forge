@@ -13,8 +13,9 @@ There are two independent axes:
   runtime) or **Streaming/Completions** (Forge). Orthogonal to tier; see
   [Chat & Dispatch Engines](./engines.md).
 
-There are also four deliberately separate identities in the execution record:
+There are also five deliberately separate identities in the execution record:
 
+- **Operator** — the human who owns or manages the delivery lease or credential.
 - **Agent profile / binding** — who is acting and what it may do in the
   workspace.
 - **Agent connection** — the concrete managed runtime, MCP client, webhook, or
@@ -24,7 +25,10 @@ There are also four deliberately separate identities in the execution record:
 
 An API key authenticates a caller; it is not the execution identity. Forge
 snapshots the connection on runs and work sessions so key rotation or later
-profile relinking cannot rewrite historical attribution.
+profile relinking cannot rewrite historical attribution. Delivery surfaces
+therefore show Agent and Operator separately; legacy clients without a
+registered agent connection are labeled unverified instead of attributing the
+agent's work to the credential owner.
 
 ## Connection-aware liveness
 
