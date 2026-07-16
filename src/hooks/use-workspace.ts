@@ -1,6 +1,6 @@
 "use client";
 import { createContext, useContext } from "react";
-import type { Role } from "@prisma/client";
+import type { Role, WorkspaceExperienceProfile } from "@prisma/client";
 
 /**
  * Shape exposed to the client tree under `/w/[slug]/*`. The shell layout
@@ -14,6 +14,7 @@ export type WorkspaceContextValue = {
   name: string;
   avatarUrl: string | null;
   role: Role;
+  experienceProfile: WorkspaceExperienceProfile;
   /** Number of workspaces the user has access to — gates the switcher UI. */
   membershipCount: number;
   cycleLengthDays: number;
@@ -27,6 +28,9 @@ export type WorkspaceContextValue = {
 };
 
 export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
+export const WorkspaceContextUpdater = createContext<
+  ((patch: Partial<WorkspaceContextValue>) => void) | null
+>(null);
 
 /**
  * Reads the current workspace from the provider seeded by the RSC shell.
@@ -43,6 +47,15 @@ export function useWorkspace(): WorkspaceContextValue {
 
 export function useMaybeWorkspace(): WorkspaceContextValue | null {
   return useContext(WorkspaceContext);
+}
+
+/** Update shell-owned workspace fields after a successful client mutation. */
+export function useUpdateWorkspaceContext(): (patch: Partial<WorkspaceContextValue>) => void {
+  const update = useContext(WorkspaceContextUpdater);
+  if (!update) {
+    throw new Error("useUpdateWorkspaceContext must be used within a WorkspaceProvider.");
+  }
+  return update;
 }
 
 /** Build a URL under the current workspace. Pass `/foo/bar` (leading slash). */

@@ -13,6 +13,7 @@ import {
   MentionEngagementPolicy,
   Role,
   RunBudgetAction,
+  WorkspaceExperienceProfile,
 } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
@@ -58,6 +59,7 @@ export const workspaceRouter = router({
         name: true,
         key: true,
         avatarUrl: true,
+        experienceProfile: true,
         memberships: {
           where: { userId: ctx.session.user.id },
           select: { role: true },
@@ -103,6 +105,7 @@ export const workspaceRouter = router({
         name: true,
         key: true,
         avatarUrl: true,
+        experienceProfile: true,
         cycleLengthDays: true,
         cycleCooldownDays: true,
         timeTrackingEnabled: true,
@@ -188,6 +191,9 @@ export const workspaceRouter = router({
         slug: slugSchema,
         name: z.string().min(1).max(80),
         key: keySchema,
+        experienceProfile: z.nativeEnum(WorkspaceExperienceProfile).default(
+          WorkspaceExperienceProfile.TEAM,
+        ),
         cycleLengthDays: z.number().int().min(1).max(90).optional(),
         timeTrackingEnabled: z.boolean().optional(),
       }),
@@ -223,6 +229,7 @@ export const workspaceRouter = router({
       }
 
       const cycleLengthDays = input.cycleLengthDays ?? 7;
+      const isPersonal = input.experienceProfile === WorkspaceExperienceProfile.PERSONAL;
       const now = new Date();
       const cycleEndsAt = new Date(now.getTime());
       cycleEndsAt.setUTCDate(cycleEndsAt.getUTCDate() + cycleLengthDays);
@@ -235,8 +242,12 @@ export const workspaceRouter = router({
           slug: input.slug,
           name: input.name,
           key: input.key,
+          experienceProfile: input.experienceProfile,
           cycleLengthDays,
           timeTrackingEnabled: input.timeTrackingEnabled ?? false,
+          defaultIssueAssigneeMode: isPersonal
+            ? DefaultIssueAssigneeMode.CREATOR
+            : DefaultIssueAssigneeMode.NONE,
           memberships: { create: { userId: ctx.session.user.id, role: Role.OWNER } },
           statuses: {
             create: [
@@ -249,25 +260,36 @@ export const workspaceRouter = router({
             ],
           },
           labels: {
-            create: [
-              { name: "bug", color: "#b45309" },
-              { name: "feature", color: "#d97706" },
-              { name: "chore", color: "#78716c" },
-              { name: "docs", color: "#0d9488" },
-              { name: "quick-win", color: "#65a30d" },
-            ],
+            create: isPersonal
+              ? [
+                  { name: "home", color: "#65a30d" },
+                  { name: "work", color: "#d97706" },
+                  { name: "errand", color: "#0d9488" },
+                  { name: "waiting", color: "#78716c" },
+                ]
+              : [
+                  { name: "bug", color: "#b45309" },
+                  { name: "feature", color: "#d97706" },
+                  { name: "chore", color: "#78716c" },
+                  { name: "docs", color: "#0d9488" },
+                  { name: "quick-win", color: "#65a30d" },
+                ],
           },
-          cycles: {
-            create: [
-              {
-                name: "Cycle 1",
-                startsAt: now,
-                endsAt: cycleEndsAt,
-                lengthDays: cycleLengthDays,
-                status: CycleStatus.ACTIVE,
-              },
-            ],
-          },
+          ...(isPersonal
+            ? {}
+            : {
+                cycles: {
+                  create: [
+                    {
+                      name: "Sprint 1",
+                      startsAt: now,
+                      endsAt: cycleEndsAt,
+                      lengthDays: cycleLengthDays,
+                      status: CycleStatus.ACTIVE,
+                    },
+                  ],
+                },
+              }),
         },
       });
       const completionStatus = await ctx.db.status.findFirst({
@@ -302,6 +324,7 @@ export const workspaceRouter = router({
       z.object({
         name: z.string().min(1).max(80).optional(),
         avatarUrl: z.string().url().max(512).nullable().optional(),
+        experienceProfile: z.nativeEnum(WorkspaceExperienceProfile).optional(),
         cycleLengthDays: z.number().int().min(1).max(90).optional(),
         cycleCooldownDays: z.number().int().min(0).max(30).optional(),
         timeTrackingEnabled: z.boolean().optional(),

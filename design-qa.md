@@ -1,73 +1,75 @@
-# Mission Control operations — design QA
+# Personal workspace — design QA
 
-## Source and implementation evidence
+## Evidence
 
-### Workspace Operations Shelf
+- Source visual truth: `/home/bailey/.codex/generated_images/019f684f-8ec0-7312-8d0f-026f4ced54b3/exec-de9fe713-1cdf-4721-8d57-366afeef5114.png`
+- Browser-rendered implementation: `/home/bailey/.codex/visualizations/2026/07/16/019f684f-8ec0-7312-8d0f-026f4ced54b3/personal-dashboard-implemented-2.png`
+- Full-view comparison: `/home/bailey/.codex/visualizations/2026/07/16/019f684f-8ec0-7312-8d0f-026f4ced54b3/personal-dashboard-comparison.png`
+- Mobile implementation: `/home/bailey/.codex/visualizations/2026/07/16/019f684f-8ec0-7312-8d0f-026f4ced54b3/personal-dashboard-mobile.png`
+- Desktop viewport: 1440 × 1024, light theme, authenticated personal workspace, agent companion expanded, realistic tasks/notes/delegated work.
+- Mobile viewport: 390 × 844, light theme, authenticated personal workspace.
 
-- Source visual truth: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\11-direction-3.png`
-- Desktop implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\21-workspace-operations-desktop.png`
-- Mobile implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\22-workspace-operations-mobile.png`
-- Full-view comparison: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\24-workspace-qa-comparison.png`
-- Viewports: 1536 x 1024 desktop; 390 x 844 mobile
-- State: Forge workspace Dashboard, Mission Control expanded, Queue selected, seeded local data loaded
-
-The full-view comparison preserves each 1536 x 1024 frame at native scale. It shows the selected bottom operations-shelf composition beside the browser-rendered implementation. Both reflow the dashboard above a bottom-attached shelf, use summary / queue / agent-presence zones, keep Queue selected, expose one ember primary action, and retain Forge's warm-earthy dark tokens and compact typography.
-
-The implementation intentionally omits the mock's speculative filter, sort, and inline assignee controls because the current quick-access query is read-only and deep-links to the durable issue surface. It uses honest dispatch-state copy and canonical issue links instead. This is an expected product constraint rather than unresolved visual drift.
-
-### Global Mission Control
-
-- Source desktop baseline: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\01-global-desktop-accepted.png`
-- Source mobile baseline: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\02-global-mobile-accepted.jpg`
-- Desktop implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\19-global-operations-desktop.png`
-- Mobile implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\20-global-operations-mobile.png`
-- Lower mobile implementation: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\20b-global-operations-mobile-lower.png`
-- Full-view comparison: `C:\Users\Bailey\Documents\Codex\2026-07-13\forge-mission-control-audit\outputs\forge-mission-control-audit\23-global-qa-comparison.png`
-- Viewports: 1536 x 1024 desktop; 390 x 844 mobile
-- State: cross-workspace overview with seeded Forge workspace, zero registered runtimes, 19 open issues, no assigned attention, three offline agents, and recent activity
-
-The baseline and implementation comparison confirms the redesign preserves the global shell, real data, existing tokens, density, navigation destinations, and read-only contract while replacing the undifferentiated card grid with the selected direction's operator hierarchy. Runtime and dispatch posture now leads; workspace queue and assigned attention are the primary work plane; agent presence, runtime coverage, and activity follow as supporting evidence.
-
-## Required fidelity surfaces
-
-- **Fonts and typography:** Both surfaces use Forge's existing font stack and density-aware scale. Section labels, headings, metrics, issue keys, and row copy establish the same compact operational hierarchy without a parallel type system.
-- **Spacing and layout:** The workspace shelf attaches to the bottom of the content flow and never covers the dashboard. The global surface uses one posture banner, a 2:1 primary work grid, then three supporting columns. Mobile collapses both surfaces into one readable vertical sequence with no clipped controls or horizontal overflow.
-- **Colors and tokens:** Existing `background`, `card`, `border`, `ember`, `warning`, `danger`, `success`, `foreground`, and `muted-foreground` tokens are used throughout. No hard-coded palette, gradients, or new design system were introduced.
-- **Images and icons:** Neither target requires raster imagery. All interface icons use Forge's existing Lucide dependency; no placeholder asset, handcrafted SVG, CSS drawing, or generated substitute was added.
-- **Copy and content:** Mission Control terminology remains consistent. Workspace issue keys use canonical `FRG-*` references. The global runtime CTA appears only when setup is required, Queue remains distinct from assigned Attention, and Sprint terminology elsewhere remains unchanged.
-
-## States, interaction, and accessibility
-
-- Live, Queue, Agents, and Chat expose `tablist`, `tab`, `aria-selected`, `aria-controls`, and `tabpanel` semantics.
-- Numeric shortcuts 1–4 switch workspace tabs and Escape collapses the shelf. The primary Assign next action opens the oldest unassigned issue; issue and agent rows deep-link to their durable surfaces.
-- The global workspace row, issue-queue action, inbox, activity, agent settings, and runtime settings navigation were exercised from the rendered page.
-- Workspace Queue and Agent Presence provide explicit loading, empty, and error states. Every global query region has a bounded loading state, empty state, and retry action without hiding the rest of Mission Control.
-- Mobile workspace tabs, Settings, and Collapse meet a 44 px target. Global mobile interactive rows and actions meet at least 40 px, preserve visible focus styles from existing components, and wrap long content without collision.
-- Desktop and mobile document widths match their viewport widths. Browser log review found no warnings or errors attributable to the implementation.
-
-## Comparison history
-
-### Iteration 1
-
-- **[P2] Workspace mobile controls were 24–40 px.** Settings, tabs, and Collapse did not meet the intended touch target. Fixed by increasing mobile controls to 44 px while retaining compact desktop sizing.
-- **[P1] The collapsed workspace pill could sit behind mobile navigation.** Fixed by applying bottom-navigation safe clearance to bottom-corner pill and glance states.
-- **[P1] Global runtime health was buried below workspace volume.** Fixed by replacing the equal-weight card grid with a derived runtime and dispatch posture banner, keeping registration failure visible before queue triage.
-- **[P2] Queue, attention, presence, and activity competed at the same level globally.** Fixed by separating actionable workspace queue and personal attention from supporting coverage and recency evidence.
-
-### Iteration 2
-
-- Post-fix mobile measurement confirms the workspace controls meet 44 px and neither surface overflows at 390 x 844.
-- Post-fix desktop captures confirm the workspace shelf remains in layout and the global scan begins with runtime posture, queue, and attention.
-- Combined comparisons contain no actionable P0, P1, or P2 differences against the approved direction, captured product baseline, and existing Forge conventions.
+The comparison image normalizes the 1487 × 1058 generated source to the
+implementation viewport. It was inspected at its original 2880 × 1024 output,
+where navigation, task rows, capture controls, note cards, agent states, and
+icons remained readable. A separate focused crop was not needed because the
+full-resolution side-by-side preserved those details without downsampling.
 
 ## Findings
 
-No actionable P0, P1, or P2 findings remain.
+No actionable P0, P1, or P2 differences remain.
+
+- Typography: the implementation preserves Forge's sans/mono system, close
+  display hierarchy, compact metadata, and identifier treatment. Dynamic
+  workspace/task text wraps or truncates without collision.
+- Spacing and layout: the task-first main column, persistent workspace rail,
+  narrow companion rail, capture bar, task groups, and notes retain the source
+  hierarchy. The narrower agent rail is the explicitly selected refinement.
+- Colors and tokens: all surfaces use Forge's warm background, graphite text,
+  ember action/state color, and existing border/card tokens; no ad-hoc palette
+  or gradient was introduced.
+- Image and icon fidelity: the source contains no raster product imagery. All
+  visible UI symbols use the repository's existing Lucide and AgentAvatar
+  components; there are no placeholder images, custom SVGs, emoji stand-ins,
+  or CSS illustrations in the implementation.
+- Copy and content: personal terminology is consistent (`Today`, `Tasks`,
+  `Upcoming`, `Notes`, `Routines`) while `Agents` remains directly available.
+  The companion reports real assignment state and update time rather than the
+  mock's illustrative progress timeline or percentage.
+- Interaction and accessibility: browser coverage passed workspace creation,
+  task add/complete, note capture, companion collapse/reopen, accessible labels,
+  keyboard-capable controls, and a settled-route console check. At 390px the
+  desktop sidebar becomes the existing bottom navigation, task content remains
+  readable, and there is no horizontal clipping.
+
+## Comparison history
+
+1. The first implementation capture contained transient black compositor
+   blocks while the page was still settling. No source-code visual change was
+   made; the same state was recaptured after the heading and companion loaded
+   and a five-second settle. The stable post-capture evidence is
+   `personal-dashboard-implemented-2.png`.
+2. Full-view comparison found no P0/P1/P2 design mismatch. The visible
+   deviations are intentional product constraints: existing Forge component
+   vocabulary, the user-requested narrower companion, and honest activity
+   state instead of invented progress.
 
 ## Follow-up polish
 
-- **P3:** If Forge later exposes safe quick-assignment mutations and queue sort/filter contracts, the workspace shelf can adopt inline controls without changing its structure.
+- [P3] The generated source uses nearly borderless task rows, while Forge's
+  implementation uses its established rounded group cards. This is acceptable
+  system consistency; it can be revisited if the whole task surface adopts a
+  flatter row treatment later.
+- [P3] The source includes more quick-date chips beneath capture. The working
+  implementation keeps the core Today/Tomorrow/Someday picker to reduce density.
 
-## Final result
+## Implementation checklist
+
+- [x] Profile-aware workspace creation and defaults
+- [x] Personal navigation and Today dashboard
+- [x] Persisted task and note interactions
+- [x] Real delegated-agent activity with collapsible rail
+- [x] Desktop and mobile browser verification
+- [x] Same-state source/implementation comparison
 
 final result: passed

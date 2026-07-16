@@ -32,6 +32,14 @@ enum Role {
   GUEST
 }
 
+/// Presentation and default-provisioning profile for a workspace. This does
+/// not change tenancy, permissions, or agent capability: PERSONAL keeps the
+/// same underlying work model while simplifying the default experience.
+enum WorkspaceExperienceProfile {
+  TEAM
+  PERSONAL
+}
+
 /// Instance-wide role, distinct from the per-workspace {@link Role}. An
 /// INSTANCE_ADMIN administers the whole self-hosted instance (tenants,
 /// users, instance-wide runtimes, audit, system info) and can create
@@ -912,6 +920,7 @@ model Workspace {
   /// Short key used for issue identifiers: e.g. `FRG-123`.
   key                             String                     @unique
   avatarUrl                       String?
+  experienceProfile               WorkspaceExperienceProfile @default(TEAM)
   /// Default cycle length (days). Overridable per cycle at create time.
   cycleLengthDays                 Int                        @default(7)
   /// Default rest/cooldown days between cycles (0 = back-to-back).

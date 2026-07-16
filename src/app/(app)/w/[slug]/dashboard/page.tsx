@@ -46,6 +46,7 @@ import { cn, formatIssueId, relativeTime } from "@/lib/utils";
 import { useTimePrefs } from "@/lib/time-prefs";
 import { useCountUp } from "@/lib/use-count-up";
 import { useWorkspace } from "@/hooks/use-workspace";
+import { PersonalDashboard } from "@/components/dashboard/personal-dashboard";
 
 /**
  * M6 (design spec): a metric that counts up from 0 once it scrolls into
@@ -83,6 +84,11 @@ const FLOW_ORDER: Record<DashboardFlowBreakpoint, readonly string[]> = {
 };
 
 export default function DashboardPage() {
+  const workspace = useWorkspace();
+  return workspace.experienceProfile === "PERSONAL" ? <PersonalDashboard /> : <TeamDashboard />;
+}
+
+function TeamDashboard() {
   const workspace = useWorkspace();
   const slug = workspace.slug;
   const { data: me } = trpc.workspace.me.useQuery();

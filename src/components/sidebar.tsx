@@ -13,6 +13,7 @@ import {
 import {
   WORKSPACE_NAV_FOOTER_ITEMS,
   WORKSPACE_NAV_SECTIONS,
+  PERSONAL_WORKSPACE_NAV_SECTIONS,
   type WorkspaceNavItem,
   type WorkspaceNavSection,
 } from "@/components/sidebar-nav";
@@ -45,11 +46,11 @@ import { Drawer } from "@/components/ui/modal";
  *   - Sign out / theme toggle → inside the user menu.
  */
 
-const SECTIONS = WORKSPACE_NAV_SECTIONS;
 const FOOTER_ITEMS = WORKSPACE_NAV_FOOTER_ITEMS;
 
 const COLLAPSED_STORAGE_KEY = "forge.sidebarCollapsed";
-const MOBILE_PRIMARY_PATHS = ["/dashboard", "/inbox", "/issues", "/projects"] as const;
+const TEAM_MOBILE_PRIMARY_PATHS = ["/dashboard", "/inbox", "/issues", "/projects"] as const;
+const PERSONAL_MOBILE_PRIMARY_PATHS = ["/dashboard", "/inbox", "/issues", "/agents"] as const;
 
 function useSidebarCollapsed(): [boolean, (next: boolean) => void] {
   // Default to expanded; read from localStorage on mount so SSR output stays
@@ -91,6 +92,7 @@ export function Sidebar({
   const mod = useModKeyLabel();
   const workspace = useMaybeWorkspace();
   const timeTrackingEnabled = workspace?.timeTrackingEnabled ?? false;
+  const isPersonal = workspace?.experienceProfile === "PERSONAL";
 
   const [collapsed, setCollapsed] = useSidebarCollapsed();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -117,18 +119,18 @@ export function Sidebar({
     if (tail.startsWith("/projects")) return "New project";
     if (tail.startsWith("/cycles")) return "New sprint";
     if (tail.startsWith("/initiatives")) return "New initiative";
-    return "New issue";
-  }, [pathname]);
+    return isPersonal ? "New task" : "New issue";
+  }, [isPersonal, pathname]);
 
   const sections = useMemo(
     () =>
-      SECTIONS.map((sec) => ({
+      (isPersonal ? PERSONAL_WORKSPACE_NAV_SECTIONS : WORKSPACE_NAV_SECTIONS).map((sec) => ({
         ...sec,
         items: sec.items
           .filter((it) => (it.onlyWhenTimeTracking ? timeTrackingEnabled : true))
           .map((it) => ({ ...it, href: `/w/${slug}${it.path}` })),
       })).filter((sec) => sec.items.length > 0),
-    [slug, timeTrackingEnabled],
+    [isPersonal, slug, timeTrackingEnabled],
   );
 
   const footerItems = useMemo(
@@ -187,7 +189,8 @@ export function Sidebar({
   // is the platform modifier — pressing Ctrl+C anywhere outside an
   // input would route to /cycles AND preventDefault the copy.
 
-  const mobilePrimaryItems = MOBILE_PRIMARY_PATHS.map((path) =>
+  const mobilePrimaryPaths = isPersonal ? PERSONAL_MOBILE_PRIMARY_PATHS : TEAM_MOBILE_PRIMARY_PATHS;
+  const mobilePrimaryItems = mobilePrimaryPaths.map((path) =>
     sections.flatMap((sec) => sec.items).find((item) => item.path === path),
   ).filter((item): item is WorkspaceNavItem & { href: string } => Boolean(item));
 

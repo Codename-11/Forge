@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Plus, ArrowRight, AlertTriangle } from "lucide-react";
+import { Plus, ArrowRight, AlertTriangle, UserRound, UsersRound } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,8 +20,8 @@ import { workspaceColor } from "@/lib/workspace-color";
  * zone) live under `/w/[slug]/settings/workspace`; this page is about
  * moving *between* workspaces plus creating new ones.
  *
- * NOTE: `workspace.create` today seeds only defaults + statuses. Agent C
- * will extend it with MinIO bucket seeding and broader onboarding.
+ * `workspace.create` seeds profile-aware labels and defaults. Personal
+ * workspaces intentionally skip the initial sprint.
  */
 export default function WorkspacesPage() {
   const router = useRouter();
@@ -210,6 +210,7 @@ function CreateDialog({
   const [slug, setSlug] = useState("");
   const [cycleLengthDays, setCycleLengthDays] = useState(7);
   const [timeTrackingEnabled, setTimeTrackingEnabled] = useState(false);
+  const [experienceProfile, setExperienceProfile] = useState<"TEAM" | "PERSONAL">("TEAM");
 
   const create = trpc.workspace.create.useMutation({
     onSuccess: (ws) => {
@@ -227,6 +228,7 @@ function CreateDialog({
     setSlug("");
     setCycleLengthDays(7);
     setTimeTrackingEnabled(false);
+    setExperienceProfile("TEAM");
   }
 
   function onNameChange(v: string) {
@@ -248,7 +250,9 @@ function CreateDialog({
         .slice(0, 3)
         .map((w) => w[0]?.toUpperCase() ?? "")
         .join("");
+      const singleWord = v.replace(/[^a-zA-Z]/g, "").slice(0, 3).toUpperCase();
       if (suggested.length >= 2) setKey(suggested.slice(0, 5));
+      else if (singleWord.length >= 2) setKey(singleWord);
     }
   }
 
@@ -260,10 +264,10 @@ function CreateDialog({
     if (!/^[a-z0-9-]{2,48}$/.test(slug))
       errs.push("Slug must be 2–48 lowercase alphanumeric chars or dashes.");
     else if (existingSlugs.has(slug)) errs.push(`Slug ${slug} is already in use.`);
-    if (cycleLengthDays < 1 || cycleLengthDays > 90)
+    if (experienceProfile === "TEAM" && (cycleLengthDays < 1 || cycleLengthDays > 90))
       errs.push("Sprint length must be between 1 and 90 days.");
     return errs;
-  }, [name, key, slug, cycleLengthDays, existingKeys, existingSlugs]);
+  }, [name, key, slug, cycleLengthDays, experienceProfile, existingKeys, existingSlugs]);
 
   return (
     <Dialog open={open} onClose={onClose} className="max-w-lg">
@@ -277,6 +281,7 @@ function CreateDialog({
             slug,
             cycleLengthDays,
             timeTrackingEnabled,
+            experienceProfile,
           });
         }}
         className="space-y-3 p-5"
@@ -288,12 +293,46 @@ function CreateDialog({
           owner via a data migration.
         </p>
 
+        <Field label="How will you use it?">
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setExperienceProfile("PERSONAL")}
+              className={cn(
+                "focus-ring rounded-lg border p-3 text-left transition-colors",
+                experienceProfile === "PERSONAL"
+                  ? "border-ember bg-ember/10"
+                  : "border-border bg-card/40 hover:bg-subtle/60",
+              )}
+            >
+              <UserRound className="mb-2 h-4 w-4 text-ember" />
+              <div className="text-sm font-medium">For myself</div>
+              <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">Today, tasks, notes, and agents.</div>
+            </button>
+            <button
+              type="button"
+              onClick={() => setExperienceProfile("TEAM")}
+              className={cn(
+                "focus-ring rounded-lg border p-3 text-left transition-colors",
+                experienceProfile === "TEAM"
+                  ? "border-ember bg-ember/10"
+                  : "border-border bg-card/40 hover:bg-subtle/60",
+              )}
+            >
+              <UsersRound className="mb-2 h-4 w-4 text-ember" />
+              <div className="text-sm font-medium">With a team</div>
+              <div className="mt-0.5 text-[0.6875rem] text-muted-foreground">Projects, sprints, planning, and delivery.</div>
+            </button>
+          </div>
+        </Field>
+
         <Field label="Name">
           <Input
             value={name}
             onChange={(e) => onNameChange(e.target.value)}
             maxLength={80}
             autoFocus
+            aria-label="Workspace name"
           />
         </Field>
         <div className="grid grid-cols-2 gap-3">
@@ -304,6 +343,7 @@ function CreateDialog({
               maxLength={6}
               placeholder="ACME"
               className="font-mono"
+              aria-label="Workspace key"
             />
           </Field>
           <Field label="Slug">
@@ -315,10 +355,11 @@ function CreateDialog({
               maxLength={48}
               placeholder="acme"
               className="font-mono"
+              aria-label="Workspace slug"
             />
           </Field>
         </div>
-        <div className="grid grid-cols-2 gap-3">
+        {experienceProfile === "TEAM" && <div className="grid grid-cols-2 gap-3">
           <Field label="Sprint length (days)">
             <Input
               type="number"
@@ -338,7 +379,7 @@ function CreateDialog({
               <span className="text-xs text-muted-foreground">Enable timers</span>
             </label>
           </Field>
-        </div>
+        </div>}
 
         <div className="rounded-md border border-warning/40 bg-warning/5 p-2.5 text-[0.6875rem] text-warning">
           The key cannot be changed later. Pick something short and stable.
