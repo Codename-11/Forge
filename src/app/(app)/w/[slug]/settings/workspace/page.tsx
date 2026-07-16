@@ -477,19 +477,6 @@ export default function WorkspaceSettingsPage() {
                     disabled={!canEdit}
                   />
                 </Field>
-                <Field
-                  label="Agent idle timeout (minutes)"
-                  hint="Flip an agent to OFFLINE when no signal arrives for this long. Signals = delivered webhooks (AGENT_ASSIGNED / COMMENT_CREATED) plus any agents.heartbeat call. 0 disables the sweep; 15 is a good default."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1440}
-                    value={agentIdleTimeoutMinutes}
-                    onChange={(e) => setAgentIdleTimeoutMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
               </div>
             </FormCard>
           </Section>
@@ -548,132 +535,8 @@ export default function WorkspaceSettingsPage() {
           </Section>
 
           <Section
-            title="Agent SLA"
-            hint="Watchdog for assignments where the agent woke up but never moved the issue. Pure follow-through reliability — no priority changes. Lower = louder."
-          >
-            <FormCard className="space-y-5 p-5">
-              <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
-                <Field
-                  label="Stalled SLA (minutes)"
-                  hint="Flip an issue to STALLED when an assigned agent hasn't moved it out of BACKLOG/TODO within this window. 0 disables. 30 is a reasonable start."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10080}
-                    value={assignmentSlaMinutes}
-                    onChange={(e) => setAssignmentSlaMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
-                <Field
-                  label="Run stale timeout (minutes)"
-                  hint="Canonically close ACTIVE agent runs as STALLED when their last run event is older than this. 0 disables auto-close."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10080}
-                    value={agentRunStaleMinutes}
-                    onChange={(e) => setAgentRunStaleMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
-                <Field
-                  label="Progress update cadence (minutes)"
-                  hint="Ask agents to refresh their rolling status during long phases at this cadence. 0 disables the reminder; meaningful phase changes should still be reported."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={1440}
-                    value={agentProgressUpdateMinutes}
-                    onChange={(e) => setAgentProgressUpdateMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
-                <Field
-                  label="Run quiet threshold (minutes)"
-                  hint="Show an ACTIVE run as Quiet / needing attention after this long without a run event. This is an early visual signal, not a state transition. 0 disables."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10080}
-                    value={agentRunQuietMinutes}
-                    onChange={(e) => setAgentRunQuietMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
-                <Field
-                  label="Review start timeout (minutes)"
-                  hint="Open a human fallback when an agent reviewer was dispatched but never acknowledged. 0 disables."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={10080}
-                    value={reviewStartTimeoutMinutes}
-                    onChange={(e) => setReviewStartTimeoutMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
-                <Field
-                  label="Work session stale timeout (minutes)"
-                  hint="Flag an active branch/worktree lease when its owner stops checking in. Stale sessions continue blocking duplicate work until resumed or abandoned. 0 disables."
-                >
-                  <Input
-                    type="number"
-                    min={0}
-                    max={43200}
-                    value={workSessionStaleMinutes}
-                    onChange={(e) => setWorkSessionStaleMinutes(Number(e.target.value) || 0)}
-                    disabled={!canEdit}
-                  />
-                </Field>
-              </div>
-              <Field
-                label="Required ack (seconds)"
-                hint="How long an agent has to comment or transition an issue after assignment before AGENT_NOACK fires. 0 disables. 60–180s is typical."
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={3600}
-                  value={requiredAckSeconds}
-                  onChange={(e) => setRequiredAckSeconds(Number(e.target.value) || 0)}
-                  disabled={!canEdit}
-                />
-              </Field>
-              <div className="space-y-4 border-t border-border/60 pt-5">
-                <FormToggle
-                  checked={autoRedispatchOnStall}
-                  onChange={setAutoRedispatchOnStall}
-                  disabled={!canEdit}
-                  label="Auto-redispatch on stall"
-                  hint="When on, a stall also clears assignedAgentId so the auto-dispatcher re-picks. Off = event-only (operator-driven)."
-                />
-                <FormToggle
-                  checked={autoRedispatchOnNoack}
-                  onChange={setAutoRedispatchOnNoack}
-                  disabled={!canEdit}
-                  label="Auto-redispatch on no-ack"
-                  hint="When on, AGENT_NOACK also clears assignedAgentId so the auto-dispatcher re-picks. Mirrors the stall toggle."
-                />
-                <FormToggle
-                  checked={slaEnforcementEnabled}
-                  onChange={setSlaEnforcementEnabled}
-                  disabled={!canEdit}
-                  label="Enforce per-issue SLA"
-                  hint="When on, scans for issues past their SLA target and emits ISSUE_SLA_BREACH (which also fires the Coach). Set a target per issue from the “SLA target” field in the issue rail — issues with no target are never breached."
-                />
-              </div>
-            </FormCard>
-          </Section>
-
-          <Section
             title="Run safety budgets"
-            hint="Hard caps per agent run. The idle watchdog above only catches quiet runs — these catch a busy-but-looping one before it burns unbounded tokens, cost, or time. 0 = no cap (opt-in)."
+            hint="Hard caps per agent run. Agent activity detection lives under Agent policy; these caps catch a busy-but-looping run before it burns unbounded tokens, cost, or time. 0 = no cap (opt-in)."
           >
             <FormCard className="space-y-5 p-5">
               {runTokenBudget === 0 && runCostBudgetUsd === 0 && runMaxMinutes === 0 && (

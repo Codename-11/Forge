@@ -1,15 +1,18 @@
 "use client";
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
   Activity,
+  AlertTriangle,
   ArrowRight,
   Bot,
   ChevronDown,
   CircleDot,
   Clock,
   MessageSquare,
+  Save,
+  ShieldCheck,
   X,
 } from "lucide-react";
 import type { EngagementMode } from "@prisma/client";
@@ -113,6 +116,9 @@ export default function AgentsBindingPage() {
             </div>
           </div>
 
+          <AgentOperationsPolicy isAdmin={isAdmin} />
+          <AgentOperationsAttention slug={ws.slug} />
+
           {/* Bound agents */}
           <Section
             title="Bound agents"
@@ -151,6 +157,401 @@ export default function AgentsBindingPage() {
         </div>
       </div>
     </>
+  );
+}
+
+type OperationsPolicy = {
+  agentIdleTimeoutMinutes: number;
+  assignmentSlaMinutes: number;
+  agentRunStaleMinutes: number;
+  agentProgressUpdateMinutes: number;
+  agentRunQuietMinutes: number;
+  reviewStartTimeoutMinutes: number;
+  workSessionStaleMinutes: number;
+  requiredAckSeconds: number;
+  autoRedispatchOnStall: boolean;
+  autoRedispatchOnNoack: boolean;
+};
+
+const EMPTY_OPERATIONS_POLICY: OperationsPolicy = {
+  agentIdleTimeoutMinutes: 0,
+  assignmentSlaMinutes: 0,
+  agentRunStaleMinutes: 0,
+  agentProgressUpdateMinutes: 5,
+  agentRunQuietMinutes: 5,
+  reviewStartTimeoutMinutes: 5,
+  workSessionStaleMinutes: 120,
+  requiredAckSeconds: 0,
+  autoRedispatchOnStall: false,
+  autoRedispatchOnNoack: false,
+};
+
+function AgentOperationsPolicy({ isAdmin }: { isAdmin: boolean }) {
+  const utils = trpc.useUtils();
+  const { data: current } = trpc.workspace.current.useQuery();
+  const [policy, setPolicy] = useState<OperationsPolicy>(EMPTY_OPERATIONS_POLICY);
+
+  useEffect(() => {
+    if (!current) return;
+    setPolicy({
+      agentIdleTimeoutMinutes: current.agentIdleTimeoutMinutes,
+      assignmentSlaMinutes: current.assignmentSlaMinutes,
+      agentRunStaleMinutes: current.agentRunStaleMinutes,
+      agentProgressUpdateMinutes: current.agentProgressUpdateMinutes,
+      agentRunQuietMinutes: current.agentRunQuietMinutes,
+      reviewStartTimeoutMinutes: current.reviewStartTimeoutMinutes,
+      workSessionStaleMinutes: current.workSessionStaleMinutes ?? 120,
+      requiredAckSeconds: current.requiredAckSeconds,
+      autoRedispatchOnStall: current.autoRedispatchOnStall,
+      autoRedispatchOnNoack: current.autoRedispatchOnNoack,
+    });
+  }, [current]);
+
+  const dirty = useMemo(() => {
+    if (!current) return false;
+    return (
+      policy.agentIdleTimeoutMinutes !== current.agentIdleTimeoutMinutes ||
+      policy.assignmentSlaMinutes !== current.assignmentSlaMinutes ||
+      policy.agentRunStaleMinutes !== current.agentRunStaleMinutes ||
+      policy.agentProgressUpdateMinutes !== current.agentProgressUpdateMinutes ||
+      policy.agentRunQuietMinutes !== current.agentRunQuietMinutes ||
+      policy.reviewStartTimeoutMinutes !== current.reviewStartTimeoutMinutes ||
+      policy.workSessionStaleMinutes !== (current.workSessionStaleMinutes ?? 120) ||
+      policy.requiredAckSeconds !== current.requiredAckSeconds ||
+      policy.autoRedispatchOnStall !== current.autoRedispatchOnStall ||
+      policy.autoRedispatchOnNoack !== current.autoRedispatchOnNoack
+    );
+  }, [current, policy]);
+
+  const update = trpc.workspace.update.useMutation({
+    onSuccess: () => {
+      toast.success("Agent detection policy updated.");
+      void utils.workspace.current.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const setNumber = (key: keyof OperationsPolicy, value: string) => {
+    setPolicy((prior) => ({ ...prior, [key]: Math.max(0, Number(value) || 0) }));
+  };
+
+  const save = () => {
+    if (!isAdmin || !dirty || update.isPending) return;
+    update.mutate(policy);
+  };
+
+  return (
+    <Section
+      title="Activity detection & recovery"
+      hint="Interpret connection signals without treating every quiet client as a failed agent."
+      actions={
+        <Button size="sm" onClick={save} disabled={!isAdmin || !dirty || update.isPending}>
+          <Save className="h-3.5 w-3.5" />
+          {update.isPending ? "Saving…" : "Save policy"}
+        </Button>
+      }
+    >
+      <Card as="div" className="space-y-4 p-4">
+        <div className="grid gap-3 md:grid-cols-3">
+          <PolicyNumber
+            label="Quiet after"
+            hint="Early signal; no state change"
+            suffix="min"
+            value={policy.agentRunQuietMinutes}
+            disabled={!isAdmin}
+            onChange={(value) => setNumber("agentRunQuietMinutes", value)}
+          />
+          <PolicyNumber
+            label="Progress cadence"
+            hint="Expected status refresh"
+            suffix="min"
+            value={policy.agentProgressUpdateMinutes}
+            disabled={!isAdmin}
+            onChange={(value) => setNumber("agentProgressUpdateMinutes", value)}
+          />
+          <PolicyNumber
+            label="Delivery lease"
+            hint="Branch ownership timeout"
+            suffix="min"
+            value={policy.workSessionStaleMinutes}
+            disabled={!isAdmin}
+            onChange={(value) => setNumber("workSessionStaleMinutes", value)}
+          />
+        </div>
+
+        <div className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning/5 p-3">
+          <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <div className="text-meta text-muted-foreground">
+            <span className="font-medium text-foreground">Transport-aware recovery.</span> Managed
+            runtimes may be confirmed stalled from lifecycle signals. MCP silence is shown as status
+            unconfirmed and never triggers redispatch by itself.
+          </div>
+        </div>
+
+        <details className="group rounded-md border border-border/70 bg-background/40">
+          <summary className="focus-ring flex cursor-pointer list-none items-center gap-2 rounded-md px-3 py-2 text-xs font-medium">
+            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none" />
+            Advanced detection policy
+            <span className="text-meta ml-auto font-normal text-muted-foreground">
+              0 disables a threshold
+            </span>
+          </summary>
+          <div className="grid gap-3 border-t border-border/60 p-3 sm:grid-cols-2 lg:grid-cols-4">
+            <PolicyNumber
+              label="Presence timeout"
+              hint="Heartbeat connections"
+              suffix="min"
+              value={policy.agentIdleTimeoutMinutes}
+              disabled={!isAdmin}
+              onChange={(value) => setNumber("agentIdleTimeoutMinutes", value)}
+            />
+            <PolicyNumber
+              label="Assignment SLA"
+              hint="No issue movement"
+              suffix="min"
+              value={policy.assignmentSlaMinutes}
+              disabled={!isAdmin}
+              onChange={(value) => setNumber("assignmentSlaMinutes", value)}
+            />
+            <PolicyNumber
+              label="Confirmed run stall"
+              hint="Lifecycle-capable runs"
+              suffix="min"
+              value={policy.agentRunStaleMinutes}
+              disabled={!isAdmin}
+              onChange={(value) => setNumber("agentRunStaleMinutes", value)}
+            />
+            <PolicyNumber
+              label="Review acknowledgement"
+              hint="Reviewer start window"
+              suffix="min"
+              value={policy.reviewStartTimeoutMinutes}
+              disabled={!isAdmin}
+              onChange={(value) => setNumber("reviewStartTimeoutMinutes", value)}
+            />
+            <PolicyNumber
+              label="Dispatch acknowledgement"
+              hint="After assignment"
+              suffix="sec"
+              value={policy.requiredAckSeconds}
+              disabled={!isAdmin}
+              onChange={(value) => setNumber("requiredAckSeconds", value)}
+            />
+            <PolicyToggle
+              label="Redispatch confirmed stalls"
+              hint="Only when failure evidence is conclusive"
+              checked={policy.autoRedispatchOnStall}
+              disabled={!isAdmin}
+              onChange={(checked) =>
+                setPolicy((prior) => ({ ...prior, autoRedispatchOnStall: checked }))
+              }
+            />
+            <PolicyToggle
+              label="Redispatch missed acknowledgements"
+              hint="After the acknowledgement window"
+              checked={policy.autoRedispatchOnNoack}
+              disabled={!isAdmin}
+              onChange={(checked) =>
+                setPolicy((prior) => ({ ...prior, autoRedispatchOnNoack: checked }))
+              }
+            />
+          </div>
+        </details>
+
+        {!isAdmin && (
+          <div className="text-meta flex items-center gap-1.5 text-muted-foreground">
+            <AlertTriangle className="h-3.5 w-3.5" /> Workspace admin access is required to edit
+            detection policy.
+          </div>
+        )}
+      </Card>
+    </Section>
+  );
+}
+
+function AgentOperationsAttention({ slug }: { slug: string }) {
+  const { data: sessions, isLoading } = trpc.workSession.active.useQuery(undefined, {
+    refetchOnWindowFocus: true,
+  });
+  const concerns = useMemo(
+    () =>
+      (sessions ?? []).flatMap((session) => {
+        const connection = session.ownerConnection;
+        const mismatch = Boolean(
+          connection?.agent && session.ownerAgent && connection.agent.id !== session.ownerAgent.id,
+        );
+        if (mismatch) {
+          return [
+            {
+              session,
+              label: "Attribution mismatch",
+              detail: `${session.ownerAgent?.name ?? "Recorded owner"} owns delivery; ${connection?.agent.name ?? "another agent"} owns the connection.`,
+              tone: "text-danger",
+            },
+          ];
+        }
+        if (connection?.status === "DISCONNECTED" || connection?.status === "REVOKED") {
+          return [
+            {
+              session,
+              label: "Connection unavailable",
+              detail: `The ${connection.kind.toLowerCase().replaceAll("_", " ")} endpoint is ${connection.status.toLowerCase()}.`,
+              tone: "text-danger",
+            },
+          ];
+        }
+        if (
+          connection?.kind === "MCP_CLIENT" &&
+          (connection.status === "QUIET" || connection.confidence === "UNCONFIRMED")
+        ) {
+          return [
+            {
+              session,
+              label: "MCP status unconfirmed",
+              detail: "Delivery remains owned; silence alone will not redispatch it.",
+              tone: "text-warning",
+            },
+          ];
+        }
+        if (!connection && session.ownerAgent) {
+          return [
+            {
+              session,
+              label: "Legacy provenance",
+              detail: "The logical agent is known, but the executing client was not registered.",
+              tone: "text-muted-foreground",
+            },
+          ];
+        }
+        return [];
+      }),
+    [sessions],
+  );
+
+  return (
+    <Section
+      title="Operational attention"
+      hint="Connection and ownership conditions that need an operator decision—not a generic stale alarm."
+      actions={
+        !isLoading ? (
+          <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
+            {concerns.length} concern{concerns.length === 1 ? "" : "s"}
+          </span>
+        ) : undefined
+      }
+    >
+      {isLoading ? (
+        <Card as="div" className="text-meta p-4 text-muted-foreground">
+          Checking execution ownership…
+        </Card>
+      ) : concerns.length === 0 ? (
+        <Card as="div" className="text-meta flex items-center gap-2 p-4 text-muted-foreground">
+          <ShieldCheck className="h-4 w-4 text-success" /> No connection or delivery ownership
+          concerns.
+        </Card>
+      ) : (
+        <Card as="div" className="divide-y divide-border/60 p-0">
+          {concerns.map(({ session, label, detail, tone }) => (
+            <Link
+              key={`${session.id}-${label}`}
+              href={`/w/${slug}/issues/${session.issue.id}`}
+              className="focus-ring flex items-start gap-3 px-3 py-2.5 hover:bg-subtle/50"
+            >
+              <AlertTriangle className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${tone}`} />
+              <span className="min-w-0 flex-1">
+                <span className="flex flex-wrap items-center gap-2 text-xs font-medium">
+                  <span className="text-id text-muted-foreground">
+                    {session.issue.workspace.key}-{session.issue.number}
+                  </span>
+                  <span className="truncate">{session.issue.title}</span>
+                </span>
+                <span className="text-meta mt-0.5 block text-muted-foreground">
+                  <span className={tone}>{label}</span> · {detail}
+                </span>
+              </span>
+              <ArrowRight className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            </Link>
+          ))}
+        </Card>
+      )}
+    </Section>
+  );
+}
+
+function PolicyNumber({
+  label,
+  hint,
+  suffix,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  suffix: string;
+  value: number;
+  disabled: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <PolicyField label={label} hint={hint}>
+      <div className="relative">
+        <Input
+          type="number"
+          min={0}
+          value={value}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value)}
+          className="h-8 pr-10 font-mono"
+        />
+        <span className="pointer-events-none absolute inset-y-0 right-2 flex items-center text-[0.625rem] uppercase text-muted-foreground">
+          {suffix}
+        </span>
+      </div>
+    </PolicyField>
+  );
+}
+
+function PolicyToggle({
+  label,
+  hint,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  hint: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <PolicyField label={label} hint={hint}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={() => onChange(!checked)}
+        className="focus-ring flex h-8 w-full items-center gap-2 rounded-md border border-border bg-background px-2 text-xs disabled:opacity-50"
+      >
+        <span
+          aria-hidden="true"
+          className={
+            "inline-flex h-4 w-7 items-center rounded-full transition-colors motion-reduce:transition-none " +
+            (checked ? "bg-ember" : "bg-subtle")
+          }
+        >
+          <span
+            className={
+              "h-3 w-3 rounded-full bg-background transition-transform motion-reduce:transition-none " +
+              (checked ? "translate-x-3.5" : "translate-x-0.5")
+            }
+          />
+        </span>
+        {checked ? "Enabled" : "Off"}
+      </button>
+    </PolicyField>
   );
 }
 

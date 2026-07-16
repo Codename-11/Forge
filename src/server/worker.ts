@@ -271,7 +271,19 @@ export const webhookWorker = new Worker(
     // `lastHeartbeatAt` and (if it was OFFLINE) flip it back to ONLINE.
     // Best-effort — failures here are logged but don't fail the job.
     if (res.ok && presenceAgentId) {
-      await recordAgentReachable(presenceAgentId);
+      const connectionId = await recordAgentReachable(presenceAgentId);
+      if (connectionId && delivery.event.subjectType === "issue") {
+        await db.agentRun.updateMany({
+          where: {
+            workspaceId: delivery.event.workspaceId,
+            issueId: delivery.event.subjectId,
+            agentId: presenceAgentId,
+            status: { in: ["ACTIVE", "WAITING"] },
+            connectionId: null,
+          },
+          data: { connectionId, lifecycleConfidence: "CONFIRMED" },
+        });
+      }
 
       // Required-ack window: if the workspace opted in, schedule a
       // delayed maintenance job that checks whether the agent actually

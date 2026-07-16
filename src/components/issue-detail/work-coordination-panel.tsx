@@ -13,12 +13,14 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import type { inferRouterOutputs } from "@trpc/server";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
+import type { AppRouter } from "@/server/routers/_app";
 
 const TERMINAL = new Set(["VERIFIED", "ABANDONED"]);
 
@@ -91,11 +93,31 @@ export function WorkCoordinationPanel({
     onSuccess: () => invalidate(),
     onError: (error) => toast.error(error.message),
   });
+  const reconcileOwnership = trpc.workSession.reconcileOwnership.useMutation({
+    onSuccess: () => {
+      toast.success("Delivery ownership reconciled.");
+      invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
 
   const owner = latest?.ownerAgent
     ? `${latest.ownerAgent.name} · @${latest.ownerAgent.profileKey}`
     : (latest?.ownerUser?.name ?? latest?.ownerUser?.email ?? "Unassigned");
   const status = latest ? (STATUS_COPY[latest.status] ?? STATUS_COPY.CLAIMED) : null;
+  const provenance = latest ? deliveryProvenance(latest) : null;
+  const connectionMismatch = Boolean(
+    latest?.ownerConnection?.agent &&
+    latest.ownerAgent &&
+    latest.ownerConnection.agent.id !== latest.ownerAgent.id,
+  );
+  const observedMismatch = Boolean(
+    latest?.observedImplementation?.agent &&
+    latest.ownerAgent &&
+    latest.observedImplementation.agent.id !== latest.ownerAgent.id,
+  );
+  const ownershipMismatch = connectionMismatch || observedMismatch;
+  const observedConnection = latest?.observedImplementation?.agent.connections[0] ?? null;
 
   return (
     <section
@@ -129,6 +151,16 @@ export function WorkCoordinationPanel({
               )}
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs font-medium">{owner}</div>
+                {provenance && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span className="rounded border border-border/70 bg-subtle/60 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {provenance.connectionLabel}
+                    </span>
+                    <span className={cn("text-meta", provenance.tone)}>
+                      {provenance.statusLabel}
+                    </span>
+                  </div>
+                )}
                 <div
                   className="mt-1 truncate font-mono text-[0.6875rem] text-muted-foreground"
                   title={latest.branch}
@@ -136,8 +168,7 @@ export function WorkCoordinationPanel({
                   {latest.repoFullName}:{latest.branch}
                 </div>
                 <div className="text-meta mt-1 text-muted-foreground">
-                  {latest.source.toLowerCase().replaceAll("_", " ")} · base {latest.baseBranch} ·
-                  seen {relativeTime(latest.lastHeartbeatAt)}
+                  base {latest.baseBranch} · activity {relativeTime(latest.lastHeartbeatAt)}
                 </div>
                 {latest.worktreePath && (
                   <div
@@ -150,6 +181,79 @@ export function WorkCoordinationPanel({
               </div>
             </div>
           </div>
+
+          {ownershipMismatch && (
+            <div
+              className="flex items-start gap-2 rounded-md border border-danger/30 bg-danger/5 p-2.5"
+              role="status"
+            >
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-danger" />
+              <div className="text-meta text-muted-foreground">
+                <div className="font-medium text-foreground">Delivery attribution mismatch</div>
+                The delivery owner is {latest.ownerAgent?.name ?? "unknown"}, but{" "}
+                {connectionMismatch && latest.ownerConnection?.agent
+                  ? `the registered connection belongs to ${latest.ownerConnection.agent.name}`
+                  : `the latest observed implementation activity is from ${latest.observedImplementation?.agent.name ?? "another agent"}`}
+                . Reconcile ownership before handoff or redispatch.
+                {latest.observedImplementation && (
+                  <span className="mt-1 block">
+                    Evidence: {latest.observedImplementation.source.replaceAll("-", " ")} ·{" "}
+                    {relativeTime(latest.observedImplementation.observedAt)}.
+                  </span>
+                )}
+                {canRelease && observedConnection && observedMismatch && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-7"
+                    disabled={reconcileOwnership.isPending}
+                    onClick={() =>
+                      reconcileOwnership.mutate({
+                        sessionId: latest.id,
+                        targetConnectionId: observedConnection.id,
+                      })
+                    }
+                  >
+                    {reconcileOwnership.isPending
+                      ? "Reconciling…"
+                      : `Reconcile to ${latest.observedImplementation?.agent.name}`}
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {provenance?.unconfirmedMcp && !ownershipMismatch && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/25 bg-warning/5 p-2.5">
+              <CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              <div className="text-meta text-muted-foreground">
+                <span className="font-medium text-foreground">MCP status is unconfirmed.</span>{" "}
+                Recent access is known, but Forge cannot guarantee the client process lifecycle.
+                Silence alone will not trigger automatic redispatch.
+              </div>
+            </div>
+          )}
+
+          {latest.participants.length > 1 && (
+            <div className="rounded-md border border-border/70 bg-background/40 p-2.5">
+              <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                Delivery participants
+              </div>
+              <ul className="mt-1.5 space-y-1">
+                {latest.participants.map((participant) => (
+                  <li key={participant.id} className="text-meta flex items-center gap-2">
+                    <span className="w-20 shrink-0 uppercase text-muted-foreground">
+                      {participant.role.toLowerCase()}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate">
+                      {participant.agent.name} via{" "}
+                      {connectionKindLabel(participant.connection.kind, participant.connection)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {latest.pullRequest ? (
             <a
@@ -337,4 +441,72 @@ export function WorkCoordinationPanel({
       )}
     </section>
   );
+}
+
+type DeliverySession = inferRouterOutputs<AppRouter>["workSession"]["listForIssue"][number];
+
+function connectionKindLabel(
+  kind: NonNullable<DeliverySession["ownerConnection"]>["kind"],
+  connection: {
+    displayName?: string | null;
+    clientName?: string | null;
+    runtime?: { name: string } | null;
+  },
+) {
+  const kindLabel =
+    kind === "MCP_CLIENT"
+      ? "MCP"
+      : kind === "MANAGED_RUNTIME"
+        ? "Runtime"
+        : kind === "WEBHOOK"
+          ? "Webhook"
+          : "On-demand";
+  const name = connection.displayName ?? connection.clientName ?? connection.runtime?.name;
+  return name ? `${kindLabel} · ${name}` : kindLabel;
+}
+
+function deliveryProvenance(session: DeliverySession): {
+  connectionLabel: string;
+  statusLabel: string;
+  tone: string;
+  unconfirmedMcp: boolean;
+} {
+  const connection = session.ownerConnection;
+  if (!connection) {
+    const source =
+      session.source === "CODEX_DESKTOP"
+        ? "MCP · Codex Desktop"
+        : session.source === "FORGE_AGENT"
+          ? "Legacy agent session"
+          : session.source.toLowerCase().replaceAll("_", " ");
+    return {
+      connectionLabel: source,
+      statusLabel: "provenance not registered",
+      tone: "text-muted-foreground",
+      unconfirmedMcp: session.source === "CODEX_DESKTOP",
+    };
+  }
+  const unconfirmedMcp = connection.kind === "MCP_CLIENT" && connection.confidence !== "CONFIRMED";
+  const statusLabel =
+    connection.status === "ACTIVE"
+      ? connection.confidence === "CONFIRMED"
+        ? "confirmed active"
+        : "activity inferred"
+      : connection.status === "QUIET" && unconfirmedMcp
+        ? "quiet · status unconfirmed"
+        : connection.status.toLowerCase();
+  const tone =
+    connection.status === "DISCONNECTED" || connection.status === "REVOKED"
+      ? "text-danger"
+      : connection.status === "QUIET"
+        ? "text-warning"
+        : connection.status === "ACTIVE" && connection.confidence === "CONFIRMED"
+          ? "text-success"
+          : "text-muted-foreground";
+  return {
+    connectionLabel: connectionKindLabel(connection.kind, connection),
+    statusLabel,
+    tone,
+    unconfirmedMcp,
+  };
 }

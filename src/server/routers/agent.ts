@@ -67,9 +67,7 @@ const upsertInput = z.object({
   description: z.string().max(2000).optional(),
   avatar: z.string().max(200).optional(),
   provider: z.nativeEnum(AgentProvider).default(AgentProvider.HERMES),
-  runtimeMode: z
-    .nativeEnum(AgentRuntimeMode)
-    .default(AgentRuntimeMode.PERSISTENT),
+  runtimeMode: z.nativeEnum(AgentRuntimeMode).default(AgentRuntimeMode.PERSISTENT),
   /// Chat engine override at creation. Null/omitted = integration default.
   runEngine: z.nativeEnum(RunEngine).nullable().optional(),
   webhookUrl: z.string().url().max(500).optional().or(z.literal("")),
@@ -84,9 +82,7 @@ const upsertInput = z.object({
   templateMarkdown: z.string().optional(),
 });
 
-function redactWebhookSecret<T extends { webhookSecret?: string | null }>(
-  value: T,
-): T {
+function redactWebhookSecret<T extends { webhookSecret?: string | null }>(value: T): T {
   return {
     ...value,
     webhookSecret: value.webhookSecret ? "[redacted]" : value.webhookSecret,
@@ -111,7 +107,8 @@ async function resolveRuntimeId(
     where: { id, workspaceId },
     select: { id: true, adapterKey: true },
   });
-  if (!rt) throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime not found in this workspace." });
+  if (!rt)
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime not found in this workspace." });
   const adapter = getRuntimeAdapter(rt.adapterKey);
   if (adapter && !adapter.multiAgent) {
     const attached = await db.agent.count({
@@ -168,10 +165,7 @@ export const agentRouter = router({
       // Indicative — uses env model availability + linked-key presence (not a
       // per-thread provider override). Secret is never needed for the readiness
       // decision, so it isn't selected or exposed.
-      const providerAvailable = await workspaceChatProviderAvailability(
-        ctx.db,
-        ctx.workspaceId,
-      );
+      const providerAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
       const linkedRows = await ctx.db.apiKey.groupBy({
         by: ["linkedAgentId"],
         where: {
@@ -204,41 +198,39 @@ export const agentRouter = router({
       });
     }),
 
-  byId: workspaceProcedure
-    .input(z.object({ id: agentId }))
-    .query(async ({ ctx, input }) => {
-      const agent = await ctx.db.agent.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        include: {
-          _count: { select: { assignedIssues: true } },
-          runtime: {
-            select: {
-              id: true,
-              name: true,
-              kind: true,
-              adapterKey: true,
-              endpoint: true,
-              heartbeatAt: true,
-              connectedAt: true,
-              archivedAt: true,
-              disabledAt: true,
-              lastProbeAt: true,
-              lastProbeAttempted: true,
-              lastProbeReachable: true,
-              lastProbeDetail: true,
-              config: true,
-            },
+  byId: workspaceProcedure.input(z.object({ id: agentId })).query(async ({ ctx, input }) => {
+    const agent = await ctx.db.agent.findFirst({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+      include: {
+        _count: { select: { assignedIssues: true } },
+        runtime: {
+          select: {
+            id: true,
+            name: true,
+            kind: true,
+            adapterKey: true,
+            endpoint: true,
+            heartbeatAt: true,
+            connectedAt: true,
+            archivedAt: true,
+            disabledAt: true,
+            lastProbeAt: true,
+            lastProbeAttempted: true,
+            lastProbeReachable: true,
+            lastProbeDetail: true,
+            config: true,
           },
         },
-      });
-      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
-      return {
-        ...agent,
-        runtime: agent.runtime
-          ? { ...agent.runtime, health: deriveRuntimeHealthStatus(agent.runtime) }
-          : null,
-      };
-    }),
+      },
+    });
+    if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+    return {
+      ...agent,
+      runtime: agent.runtime
+        ? { ...agent.runtime, health: deriveRuntimeHealthStatus(agent.runtime) }
+        : null,
+    };
+  }),
 
   /**
    * Preview how a (not-yet-created) agent's chat would be served, given a
@@ -261,10 +253,7 @@ export const agentRouter = router({
             select: { adapterKey: true, endpoint: true, kind: true, runtimeInfo: true },
           })
         : null;
-      const providerAvailable = await workspaceChatProviderAvailability(
-        ctx.db,
-        ctx.workspaceId,
-      );
+      const providerAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
       const r = resolveChatReadiness({
         provider: input.provider,
         runEngine: input.runEngine ?? null,
@@ -388,10 +377,7 @@ export const agentRouter = router({
         },
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
-      const providerAvailable = await workspaceChatProviderAvailability(
-        ctx.db,
-        ctx.workspaceId,
-      );
+      const providerAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
       const daemonLinked =
         (await ctx.db.apiKey.count({
           where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
@@ -429,81 +415,108 @@ export const agentRouter = router({
       };
     }),
 
-  byProfileKey: workspaceProcedure
-    .input(z.object({ profileKey }))
-    .query(async ({ ctx, input }) => {
-      const agent = await ctx.db.agent.findUnique({
-        where: {
-          workspaceId_profileKey: {
-            workspaceId: ctx.workspaceId,
-            profileKey: input.profileKey,
+  byProfileKey: workspaceProcedure.input(z.object({ profileKey })).query(async ({ ctx, input }) => {
+    const agent = await ctx.db.agent.findUnique({
+      where: {
+        workspaceId_profileKey: {
+          workspaceId: ctx.workspaceId,
+          profileKey: input.profileKey,
+        },
+      },
+      include: {
+        runtime: {
+          select: {
+            id: true,
+            name: true,
+            kind: true,
+            heartbeatAt: true,
+            providersAvailable: true,
+            adapterKey: true,
+            disabledAt: true,
+            endpoint: true,
+            runtimeInfo: true,
           },
         },
-        include: {
-          runtime: {
-            select: {
-              id: true,
-              name: true,
-              kind: true,
-              heartbeatAt: true,
-              providersAvailable: true,
-              adapterKey: true,
-              disabledAt: true,
-              endpoint: true,
-              runtimeInfo: true,
+        connections: {
+          orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
+          take: 25,
+          select: {
+            id: true,
+            kind: true,
+            livenessModel: true,
+            status: true,
+            confidence: true,
+            instanceKey: true,
+            displayName: true,
+            clientName: true,
+            clientVersion: true,
+            capabilities: true,
+            firstSeenAt: true,
+            lastSeenAt: true,
+            connectedAt: true,
+            disconnectedAt: true,
+            revokedAt: true,
+            runtime: { select: { id: true, name: true } },
+            apiKey: { select: { id: true, name: true, kind: true, revokedAt: true } },
+            _count: {
+              select: {
+                runs: { where: { status: { in: ["ACTIVE", "WAITING"] } } },
+                ownedSessions: {
+                  where: { status: { notIn: ["VERIFIED", "ABANDONED"] } },
+                },
+              },
             },
           },
         },
-      });
-      if (!agent) return null;
-      // Resolved chat transport + an availability model so the detail page can
-      // show how chat is served and stop applying a heartbeat "offline" badge
-      // to an on-demand managed-runtime agent (e.g. Codex app server).
-      const providerAvailable = await workspaceChatProviderAvailability(
-        ctx.db,
-        ctx.workspaceId,
-      );
-      const daemonLinked =
-        (await ctx.db.apiKey.count({
-          where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
-        })) > 0;
-      const r = resolveChatReadiness({
-        provider: agent.provider,
-        runEngine: agent.runEngine,
-        runtime: agent.runtime
-          ? {
-              adapterKey: agent.runtime.adapterKey,
-              endpoint: agent.runtime.endpoint,
-              secret: null,
-              runtimeInfo: agent.runtime.runtimeInfo,
-            }
-          : null,
-        webhookUrl: agent.webhookUrl,
-        runtimeKind: agent.runtime?.kind ?? null,
-        daemonLinked,
-        providerAvailable,
-      });
-      const resolvedEngine = resolveRunEngineWithSource({
-        runEngine: agent.runEngine,
-        provider: agent.provider,
-        runtime: agent.runtime
-          ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: null }
-          : null,
-      });
-      return {
-        ...agent,
-        // Effective engine (honors an attached runs-runtime), not just the raw
-        // Agent.runEngine preference — drives the detail-page Engine row.
-        resolvedEngine,
-        transport: { mode: r.mode, label: r.transportLabel, ready: r.ready },
-        availability: agentAvailabilityModel({
-          runtimeMode: agent.runtimeMode,
-          lastHeartbeatAt: agent.lastHeartbeatAt,
-          transportMode: r.mode,
-          runtimeHeartbeats: agent.runtime?.adapterKey === "hermes",
-        }),
-      };
-    }),
+        _count: { select: { connections: true } },
+      },
+    });
+    if (!agent) return null;
+    // Resolved chat transport + an availability model so the detail page can
+    // show how chat is served and stop applying a heartbeat "offline" badge
+    // to an on-demand managed-runtime agent (e.g. Codex app server).
+    const providerAvailable = await workspaceChatProviderAvailability(ctx.db, ctx.workspaceId);
+    const daemonLinked =
+      (await ctx.db.apiKey.count({
+        where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
+      })) > 0;
+    const r = resolveChatReadiness({
+      provider: agent.provider,
+      runEngine: agent.runEngine,
+      runtime: agent.runtime
+        ? {
+            adapterKey: agent.runtime.adapterKey,
+            endpoint: agent.runtime.endpoint,
+            secret: null,
+            runtimeInfo: agent.runtime.runtimeInfo,
+          }
+        : null,
+      webhookUrl: agent.webhookUrl,
+      runtimeKind: agent.runtime?.kind ?? null,
+      daemonLinked,
+      providerAvailable,
+    });
+    const resolvedEngine = resolveRunEngineWithSource({
+      runEngine: agent.runEngine,
+      provider: agent.provider,
+      runtime: agent.runtime
+        ? { adapterKey: agent.runtime.adapterKey, endpoint: agent.runtime.endpoint, secret: null }
+        : null,
+    });
+    return {
+      ...agent,
+      // Effective engine (honors an attached runs-runtime), not just the raw
+      // Agent.runEngine preference — drives the detail-page Engine row.
+      resolvedEngine,
+      transport: { mode: r.mode, label: r.transportLabel, ready: r.ready },
+      availability: agentAvailabilityModel({
+        runtimeMode: agent.runtimeMode,
+        lastHeartbeatAt: agent.lastHeartbeatAt,
+        transportMode: r.mode,
+        runtimeHeartbeats: agent.runtime?.adapterKey === "hermes",
+      }),
+    };
+  }),
 
   /**
    * Crews this agent belongs to + what it's actively working on right
@@ -737,38 +750,32 @@ export const agentRouter = router({
       });
     }),
 
-  archive: adminProcedure
-    .input(z.object({ id: agentId }))
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.agent.findFirstOrThrow({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-      });
-      return ctx.db.agent.update({
-        where: { id: row.id },
-        data: { archivedAt: new Date(), status: AgentStatus.OFFLINE },
-      });
-    }),
+  archive: adminProcedure.input(z.object({ id: agentId })).mutation(async ({ ctx, input }) => {
+    const row = await ctx.db.agent.findFirstOrThrow({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+    });
+    return ctx.db.agent.update({
+      where: { id: row.id },
+      data: { archivedAt: new Date(), status: AgentStatus.OFFLINE },
+    });
+  }),
 
-  unarchive: adminProcedure
-    .input(z.object({ id: agentId }))
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.agent.findFirstOrThrow({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-      });
-      return ctx.db.agent.update({
-        where: { id: row.id },
-        data: { archivedAt: null },
-      });
-    }),
+  unarchive: adminProcedure.input(z.object({ id: agentId })).mutation(async ({ ctx, input }) => {
+    const row = await ctx.db.agent.findFirstOrThrow({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+    });
+    return ctx.db.agent.update({
+      where: { id: row.id },
+      data: { archivedAt: null },
+    });
+  }),
 
-  delete: adminProcedure
-    .input(z.object({ id: agentId }))
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.agent.findFirstOrThrow({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-      });
-      return ctx.db.agent.delete({ where: { id: row.id } });
-    }),
+  delete: adminProcedure.input(z.object({ id: agentId })).mutation(async ({ ctx, input }) => {
+    const row = await ctx.db.agent.findFirstOrThrow({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+    });
+    return ctx.db.agent.delete({ where: { id: row.id } });
+  }),
 
   /**
    * Smart remove — what the settings UI's "Delete" action calls. Hard-deletes a
@@ -779,77 +786,73 @@ export const agentRouter = router({
    * an agent with runs would silently destroy that run history. `delete`/
    * `archive` above stay as the explicit raw variants.
    */
-  remove: adminProcedure
-    .input(z.object({ id: agentId }))
-    .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.agent.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: {
-          id: true,
-          name: true,
-          profileKey: true,
-          _count: {
-            select: {
-              runs: true,
-              authoredComments: true,
-              apiKeys: true,
-              assignedIssues: true,
-              claimedIssues: true,
-              authoredArtifacts: true,
-              createdExecutionPlans: true,
-              createdGoals: true,
-              executionSteps: true,
-              requestedReviewGates: true,
-              resolvedReviewGates: true,
-              requestedActionRequests: true,
-              assignedActionRequests: true,
-              crewMemberships: true,
-            },
+  remove: adminProcedure.input(z.object({ id: agentId })).mutation(async ({ ctx, input }) => {
+    const row = await ctx.db.agent.findFirst({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+      select: {
+        id: true,
+        name: true,
+        profileKey: true,
+        _count: {
+          select: {
+            runs: true,
+            authoredComments: true,
+            apiKeys: true,
+            assignedIssues: true,
+            claimedIssues: true,
+            authoredArtifacts: true,
+            createdExecutionPlans: true,
+            createdGoals: true,
+            executionSteps: true,
+            requestedReviewGates: true,
+            resolvedReviewGates: true,
+            requestedActionRequests: true,
+            assignedActionRequests: true,
+            crewMemberships: true,
           },
         },
+      },
+    });
+    if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+
+    const references = Object.fromEntries(Object.entries(row._count).filter(([, n]) => n > 0));
+    const hasHistory = Object.keys(references).length > 0;
+
+    if (hasHistory) {
+      await ctx.db.agent.update({
+        where: { id: row.id },
+        data: { archivedAt: new Date(), status: AgentStatus.OFFLINE },
       });
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
+    } else {
+      await ctx.db.agent.delete({ where: { id: row.id } });
+    }
 
-      const references = Object.fromEntries(
-        Object.entries(row._count).filter(([, n]) => n > 0),
-      );
-      const hasHistory = Object.keys(references).length > 0;
-
-      if (hasHistory) {
-        await ctx.db.agent.update({
-          where: { id: row.id },
-          data: { archivedAt: new Date(), status: AgentStatus.OFFLINE },
-        });
-      } else {
-        await ctx.db.agent.delete({ where: { id: row.id } });
-      }
-
-      await recordChange(ctx.db, {
-        workspaceId: ctx.workspaceId,
-        actorId: ctx.session.user.id,
-        actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
-        entity: "Agent",
-        entityId: row.id,
-        action: "delete",
-        before: { profileKey: row.profileKey, name: row.name },
-        eventKind: EventKind.AGENT_DELETED,
-        subjectType: "agent",
-        subjectId: row.id,
-        payload: {
-          profileKey: row.profileKey,
-          removed: hasHistory ? "archived" : "deleted",
-          references,
-        },
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
-      });
-
-      return {
-        action: hasHistory ? ("archived" as const) : ("deleted" as const),
-        name: row.name,
+    await recordChange(ctx.db, {
+      workspaceId: ctx.workspaceId,
+      actorId: ctx.session.user.id,
+      actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
+      entity: "Agent",
+      entityId: row.id,
+      action: "delete",
+      before: { profileKey: row.profileKey, name: row.name },
+      eventKind: EventKind.AGENT_DELETED,
+      subjectType: "agent",
+      subjectId: row.id,
+      payload: {
+        profileKey: row.profileKey,
+        removed: hasHistory ? "archived" : "deleted",
         references,
-      };
-    }),
+      },
+      ip: ctx.ip,
+      userAgent: ctx.userAgent,
+    });
+
+    return {
+      action: hasHistory ? ("archived" as const) : ("deleted" as const),
+      name: row.name,
+      references,
+    };
+  }),
 
   testWebhook: adminProcedure
     .input(
@@ -863,17 +866,15 @@ export const agentRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      let agent:
-        | {
-            id: string;
-            name: string;
-            profileKey: string;
-            webhookUrl: string | null;
-            webhookSecret: string | null;
-            provider: AgentProvider;
-            runtimeMode: AgentRuntimeMode;
-          }
-        | null = null;
+      let agent: {
+        id: string;
+        name: string;
+        profileKey: string;
+        webhookUrl: string | null;
+        webhookSecret: string | null;
+        provider: AgentProvider;
+        runtimeMode: AgentRuntimeMode;
+      } | null = null;
 
       if (input.id) {
         agent = await ctx.db.agent.findFirstOrThrow({
@@ -899,12 +900,10 @@ export const agentRouter = router({
       }
 
       const provider = input.provider ?? agent?.provider ?? AgentProvider.CUSTOM;
-      const runtimeMode =
-        input.runtimeMode ?? agent?.runtimeMode ?? AgentRuntimeMode.EPHEMERAL;
+      const runtimeMode = input.runtimeMode ?? agent?.runtimeMode ?? AgentRuntimeMode.EPHEMERAL;
       const res = await deliverWebhook({
         url,
-        secret:
-          input.webhookSecret || agent?.webhookSecret || "forge_connection_test",
+        secret: input.webhookSecret || agent?.webhookSecret || "forge_connection_test",
         timeoutMs: 5000,
         body: {
           id: `agent-test-${Date.now()}`,
@@ -969,9 +968,7 @@ export const agentRouter = router({
         .default({ recentDays: 7, laneLimit: 25, poolLimit: 50 }),
     )
     .query(async ({ ctx, input }) => {
-      const recentSince = new Date(
-        Date.now() - input.recentDays * 86_400_000,
-      );
+      const recentSince = new Date(Date.now() - input.recentDays * 86_400_000);
 
       const issueInclude = {
         status: {
@@ -984,10 +981,7 @@ export const agentRouter = router({
         _count: { select: { comments: true } },
       } as const;
 
-      const blockedIds = await findBlockedIssueIdsForWorkspace(
-        ctx.db,
-        ctx.workspaceId,
-      );
+      const blockedIds = await findBlockedIssueIdsForWorkspace(ctx.db, ctx.workspaceId);
 
       const [poolRows, agents] = await Promise.all([
         ctx.db.issue.findMany({
@@ -1029,11 +1023,7 @@ export const agentRouter = router({
                 assignedAgentId: agent.id,
                 status: { category: { in: ["IN_PROGRESS", "IN_REVIEW"] } },
               },
-              orderBy: [
-                { priority: "desc" },
-                { startedAt: "desc" },
-                { createdAt: "asc" },
-              ],
+              orderBy: [{ priority: "desc" }, { startedAt: "desc" }, { createdAt: "asc" }],
               take: input.laneLimit,
               include: issueInclude,
             }),
@@ -1262,21 +1252,12 @@ export const agentRouter = router({
       return {
         events: page.map((e) => {
           const payload = (e.payload ?? {}) as Record<string, unknown>;
-          const pAgentId =
-            typeof payload.agentId === "string"
-              ? (payload.agentId as string)
-              : null;
+          const pAgentId = typeof payload.agentId === "string" ? (payload.agentId as string) : null;
           const subjectIssue =
-            e.subjectType === "issue"
-              ? (issueById.get(e.subjectId) ?? null)
-              : null;
+            e.subjectType === "issue" ? (issueById.get(e.subjectId) ?? null) : null;
           const subjectAgent =
-            e.subjectType === "agent"
-              ? (agentById.get(e.subjectId) ?? null)
-              : null;
-          const payloadAgent = pAgentId
-            ? (agentById.get(pAgentId) ?? null)
-            : null;
+            e.subjectType === "agent" ? (agentById.get(e.subjectId) ?? null) : null;
+          const payloadAgent = pAgentId ? (agentById.get(pAgentId) ?? null) : null;
           return {
             id: e.id,
             kind: e.kind,
@@ -1322,9 +1303,7 @@ export const agentRouter = router({
       });
 
       const now = new Date();
-      const windowStart = new Date(
-        now.getTime() - input.windowDays * 86_400_000,
-      );
+      const windowStart = new Date(now.getTime() - input.windowDays * 86_400_000);
 
       const eventsAfter = await ctx.db.activityEvent.findMany({
         where: {
@@ -1383,11 +1362,8 @@ export const agentRouter = router({
       const tail = now.getTime() - cursorAt.getTime();
       if (tail > 0) buckets[cursorStatus] += tail;
 
-      const totalMs =
-        buckets.ONLINE + buckets.BUSY + buckets.OFFLINE || 1;
-      const uptimePct = Math.round(
-        ((buckets.ONLINE + buckets.BUSY) / totalMs) * 1000,
-      ) / 10;
+      const totalMs = buckets.ONLINE + buckets.BUSY + buckets.OFFLINE || 1;
+      const uptimePct = Math.round(((buckets.ONLINE + buckets.BUSY) / totalMs) * 1000) / 10;
 
       // currentSinceIso = createdAt of the most-recent transition; falls
       // back to lastHeartbeatAt, then windowStart.
@@ -1441,9 +1417,7 @@ export const agentRouter = router({
         select: { id: true, webhookUrl: true },
       });
 
-      const since = new Date(
-        Date.now() - input.windowDays * 86_400_000,
-      );
+      const since = new Date(Date.now() - input.windowDays * 86_400_000);
 
       const perAgentUrl = agentDispatchUrlFor(agent.id);
 
@@ -1597,9 +1571,7 @@ export const agentRouter = router({
       });
       if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const beforeFilter = input.before
-        ? { lt: input.before }
-        : undefined;
+      const beforeFilter = input.before ? { lt: input.before } : undefined;
 
       const [comments, events, runEvents] = await Promise.all([
         // (1) Agent-authored comments.
@@ -1715,12 +1687,8 @@ export const agentRouter = router({
           };
 
       const merged: Row[] = [
-        ...comments.map(
-          (c): Row => ({ kind: "comment", timestamp: c.createdAt, payload: c }),
-        ),
-        ...events.map(
-          (e): Row => ({ kind: "event", timestamp: e.createdAt, payload: e }),
-        ),
+        ...comments.map((c): Row => ({ kind: "comment", timestamp: c.createdAt, payload: c })),
+        ...events.map((e): Row => ({ kind: "event", timestamp: e.createdAt, payload: e })),
         ...runEvents.map(
           (r): Row => ({
             kind: "run-event",
@@ -1731,8 +1699,7 @@ export const agentRouter = router({
       ].sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
       const page = merged.slice(0, input.limit);
-      const nextBefore =
-        page.length === input.limit ? page[page.length - 1].timestamp : null;
+      const nextBefore = page.length === input.limit ? page[page.length - 1].timestamp : null;
 
       return {
         agent,
@@ -1763,90 +1730,43 @@ export const agentRouter = router({
    * client doesn't need follow-up fetches. Sorted oldest-first within
    * each bucket so the most-stale entries surface to the top.
    */
-  stalled: workspaceProcedure
-    .input(z.object({ agentId }))
-    .query(async ({ ctx, input }) => {
-      // Workspace-scope guard: confirm the agent belongs to the
-      // calling tenant before returning rows joined off it.
-      const agent = await ctx.db.agent.findFirst({
-        where: { id: input.agentId, workspaceId: ctx.workspaceId },
-        select: { id: true },
-      });
-      if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
+  stalled: workspaceProcedure.input(z.object({ agentId })).query(async ({ ctx, input }) => {
+    // Workspace-scope guard: confirm the agent belongs to the
+    // calling tenant before returning rows joined off it.
+    const agent = await ctx.db.agent.findFirst({
+      where: { id: input.agentId, workspaceId: ctx.workspaceId },
+      select: { id: true },
+    });
+    if (!agent) throw new TRPCError({ code: "NOT_FOUND" });
 
-      const ws = await ctx.db.workspace.findUniqueOrThrow({
-        where: { id: ctx.workspaceId },
-        select: { stalledThresholdDays: true },
-      });
+    const ws = await ctx.db.workspace.findUniqueOrThrow({
+      where: { id: ctx.workspaceId },
+      select: { stalledThresholdDays: true },
+    });
 
-      const now = Date.now();
-      const runCutoff = new Date(now - STALE_RUN_MS);
+    const now = Date.now();
+    const runCutoff = new Date(now - STALE_RUN_MS);
 
-      const stalledRuns = await ctx.db.agentRun.findMany({
-        where: {
-          workspaceId: ctx.workspaceId,
-          agentId: agent.id,
-          status: AgentRunStatus.ACTIVE,
-          lastEventAt: { lt: runCutoff },
-        },
-        orderBy: [{ lastEventAt: "asc" }],
-        take: 50,
-        select: {
-          id: true,
-          issueId: true,
-          currentStep: true,
-          startedAt: true,
-          lastEventAt: true,
-          issue: {
-            select: {
-              id: true,
-              number: true,
-              title: true,
-              status: {
-                select: { id: true, name: true, category: true, color: true },
-              },
-              project: {
-                select: { id: true, key: true, name: true, color: true },
-              },
-              workspace: { select: { key: true, slug: true } },
-            },
-          },
-        },
-      });
-
-      let stalledIssues: Array<{
-        id: string;
-        number: number;
-        title: string;
-        updatedAt: Date;
-        status: { id: string; name: string; category: string; color: string };
-        project: { id: string; key: string; name: string; color: string | null } | null;
-        workspace: { key: string; slug: string };
-      }> = [];
-      if (ws.stalledThresholdDays > 0) {
-        const issueCutoff = new Date(
-          now - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
-        );
-        const snoozeNow = new Date();
-        stalledIssues = await ctx.db.issue.findMany({
-          where: {
-            workspaceId: ctx.workspaceId,
-            deletedAt: null,
-            assignedAgentId: agent.id,
-            updatedAt: { lt: issueCutoff },
-            status: { category: { in: ["IN_PROGRESS", "IN_REVIEW"] } },
-            OR: [
-              { snoozedUntil: null },
-              { snoozedUntil: { lte: snoozeNow } },
-            ],
-          },
-          orderBy: [{ updatedAt: "asc" }],
-          take: 50,
+    const stalledRuns = await ctx.db.agentRun.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+        lastEventAt: { lt: runCutoff },
+      },
+      orderBy: [{ lastEventAt: "asc" }],
+      take: 50,
+      select: {
+        id: true,
+        issueId: true,
+        currentStep: true,
+        startedAt: true,
+        lastEventAt: true,
+        issue: {
           select: {
             id: true,
             number: true,
             title: true,
-            updatedAt: true,
             status: {
               select: { id: true, name: true, category: true, color: true },
             },
@@ -1855,15 +1775,55 @@ export const agentRouter = router({
             },
             workspace: { select: { key: true, slug: true } },
           },
-        });
-      }
+        },
+      },
+    });
 
-      return {
-        stalledRuns,
-        stalledIssues,
-        stalledThresholdDays: ws.stalledThresholdDays,
-      };
-    }),
+    let stalledIssues: Array<{
+      id: string;
+      number: number;
+      title: string;
+      updatedAt: Date;
+      status: { id: string; name: string; category: string; color: string };
+      project: { id: string; key: string; name: string; color: string | null } | null;
+      workspace: { key: string; slug: string };
+    }> = [];
+    if (ws.stalledThresholdDays > 0) {
+      const issueCutoff = new Date(now - ws.stalledThresholdDays * 24 * 60 * 60 * 1000);
+      const snoozeNow = new Date();
+      stalledIssues = await ctx.db.issue.findMany({
+        where: {
+          workspaceId: ctx.workspaceId,
+          deletedAt: null,
+          assignedAgentId: agent.id,
+          updatedAt: { lt: issueCutoff },
+          status: { category: { in: ["IN_PROGRESS", "IN_REVIEW"] } },
+          OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: snoozeNow } }],
+        },
+        orderBy: [{ updatedAt: "asc" }],
+        take: 50,
+        select: {
+          id: true,
+          number: true,
+          title: true,
+          updatedAt: true,
+          status: {
+            select: { id: true, name: true, category: true, color: true },
+          },
+          project: {
+            select: { id: true, key: true, name: true, color: true },
+          },
+          workspace: { select: { key: true, slug: true } },
+        },
+      });
+    }
+
+    return {
+      stalledRuns,
+      stalledIssues,
+      stalledThresholdDays: ws.stalledThresholdDays,
+    };
+  }),
 });
 
 /**

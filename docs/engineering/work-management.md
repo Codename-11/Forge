@@ -22,6 +22,13 @@ Branch names include the issue key and owner namespace, for example
 Never work directly in a long-lived integration/release branch or in the
 production checkout.
 
+The lease is owned by a concrete execution connection, not merely an Agent
+Profile. Two MCP clients, or an MCP client and a managed runtime, remain
+distinct participants even when they act as the same logical agent. One
+connection is primary; additional connections must explicitly join as a
+contributor or reviewer, or receive an audited handoff before changing the
+branch or advancing delivery state.
+
 ## Project branch contract
 
 Branch topology is project configuration, not an Axiom-wide constant. Every
@@ -56,6 +63,9 @@ integration, scheduled stabilization, or an upstream convention.
   mirrors those facts into the delivery lifecycle.
 - Resolve file overlap in the PR. Do not move uncommitted patches between
   worktrees or share one worktree between tasks.
+- If dispatch discovers an existing primary connection, block a second execute
+  attempt and ask the operator to join, hand off, or cancel. Never infer that
+  two connections are the same owner from a shared Agent Profile or API key.
 
 ## Delivery lifecycle
 

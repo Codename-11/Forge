@@ -148,6 +148,8 @@ import {
   listIssueWorkSessions,
   touchWorkSession,
 } from "@/server/services/work-session";
+import { revokeAgentConnectionsForApiKey } from "@/server/services/agent-connection";
+import { handoffWorkSession, joinWorkSession } from "@/server/services/work-session-participant";
 
 /**
  * Forge's MCP (Model Context Protocol) surface — the stable set of tools any
@@ -180,6 +182,8 @@ export interface McpContext {
    * apply `buildKeyScopeWhere` + `assertKeyScope`.
    */
   apiKey: ApiKeyContext | null;
+  /** Concrete MCP client instance negotiated by the HTTP transport. */
+  connectionId?: string | null;
 }
 
 /**
@@ -1952,6 +1956,8 @@ export const mcpTools = {
             agentId,
             actorId,
             actorAgentId: agentId,
+            connectionId: ctx.connectionId ?? null,
+            lifecycleConfidence: "UNCONFIRMED",
             currentStep: `→ ${status.name}`,
             resumeWaiting: true,
           });
@@ -1961,6 +1967,7 @@ export const mcpTools = {
               workspaceId: ctx.workspaceId,
               issueId: input.id,
               agentId,
+              connectionId: ctx.connectionId ?? null,
               kind: "TRANSITION",
               payload: { statusId: status.id, category: status.category },
             });
@@ -3079,6 +3086,8 @@ export const mcpTools = {
             agentId: authoringAgentId,
             actorId: authorId,
             actorAgentId: authoringAgentId,
+            connectionId: ctx.connectionId ?? null,
+            lifecycleConfidence: "UNCONFIRMED",
           });
           if (isNew) {
             await tx.agentRun.updateMany({
@@ -3091,6 +3100,7 @@ export const mcpTools = {
               workspaceId: ctx.workspaceId,
               issueId: input.issueId,
               agentId: authoringAgentId,
+              connectionId: ctx.connectionId ?? null,
               kind: "COMMENT",
               payload: { commentId: comment.id, preview: input.body.slice(0, 120) },
             });
@@ -3372,6 +3382,8 @@ export const mcpTools = {
           agentId,
           actorId: authorId,
           actorAgentId: agentId,
+          connectionId: ctx.connectionId ?? null,
+          lifecycleConfidence: "UNCONFIRMED",
           currentStep: input.currentStep ?? null,
         });
         if (isNew) {
@@ -3429,6 +3441,7 @@ export const mcpTools = {
             workspaceId: ctx.workspaceId,
             issueId: input.issueId,
             agentId,
+            connectionId: ctx.connectionId ?? null,
             kind: "STATUS",
             payload: { commentId: comment.id, preview: input.body.slice(0, 120) },
             currentStep: input.currentStep ?? null,
@@ -5697,7 +5710,9 @@ export const mcpTools = {
           select: { id: true, externalSessionId: true, capabilities: true },
         });
         if (!mapping) {
-          throw new Error("No tenant-scoped Forge-owned Hermes session mapping matches this event.");
+          throw new Error(
+            "No tenant-scoped Forge-owned Hermes session mapping matches this event.",
+          );
         }
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${envelope.threadId}))`;
         const duplicate = await tx.connectorDelivery.findUnique({
@@ -5711,7 +5726,11 @@ export const mcpTools = {
           select: { chatMessageId: true },
         });
         if (duplicate) {
-          return { accepted: true, duplicate: true, messageId: duplicate.chatMessageId ?? undefined };
+          return {
+            accepted: true,
+            duplicate: true,
+            messageId: duplicate.chatMessageId ?? undefined,
+          };
         }
         const prior = await tx.connectorDelivery.findFirst({
           where: {
@@ -5722,7 +5741,11 @@ export const mcpTools = {
           orderBy: { sequence: "desc" },
           select: { sequence: true },
         });
-        if (prior?.sequence !== null && prior?.sequence !== undefined && envelope.sequence <= prior.sequence) {
+        if (
+          prior?.sequence !== null &&
+          prior?.sequence !== undefined &&
+          envelope.sequence <= prior.sequence
+        ) {
           throw new Error("Connector event sequence is stale for this mapped session.");
         }
         const expectedSequence = (prior?.sequence ?? 0) + 1;
@@ -5746,13 +5769,16 @@ export const mcpTools = {
           },
         });
 
-        const isFinal =
-          envelope.kind === "message.final" || envelope.kind === "message.proactive";
+        const isFinal = envelope.kind === "message.final" || envelope.kind === "message.proactive";
         let messageId: string | undefined;
         if (isFinal) {
-          const bodyValue = envelope.payload.body ?? envelope.payload.content ?? envelope.payload.text;
+          const bodyValue =
+            envelope.payload.body ?? envelope.payload.content ?? envelope.payload.text;
           const body = typeof bodyValue === "string" ? bodyValue.trim() : "";
-          if (!body) throw new Error("Final/proactive connector messages require payload body/content/text.");
+          if (!body)
+            throw new Error(
+              "Final/proactive connector messages require payload body/content/text.",
+            );
           if (envelope.replyToMessageId) {
             const target = await tx.chatMessage.findFirst({
               where: {
@@ -5782,8 +5808,7 @@ export const mcpTools = {
               body,
               sequence: (aggregate._max.sequence ?? 0) + 1,
               replyToMessageId: envelope.replyToMessageId ?? null,
-              externalMessageId:
-                envelope.attribution.hermesMessageId ?? envelope.idempotency.key,
+              externalMessageId: envelope.attribution.hermesMessageId ?? envelope.idempotency.key,
               connectorSessionId: mapping.id,
               contextSnapshot: {
                 proactive: envelope.kind === "message.proactive",
@@ -5860,7 +5885,10 @@ export const mcpTools = {
               attribution: true,
               platformProtocolVersion: envelope.protocolVersion,
             },
-            lastError: envelope.kind === "delivery.error" ? String(envelope.payload.error ?? "Delivery error") : null,
+            lastError:
+              envelope.kind === "delivery.error"
+                ? String(envelope.payload.error ?? "Delivery error")
+                : null,
             lastErrorAt: envelope.kind === "delivery.error" ? new Date() : null,
           },
         });
@@ -6897,6 +6925,22 @@ export const mcpTools = {
         select: { id: true },
       });
       if (!issue) throw new Error("Issue not found in this workspace.");
+      if (ctx.connectionId) {
+        const active = await db.agentRun.findFirst({
+          where: {
+            workspaceId: ctx.workspaceId,
+            issueId: issue.id,
+            agentId: linkedAgentId,
+            status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+          },
+          select: { connectionId: true },
+        });
+        if (active?.connectionId && active.connectionId !== ctx.connectionId) {
+          throw new Error(
+            "Another connection already owns this active run. Join in a non-primary role or hand off the run before executing.",
+          );
+        }
+      }
       const { run, isNew } = await db.$transaction((tx) =>
         openOrTouchRun(tx, {
           workspaceId: ctx.workspaceId,
@@ -6904,6 +6948,8 @@ export const mcpTools = {
           agentId: linkedAgentId,
           actorId: ctx.userId ?? null,
           actorAgentId: linkedAgentId,
+          connectionId: ctx.connectionId ?? null,
+          lifecycleConfidence: "UNCONFIRMED",
           engagementMode: (input.mode as EngagementMode | undefined) ?? "EXECUTE",
           currentStep: input.summary ?? "opened by agent",
           resumeWaiting: true,
@@ -7163,6 +7209,7 @@ export const mcpTools = {
           status: true,
           startedAt: true,
           engagementMode: true,
+          connectionId: true,
           executionStepId: true,
           agent: { select: { profileKey: true, name: true } },
           issue: {
@@ -7177,6 +7224,9 @@ export const mcpTools = {
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
         throw new Error("AgentRun belongs to a different agent than the calling key.");
+      }
+      if (ctx.connectionId && run.connectionId && ctx.connectionId !== run.connectionId) {
+        throw new Error("AgentRun belongs to a different execution connection.");
       }
       if (run.status !== AgentRunStatus.ACTIVE && run.status !== AgentRunStatus.WAITING) {
         throw new Error(`Run is ${run.status}; only ACTIVE / WAITING runs can be completed.`);
@@ -7254,6 +7304,7 @@ export const mcpTools = {
         data.followUps = input.followUps as Prisma.InputJsonValue;
       }
       data.completionMeta = completionMeta as Prisma.InputJsonValue;
+      data.lifecycleConfidence = "CONFIRMED";
       const completed = await db.$transaction(async (tx) => {
         const updated = await tx.agentRun.updateMany({
           where: {
@@ -8289,10 +8340,14 @@ export const mcpTools = {
         select: { id: true },
       });
       if (!key) throw new Error("Access key not found in selected workspace.");
-      return db.apiKey.update({
-        where: { id: key.id },
-        data: { revokedAt: new Date() },
-        select: { id: true, prefix: true, kind: true, revokedAt: true },
+      const revokedAt = new Date();
+      return db.$transaction(async (tx) => {
+        await revokeAgentConnectionsForApiKey(tx, key.id, revokedAt);
+        return tx.apiKey.update({
+          where: { id: key.id },
+          data: { revokedAt },
+          select: { id: true, prefix: true, kind: true, revokedAt: true },
+        });
       });
     },
   },
@@ -8345,7 +8400,7 @@ export const mcpTools = {
         workspaceId: ctx.workspaceId,
         ...input,
         source: WorkSessionSource.FORGE_AGENT,
-        actor: { userId: ctx.userId, agentId },
+        actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
       });
     },
   },
@@ -8370,13 +8425,73 @@ export const mcpTools = {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) throw new Error("workSessions.heartbeat requires a linked agent key.");
       const owned = await db.workSession.findFirst({
-        where: { id: input.sessionId, workspaceId: ctx.workspaceId, ownerAgentId: agentId },
+        where: {
+          id: input.sessionId,
+          workspaceId: ctx.workspaceId,
+          ...(ctx.connectionId
+            ? { ownerConnectionId: ctx.connectionId }
+            : { ownerAgentId: agentId, ownerConnectionId: null }),
+        },
         select: { id: true },
       });
       if (!owned) throw new Error("Work session is not owned by this agent.");
       return touchWorkSession(db, {
         workspaceId: ctx.workspaceId,
         ...input,
+        actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
+      });
+    },
+  },
+
+  "workSessions.join": {
+    description:
+      "Join an existing delivery session as an explicit contributor or reviewer without taking primary branch/PR authority.",
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      sessionId: z.string().cuid(),
+      role: z.enum(["CONTRIBUTOR", "REVIEWER"]),
+    }),
+    async run(input: { sessionId: string; role: "CONTRIBUTOR" | "REVIEWER" }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId || !ctx.connectionId) {
+        throw new Error("workSessions.join requires a registered agent connection.");
+      }
+      return joinWorkSession(db, {
+        workspaceId: ctx.workspaceId,
+        sessionId: input.sessionId,
+        connectionId: ctx.connectionId,
+        role: input.role,
+        actor: { userId: ctx.userId, agentId },
+      });
+    },
+  },
+
+  "workSessions.handoff": {
+    description:
+      "Transfer primary delivery authority from the calling connection to another registered connection. The handoff is explicit and audited.",
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({
+      sessionId: z.string().cuid(),
+      targetConnectionId: z.string().cuid(),
+    }),
+    async run(input: { sessionId: string; targetConnectionId: string }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId || !ctx.connectionId) {
+        throw new Error("workSessions.handoff requires a registered agent connection.");
+      }
+      const owned = await db.workSession.findFirst({
+        where: {
+          id: input.sessionId,
+          workspaceId: ctx.workspaceId,
+          ownerConnectionId: ctx.connectionId,
+        },
+        select: { id: true },
+      });
+      if (!owned) throw new Error("Only the primary connection can hand off delivery.");
+      return handoffWorkSession(db, {
+        workspaceId: ctx.workspaceId,
+        sessionId: input.sessionId,
+        toConnectionId: input.targetConnectionId,
         actor: { userId: ctx.userId, agentId },
       });
     },
@@ -8402,14 +8517,20 @@ export const mcpTools = {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) throw new Error("workSessions.attachPullRequest requires a linked agent key.");
       const owned = await db.workSession.findFirst({
-        where: { id: input.sessionId, workspaceId: ctx.workspaceId, ownerAgentId: agentId },
+        where: {
+          id: input.sessionId,
+          workspaceId: ctx.workspaceId,
+          ...(ctx.connectionId
+            ? { ownerConnectionId: ctx.connectionId }
+            : { ownerAgentId: agentId, ownerConnectionId: null }),
+        },
         select: { id: true },
       });
       if (!owned) throw new Error("Work session is not owned by this agent.");
       return attachPullRequest(db, {
         workspaceId: ctx.workspaceId,
         ...input,
-        actor: { userId: ctx.userId, agentId },
+        actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
       });
     },
   },

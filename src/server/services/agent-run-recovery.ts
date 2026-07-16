@@ -58,6 +58,17 @@ const runRecoverySelect = {
   engagementSource: true,
   runEngine: true,
   runEngineSource: true,
+  connection: {
+    select: {
+      id: true,
+      kind: true,
+      status: true,
+      confidence: true,
+      displayName: true,
+      clientName: true,
+      lastSeenAt: true,
+    },
+  },
   acknowledgedAt: true,
   outputStartedAt: true,
   producedArtifactIds: true,

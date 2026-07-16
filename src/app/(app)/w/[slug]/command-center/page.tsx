@@ -263,7 +263,7 @@ export default function CommandCenterPage() {
                     ) : null}
                     {data.stalledRuns.length > 0 ? (
                       <AttentionGroup
-                        title="Stalled runs"
+                        title="Run recovery"
                         count={data.counts.stalledRuns}
                         empty="No recoverable runs."
                         action={
@@ -1233,6 +1233,14 @@ type CCRunFailure = {
   recoveryDetail: string;
   recommendedAction: "ABANDON" | "CLEAR" | "RECONCILE";
   availableActions: Array<"ABANDON" | "CLEAR" | "RECONCILE">;
+  connection: {
+    kind: "MANAGED_RUNTIME" | "MCP_CLIENT" | "WEBHOOK" | "ON_DEMAND";
+    status: "ACTIVE" | "QUIET" | "DISCONNECTED" | "REVOKED";
+    confidence: "UNCONFIRMED" | "INFERRED" | "CONFIRMED";
+    displayName: string | null;
+    clientName: string | null;
+    lastSeenAt: Date | string | null;
+  } | null;
   agent: { profileKey: string };
   issue: {
     id: string;
@@ -1250,7 +1258,7 @@ function groupRunRecoveries(runs: CCRunFailure[]): CCRunFailure[][] {
     // failures remain issue-specific because their recovery evidence differs.
     const key =
       run.recoveryReason === "active-stale"
-        ? `${run.agent.profileKey}:${run.recoveryReason}`
+        ? `${run.agent.profileKey}:${run.recoveryReason}:${run.connection?.kind ?? "legacy"}`
         : run.id;
     const group = groups.get(key) ?? [];
     group.push(run);
@@ -1346,6 +1354,7 @@ function RunFailureCard({
   const ts = run.finishedAt ?? run.lastEventAt;
   const excerpt = run.recoveryDetail ?? run.summary ?? run.currentStep ?? run.issue.title;
   const ActionIcon = recoveryActionIcon(run.recommendedAction);
+  const presentation = runRecoveryPresentation(run);
   return (
     <>
       <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
@@ -1357,19 +1366,19 @@ function RunFailureCard({
             >
               {run.issue.workspace.key}-{run.issue.number}
             </Link>
-            <span className="rounded bg-warning/10 px-1 py-0.5 text-[10px] uppercase text-warning">
-              {run.recoveryReason.replace("-", " ")}
+            <span className={cn("rounded px-1 py-0.5 text-[10px] uppercase", presentation.tone)}>
+              {presentation.badge}
             </span>
           </div>
           <span className="text-meta block font-medium text-foreground/80">
-            {run.recoveryTitle}
+            {presentation.title}
           </span>
           <ExpandableText
-            content={`@${run.agent.profileKey} · ${new Date(ts).toLocaleString()} · ${excerpt}`}
+            content={`@${run.agent.profileKey} · ${presentation.connection} · ${new Date(ts).toLocaleString()} · ${excerpt}${presentation.guidance ? ` ${presentation.guidance}` : ""}`}
             className="text-meta text-muted-foreground"
           />
         </div>
-        {canRecover ? (
+        {canRecover && !presentation.inspectFirst ? (
           <Button
             size="sm"
             variant="ghost"
@@ -1398,11 +1407,74 @@ function RunFailureCard({
               <ActionIcon className="h-3 w-3" />
             )}
           </Button>
+        ) : presentation.inspectFirst ? (
+          <Link
+            href={`/w/${slug}/issues/${run.issue.id}`}
+            className="focus-ring text-meta inline-flex h-7 shrink-0 items-center rounded-md border border-border bg-background px-2 text-muted-foreground hover:text-foreground"
+          >
+            Inspect
+          </Link>
         ) : null}
       </div>
       {confirmElement}
     </>
   );
+}
+
+function runRecoveryPresentation(run: CCRunFailure): {
+  badge: string;
+  title: string;
+  connection: string;
+  guidance: string;
+  tone: string;
+  inspectFirst: boolean;
+} {
+  const connection = run.connection;
+  const name = connection?.displayName ?? connection?.clientName;
+  if (
+    connection?.kind === "MCP_CLIENT" &&
+    run.recoveryReason === "active-stale" &&
+    connection.confidence !== "CONFIRMED"
+  ) {
+    return {
+      badge: "MCP · unconfirmed",
+      title: "MCP client is quiet; lifecycle is unconfirmed",
+      connection: name ? `MCP · ${name}` : "MCP client",
+      guidance:
+        "Silence alone is not a confirmed stall; inspect evidence before handoff or abandon.",
+      tone: "bg-warning/10 text-warning",
+      inspectFirst: true,
+    };
+  }
+  if (connection?.kind === "MANAGED_RUNTIME") {
+    const confirmed = connection.confidence === "CONFIRMED";
+    return {
+      badge: confirmed ? "Runtime · confirmed" : "Runtime · inferred",
+      title: confirmed ? "Managed runtime run stalled" : run.recoveryTitle,
+      connection: name ? `Runtime · ${name}` : "Managed runtime",
+      guidance: confirmed ? "Runtime lifecycle evidence confirms recovery is safe." : "",
+      tone: confirmed ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning",
+      inspectFirst: false,
+    };
+  }
+  if (connection?.kind === "WEBHOOK") {
+    return {
+      badge: "Webhook",
+      title: "Webhook-dispatched run needs recovery",
+      connection: name ? `Webhook · ${name}` : "Webhook",
+      guidance: "Check delivery acknowledgement and retries before treating the agent as stalled.",
+      tone: "bg-danger/10 text-danger",
+      inspectFirst: true,
+    };
+  }
+  return {
+    badge: run.recoveryReason.replace("-", " "),
+    title: run.recoveryTitle,
+    connection: "Legacy or unidentified connection",
+    guidance: "",
+    tone: "bg-warning/10 text-warning",
+    inspectFirst: false,
+  };
 }
 
 function RunRecoveryIncidentCard({
@@ -1419,19 +1491,20 @@ function RunRecoveryIncidentCard({
   onRecover: (action: CCRunFailure["recommendedAction"], runIds: string[]) => void;
 }) {
   const first = runs[0]!;
+  const presentation = runRecoveryPresentation(first);
   return (
     <div className="rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
       <div className="flex min-w-0 flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium">
-            @{first.agent.profileKey} · {runs.length} affected runs
+            @{first.agent.profileKey} · {presentation.badge} · {runs.length} affected runs
           </div>
           <ExpandableText
-            content={`${first.recoveryTitle}. ${first.recoveryDetail ?? first.summary ?? first.currentStep ?? "Inspect the affected runs for recovery details."}`}
+            content={`${presentation.title}. ${first.recoveryDetail ?? first.summary ?? first.currentStep ?? "Inspect the affected runs for recovery details."} ${presentation.guidance}`}
             className="text-meta text-muted-foreground"
           />
         </div>
-        {canRecover ? (
+        {canRecover && !presentation.inspectFirst ? (
           <RunRecoveryBulkActions runs={runs} pending={pending} onRecover={onRecover} />
         ) : null}
       </div>

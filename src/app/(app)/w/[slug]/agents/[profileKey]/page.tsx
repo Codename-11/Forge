@@ -1349,12 +1349,14 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
       title={
         <span className="flex items-center gap-2">
           <Server className="h-3.5 w-3.5 text-muted-foreground" />
-          Runtime &amp; readiness
+          Connections &amp; execution
         </span>
       }
+      hint="Concrete endpoints acting as this profile; identity stays stable across clients."
     >
       <Card className="space-y-3 p-3 text-[0.75rem]">
-        {/* How chat is served — engine + runtime/transport. */}
+        {/* Resolved chat path is useful even before a durable endpoint has
+            registered (legacy clients appear below as unidentified). */}
         <div className="flex flex-wrap items-center gap-2">
           {transport && <TransportChip mode={transport.mode} label={transport.label} showNone />}
           {disabled && (
@@ -1364,7 +1366,21 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
           )}
         </div>
 
-        {runtime ? (
+        {agent.connections.length > 0 ? (
+          <>
+            <ul className="space-y-2" aria-label="Registered execution connections">
+              {agent.connections.map((connection) => (
+                <AgentConnectionRow key={connection.id} connection={connection} />
+              ))}
+            </ul>
+            {agent._count.connections > agent.connections.length && (
+              <div className="text-meta text-muted-foreground">
+                Showing the 25 most recently seen of {agent._count.connections} registered
+                connections. Older revoked and disconnected records remain in the audit trail.
+              </div>
+            )}
+          </>
+        ) : runtime ? (
           <Link
             href={`/w/${ws.slug}/settings/runtimes/${runtime.id}`}
             className="focus-ring flex items-start gap-2 rounded-md border border-border bg-background/40 p-2 hover:text-ember"
@@ -1379,13 +1395,15 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
             <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
           </Link>
         ) : (
-          <div className="text-meta text-muted-foreground">
-            No managed runtime attached —{" "}
-            {transport?.mode === "completions"
-              ? "chat uses a configured model (Streaming engine)."
-              : transport?.mode === "dispatch"
-                ? "chat is delivered by the agent's daemon/webhook."
-                : "attach a runtime or configure a model to chat."}
+          <div className="rounded-md border border-dashed border-border/70 bg-background/30 p-2">
+            <div className="font-medium text-foreground">No registered client instances</div>
+            <div className="text-meta mt-0.5 text-muted-foreground">
+              {transport?.mode === "completions"
+                ? "Chat is available on demand; the first execution will register its endpoint."
+                : transport?.mode === "dispatch"
+                  ? "Legacy dispatch is configured, but this endpoint has not registered durable provenance yet."
+                  : "Attach a runtime or connect an MCP client to register an execution endpoint."}
+            </div>
           </div>
         )}
 
@@ -1431,6 +1449,85 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
         </div>
       </Card>
     </Section>
+  );
+}
+
+type AgentConnectionRowData = AgentRow["connections"][number];
+
+const CONNECTION_KIND_LABEL: Record<AgentConnectionRowData["kind"], string> = {
+  MANAGED_RUNTIME: "Runtime",
+  MCP_CLIENT: "MCP",
+  WEBHOOK: "Webhook",
+  ON_DEMAND: "On-demand",
+};
+
+function AgentConnectionRow({ connection }: { connection: AgentConnectionRowData }) {
+  const name =
+    connection.displayName ??
+    connection.clientName ??
+    connection.runtime?.name ??
+    CONNECTION_KIND_LABEL[connection.kind];
+  const kind = CONNECTION_KIND_LABEL[connection.kind];
+  const confirmedActive = connection.status === "ACTIVE" && connection.confidence === "CONFIRMED";
+  const unconfirmedQuiet = connection.status === "QUIET" && connection.confidence === "UNCONFIRMED";
+  const statusLabel = unconfirmedQuiet
+    ? "Quiet · status unconfirmed"
+    : connection.status === "ACTIVE"
+      ? connection.confidence === "CONFIRMED"
+        ? "Confirmed active"
+        : "Activity inferred"
+      : connection.status.toLowerCase();
+  const statusTone =
+    connection.status === "REVOKED" || connection.status === "DISCONNECTED"
+      ? "text-danger"
+      : unconfirmedQuiet
+        ? "text-warning"
+        : confirmedActive
+          ? "text-success"
+          : "text-muted-foreground";
+  const lastSignal = connection.lastSeenAt ?? connection.connectedAt ?? connection.firstSeenAt;
+
+  return (
+    <li className="rounded-md border border-border bg-background/40 p-2">
+      <div className="flex items-start gap-2">
+        <span
+          className={cn(
+            "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full",
+            confirmedActive
+              ? "bg-success motion-safe:animate-pulse"
+              : unconfirmedQuiet
+                ? "bg-warning"
+                : "bg-muted-foreground/50",
+          )}
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="truncate font-medium text-foreground">{name}</span>
+            <span className="rounded border border-border/70 bg-subtle/60 px-1 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+              {kind}
+            </span>
+            {connection.clientVersion && (
+              <span className="text-meta font-mono text-muted-foreground">
+                v{connection.clientVersion}
+              </span>
+            )}
+          </div>
+          <div className={cn("text-meta mt-0.5", statusTone)}>{statusLabel}</div>
+          <div className="text-meta mt-0.5 text-muted-foreground">
+            {connection.livenessModel.toLowerCase().replaceAll("_", " ")} · seen{" "}
+            {relativeTime(lastSignal)} · {connection._count.runs} live run
+            {connection._count.runs === 1 ? "" : "s"} · {connection._count.ownedSessions}{" "}
+            {connection._count.ownedSessions === 1 ? "delivery" : "deliveries"}
+          </div>
+        </div>
+      </div>
+      {connection.kind === "MCP_CLIENT" && connection.confidence !== "CONFIRMED" && (
+        <div className="text-meta mt-2 border-t border-border/60 pt-2 text-muted-foreground">
+          MCP activity proves recent access, not that the client process is still running.
+        </div>
+      )}
+    </li>
   );
 }
 

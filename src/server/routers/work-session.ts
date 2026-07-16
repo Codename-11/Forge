@@ -1,7 +1,7 @@
 import { WorkSessionSource } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
-import { router, workspaceProcedure } from "@/server/trpc";
+import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import {
   advanceWorkSession,
   attachPullRequest,
@@ -9,6 +9,7 @@ import {
   listIssueWorkSessions,
   touchWorkSession,
 } from "@/server/services/work-session";
+import { handoffWorkSession, joinWorkSession } from "@/server/services/work-session-participant";
 
 const repoSchema = z
   .string()
@@ -72,6 +73,18 @@ export const workSessionRouter = router({
         },
         ownerUser: { select: { id: true, name: true, email: true, image: true } },
         ownerAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+        ownerConnection: {
+          select: {
+            id: true,
+            kind: true,
+            status: true,
+            confidence: true,
+            displayName: true,
+            clientName: true,
+            lastSeenAt: true,
+            agent: { select: { id: true, name: true, profileKey: true } },
+          },
+        },
         pullRequest: {
           select: { number: true, repoFullName: true, url: true, state: true, metadata: true },
         },
@@ -82,6 +95,43 @@ export const workSessionRouter = router({
   listForIssue: workspaceProcedure
     .input(z.object({ issueId: z.string().cuid() }))
     .query(({ ctx, input }) => listIssueWorkSessions(ctx.db, ctx.workspaceId, input.issueId)),
+
+  join: workspaceProcedure
+    .input(
+      z.object({
+        sessionId: z.string().cuid(),
+        connectionId: z.string().cuid(),
+        role: z.enum(["CONTRIBUTOR", "REVIEWER"]),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      await assertSessionManager(ctx, input.sessionId);
+      return joinWorkSession(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        sessionId: input.sessionId,
+        connectionId: input.connectionId,
+        role: input.role,
+        actor: { userId: ctx.session.user.id },
+      });
+    }),
+
+  reconcileOwnership: adminProcedure
+    .input(
+      z.object({
+        sessionId: z.string().cuid(),
+        targetConnectionId: z.string().cuid(),
+        reason: z.string().max(500).nullable().optional(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      handoffWorkSession(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        sessionId: input.sessionId,
+        toConnectionId: input.targetConnectionId,
+        actor: { userId: ctx.session.user.id },
+        reason: input.reason,
+      }),
+    ),
 
   claim: workspaceProcedure
     .input(

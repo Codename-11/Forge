@@ -9,6 +9,10 @@ import {
   sweepStaleWorkSessions,
 } from "@/server/services/work-session";
 import {
+  handoffWorkSession,
+  joinWorkSession,
+} from "@/server/services/work-session-participant";
+import {
   createIssue,
   createWorkspaceFixture,
   disconnectPrisma,
@@ -63,6 +67,76 @@ describe("work session coordination", () => {
         actor: { userId: fixture.secondUser.id },
       }),
     ).rejects.toMatchObject({ code: "CONFLICT" });
+  });
+
+  it("distinguishes same-agent connections and supports explicit join and handoff", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `multi-connection-${Date.now()}`,
+        name: "Multi-connection agent",
+      },
+    });
+    const [primary, second] = await Promise.all(
+      ["primary", "second"].map((instanceKey) =>
+        prisma.agentConnection.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            agentId: agent.id,
+            kind: "MCP_CLIENT",
+            livenessModel: "LEASE",
+            instanceKey: `${instanceKey}-${Date.now()}`,
+          },
+        }),
+      ),
+    );
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/connection-primary",
+      source: WorkSessionSource.FORGE_AGENT,
+      actor: { userId: fixture.user.id, agentId: agent.id, connectionId: primary!.id },
+    });
+    await expect(
+      claimWorkSession(prisma, {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        repoFullName: "acme/forge",
+        branch: "codex/connection-primary",
+        source: WorkSessionSource.FORGE_AGENT,
+        actor: { userId: fixture.user.id, agentId: agent.id, connectionId: second!.id },
+      }),
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+
+    await joinWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      connectionId: second!.id,
+      role: "REVIEWER",
+      actor: { userId: fixture.user.id, agentId: agent.id },
+    });
+    await handoffWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      toConnectionId: second!.id,
+      actor: { userId: fixture.user.id, agentId: agent.id },
+    });
+
+    await expect(
+      prisma.workSession.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({ ownerAgentId: agent.id, ownerConnectionId: second!.id });
+    const participants = await prisma.workSessionParticipant.findMany({
+      where: { workSessionId: session.id },
+      orderBy: { joinedAt: "asc" },
+    });
+    expect(participants).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ connectionId: primary!.id, role: "PRIMARY", leftAt: expect.any(Date) }),
+        expect.objectContaining({ connectionId: second!.id, role: "PRIMARY", leftAt: null }),
+      ]),
+    );
   });
 
   it("derives merge state from a native implementation PR and gates delivery milestones", async () => {
@@ -153,6 +227,67 @@ describe("work session coordination", () => {
       status: "VERIFIED",
     });
     expect(verified.endedAt).not.toBeNull();
+  });
+
+  it("completes a live implementation run when its linked pull request merges", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `merge-reconcile-${Date.now()}`,
+        name: "Merge reconcile agent",
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: "ACTIVE",
+        engagementMode: "EXECUTE",
+        currentStep: "Waiting for merge",
+      },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/reconcile-on-merge",
+      source: WorkSessionSource.FORGE_AGENT,
+      actor: { userId: fixture.user.id, agentId: agent.id },
+    });
+    const mergedAt = new Date();
+    const pr = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 75,
+        url: "https://github.com/acme/forge/pull/75",
+        title: "Reconcile lifecycle",
+        state: "merged",
+        metadata: {
+          mergedAt: mergedAt.toISOString(),
+          head: { ref: session.branch, sha: "abcdef1234567" },
+        },
+      },
+    });
+
+    await attachPullRequest(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      externalResourceId: pr.id,
+      actor: { userId: fixture.user.id, agentId: agent.id },
+    });
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).resolves.toMatchObject({
+      status: "COMPLETED",
+      currentStep: null,
+      summary: "Implementation completed when the linked pull request merged.",
+    });
   });
 
   it("automatically posts one human-readable PR handoff when configured", async () => {
@@ -381,5 +516,75 @@ describe("work session coordination", () => {
     expect((await prisma.workSession.findUniqueOrThrow({ where: { id: session.id } })).status).toBe(
       "CLAIMED",
     );
+  });
+
+  it("keeps a quiet MCP-owned lease intact and requests explicit recovery", async () => {
+    const { fixture, prisma, issue } = await setup();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { workSessionStaleMinutes: 1 },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `quiet-mcp-${Date.now()}`,
+        name: "Quiet MCP agent",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "ACTIVE",
+        confidence: "CONFIRMED",
+        instanceKey: `quiet-${Date.now()}`,
+      },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/quiet-mcp",
+      source: WorkSessionSource.FORGE_AGENT,
+      actor: {
+        userId: fixture.user.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+      },
+    });
+    await prisma.workSession.update({
+      where: { id: session.id },
+      data: { lastHeartbeatAt: new Date(Date.now() - 5 * 60_000) },
+    });
+
+    expect(await sweepStaleWorkSessions(prisma)).toBe(0);
+    await expect(
+      prisma.workSession.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({ status: "CLAIMED", staleAt: null });
+    await expect(
+      prisma.agentConnection.findUniqueOrThrow({ where: { id: connection.id } }),
+    ).resolves.toMatchObject({ status: "QUIET", confidence: "UNCONFIRMED" });
+    expect(
+      await prisma.actionRequest.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          dedupeKey: `work-session-mcp-quiet:${session.id}`,
+        },
+      }),
+    ).toBe(1);
+
+    // The run watchdog may mark the shared connection quiet before the
+    // delivery sweep runs. Recovery must still be materialized in that order.
+    await prisma.actionRequest.deleteMany({
+      where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+    });
+    expect(await sweepStaleWorkSessions(prisma)).toBe(0);
+    expect(
+      await prisma.actionRequest.count({
+        where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+      }),
+    ).toBe(1);
   });
 });

@@ -14,6 +14,7 @@ import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
 import { createActionRequest } from "@/server/services/action-request-service";
 import { autoWatchActor } from "@/server/services/issue-watchers";
+import { finishRun } from "@/server/services/agent-run";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -47,6 +48,7 @@ const STALEABLE_WORK_SESSION_STATUSES: readonly WorkSessionStatus[] = [
 export type WorkSessionActor = {
   userId: string | null;
   agentId?: string | null;
+  connectionId?: string | null;
 };
 
 export type DeliveryTimelineUpdate = {
@@ -125,6 +127,42 @@ export function deriveWorkSessionPrStatus(resource: {
   return WorkSessionStatus.IN_REVIEW;
 }
 
+/**
+ * A merged implementation PR is authoritative evidence that the implementation
+ * attempt has ended. MCP clients are not guaranteed to call `runs.complete`
+ * after GitHub merges, so reconcile live EXECUTE runs at this delivery
+ * boundary. Runs opened after the merge are deliberately excluded: those may
+ * represent release/deploy work and have their own lifecycle.
+ */
+async function reconcileMergedImplementationRuns(
+  db: DbClient,
+  input: { workspaceId: string; issueId: string; mergedAt: Date },
+): Promise<number> {
+  const runs = await db.agentRun.findMany({
+    where: {
+      workspaceId: input.workspaceId,
+      issueId: input.issueId,
+      status: { in: ["ACTIVE", "WAITING"] },
+      engagementMode: "EXECUTE",
+      startedAt: { lte: input.mergedAt },
+    },
+    select: { id: true, agentId: true },
+  });
+  let completed = 0;
+  for (const run of runs) {
+    const result = await finishRun(db, {
+      runId: run.id,
+      workspaceId: input.workspaceId,
+      issueId: input.issueId,
+      agentId: run.agentId,
+      status: "COMPLETED",
+      summary: "Implementation completed when the linked pull request merged.",
+    });
+    if (result?.status === "COMPLETED") completed += 1;
+  }
+  return completed;
+}
+
 async function auditSession(
   db: DbClient,
   session: { id: string; workspaceId: string; issueId: string },
@@ -180,9 +218,19 @@ export async function claimWorkSession(
       },
     });
     if (active) {
-      const sameOwner = input.actor.agentId
-        ? active.ownerAgentId === input.actor.agentId
-        : active.ownerUserId === input.actor.userId;
+      // A concrete endpoint is the delivery lease owner. Two runtimes/MCP
+      // clients bound to the same Agent are distinct and must explicitly hand
+      // off instead of silently sharing primary execution authority.
+      const connectionScoped = Boolean(active.ownerConnectionId || input.actor.connectionId);
+      const sameOwner = connectionScoped
+        ? Boolean(
+            active.ownerConnectionId &&
+            input.actor.connectionId &&
+            active.ownerConnectionId === input.actor.connectionId,
+          )
+        : input.actor.agentId
+          ? active.ownerAgentId === input.actor.agentId
+          : active.ownerUserId === input.actor.userId;
       if (
         sameOwner &&
         active.repoFullName === input.repoFullName &&
@@ -218,12 +266,25 @@ export async function claimWorkSession(
         issueId: input.issueId,
         ownerUserId: input.actor.userId,
         ownerAgentId: input.actor.agentId ?? null,
+        ownerConnectionId: input.actor.connectionId ?? null,
         source: input.source,
         status: WorkSessionStatus.CLAIMED,
         repoFullName: input.repoFullName,
         branch: input.branch,
         baseBranch: input.baseBranch || "main",
         worktreePath: input.worktreePath ?? null,
+        ...(input.actor.connectionId && input.actor.agentId
+          ? {
+              participants: {
+                create: {
+                  workspaceId: input.workspaceId,
+                  agentId: input.actor.agentId,
+                  connectionId: input.actor.connectionId,
+                  role: "PRIMARY",
+                },
+              },
+            }
+          : {}),
       },
     });
     await auditSession(tx, created, input.actor, "work-session-claimed", undefined, created);
@@ -250,6 +311,43 @@ export async function listIssueWorkSessions(
     include: {
       ownerUser: { select: { id: true, name: true, email: true, image: true } },
       ownerAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+      ownerConnection: {
+        select: {
+          id: true,
+          kind: true,
+          livenessModel: true,
+          status: true,
+          confidence: true,
+          displayName: true,
+          clientName: true,
+          clientVersion: true,
+          lastSeenAt: true,
+          disconnectedAt: true,
+          agent: { select: { id: true, name: true, profileKey: true } },
+          runtime: { select: { id: true, name: true } },
+        },
+      },
+      participants: {
+        where: { leftAt: null },
+        orderBy: [{ role: "asc" }, { joinedAt: "asc" }],
+        select: {
+          id: true,
+          role: true,
+          joinedAt: true,
+          agent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+          connection: {
+            select: {
+              id: true,
+              kind: true,
+              status: true,
+              confidence: true,
+              displayName: true,
+              clientName: true,
+              lastSeenAt: true,
+            },
+          },
+        },
+      },
       pullRequest: {
         select: {
           id: true,
@@ -265,6 +363,63 @@ export async function listIssueWorkSessions(
       },
     },
   });
+  const [latestImplementationRun, latestAgentComment] = await Promise.all([
+    db.agentRun.findFirst({
+      where: { workspaceId, issueId, engagementMode: "EXECUTE" },
+      orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+      select: {
+        lastEventAt: true,
+        agent: {
+          select: {
+            id: true,
+            name: true,
+            profileKey: true,
+            avatar: true,
+            connections: {
+              where: { revokedAt: null },
+              orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
+              take: 1,
+              select: { id: true, displayName: true, clientName: true, kind: true },
+            },
+          },
+        },
+      },
+    }),
+    db.comment.findFirst({
+      where: { workspaceId, issueId, authoringAgentId: { not: null } },
+      orderBy: { updatedAt: "desc" },
+      select: {
+        updatedAt: true,
+        authoringAgent: {
+          select: {
+            id: true,
+            name: true,
+            profileKey: true,
+            avatar: true,
+            connections: {
+              where: { revokedAt: null },
+              orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
+              take: 1,
+              select: { id: true, displayName: true, clientName: true, kind: true },
+            },
+          },
+        },
+      },
+    }),
+  ]);
+  const observedImplementation = latestImplementationRun
+    ? {
+        agent: latestImplementationRun.agent,
+        observedAt: latestImplementationRun.lastEventAt,
+        source: "implementation-run" as const,
+      }
+    : latestAgentComment?.authoringAgent
+      ? {
+          agent: latestAgentComment.authoringAgent,
+          observedAt: latestAgentComment.updatedAt,
+          source: "agent-comment" as const,
+        }
+      : null;
 
   // Auto-bind an IMPLEMENTS PR whose head branch matches the session. This is
   // intentionally a repair path: explicit linking remains preferred.
@@ -294,7 +449,7 @@ export async function listIssueWorkSessions(
       return listIssueWorkSessions(db, workspaceId, issueId);
     }
   }
-  return sessions;
+  return sessions.map((session) => ({ ...session, observedImplementation }));
 }
 
 export async function touchWorkSession(
@@ -473,6 +628,13 @@ export async function attachPullRequest(
       },
     };
   });
+  if (result.status === WorkSessionStatus.MERGED && result.mergedAt) {
+    await reconcileMergedImplementationRuns(db, {
+      workspaceId: input.workspaceId,
+      issueId: result.issueId,
+      mergedAt: result.mergedAt,
+    });
+  }
   return result;
 }
 
@@ -512,6 +674,17 @@ export async function syncWorkSessionsFromPullRequest(
           : {}),
       },
     });
+    if (derived === WorkSessionStatus.MERGED) {
+      const mergedAt =
+        typeof meta.mergedAt === "string"
+          ? new Date(meta.mergedAt)
+          : (session.mergedAt ?? new Date());
+      await reconcileMergedImplementationRuns(db, {
+        workspaceId: resource.workspaceId,
+        issueId: session.issueId,
+        mergedAt,
+      });
+    }
     count += 1;
   }
   return count;
@@ -607,8 +780,41 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
         status: { in: [...STALEABLE_WORK_SESSION_STATUSES] },
         lastHeartbeatAt: { lt: cutoff },
       },
+      include: { ownerConnection: { select: { id: true, kind: true, status: true } } },
     });
     for (const session of sessions) {
+      if (session.ownerConnection?.kind === "MCP_CLIENT") {
+        // MCP silence is an expired observation lease, not proof that the
+        // client process failed. Keep delivery ownership intact so the
+        // dispatcher cannot start a competing branch while status is unknown.
+        // Always materialize the idempotent action request, even when the run
+        // watchdog already changed the shared connection to QUIET first.
+        await db.agentConnection.updateMany({
+          where: { id: session.ownerConnection.id, status: "ACTIVE" },
+          data: { status: "QUIET", confidence: "UNCONFIRMED" },
+        });
+        const issue = await db.issue.findUnique({
+          where: { id: session.issueId },
+          select: { authorId: true, workspace: { select: { key: true } }, number: true },
+        });
+        await createActionRequest(db, {
+          workspaceId: workspace.id,
+          actorId: null,
+          title: `MCP status for ${issue ? `${issue.workspace.key}-${issue.number}` : "an issue"} is unconfirmed`,
+          body:
+            `${session.repoFullName}:${session.branch} has not sent a lifecycle signal for ` +
+            `${workspace.workSessionStaleMinutes} minutes. Delivery remains owned; request status, hand off, or abandon it explicitly.`,
+          severity: NotificationSeverity.WARNING,
+          kind: ActionRequestKind.FREE_FORM,
+          assignedUserId: session.ownerUserId ?? issue?.authorId ?? null,
+          assignedAgentId: session.ownerAgentId,
+          sourceType: "work-session",
+          sourceId: session.id,
+          dedupeKey: `work-session-mcp-quiet:${session.id}`,
+          issueId: session.issueId,
+        });
+        continue;
+      }
       const markedStale = await db.$transaction(async (tx) => {
         const claimed = await tx.workSession.updateMany({
           where: {

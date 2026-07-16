@@ -144,4 +144,49 @@ describe("agent-run-stale — sweepStalledRuns", () => {
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(after.status).toBe("WAITING");
   });
+
+  it("marks a quiet MCP connection unconfirmed without declaring its run stalled", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARM" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { agentRunStaleMinutes: 30 },
+    });
+    const agent = await createAgent(fixture.workspace.id, "arm-mcp");
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "ACTIVE",
+        confidence: "CONFIRMED",
+        instanceKey: `test-${Date.now()}`,
+      },
+    });
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+        lifecycleConfidence: "CONFIRMED",
+        status: "ACTIVE",
+      },
+    });
+    await backdateRun(run.id, new Date(Date.now() - 90 * 60_000));
+
+    const result = await sweepStalledRuns();
+
+    expect(result.stalled).not.toContain(run.id);
+    expect(result.quiet).toContain(run.id);
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).resolves.toMatchObject({ status: "ACTIVE", lifecycleConfidence: "UNCONFIRMED" });
+    await expect(
+      prisma.agentConnection.findUniqueOrThrow({ where: { id: connection.id } }),
+    ).resolves.toMatchObject({ status: "QUIET", confidence: "UNCONFIRMED" });
+  });
 });

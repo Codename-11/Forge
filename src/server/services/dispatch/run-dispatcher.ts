@@ -1,5 +1,14 @@
 import "server-only";
-import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
+import {
+  AgentConnectionCapability,
+  AgentConnectionKind,
+  AgentConnectionLiveness,
+  AgentRunStatus,
+  ActionRequestKind,
+  EventKind,
+  NotificationSeverity,
+  Prisma,
+} from "@prisma/client";
 import type { AgentProvider } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
@@ -19,6 +28,8 @@ import {
   loadRunOrchestrationContext,
 } from "@/server/services/orchestration-context";
 import { markExecutionStepRunning } from "@/server/services/execution-step-runtime";
+import { upsertAgentConnection } from "@/server/services/agent-connection";
+import { createActionRequest } from "@/server/services/action-request-service";
 import {
   captureRunApproval,
   resolveRunApproval,
@@ -247,6 +258,7 @@ async function startNewRuns(): Promise<number> {
       select: {
         id: true,
         number: true,
+        authorId: true,
         title: true,
         description: true,
         assignedAgentId: true,
@@ -260,6 +272,7 @@ async function startNewRuns(): Promise<number> {
             maxConcurrent: true,
             runtime: {
               select: {
+                id: true,
                 adapterKey: true,
                 endpoint: true,
                 secret: true,
@@ -299,6 +312,75 @@ async function startNewRuns(): Promise<number> {
     const engagementMode =
       (evtPayload.engagementMode as "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS" | undefined) ??
       "EXECUTE";
+    const runtimeConnection = agent.runtime
+      ? await upsertAgentConnection(db, {
+          workspaceId: evt.workspaceId,
+          agentId: agent.id,
+          kind: AgentConnectionKind.MANAGED_RUNTIME,
+          livenessModel: AgentConnectionLiveness.HEARTBEAT,
+          runtimeId: agent.runtime.id,
+          instanceKey: `runtime:${agent.runtime.id}`,
+          displayName: agent.runtime.name,
+          capabilities: [
+            AgentConnectionCapability.HEARTBEAT,
+            AgentConnectionCapability.LIFECYCLE_REPORTING,
+            AgentConnectionCapability.CANCELLATION,
+            AgentConnectionCapability.STREAMING,
+          ],
+          metadata: { signal: "dispatch" },
+        })
+      : null;
+
+    // One implementation endpoint owns delivery. A managed runtime must not
+    // silently start while an MCP client/other endpoint owns the active lease.
+    if (engagementMode === "EXECUTE" && runtimeConnection) {
+      const competingSession = await db.workSession.findFirst({
+        where: {
+          issueId: issue.id,
+          endedAt: null,
+          status: {
+            in: [
+              "CLAIMED",
+              "IN_PROGRESS",
+              "PR_OPEN",
+              "IN_REVIEW",
+              "READY_TO_MERGE",
+              "STALE",
+            ],
+          },
+          ownerConnectionId: { not: null },
+          NOT: { ownerConnectionId: runtimeConnection.id },
+        },
+        select: { id: true, ownerConnectionId: true },
+      });
+      if (competingSession) {
+        await createActionRequest(db, {
+          workspaceId: evt.workspaceId,
+          actorId: null,
+          title: `${issue.workspace.key}-${issue.number} already has a primary delivery connection`,
+          body:
+            `${agent.runtime?.name ?? "Managed runtime"} was not started because another connection owns the active delivery session. ` +
+            "Join as a reviewer or contributor, hand off primary ownership, or cancel this dispatch.",
+          severity: NotificationSeverity.WARNING,
+          kind: ActionRequestKind.FREE_FORM,
+          assignedUserId: issue.authorId,
+          assignedAgentId: agent.id,
+          sourceType: "work-session",
+          sourceId: competingSession.id,
+          dedupeKey: `work-session-execution-conflict:${competingSession.id}:${runtimeConnection.id}`,
+          issueId: issue.id,
+        });
+        logger.warn(
+          {
+            issueId: issue.id,
+            runtimeConnectionId: runtimeConnection.id,
+            ownerConnectionId: competingSession.ownerConnectionId,
+          },
+          "managed runtime dispatch blocked by another delivery connection",
+        );
+        continue;
+      }
+    }
     const instruction = forgeRunInstruction(
       {
         mode: engagementMode,
@@ -351,6 +433,8 @@ async function startNewRuns(): Promise<number> {
           workspaceId: evt.workspaceId,
           issueId: issue.id,
           agentId: agent.id,
+          connectionId: runtimeConnection?.id ?? null,
+          lifecycleConfidence: runtimeConnection ? "CONFIRMED" : "UNCONFIRMED",
           assignmentEventId: evt.id,
           currentStep: "starting run",
           executionStepId: orchestrationContext?.step?.id ?? already?.executionStepId ?? null,

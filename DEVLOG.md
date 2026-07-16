@@ -13571,6 +13571,35 @@ Mission Control Playwright suite passed both journeys.
 
 ---
 
+## 2026-07-16 — Canonical agent connections and delivery ownership
+
+Introduced `AgentConnection` as the durable identity for managed runtimes, MCP
+clients, webhooks, and on-demand execution. Runs, run events, work sessions, and
+participants now preserve connection provenance and liveness confidence, while
+MCP initialization establishes a session identity that is refreshed on every
+request and revoked with its API key.
+
+Separated transport-specific liveness semantics: managed runtimes retain
+heartbeat/stall recovery, while silent MCP clients become quiet and
+unconfirmed without losing delivery ownership or being automatically
+redispatched. Work sessions now enforce one active primary connection, support
+explicit join and handoff operations, and block conflicting runtime dispatch
+with an actionable operator request. PR merge reconciliation also closes
+pre-merge execute runs so delivery state cannot remain falsely active.
+
+Expanded Agent Profile, Access, Command Center, Agent Policy, and issue Delivery
+surfaces with connection type, confidence, last-seen evidence, participants,
+ownership conflicts, and audited reconciliation. Updated the operator and
+transport documentation and refreshed the Agent Studio audit captures.
+
+Verification: Prisma validation passed; lint and typecheck passed (existing
+lint warnings only); the focused connection, stale-run, work-session, and
+dispatcher integration suite passed 28/28; the complete Vitest suite passed;
+the production Next.js build passed; and all 52 Playwright journeys passed
+against the migrated production-mode E2E stack.
+
+---
+
 ## 2026-07-15 — Mission Control attention surfaces
 
 Audited Mission Control, the cross-workspace Inbox, Activity, and top-bar

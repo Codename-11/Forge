@@ -29,6 +29,8 @@ import { finishRun } from "@/server/services/agent-run";
 export interface StalledRunSweepResult {
   workspacesScanned: number;
   stalled: string[];
+  /** Lease-backed MCP attempts whose lifecycle is unknown, not failed. */
+  quiet: string[];
 }
 
 export async function sweepStalledRuns(
@@ -41,6 +43,7 @@ export async function sweepStalledRuns(
   });
 
   const stalled: string[] = [];
+  const quiet: string[] = [];
 
   for (const ws of workspaces) {
     const cutoff = new Date(now.getTime() - ws.agentRunStaleMinutes * 60_000);
@@ -59,11 +62,32 @@ export async function sweepStalledRuns(
         agentId: true,
         lastEventAt: true,
         currentStep: true,
+        connectionId: true,
+        connection: { select: { kind: true, status: true } },
       },
     });
 
     for (const run of candidates) {
       try {
+        if (run.connection?.kind === "MCP_CLIENT") {
+          if (run.connection.status === "QUIET") continue;
+          // Streamable HTTP clients do not provide a durable process signal.
+          // Silence expires confidence, not the run: external Git/PR work may
+          // still be progressing and automatic redispatch would create a
+          // competing implementation.
+          await client.agentRun.updateMany({
+            where: { id: run.id, status: AgentRunStatus.ACTIVE },
+            data: { lifecycleConfidence: "UNCONFIRMED" },
+          });
+          if (run.connectionId) {
+            await client.agentConnection.updateMany({
+              where: { id: run.connectionId, status: "ACTIVE" },
+              data: { status: "QUIET", confidence: "UNCONFIRMED" },
+            });
+          }
+          quiet.push(run.id);
+          continue;
+        }
         await finishRun(client, {
           runId: run.id,
           workspaceId: ws.id,
@@ -84,5 +108,5 @@ export async function sweepStalledRuns(
     }
   }
 
-  return { workspacesScanned: workspaces.length, stalled };
+  return { workspacesScanned: workspaces.length, stalled, quiet };
 }
