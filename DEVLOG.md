@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — Native Sessions production initialization hotfix
+
+The authenticated v0.26.0 live smoke reached Forge but the first native Hermes
+send failed before contacting the runtime: the durable outbound delivery
+transaction serialized `systemPrompt` before that block-scoped value was
+initialized later in the handler. The prompt and optional canvas context are
+now prepared before the transaction, preserving atomic user-message/outbox
+writes without a production-bundle temporal-dead-zone failure. A focused
+source-order regression protects this initialization invariant.
+
 ## 2026-07-16 — v0.26.0 coordinated release preparation
 
 Release coordination confirmed that AXI-113 merged after v0.25.0 with no other
@@ -119,6 +129,7 @@ crash-stranded `PROCESSING` row. The platform plugin also retains a failed
 final draft and reuses its original event id, preventing duplicate final
 messages on retry. Focused review coverage passes **33/33** TypeScript tests and
 **8/8** Python adapter tests.
+
 ## 2026-07-16 — AXI-86 Artifact Studio
 
 Implemented Forge as the artifact control plane for people and agents. The
@@ -482,6 +493,7 @@ Verification: focused dispatcher and operator-attention coverage passed
 passed; the full Vitest suite passed (**1,211 passed; 1 skipped**); a fresh
 production build and the responsive Command Center Playwright contract passed
 (**1/1** across desktop, tablet, and mobile); and `git diff --check` passed.
+
 ## 2026-07-13 — Artifacts system research and implementation brief
 
 Created a documentation-only Artifacts audit in an isolated worktree using

@@ -563,6 +563,54 @@ export async function POST(req: NextRequest) {
         ]
       : body;
 
+  // Prepare connector instructions before the durable delivery transaction.
+  // Hermes delivery rows persist this value atomically with the user turn so
+  // replay has the exact original instructions. Keeping it below the
+  // transaction created a temporal-dead-zone failure only on the native
+  // Sessions path (`systemPrompt` was initialized later while the callback
+  // tried to serialize it).
+  let boundCanvasId: string | null = null;
+  if (canvasId) {
+    const canvas = await db.workspaceCanvas.findFirst({
+      where: { id: canvasId, workspaceId, archivedAt: null },
+      select: { id: true },
+    });
+    if (canvas) boundCanvasId = canvas.id;
+  }
+
+  const baseSystemPrompt =
+    `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
+    `management workspace. Be concise and direct. ` +
+    (agent.capabilities && agent.capabilities.length > 0
+      ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
+      : "") +
+    (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
+
+  const buildSystemPrompt = async (): Promise<string> => {
+    if (!boundCanvasId) return baseSystemPrompt;
+    const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
+    const storyboardHint =
+      `When the operator asks you to lay out, storyboard, sketch, ` +
+      `organize, or "set up a canvas for" something, reach for the ` +
+      `compound MCP gestures:\n` +
+      `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
+      `the plan card + notes lane + sources column + next-steps lane.\n` +
+      `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
+      `with the issue card + related + comments + attachments.\n` +
+      `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
+      `with a scratchpad + sources column + next-steps lane.\n` +
+      `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
+      `hatch when the three presets don't fit. Provide a panels[] ` +
+      `array of \`{ label, body?, x, y, width, height }\`.\n` +
+      `One storyboard call is the grammar — don't scatter 25 floating ` +
+      `nodes by hand.`;
+    if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
+    return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
+  };
+  // Dispatch-only agents receive the durable user event and build their own
+  // runtime context. Avoid reading canvas state for a prompt Forge never uses.
+  const systemPrompt = useDispatch ? "" : await buildSystemPrompt();
+
   // Persist the USER row and the audit/event in one transaction. Mirrors
   // `chat.send` so the inbox lifecycle stays honest. Forge-owned streaming
   // turns tag the payload `streamed: true` so the dispatch worker can no-op
@@ -873,48 +921,6 @@ export async function POST(req: NextRequest) {
     });
     const history = recent.reverse();
 
-    // Resolve the canvas binding once up-front so an invalid id fails fast
-    // (rather than silently dropping the binding mid-stream).
-    let boundCanvasId: string | null = null;
-    if (canvasId) {
-      const canvas = await db.workspaceCanvas.findFirst({
-        where: { id: canvasId, workspaceId, archivedAt: null },
-        select: { id: true },
-      });
-      if (canvas) boundCanvasId = canvas.id;
-    }
-
-    const baseSystemPrompt =
-      `You are ${agent.name}. You're chatting with the operator inside Forge, a project ` +
-      `management workspace. Be concise and direct. ` +
-      (agent.capabilities && agent.capabilities.length > 0
-        ? `Your capabilities: ${agent.capabilities.join(", ")}.\n\n`
-        : "") +
-      (agent.templateMarkdown ? `${agent.templateMarkdown}\n` : "");
-
-    const buildSystemPrompt = async (): Promise<string> => {
-      if (!boundCanvasId) return baseSystemPrompt;
-      const canvasSummary = await loadCanvasContextSummary(workspaceId, boundCanvasId);
-      const storyboardHint =
-        `When the operator asks you to lay out, storyboard, sketch, ` +
-        `organize, or "set up a canvas for" something, reach for the ` +
-        `compound MCP gestures:\n` +
-        `- \`canvases.storyboardPlan({ planId })\` — labeled frame with ` +
-        `the plan card + notes lane + sources column + next-steps lane.\n` +
-        `- \`canvases.storyboardIssue({ issueId })\` — labeled frame ` +
-        `with the issue card + related + comments + attachments.\n` +
-        `- \`canvases.storyboardResearch({ topic })\` — labeled frame ` +
-        `with a scratchpad + sources column + next-steps lane.\n` +
-        `- \`canvases.storyboardCustom({ name, panels })\` — escape ` +
-        `hatch when the three presets don't fit. Provide a panels[] ` +
-        `array of \`{ label, body?, x, y, width, height }\`.\n` +
-        `One storyboard call is the grammar — don't scatter 25 floating ` +
-        `nodes by hand.`;
-      if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
-      return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
-    };
-    const systemPrompt = await buildSystemPrompt();
-
     // Build the model-facing message array. History rows stay plain text —
     // we only attach image blocks to the *latest* user turn, which is the
     // one we just persisted. (Historical attachments aren't replayed; the
@@ -933,7 +939,7 @@ export async function POST(req: NextRequest) {
         messages.push({ role, content: m.body });
       }
     }
-    return { boundCanvasId, buildSystemPrompt, history, messages, systemPrompt };
+    return { history, messages };
   })().catch(async (err) => {
     const failedAt = new Date().toISOString();
     const message = streamErrorMessage(err, "Failed to prepare the chat turn.");
@@ -963,7 +969,7 @@ export async function POST(req: NextRequest) {
   if (!prepared) {
     return NextResponse.json({ error: "Failed to prepare chat turn" }, { status: 500 });
   }
-  const { boundCanvasId, buildSystemPrompt, history, messages, systemPrompt } = prepared;
+  const { history, messages } = prepared;
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
