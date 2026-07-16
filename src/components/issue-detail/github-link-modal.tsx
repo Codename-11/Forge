@@ -22,12 +22,14 @@ import { Input } from "@/components/ui/input";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 
-const LINK_KINDS = ["RELATES_TO", "IMPLEMENTS", "REVIEWS", "SOURCE"] as const;
+const LINK_KINDS = ["RELATES_TO", "IMPLEMENTS", "FIXES", "RELEASES", "REVIEWS", "SOURCE"] as const;
 type LinkKind = (typeof LINK_KINDS)[number];
 
 function kindLabel(kind: string): string {
   if (kind === "SOURCE") return "source";
   if (kind === "IMPLEMENTS") return "implements";
+  if (kind === "FIXES") return "fixes / closes";
+  if (kind === "RELEASES") return "release contains implementation";
   if (kind === "REVIEWS") return "reviews";
   return "related";
 }
@@ -158,7 +160,12 @@ export function GitHubLinkModal({
             onLinked={() => onLinked(true)}
           />
         ) : (
-          <BrowseTab issueId={issueId} kind={kind} isAdmin={isAdmin} onLinked={() => onLinked(false)} />
+          <BrowseTab
+            issueId={issueId}
+            kind={kind}
+            isAdmin={isAdmin}
+            onLinked={() => onLinked(false)}
+          />
         )}
       </div>
     </CenterModal>
@@ -235,13 +242,16 @@ function ByUrlTab({
     // repo would fire wasted GitHub installation probes.
     { enabled: !!repoFullName && parsed?.number != null, staleTime: 15_000, retry: false },
   );
-  const ready =
-    linkability.data?.status === "ready" ? linkability.data : null;
+  const ready = linkability.data?.status === "ready" ? linkability.data : null;
 
   const preview = trpc.github.preview.useQuery(
     parsed?.url
       ? { url: parsed.url, mappingId: ready?.mappingId }
-      : { repoFullName: repoFullName ?? "", number: parsed?.number ?? 0, mappingId: ready?.mappingId },
+      : {
+          repoFullName: repoFullName ?? "",
+          number: parsed?.number ?? 0,
+          mappingId: ready?.mappingId,
+        },
     { enabled: !!ready && !!parsed?.number, staleTime: 15_000, retry: false },
   );
 
@@ -282,8 +292,8 @@ function ByUrlTab({
 
       {parsed && !parsed.number && (
         <p className="text-meta text-muted-foreground">
-          Add an issue/PR number — <span className="font-mono">{parsed.repoFullName}#123</span> —
-          or use <span className="font-medium text-foreground">Browse a repo</span> to pick one.
+          Add an issue/PR number — <span className="font-mono">{parsed.repoFullName}#123</span> — or
+          use <span className="font-medium text-foreground">Browse a repo</span> to pick one.
         </p>
       )}
 
@@ -319,7 +329,11 @@ function ByUrlTab({
                 linkUrl && linkM.mutate({ issueId, url: linkUrl, kind, mappingId: ready.mappingId })
               }
             >
-              {linkM.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
+              {linkM.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Link2 className="h-3.5 w-3.5" />
+              )}
               Link as {kindLabel(kind)}
             </Button>
           </div>
@@ -380,7 +394,7 @@ function Remediation({
   });
 
   const [connectionId, setConnectionId] = useState<string>(
-    state.status === "mappable" ? state.connections[0]?.connectionId ?? "" : "",
+    state.status === "mappable" ? (state.connections[0]?.connectionId ?? "") : "",
   );
 
   if (state.status === "app_available") {
@@ -416,7 +430,9 @@ function Remediation({
             Use {app?.name ?? "GitHub App"}
           </Button>
         ) : (
-          <AskAdmin>connect the workspace GitHub App for linking in Settings → Connections</AskAdmin>
+          <AskAdmin>
+            connect the workspace GitHub App for linking in Settings → Connections
+          </AskAdmin>
         )}
       </RemediationCard>
     );
@@ -486,7 +502,11 @@ function Remediation({
               disabled={mapM.isPending || !connectionId}
               onClick={() => mapM.mutate({ connectionId, repoFullName: state.repoFullName })}
             >
-              {mapM.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <PlugZap className="h-3.5 w-3.5" />}
+              {mapM.isPending ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <PlugZap className="h-3.5 w-3.5" />
+              )}
               Connect repository
             </Button>
           </div>
@@ -581,11 +601,7 @@ function Remediation({
 }
 
 function AskAdmin({ children }: { children: React.ReactNode }) {
-  return (
-    <p className="text-meta text-muted-foreground">
-      Ask a workspace admin to {children}.
-    </p>
-  );
+  return <p className="text-meta text-muted-foreground">Ask a workspace admin to {children}.</p>;
 }
 
 function RemediationCard({
@@ -610,7 +626,8 @@ function RemediationCard({
       <div className="flex items-start gap-2">
         <Icon
           className={
-            "mt-0.5 h-4 w-4 shrink-0 " + (tone === "warning" ? "text-warning" : "text-muted-foreground")
+            "mt-0.5 h-4 w-4 shrink-0 " +
+            (tone === "warning" ? "text-warning" : "text-muted-foreground")
           }
         />
         <div className="min-w-0 space-y-0.5">
@@ -677,7 +694,9 @@ function BrowseTab({
   }, [current?.repoFullName, current?.mapped, debouncedQuery, isAdmin]);
 
   const connecting =
-    !!current && !current.mapped && (connectRepoM.isPending || autoConnected.has(current.repoFullName));
+    !!current &&
+    !current.mapped &&
+    (connectRepoM.isPending || autoConnected.has(current.repoFullName));
 
   const search = trpc.github.search.useQuery(
     { mappingId, query: debouncedQuery, type: type || undefined },
@@ -696,7 +715,11 @@ function BrowseTab({
   });
 
   if (repos.isLoading) {
-    return <StatusLine icon={Loader2} spin>Loading repositories…</StatusLine>;
+    return (
+      <StatusLine icon={Loader2} spin>
+        Loading repositories…
+      </StatusLine>
+    );
   }
   if (!repos.data || repos.data.length === 0) {
     return (
@@ -777,10 +800,14 @@ function BrowseTab({
       )}
 
       {search.isLoading && debouncedQuery.trim() && (
-        <StatusLine icon={Loader2} spin>Searching…</StatusLine>
+        <StatusLine icon={Loader2} spin>
+          Searching…
+        </StatusLine>
       )}
       {search.isError && (
-        <StatusLine icon={AlertCircle} tone="warning">{search.error.message}</StatusLine>
+        <StatusLine icon={AlertCircle} tone="warning">
+          {search.error.message}
+        </StatusLine>
       )}
       {search.data && search.data.length === 0 && debouncedQuery.trim() && (
         <p className="text-meta text-muted-foreground">No matching open issues or PRs.</p>
@@ -806,13 +833,13 @@ function BrowseTab({
                   <p className="truncate text-[0.8125rem] font-medium" title={item.title}>
                     {item.title}
                   </p>
-                  <div className="mt-0.5 flex items-center gap-1.5 text-meta text-muted-foreground">
+                  <div className="text-meta mt-0.5 flex items-center gap-1.5 text-muted-foreground">
                     <span className="font-mono">#{item.number}</span>
                     <span>{stateLabel(item.state)}</span>
                   </div>
                 </div>
                 {isLinked ? (
-                  <span className="inline-flex items-center gap-1 px-2 text-meta text-success">
+                  <span className="text-meta inline-flex items-center gap-1 px-2 text-success">
                     <CheckCircle2 className="h-3.5 w-3.5" />
                     linked
                   </span>
@@ -856,12 +883,23 @@ function ResourcePreview({
 }: {
   loading: boolean;
   error: string | null;
-  snapshot: { resourceType: string; title: string; state: string; url: string; repoFullName: string; number: number } | null;
+  snapshot: {
+    resourceType: string;
+    title: string;
+    state: string;
+    url: string;
+    repoFullName: string;
+    number: number;
+  } | null;
   fallbackRepo: string | null;
   fallbackNumber: number;
 }) {
   if (loading) {
-    return <StatusLine icon={Loader2} spin>Loading {fallbackRepo}#{fallbackNumber}…</StatusLine>;
+    return (
+      <StatusLine icon={Loader2} spin>
+        Loading {fallbackRepo}#{fallbackNumber}…
+      </StatusLine>
+    );
   }
   if (error) {
     return (
@@ -889,7 +927,7 @@ function ResourcePreview({
         >
           {snapshot.title}
         </a>
-        <div className="mt-0.5 flex items-center gap-1.5 text-meta text-muted-foreground">
+        <div className="text-meta mt-0.5 flex items-center gap-1.5 text-muted-foreground">
           <span className="font-mono">
             {snapshot.repoFullName}#{snapshot.number}
           </span>
@@ -914,7 +952,7 @@ function StatusLine({
   return (
     <p
       className={
-        "flex items-center gap-1.5 text-meta " +
+        "text-meta flex items-center gap-1.5 " +
         (tone === "warning" ? "text-warning" : "text-muted-foreground")
       }
     >

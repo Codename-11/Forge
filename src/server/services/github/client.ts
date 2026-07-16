@@ -598,6 +598,7 @@ export function pullRequestSnapshot(
   pr: GitHubPullResponse,
 ): GitHubResourceSnapshot {
   const state = pr.merged ? "merged" : pr.draft ? "draft" : pr.state;
+  const terminal = state === "merged" || state === "closed";
   return {
     provider: "GITHUB",
     resourceType: "PULL_REQUEST",
@@ -618,7 +619,10 @@ export function pullRequestSnapshot(
       merged: pr.merged ?? false,
       mergedAt: pr.merged_at ?? null,
       closedAt: pr.closed_at ?? null,
-      mergeableState: pr.mergeable_state ?? null,
+      // GitHub mergeability is a pre-merge planning fact. Retaining an old
+      // "unknown"/"blocked" value after terminal state creates contradictory
+      // cards, so terminal snapshots deliberately clear it.
+      mergeableState: terminal ? null : (pr.mergeable_state ?? null),
       requestedReviewers: (pr.requested_reviewers ?? [])
         .map((reviewer) => reviewer.login ?? "")
         .filter(Boolean),

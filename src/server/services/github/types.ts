@@ -5,8 +5,20 @@ export const GITHUB_PROVIDER = "GITHUB" as const;
 export const GITHUB_RESOURCE_TYPES = ["ISSUE", "PULL_REQUEST"] as const;
 export type GitHubResourceType = (typeof GITHUB_RESOURCE_TYPES)[number];
 
-export const EXTERNAL_LINK_KINDS = ["SOURCE", "IMPLEMENTS", "REVIEWS", "RELATES_TO"] as const;
+export const EXTERNAL_LINK_KINDS = [
+  "SOURCE",
+  "IMPLEMENTS",
+  "FIXES",
+  "RELEASES",
+  "REVIEWS",
+  "RELATES_TO",
+] as const;
 export type ExternalLinkKind = (typeof EXTERNAL_LINK_KINDS)[number];
+
+export const IMPLEMENTATION_LINK_KINDS = [
+  "IMPLEMENTS",
+  "FIXES",
+] as const satisfies readonly ExternalLinkKind[];
 
 export type GitHubRepoRef = {
   owner: string;

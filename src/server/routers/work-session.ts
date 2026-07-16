@@ -141,13 +141,13 @@ export const workSessionRouter = router({
         branch: branchSchema,
         baseBranch: branchSchema.default("main"),
         worktreePath: z.string().max(1_000).nullable().optional(),
-        source: z.nativeEnum(WorkSessionSource).default(WorkSessionSource.CODEX_DESKTOP),
       }),
     )
     .mutation(({ ctx, input }) =>
       claimWorkSession(ctx.db, {
         workspaceId: ctx.workspaceId,
         ...input,
+        source: WorkSessionSource.MANUAL,
         actor: { userId: ctx.session.user.id, agentId: ctx.apiKey?.linkedAgentId ?? null },
       }),
     ),

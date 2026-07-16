@@ -11,6 +11,8 @@ import { GitHubLinkModal } from "@/components/issue-detail/github-link-modal";
 function kindLabel(kind: string): string {
   if (kind === "SOURCE") return "source";
   if (kind === "IMPLEMENTS") return "implements";
+  if (kind === "FIXES") return "fixes / closes";
+  if (kind === "RELEASES") return "release contains implementation";
   if (kind === "REVIEWS") return "reviews";
   return "related";
 }
@@ -73,6 +75,8 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
             {links.map((link) => {
               const resource = link.externalResource;
               const isPr = resource.resourceType === "PULL_REQUEST";
+              const terminalPr =
+                isPr && (resource.state === "merged" || resource.state === "closed");
               const metadata = metadataRecord(resource.metadata);
               const head = metadataRecord(metadata.head);
               const checks = metadataRecord(metadata.checks);
@@ -83,8 +87,9 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
                   : typeof review.decision === "string"
                     ? review.decision
                     : null;
-              const checksLabel =
-                checks.partial === true
+              const checksLabel = terminalPr
+                ? null
+                : checks.partial === true
                   ? "checks partial"
                   : typeof checks.conclusion === "string"
                     ? `checks ${checks.conclusion}`
@@ -113,27 +118,38 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
                         <span className="font-mono">
                           {resource.repoFullName}#{resource.number}
                         </span>
-                        <span>{kindLabel(link.kind)}</span>
+                        <span className="font-medium text-foreground">{kindLabel(link.kind)}</span>
                         <span>{stateLabel(resource.state)}</span>
                         {resource.lastSyncedAt && (
                           <span>synced {relativeTime(resource.lastSyncedAt)}</span>
                         )}
                       </div>
                       {isPr && (
-                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
-                          {typeof head.ref === "string" && (
-                            <span className="max-w-full truncate font-mono" title={head.ref}>
-                              {head.ref}
-                            </span>
-                          )}
-                          {reviewDecision && (
-                            <span>{reviewDecision.toLowerCase().replaceAll("_", " ")}</span>
-                          )}
-                          {checksLabel && <span>{checksLabel}</span>}
-                          {typeof metadata.mergeableState === "string" && (
-                            <span>merge {metadata.mergeableState}</span>
-                          )}
-                        </div>
+                        <details className="mt-1 text-[0.6875rem] text-muted-foreground">
+                          <summary className="focus-ring cursor-pointer list-none hover:text-foreground">
+                            Evidence
+                          </summary>
+                          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+                            {typeof head.ref === "string" && (
+                              <span className="max-w-full truncate font-mono" title={head.ref}>
+                                {head.ref}
+                              </span>
+                            )}
+                            {terminalPr && typeof metadata.mergedAt === "string" ? (
+                              <span>merged {relativeTime(metadata.mergedAt)}</span>
+                            ) : (
+                              <>
+                                {reviewDecision && (
+                                  <span>{reviewDecision.toLowerCase().replaceAll("_", " ")}</span>
+                                )}
+                                {checksLabel && <span>{checksLabel}</span>}
+                                {typeof metadata.mergeableState === "string" && (
+                                  <span>merge {metadata.mergeableState}</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </details>
                       )}
                       {resource.syncLastError && (
                         <div

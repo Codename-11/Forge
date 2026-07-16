@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — Truthful Delivery provenance and GitHub relations
+
+AXI-117 audited production Ready to Close, Delivery, and native GitHub cards,
+then separated actor, invocation, connector, runtime, implementation PR, and
+release-containment facts. Browser claims now persist as manual UI actions and
+MCP claims persist as Forge MCP; connector identity comes only from the MCP
+initialize `clientInfo`, while runtime attribution requires an output-producing
+managed run. Compact Delivery cards expose the full evidence on demand without
+guessing Codex Desktop or a runtime from agent identity.
+
+GitHub webhook matching now derives one native relation per issue/resource:
+`IMPLEMENTS`, `FIXES`, `RELEASES`, or `RELATES_TO`. The migration reclassifies
+release assembly PRs, removes legacy duplicate relations deterministically, and
+enforces the singular relation invariant. Terminal PR synchronization clears
+stale mergeability and suppresses pending-check contradictions, while merged
+implementation evidence still participates in completion readiness. Passing
+completion evidence and READY state now use the semantic success token.
+
+Verification passed lint (existing warnings only), typecheck, a production
+Next build, 1,399 Vitest tests with one intentional skip, focused relation and
+provenance coverage, and the AXI-117 Playwright issue journey. The full
+single-worker browser run passed 51 journeys before Chromium exited while
+opening an unrelated Mission Control context; both affected Mission Control
+tests passed immediately in isolation, covering all 53 journeys.
+
 ## 2026-07-16 — v0.26.1 released, deployed, and verified
 
 Merged release PR #60 and tagged exact `main` commit

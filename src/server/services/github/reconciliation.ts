@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 import { logger } from "@/server/logger";
 import { GitHubRequestError } from "@/server/services/github/client";
 import { syncGitHubExternalResource } from "@/server/services/github/resource-sync";
+import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
 
 const PROVIDER = "GITHUB";
 const RESOURCE_TYPE = "PULL_REQUEST";
@@ -186,7 +187,7 @@ export async function sweepGitHubStatusReconciliation(
         links: {
           some: {
             workspaceId: workspace.id,
-            kind: "IMPLEMENTS",
+            kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
             issue: { workspaceId: workspace.id, deletedAt: null },
           },
         },
@@ -242,9 +243,9 @@ export async function sweepGitHubStatusReconciliation(
           checks.source !== "api-aggregate" ||
           checks.status === "unknown" ||
           checks.partial === true;
-        // Unknown/partial checks on any PR state use exponential/provider
-        // backoff. This includes open/draft resources with missing permissions.
-        if (untrustedChecks && resource.state !== "closed") {
+        // Unknown/partial checks only block actionable open/draft PRs. A merged
+        // or closed PR is terminal regardless of a stale checks aggregate.
+        if (untrustedChecks && resource.state !== "closed" && resource.state !== "merged") {
           const failureCount = candidate.syncFailureCount + 1;
           const exponential = retryAtForFailure({
             error: new Error(

@@ -190,7 +190,7 @@ describe("GitHub status reconciliation", () => {
     expect(calls).toBe(1);
   });
 
-  it("backs off merged PRs with no checks and re-enables terminal rows when reopened", async () => {
+  it("does not back off merged PRs for stale checks and re-enables terminal rows when reopened", async () => {
     const { fixture, prisma, resource } = await setupResource();
     const now = new Date("2026-07-14T12:00:00.000Z");
     const syncResource = async () =>
@@ -211,8 +211,8 @@ describe("GitHub status reconciliation", () => {
       syncResource,
     });
     const held = await prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } });
-    expect(held.syncFailureCount).toBe(1);
-    expect(held.syncRetryAt).toEqual(new Date("2026-07-14T12:05:00.000Z"));
+    expect(held.syncFailureCount).toBe(0);
+    expect(held.syncRetryAt).toBeNull();
 
     await prisma.externalResource.update({
       where: { id: resource.id },
@@ -270,6 +270,33 @@ describe("GitHub status reconciliation", () => {
       },
     });
     expect(newHead.metadata).not.toHaveProperty("checks");
+  });
+
+  it("normalizes merged PRs as terminal even when checks and mergeability are unknown", async () => {
+    const { fixture, prisma, resource } = await setupResource();
+    const merged = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: resource.url,
+        title: resource.title,
+        state: "merged",
+        labels: [],
+        assignees: [],
+        metadata: {
+          mergeableState: "unknown",
+          checks: { status: "unknown", partial: true, diagnostic: "Checks unavailable" },
+        },
+      },
+    });
+    const metadata = merged.metadata as Record<string, unknown>;
+    expect(merged.syncTerminalAt).toBeInstanceOf(Date);
+    expect(merged.syncRetryAt).toBeNull();
+    expect(merged.syncLastError).toBeNull();
+    expect(metadata.mergeableState).toBeNull();
   });
 
   it("does not inspect disabled workspaces, terminal PRs, or an active retry lease", async () => {

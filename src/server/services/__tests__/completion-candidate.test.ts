@@ -49,6 +49,7 @@ async function linkedPullRequest(
   issueId: string,
   state: "open" | "closed" | "merged",
   conclusion: string | null = "success",
+  kind: "IMPLEMENTS" | "FIXES" = "IMPLEMENTS",
 ) {
   const prisma = getPrisma();
   const resource = await prisma.externalResource.create({
@@ -71,7 +72,7 @@ async function linkedPullRequest(
       workspaceId: fixture.workspace.id,
       issueId,
       externalResourceId: resource.id,
-      kind: "IMPLEMENTS",
+      kind,
       createdById: fixture.user.id,
     },
   });
@@ -79,6 +80,27 @@ async function linkedPullRequest(
 }
 
 describe("completion candidate policy", () => {
+  it("treats an explicit fixes/closes PR as implementation evidence", async () => {
+    const { fixture, prisma } = await setup();
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const pullRequest = await linkedPullRequest(fixture, issue.id, "merged", "success", "FIXES");
+
+    const result = await evaluateIssueCompletionCandidate(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      actorId: fixture.user.id,
+      sourceType: "github-pull-request",
+      sourceId: pullRequest.id,
+      sourceLabel: "Fixes AXI issue",
+    });
+
+    expect(result.outcome).toBe("RECOMMENDED");
+    const request = await prisma.actionRequest.findUniqueOrThrow({
+      where: { id: "requestId" in result ? result.requestId : "" },
+    });
+    expect(request.payload).toMatchObject({ assessment: { state: "READY" } });
+  });
+
   it("refreshes one durable recommendation for repeated completion signals", async () => {
     const { fixture, prisma } = await setup();
     const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });

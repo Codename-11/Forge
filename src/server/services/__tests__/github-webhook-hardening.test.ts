@@ -1573,14 +1573,13 @@ describe("GitHub webhook hardening", () => {
     await expect(
       prisma.externalResourceLink.findUnique({
         where: {
-          issueId_externalResourceId_kind: {
+          issueId_externalResourceId: {
             issueId: issue.id,
             externalResourceId: resource.id,
-            kind: "RELATES_TO",
           },
         },
       }),
-    ).resolves.toBeTruthy();
+    ).resolves.toMatchObject({ kind: "RELATES_TO" });
     await expect(
       migrateGenericGitHubAttachments(prisma, {
         workspaceId: fixture.workspace.id,

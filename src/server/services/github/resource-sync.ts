@@ -541,16 +541,15 @@ export async function canonicalizeGitHubResourceIdentity(
 
   // Older builds could create one row per repository spelling. Preserve every
   // issue relation on the canonical row, keeping the original link id unless
-  // the same issue/kind relation already exists there.
+  // the same issue/resource relation already exists there.
   for (const duplicate of equivalent) {
     if (duplicate.id === canonical.id) continue;
     for (const link of duplicate.links) {
       const collision = await db.externalResourceLink.findUnique({
         where: {
-          issueId_externalResourceId_kind: {
+          issueId_externalResourceId: {
             issueId: link.issueId,
             externalResourceId: canonical.id,
-            kind: link.kind,
           },
         },
         select: { id: true },
@@ -616,6 +615,10 @@ async function upsertExternalResourceInTransaction(
     ...existingMetadata,
     ...snapshotMetadata,
   };
+  const terminal =
+    args.snapshot.resourceType === "PULL_REQUEST" &&
+    (args.snapshot.state === "closed" || args.snapshot.state === "merged");
+  if (terminal) metadata.mergeableState = null;
   const existingHead =
     existingMetadata.head &&
     typeof existingMetadata.head === "object" &&
@@ -640,22 +643,14 @@ async function upsertExternalResourceInTransaction(
     metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
       ? (metadata.checks as Record<string, unknown>)
       : {};
-  const passingChecks =
-    checks.source === "api-aggregate" &&
-    checks.status === "completed" &&
-    typeof checks.conclusion === "string" &&
-    ["success", "neutral", "skipped"].includes(checks.conclusion);
   const checksDiagnostic =
-    checks.partial === true && typeof checks.diagnostic === "string"
+    !terminal && checks.partial === true && typeof checks.diagnostic === "string"
       ? checks.diagnostic.slice(0, 2_000)
       : null;
   const checksRetryAt =
     typeof checks.retryAt === "string" && Number.isFinite(Date.parse(checks.retryAt))
       ? new Date(checks.retryAt)
       : null;
-  const terminal =
-    args.snapshot.resourceType === "PULL_REQUEST" &&
-    (args.snapshot.state === "closed" || (args.snapshot.state === "merged" && passingChecks));
   const row = await db.externalResource.upsert({
     where: {
       workspaceId_provider_repoFullName_resourceType_number: {
@@ -766,21 +761,19 @@ export async function linkExternalResourceToIssue(
 
   const existingLink = await db.externalResourceLink.findUnique({
     where: {
-      issueId_externalResourceId_kind: {
+      issueId_externalResourceId: {
         issueId: args.issueId,
         externalResourceId: args.externalResourceId,
-        kind: args.kind,
       },
     },
   });
-  if (existingLink) return existingLink;
+  if (existingLink?.kind === args.kind) return existingLink;
 
   const link = await db.externalResourceLink.upsert({
     where: {
-      issueId_externalResourceId_kind: {
+      issueId_externalResourceId: {
         issueId: args.issueId,
         externalResourceId: args.externalResourceId,
-        kind: args.kind,
       },
     },
     create: {
@@ -790,7 +783,10 @@ export async function linkExternalResourceToIssue(
       kind: args.kind,
       createdById: args.actor.actorId ?? undefined,
     },
-    update: {},
+    update: {
+      kind: args.kind,
+      ...(args.actor.actorId ? { createdById: args.actor.actorId } : {}),
+    },
   });
 
   if (args.recordActivity ?? true) {
@@ -800,14 +796,15 @@ export async function linkExternalResourceToIssue(
       actorAgentId: args.actor.actorAgentId ?? null,
       entity: "Issue",
       entityId: args.issueId,
-      action: "external-resource.link",
+      action: existingLink ? "external-resource.relate" : "external-resource.link",
+      before: existingLink ?? undefined,
       after: link,
       eventKind: EventKind.ISSUE_UPDATED,
       subjectType: "issue",
       subjectId: args.issueId,
       payload: {
         source: "github",
-        change: "external-resource-linked",
+        change: existingLink ? "external-resource-relation-updated" : "external-resource-linked",
         externalResourceId: args.externalResourceId,
         linkKind: args.kind,
         resourceType: resource.resourceType,

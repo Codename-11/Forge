@@ -29,6 +29,7 @@ import {
   type ActorMeta,
 } from "@/server/services/github/resource-sync";
 import { GITHUB_PROVIDER, type GitHubResourceSnapshot } from "@/server/services/github/types";
+import { derivePullRequestIssueRelations } from "@/server/services/github/relation";
 
 type GitHubWebhookRepository = {
   full_name?: string;
@@ -239,19 +240,6 @@ export async function finishGitHubWebhookDelivery(args: {
   return updated.count === 1;
 }
 
-function forgeIssueKeys(text: string | null | undefined, workspaceKey: string): number[] {
-  if (!text) return [];
-  const escaped = workspaceKey.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`\\b${escaped}-(\\d+)\\b`, "gi");
-  const out = new Set<number>();
-  let match: RegExpExecArray | null;
-  while ((match = re.exec(text))) {
-    const n = Number(match[1]);
-    if (Number.isInteger(n) && n > 0) out.add(n);
-  }
-  return [...out];
-}
-
 async function ensureSourceIssueForSnapshot(args: {
   db: PrismaClient;
   workspaceId: string;
@@ -415,15 +403,18 @@ async function processPullRequestEvent(args: {
   if (!persisted.applied) return 0;
   const resource = persisted.resource;
 
-  const keyNumbers = [
-    ...forgeIssueKeys(args.payload.pull_request.title, args.mapping.workspace.key),
-    ...forgeIssueKeys(args.payload.pull_request.body, args.mapping.workspace.key),
-  ];
+  const relations = derivePullRequestIssueRelations({
+    workspaceKey: args.mapping.workspace.key,
+    title: args.payload.pull_request.title,
+    body: args.payload.pull_request.body,
+    headRef: args.payload.pull_request.head?.ref,
+  });
+  const keyNumbers = [...relations.keys()];
   const issues =
     keyNumbers.length > 0
       ? await args.db.issue.findMany({
           where: { workspaceId, number: { in: keyNumbers }, deletedAt: null },
-          select: { id: true },
+          select: { id: true, number: true },
         })
       : [];
 
@@ -450,7 +441,7 @@ async function processPullRequestEvent(args: {
         workspaceId,
         issueId: issue.id,
         externalResourceId: resource.id,
-        kind: "IMPLEMENTS",
+        kind: relations.get(issue.number) ?? "RELATES_TO",
         actor: args.actor,
       });
     }

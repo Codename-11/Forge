@@ -12,6 +12,7 @@ import {
   createActionRequest,
   transitionActionRequest,
 } from "@/server/services/action-request-service";
+import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
 
 const COMPLETION_SOURCE = "completion-candidate";
 const RECOVERY_SOURCE = "github-pr-recovery";
@@ -157,7 +158,10 @@ async function completionContext(db: PrismaClient, workspaceId: string, issueId:
       executionPlans: { select: { id: true } },
       executionSteps: { select: { id: true } },
       externalLinks: {
-        where: { kind: "IMPLEMENTS", externalResource: { resourceType: "PULL_REQUEST" } },
+        where: {
+          kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+          externalResource: { resourceType: "PULL_REQUEST" },
+        },
         select: {
           externalResource: {
             select: {
@@ -637,7 +641,7 @@ export async function reconcileGitHubPullRequestCompletion(
       url: true,
       metadata: true,
       links: {
-        where: { kind: "IMPLEMENTS" },
+        where: { kind: { in: [...IMPLEMENTATION_LINK_KINDS] } },
         select: {
           issueId: true,
           issue: {

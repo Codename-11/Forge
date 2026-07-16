@@ -117,7 +117,7 @@ export function WorkCoordinationPanel({
     latest.observedImplementation.agent.id !== latest.ownerAgent.id,
   );
   const ownershipMismatch = connectionMismatch || observedMismatch;
-  const observedConnection = latest?.observedImplementation?.agent.connections[0] ?? null;
+  const observedConnection = latest?.observedImplementation?.run.connection ?? null;
 
   return (
     <section
@@ -154,8 +154,13 @@ export function WorkCoordinationPanel({
                 {provenance && (
                   <div className="mt-1 flex flex-wrap items-center gap-1.5">
                     <span className="rounded border border-border/70 bg-subtle/60 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                      {provenance.connectionLabel}
+                      {provenance.invocationLabel}
                     </span>
+                    {provenance.connectorLabel && (
+                      <span className="rounded border border-border/70 bg-subtle/60 px-1.5 py-0.5 text-[0.5625rem] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {provenance.connectorLabel}
+                      </span>
+                    )}
                     <span className={cn("text-meta", provenance.tone)}>
                       {provenance.statusLabel}
                     </span>
@@ -167,17 +172,33 @@ export function WorkCoordinationPanel({
                 >
                   {latest.repoFullName}:{latest.branch}
                 </div>
-                <div className="text-meta mt-1 text-muted-foreground">
-                  base {latest.baseBranch} · activity {relativeTime(latest.lastHeartbeatAt)}
-                </div>
-                {latest.worktreePath && (
-                  <div
-                    className="mt-1 truncate font-mono text-[0.625rem] text-muted-foreground"
-                    title={latest.worktreePath}
-                  >
-                    {latest.worktreePath}
-                  </div>
-                )}
+                <details className="group mt-1.5 text-muted-foreground">
+                  <summary className="focus-ring cursor-pointer list-none text-[0.6875rem] hover:text-foreground">
+                    Delivery evidence
+                  </summary>
+                  <dl className="mt-1.5 grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-[0.6875rem]">
+                    <dt>Actor</dt>
+                    <dd className="min-w-0 truncate text-foreground">{owner}</dd>
+                    <dt>Invocation</dt>
+                    <dd>{provenance?.invocationLabel ?? "unknown"}</dd>
+                    <dt>Connector</dt>
+                    <dd>{provenance?.connectorLabel ?? "none recorded"}</dd>
+                    <dt>Runtime</dt>
+                    <dd>{provenance?.runtimeLabel ?? "no dispatched run recorded"}</dd>
+                    <dt>Base</dt>
+                    <dd className="font-mono">{latest.baseBranch}</dd>
+                    <dt>Activity</dt>
+                    <dd>{relativeTime(latest.lastHeartbeatAt)}</dd>
+                    {latest.worktreePath && (
+                      <>
+                        <dt>Worktree</dt>
+                        <dd className="min-w-0 truncate font-mono" title={latest.worktreePath}>
+                          {latest.worktreePath}
+                        </dd>
+                      </>
+                    )}
+                  </dl>
+                </details>
               </div>
             </div>
           </div>
@@ -367,7 +388,6 @@ export function WorkCoordinationPanel({
               branch,
               baseBranch,
               worktreePath: worktreePath || null,
-              source: "CODEX_DESKTOP",
             });
           }}
         >
@@ -466,24 +486,43 @@ function connectionKindLabel(
 }
 
 function deliveryProvenance(session: DeliverySession): {
-  connectionLabel: string;
+  invocationLabel: string;
+  connectorLabel: string | null;
+  runtimeLabel: string | null;
   statusLabel: string;
   tone: string;
   unconfirmedMcp: boolean;
 } {
   const connection = session.ownerConnection;
+  const invocationLabel =
+    session.source === "MCP"
+      ? "Forge MCP"
+      : session.source === "NATIVE_SESSION"
+        ? "Native session"
+        : session.source === "ISSUE_DISPATCH"
+          ? "Issue dispatch"
+          : session.source === "SCHEDULED"
+            ? "Scheduled"
+            : session.source === "MANUAL"
+              ? "Manual UI"
+              : session.source === "CONTRIBUTOR"
+                ? "Contributor"
+                : session.source === "CODEX_DESKTOP"
+                  ? "Legacy desktop claim"
+                  : "Legacy Forge agent";
+  const run = session.observedImplementation?.run;
+  const runtimeLabel =
+    run?.externalRunId && run.connection?.kind === "MANAGED_RUNTIME" && run.connection.runtime
+      ? `${run.connection.runtime.name}${run.runEngine ? ` · ${run.runEngine.toLowerCase()}` : ""}`
+      : null;
   if (!connection) {
-    const source =
-      session.source === "CODEX_DESKTOP"
-        ? "MCP · Codex Desktop"
-        : session.source === "FORGE_AGENT"
-          ? "Legacy agent session"
-          : session.source.toLowerCase().replaceAll("_", " ");
     return {
-      connectionLabel: source,
+      invocationLabel,
+      connectorLabel: null,
+      runtimeLabel,
       statusLabel: "provenance not registered",
       tone: "text-muted-foreground",
-      unconfirmedMcp: session.source === "CODEX_DESKTOP",
+      unconfirmedMcp: session.source === "MCP",
     };
   }
   const unconfirmedMcp = connection.kind === "MCP_CLIENT" && connection.confidence !== "CONFIRMED";
@@ -504,7 +543,9 @@ function deliveryProvenance(session: DeliverySession): {
           ? "text-success"
           : "text-muted-foreground";
   return {
-    connectionLabel: connectionKindLabel(connection.kind, connection),
+    invocationLabel,
+    connectorLabel: connectionKindLabel(connection.kind, connection),
+    runtimeLabel,
     statusLabel,
     tone,
     unconfirmedMcp,

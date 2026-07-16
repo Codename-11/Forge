@@ -55,6 +55,20 @@ test.describe("Issue flow", () => {
     await page.goto(new URL(page.url()).pathname);
     await expect(activityTab).toHaveAttribute("aria-selected", "true");
 
+    // A browser claim is a manual UI invocation. It must not be guessed as a
+    // Codex Desktop/MCP connection or as runtime execution.
+    const delivery = page.getByRole("region", { name: "Code work coordination" });
+    await delivery.getByRole("button", { name: "Start isolated work" }).click();
+    await delivery.getByLabel("Repository").fill("Codename-11/Forge");
+    await delivery
+      .getByRole("textbox", { name: "Branch" })
+      .fill(`codex/e2e-delivery-${Date.now()}`);
+    await delivery.getByRole("button", { name: "Claim work" }).click();
+    await expect(delivery.locator("span").filter({ hasText: /^Manual UI$/ })).toBeVisible();
+    await expect(delivery.getByText("MCP · Codex Desktop", { exact: true })).toHaveCount(0);
+    await delivery.getByText("Delivery evidence", { exact: true }).click();
+    await expect(delivery.getByText("no dispatched run recorded", { exact: true })).toBeVisible();
+
     // Move status on the detail page and confirm it sticks.
     const status = page.getByRole("combobox", { name: "Status" });
     await status.click();

@@ -6,6 +6,7 @@ import {
   advanceWorkSession,
   attachPullRequest,
   claimWorkSession,
+  listIssueWorkSessions,
   resolveMcpQuietRequestsForConnection,
   sweepStaleWorkSessions,
   touchWorkSession,
@@ -36,6 +37,67 @@ async function setup() {
 }
 
 describe("work session coordination", () => {
+  it("reports implementation provenance only from a run that produced output", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `run-backed-${Date.now()}`,
+        name: "Run-backed agent",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        instanceKey: `run-backed-${Date.now()}`,
+        displayName: "Codex CLI",
+        clientName: "codex-cli",
+      },
+    });
+    await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/run-backed",
+      source: WorkSessionSource.MCP,
+      actor: { userId: fixture.user.id, agentId: agent.id, connectionId: connection.id },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+        engagementMode: "EXECUTE",
+        externalRunId: null,
+      },
+    });
+
+    expect(
+      (await listIssueWorkSessions(prisma, fixture.workspace.id, issue.id))[0]
+        ?.observedImplementation,
+    ).toBeNull();
+    await prisma.agentRun.update({ where: { id: run.id }, data: { outputStartedAt: new Date() } });
+    await expect(
+      listIssueWorkSessions(prisma, fixture.workspace.id, issue.id),
+    ).resolves.toMatchObject([
+      {
+        source: "MCP",
+        observedImplementation: {
+          agent: { id: agent.id },
+          run: {
+            id: run.id,
+            externalRunId: null,
+            connection: { id: connection.id, kind: "MCP_CLIENT", clientName: "codex-cli" },
+          },
+        },
+      },
+    ]);
+  });
+
   it("returns the owned lease idempotently and rejects competing work", async () => {
     const { fixture, prisma, issue } = await setup();
     const first = await claimWorkSession(prisma, {
