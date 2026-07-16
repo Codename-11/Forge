@@ -607,7 +607,9 @@ export async function POST(req: NextRequest) {
     if (!canvasSummary) return `${baseSystemPrompt}\n\n${storyboardHint}`;
     return `${baseSystemPrompt}\n\n${canvasSummary}\n\n${storyboardHint}`;
   };
-  const systemPrompt = await buildSystemPrompt();
+  // Dispatch-only agents receive the durable user event and build their own
+  // runtime context. Avoid reading canvas state for a prompt Forge never uses.
+  const systemPrompt = useDispatch ? "" : await buildSystemPrompt();
 
   // Persist the USER row and the audit/event in one transaction. Mirrors
   // `chat.send` so the inbox lifecycle stays honest. Forge-owned streaming

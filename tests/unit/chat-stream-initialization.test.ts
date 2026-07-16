@@ -8,7 +8,9 @@ describe("native chat stream initialization", () => {
       path.join(process.cwd(), "src/app/api/chat/stream/route.ts"),
       "utf8",
     );
-    const promptInitialization = source.indexOf("const systemPrompt = await buildSystemPrompt();");
+    const promptInitialization = source.indexOf(
+      'const systemPrompt = useDispatch ? "" : await buildSystemPrompt();',
+    );
     const deliveryTransaction = source.indexOf("await tx.connectorDelivery.create({");
 
     expect(promptInitialization).toBeGreaterThan(-1);
