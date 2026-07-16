@@ -613,6 +613,62 @@ enum ArtifactType {
   NOTE
 }
 
+enum ArtifactVisibility {
+  PRIVATE
+  WORKSPACE
+}
+
+enum ArtifactRole {
+  VIEWER
+  COMMENTER
+  EDITOR
+  OWNER
+}
+
+enum ArtifactContentType {
+  MARKDOWN
+  TEXT
+  CODE
+  IMAGE
+  DATA
+  FILE
+  HTML
+}
+
+enum ArtifactCommentStatus {
+  OPEN
+  RESOLVED
+}
+
+enum ArtifactPublicationAudience {
+  LINK
+  WORKSPACE
+}
+
+enum ArtifactPublicationStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+enum ArtifactDeploymentProvider {
+  ARTIFACT_PREVIEW
+}
+
+enum ArtifactDeploymentStatus {
+  PENDING
+  DEPLOYING
+  READY
+  FAILED
+  RETIRED
+}
+
+enum ArtifactAgentPublishPolicy {
+  NEVER
+  REQUIRE_APPROVAL
+  ALLOW
+}
+
 enum AgentRunStatus {
   ACTIVE
   COMPLETED
@@ -743,7 +799,14 @@ model User {
   notes                             Note[]
   issueWatches                      IssueWatcher[]
   createdArtifacts                  Artifact[]               @relation("ArtifactCreator")
+  acceptedArtifacts                 Artifact[]               @relation("ArtifactAcceptor")
   artifactVersions                  ArtifactVersion[]        @relation("ArtifactVersionCreator")
+  artifactGrants                    ArtifactGrant[]
+  artifactComments                  ArtifactComment[]        @relation("ArtifactCommentAuthor")
+  resolvedArtifactComments          ArtifactComment[]        @relation("ArtifactCommentResolver")
+  artifactPublications              ArtifactPublication[]    @relation("ArtifactPublicationCreator")
+  revokedArtifactPublications       ArtifactPublication[]    @relation("ArtifactPublicationRevoker")
+  artifactDeployments               ArtifactDeployment[]     @relation("ArtifactDeploymentCreator")
   ownedContextSets                  ContextSet[]             @relation("ContextSetOwnerUser")
   createdExecutionPlans             ExecutionPlan[]          @relation("ExecutionPlanCreator")
   createdGoals                      Goal[]                   @relation("GoalCreator")
@@ -840,149 +903,149 @@ model SsoProvider {
 // ----------------------------------------------------------------------------
 
 model Workspace {
-  id                            String                   @id @default(cuid())
-  slug                          String                   @unique
-  name                          String
+  id                              String                     @id @default(cuid())
+  slug                            String                     @unique
+  name                            String
   /// Short key used for issue identifiers: e.g. `FRG-123`.
-  key                           String                   @unique
-  avatarUrl                     String?
+  key                             String                     @unique
+  avatarUrl                       String?
   /// Default cycle length (days). Overridable per cycle at create time.
-  cycleLengthDays               Int                      @default(7)
+  cycleLengthDays                 Int                        @default(7)
   /// Default rest/cooldown days between cycles (0 = back-to-back).
-  cycleCooldownDays             Int                      @default(0)
+  cycleCooldownDays               Int                        @default(0)
   /// When true, the time-tracking surface is enabled for this workspace.
-  timeTrackingEnabled           Boolean                  @default(false)
+  timeTrackingEnabled             Boolean                    @default(false)
   /// Soft cap on total attachment storage (MB) for this workspace.
-  attachmentQuotaMb             Int                      @default(1024)
+  attachmentQuotaMb               Int                        @default(1024)
   /// How Forge fills human assignees on issue create when no explicit
   /// assignees were supplied.
-  defaultIssueAssigneeMode      DefaultIssueAssigneeMode @default(NONE)
+  defaultIssueAssigneeMode        DefaultIssueAssigneeMode   @default(NONE)
   /// Member used when `defaultIssueAssigneeMode = USER`. Validated by
   /// settings writes and ignored on create if the membership later goes stale.
-  defaultIssueAssigneeUserId    String?
+  defaultIssueAssigneeUserId      String?
   /// Master toggle for auto-dispatching queued issues to agents.
-  autoDispatch                  Boolean                  @default(false)
+  autoDispatch                    Boolean                    @default(false)
   /// Strategy used when autoDispatch is on. MANUAL_ONLY disables picking.
-  autoDispatchMode              AutoDispatchMode         @default(MANUAL_ONLY)
+  autoDispatchMode                AutoDispatchMode           @default(MANUAL_ONLY)
   /// Default engagement mode for work dispatched via assignment / queue
   /// (the "you're handing it over" surface). See docs/agents/engagement-modes.md.
-  assignmentEngagementMode      EngagementMode           @default(EXECUTE)
+  assignmentEngagementMode        EngagementMode             @default(EXECUTE)
   /// How an @-mention with no explicit mode marker resolves.
-  mentionEngagementPolicy       MentionEngagementPolicy  @default(INFER)
+  mentionEngagementPolicy         MentionEngagementPolicy    @default(INFER)
   /// Fallback mode for @-mentions under FIXED policy (or when INFER yields
   /// nothing actionable). Mentions are conversational by default.
-  mentionDefaultMode            EngagementMode           @default(DISCUSS)
+  mentionDefaultMode              EngagementMode             @default(DISCUSS)
   /// When true, assigning (manually or auto) immediately pushes the agent
   /// webhook to start work; when false, the issue sits in the agent queue.
-  autoStartOnAssign             Boolean                  @default(false)
+  autoStartOnAssign               Boolean                    @default(false)
   /// Heartbeat idle timeout: a heartbeat-tracked agent (Hermes, local daemon,
   /// or a health-probed app server) flips to OFFLINE once its last heartbeat
   /// is older than this window (see `sweepIdleAgents`). 0 = disabled (the
   /// agent never auto-offlines). Default 15 so true presence works out of the
   /// box — well above the 60s heartbeat/probe cadence.
-  agentIdleTimeoutMinutes       Int                      @default(15)
+  agentIdleTimeoutMinutes         Int                        @default(15)
   /// Gated dispatch — assignment lands in queue but agent does not start
   /// work until a human approves.
-  requireApprovalBeforeStart    Boolean                  @default(false)
+  requireApprovalBeforeStart      Boolean                    @default(false)
   /// When > 0, agents must move issues out of BACKLOG/TODO within
   /// this many minutes of assignment. Stale issues emit ISSUE_STALLED
   /// and (depending on `autoRedispatchOnStall`) get their assignedAgentId
   /// cleared so the next auto-dispatch picks them up.
-  assignmentSlaMinutes          Int                      @default(0)
+  assignmentSlaMinutes            Int                        @default(0)
   /// When true, ISSUE_STALLED also clears assignedAgentId so the
   /// auto-dispatcher re-picks. When false, the event fires but the
   /// assignment is preserved (operator-driven workflow).
-  autoRedispatchOnStall         Boolean                  @default(false)
+  autoRedispatchOnStall           Boolean                    @default(false)
   /// When > 0, every successful AGENT_ASSIGNED delivery starts an
   /// "ack window" — the agent must comment on or transition the
   /// issue within this many seconds, otherwise an AGENT_NOACK event
   /// fires (and the issue is re-dispatched if `autoRedispatchOnNoack`
   /// is true). 0 disables the check. 60–180s is reasonable when the
   /// agent's loop is fast.
-  requiredAckSeconds            Int                      @default(0)
+  requiredAckSeconds              Int                        @default(0)
   /// When true, AGENT_NOACK also clears assignedAgentId so the
   /// auto-dispatcher re-picks. Mirrors `autoRedispatchOnStall`.
-  autoRedispatchOnNoack         Boolean                  @default(false)
+  autoRedispatchOnNoack           Boolean                    @default(false)
   /// When true, the maintenance worker scans for SLA breaches every
   /// minute and emits ISSUE_SLA_BREACH events. Off by default —
   /// requires `Issue.slaMinutes` to be set per-issue, otherwise the
   /// sweep is a no-op for the row.
-  slaEnforcementEnabled         Boolean                  @default(false)
+  slaEnforcementEnabled           Boolean                    @default(false)
   /// Master toggle for AI features in this workspace. Off by default.
   /// Gates AI triage on issue create AND Coach agent comments on
   /// stall/noack/breach events. Requires `ANTHROPIC_API_KEY` in env.
-  aiEnabled                     Boolean                  @default(false)
+  aiEnabled                       Boolean                    @default(false)
   /// When true, every newly created issue (by a human author) kicks off
   /// a background AI triage. Null when `aiEnabled` is off.
-  aiTriageOnCreate              Boolean                  @default(true)
+  aiTriageOnCreate                Boolean                    @default(true)
   /// When true, Coach agents post diagnostic comments on
   /// ISSUE_STALLED / AGENT_NOACK / ISSUE_SLA_BREACH events. The
   /// workspace must have an Agent with role=COACH for this to fire.
-  aiCoachEnabled                Boolean                  @default(true)
+  aiCoachEnabled                  Boolean                    @default(true)
   /// Which provider Forge talks to for AI features. Default `hermes`
   /// uses Mission-Control's pattern: an OpenAI-compatible Hermes
   /// gateway that itself fans out to Anthropic / OpenAI / etc. via the
   /// model-router plugin. Other values (`openai`, `anthropic`,
   /// `custom`) bypass Hermes and call the named provider directly.
   /// All provider URLs / keys live in env — see ai-providers.ts.
-  aiProvider                    String                   @default("hermes")
+  aiProvider                      String                     @default("hermes")
   /// Optional model override. The provider supplies a sensible default
   /// (Hermes default = workspace's session model; OpenAI default =
   /// gpt-4o-mini; Anthropic default = claude-haiku-4-5-20251001).
-  aiModel                       String?
+  aiModel                         String?
   /// AgentRun monitoring: when > 0, the watchdog flags an ACTIVE run
   /// as STALLED if it sees no AgentRunEvent within this many minutes.
   /// Defaults to 30 — long enough not to misclassify a quiet-but-working
   /// agent (they emit run events / status comments as they work), short
   /// enough that a finished turn an agent didn't close via `runs.complete`
   /// stops lingering as a live run on the issue page. 0 disables the sweep.
-  agentRunStaleMinutes          Int                      @default(30)
+  agentRunStaleMinutes            Int                        @default(30)
   /// Expected cadence for meaningful, human-facing status checkpoints while
   /// an agent run is active. Injected into the run protocol so agents refresh
   /// their rolling STATUS comment during long phases without narrating every
   /// internal thought. 0 disables the cadence reminder.
-  agentProgressUpdateMinutes    Int                      @default(5)
+  agentProgressUpdateMinutes      Int                        @default(5)
   /// Operator-facing quiet threshold for ACTIVE runs. After this many minutes
   /// without an AgentRunEvent, surfaces may label the run QUIET / needing
   /// attention. This does not mutate run state; `agentRunStaleMinutes` remains
   /// the separate watchdog that canonically closes a run as STALLED. 0 disables
   /// the early quiet signal.
-  agentRunQuietMinutes          Int                      @default(5)
+  agentRunQuietMinutes            Int                        @default(5)
   /// Minutes a REVIEW step may wait for its dispatched reviewer to
   /// acknowledge before Forge opens a human fallback gate. 0 disables the
   /// fallback. The orchestration watchdog evaluates this workspace setting.
-  reviewStartTimeoutMinutes     Int                      @default(5)
+  reviewStartTimeoutMinutes       Int                        @default(5)
   /// Auto-archive idle EPHEMERAL agents after this many minutes with no
   /// heartbeat (a session CLI that vanished). 0 = disabled (default). Only
   /// EPHEMERAL agents are touched; PERSISTENT agents (Hermes, etc.) are never
   /// reaped by this sweep. Archive is reversible (unarchive / re-bind), so
   /// this just keeps abandoned session rows out of the lists.
-  ephemeralAgentIdleMinutes     Int                      @default(0)
+  ephemeralAgentIdleMinutes       Int                        @default(0)
   /// Per-run safety budgets (added 2026-06-23). Opt-in: null = no cap.
   /// A run that exceeds any set cap triggers `runBudgetAction` (default
   /// PAUSE → stop the provider + park WAITING + notify). Distinct from
   /// `agentRunStaleMinutes`, which is *idle*-based — these catch a
   /// busy-but-runaway loop (the AXI-75 run burned 21.1M tokens because
   /// nothing capped it). Cumulative tokensIn+tokensOut for the run.
-  runTokenBudget                Int?
+  runTokenBudget                  Int?
   /// Per-run USD cost cap. Null = no cap. Matched against `costUsd`.
-  runCostBudgetUsd              Decimal?                 @db.Decimal(10, 4)
+  runCostBudgetUsd                Decimal?                   @db.Decimal(10, 4)
   /// Per-run wall-clock cap (minutes since `startedAt`). Null = no cap.
-  runMaxMinutes                 Int?
+  runMaxMinutes                   Int?
   /// Emit a one-time AGENT_RUN_BUDGET_WARNING when a run crosses this
   /// percentage of any set budget (default 80). 0 disables the warning.
-  runBudgetWarnPct              Int                      @default(80)
+  runBudgetWarnPct                Int                        @default(80)
   /// What to do on breach. PAUSE (default) parks the run WAITING and
   /// raises an actionable "raise budget & resume / abandon" request;
   /// STOP closes it ABANDONED. Either way the provider run is stopped.
-  runBudgetAction               RunBudgetAction          @default(PAUSE)
+  runBudgetAction                 RunBudgetAction            @default(PAUSE)
   /// Optional Status row id to auto-transition into on AGENT_ASSIGNED.
   /// When set, the audit/event fan-out promotes assigned issues to this
   /// status (must be in IN_PROGRESS category, validated at write time).
   /// Skipped if the issue is already in IN_PROGRESS / IN_REVIEW or in a
   /// terminal category (DONE / CANCELED). Null disables — agents must
   /// transition client-side via statuses.list + issues.transition.
-  startedStatusId               String?
+  startedStatusId                 String?
   /// Optional Status row id to auto-transition into when an EXECUTE run
   /// completes successfully via `runs.complete` (must be in IN_REVIEW
   /// category, validated at write time). An agent finishing EXECUTE work
@@ -992,36 +1055,36 @@ model Workspace {
   /// CANCELED); NOT skipped for BACKLOG/TODO/IN_PROGRESS since completing
   /// work should surface for review regardless of prior state. Null
   /// disables — no auto-transition on completion.
-  reviewStatusId                String?
+  reviewStatusId                  String?
   /// What Forge should do when an agent or linked implementation PR provides
   /// verified completion evidence. RECOMMEND opens one shared actionable
   /// card; AUTO_WHEN_SAFE transitions only when the central safety gate passes.
-  completionAutomation          CompletionAutomation     @default(RECOMMEND)
+  completionAutomation            CompletionAutomation       @default(RECOMMEND)
   /// Human-readable issue timeline behavior when a work session attaches an
   /// implementation PR. Mechanical heartbeats remain audit-only.
-  deliveryTimelinePolicy        DeliveryTimelinePolicy   @default(RECOMMEND)
+  deliveryTimelinePolicy          DeliveryTimelinePolicy     @default(RECOMMEND)
   /// DONE-category status used by completion recommendations/automation.
   /// Null keeps completion candidates disabled until an admin chooses one.
-  completionStatusId            String?
+  completionStatusId              String?
   /// Self-heal missed GitHub webhooks by polling stale linked implementation
   /// PRs. Webhooks remain the primary path; this only reconciles stale rows.
-  githubSyncEnabled             Boolean                  @default(true)
+  githubSyncEnabled               Boolean                    @default(true)
   /// Minimum age of a successful GitHub snapshot before it may be polled.
-  githubSyncStaleMinutes        Int                      @default(15)
+  githubSyncStaleMinutes          Int                        @default(15)
   /// Maximum stale GitHub resources processed for this workspace per sweep.
-  githubSyncBatchSize           Int                      @default(25)
+  githubSyncBatchSize             Int                        @default(25)
   /// Initial retry delay for provider failures; retries grow exponentially.
-  githubSyncBackoffMinutes      Int                      @default(5)
+  githubSyncBackoffMinutes        Int                        @default(5)
   /// Maximum retry delay for repeated provider failures.
-  githubSyncMaxBackoffMinutes   Int                      @default(1440)
+  githubSyncMaxBackoffMinutes     Int                        @default(1440)
   /// Per-request timeout for GitHub REST calls made by the repair loop.
-  githubRequestTimeoutSeconds   Int                      @default(10)
+  githubRequestTimeoutSeconds     Int                        @default(10)
   /// Maximum wall time a GitHub repair sweep may occupy the shared worker.
-  githubSweepBudgetSeconds      Int                      @default(45)
+  githubSweepBudgetSeconds        Int                        @default(45)
   /// Slow re-probe cadence for closed-unmerged PRs so missed reopen events heal.
-  githubClosedReprobeMinutes    Int                      @default(1440)
+  githubClosedReprobeMinutes      Int                        @default(1440)
   /// Minimum interval between operator/agent manual refresh requests per PR.
-  githubManualCooldownSeconds   Int                      @default(30)
+  githubManualCooldownSeconds     Int                        @default(30)
   /// Timeout for one interactive runtime connector HTTP request.
   connectorRequestTimeoutSeconds Int                     @default(15)
   /// Total connector delivery attempts before the delivery is dead-lettered.
@@ -1041,33 +1104,43 @@ model Workspace {
   webhookRetryMaxSeconds         Int                     @default(300)
   /// An active code work session with no heartbeat beyond this threshold is
   /// surfaced as stale. 0 disables automatic stale marking.
-  workSessionStaleMinutes       Int                      @default(120)
+  workSessionStaleMinutes         Int                        @default(120)
   /// Issues with `updatedAt` older than this threshold (in days) are
   /// considered "stalled" by the dashboard suggestions bucket. Settings-
   /// driven so admins can tune the workspace's idle definition without
   /// editing handler code. 0 disables the bucket.
-  stalledThresholdDays          Int                      @default(7)
+  stalledThresholdDays            Int                        @default(7)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row surfaces a warning chip on the agents page.
   /// EPHEMERAL agents only heartbeat while running, so the warning is
   /// suppressed for them. 0 disables the warning entirely.
-  agentHeartbeatWarnMinutes     Int                      @default(5)
+  agentHeartbeatWarnMinutes       Int                        @default(5)
   /// Minutes since `Agent.lastHeartbeatAt` after which a PERSISTENT
   /// agent's presence row escalates to the critical (danger) tier.
   /// Should be > `agentHeartbeatWarnMinutes`. 0 disables critical.
-  agentHeartbeatCriticalMinutes Int                      @default(30)
+  agentHeartbeatCriticalMinutes   Int                        @default(30)
   /// Master toggle for the `/api/ingest/email` inbound endpoint. When
   /// off, the endpoint returns 403 even if the HMAC signature is valid.
   /// Off by default; admins flip it on in `/settings/integrations`.
-  emailIngestEnabled            Boolean                  @default(false)
+  emailIngestEnabled              Boolean                    @default(false)
   /// HMAC-SHA256 shared secret for the email-ingest endpoint. Caller
   /// signs the JSON body and sends it as `x-forge-email-signature`.
   /// Null until the admin generates one; rotating it invalidates any
   /// outstanding inbound integrations.
-  emailIngestSecret             String?
-  createdAt                     DateTime                 @default(now())
-  updatedAt                     DateTime                 @updatedAt
-  deletedAt                     DateTime?
+  emailIngestSecret               String?
+  /// Artifact sharing is internal-only unless this workspace setting is on.
+  artifactExternalSharingEnabled  Boolean                    @default(false)
+  /// Public discoverable publishing is a separate, higher-risk capability.
+  artifactPublicPublishingEnabled Boolean                    @default(false)
+  /// Default lifetime for revocable external artifact links. 0 = no expiry.
+  artifactDefaultLinkExpiryDays   Int                        @default(7)
+  /// Whether deployments may be sent to the configured Artifact Preview runtime.
+  artifactPreviewEnabled          Boolean                    @default(false)
+  /// Agents may never publish, may require approval, or may publish directly.
+  artifactAgentPublishPolicy      ArtifactAgentPublishPolicy @default(REQUIRE_APPROVAL)
+  createdAt                       DateTime                   @default(now())
+  updatedAt                       DateTime                   @updatedAt
+  deletedAt                       DateTime?
 
   defaultIssueAssigneeUser User? @relation("WorkspaceDefaultIssueAssignee", fields: [defaultIssueAssigneeUserId], references: [id], onDelete: SetNull)
 
@@ -1120,6 +1193,10 @@ model Workspace {
   issueWatchers           IssueWatcher[]
   artifacts               Artifact[]
   artifactVersions        ArtifactVersion[]
+  artifactGrants          ArtifactGrant[]
+  artifactComments        ArtifactComment[]
+  artifactPublications    ArtifactPublication[]
+  artifactDeployments     ArtifactDeployment[]
   contextSets             ContextSet[]
   contextSetItems         ContextSetItem[]
   executionPlans          ExecutionPlan[]
@@ -1336,32 +1413,32 @@ model Issue {
   updatedAt             DateTime        @updatedAt
   deletedAt             DateTime?
 
-  workspace      Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  project        Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  parent         Issue?                 @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
-  children       Issue[]                @relation("IssueChildren")
-  cycle          Cycle?                 @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  status         Status                 @relation(fields: [statusId], references: [id])
-  author         User                   @relation("IssueAuthor", fields: [authorId], references: [id])
-  claimedBy      User?                  @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
-  claimedByAgent Agent?                 @relation("IssueClaimedByAgent", fields: [claimedByAgentId], references: [id], onDelete: SetNull)
-  assignedAgent  Agent?                 @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
-  assignees      IssueAssignee[]
-  labels         IssueLabel[]
-  comments       Comment[]
-  attachments    Attachment[]
-  relationsFrom  IssueRelation[]        @relation("IssueRelationFrom")
-  relationsTo    IssueRelation[]        @relation("IssueRelationTo")
-  timeEntries    TimeEntry[]
-  agentRuns      AgentRun[]
-  watchers       IssueWatcher[]
-  artifacts      Artifact[]
-  executionPlans ExecutionPlan[]
-  executionSteps ExecutionStep[]        @relation("ExecutionStepIssue")
-  goals          Goal[]
-  actionRequests ActionRequest[]
-  externalLinks  ExternalResourceLink[]
-  workSessions   WorkSession[]
+  workspace         Workspace              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project           Project?               @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  parent            Issue?                 @relation("IssueChildren", fields: [parentId], references: [id], onDelete: SetNull)
+  children          Issue[]                @relation("IssueChildren")
+  cycle             Cycle?                 @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  status            Status                 @relation(fields: [statusId], references: [id])
+  author            User                   @relation("IssueAuthor", fields: [authorId], references: [id])
+  claimedBy         User?                  @relation("IssueClaimedBy", fields: [claimedById], references: [id], onDelete: SetNull)
+  claimedByAgent    Agent?                 @relation("IssueClaimedByAgent", fields: [claimedByAgentId], references: [id], onDelete: SetNull)
+  assignedAgent     Agent?                 @relation("IssueAssignedAgent", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  assignees         IssueAssignee[]
+  labels            IssueLabel[]
+  comments          Comment[]
+  attachments       Attachment[]
+  relationsFrom     IssueRelation[]        @relation("IssueRelationFrom")
+  relationsTo       IssueRelation[]        @relation("IssueRelationTo")
+  timeEntries       TimeEntry[]
+  agentRuns         AgentRun[]
+  watchers          IssueWatcher[]
+  artifacts         Artifact[]
+  executionPlans    ExecutionPlan[]
+  executionSteps    ExecutionStep[]        @relation("ExecutionStepIssue")
+  goals             Goal[]
+  actionRequests    ActionRequest[]
+  externalLinks     ExternalResourceLink[]
+  workSessions      WorkSession[]
   scheduledTaskRuns ScheduledTaskRun[]
 
   @@unique([workspaceId, number])
@@ -2693,32 +2770,35 @@ model Agent {
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
 
-  workspace                Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  profile                  AgentProfile?     @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)
-  runtime                  Runtime?          @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
-  assignedIssues           Issue[]           @relation("IssueAssignedAgent")
-  claimedIssues            Issue[]           @relation("IssueClaimedByAgent")
-  apiKeys                  ApiKey[]          @relation("AgentApiKeys")
-  authoredComments         Comment[]         @relation("AgentAuthoredComments")
+  workspace                Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  profile                  AgentProfile?        @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)
+  runtime                  Runtime?             @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
+  assignedIssues           Issue[]              @relation("IssueAssignedAgent")
+  claimedIssues            Issue[]              @relation("IssueClaimedByAgent")
+  apiKeys                  ApiKey[]             @relation("AgentApiKeys")
+  authoredComments         Comment[]            @relation("AgentAuthoredComments")
   dispatchRules            DispatchRule[]
   runs                     AgentRun[]
   chatThreads              ChatThread[]
   connectorSessions        ConnectorSession[]
   issueWatches             IssueWatcher[]
-  authoredArtifacts        Artifact[]        @relation("ArtifactCreatorAgent")
-  authoredArtifactVersions ArtifactVersion[] @relation("ArtifactVersionCreatorAgent")
-  ownedContextSets         ContextSet[]      @relation("ContextSetOwnerAgent")
-  createdExecutionPlans    ExecutionPlan[]   @relation("ExecutionPlanCreatorAgent")
-  createdGoals             Goal[]            @relation("GoalCreatorAgent")
-  executionSteps           ExecutionStep[]   @relation("ExecutionStepAgent")
-  crewMemberships          AgentCrewMember[] @relation("AgentCrewMember")
-  requestedReviewGates     ReviewGate[]      @relation("ReviewGateRequesterAgent")
-  resolvedReviewGates      ReviewGate[]      @relation("ReviewGateResolverAgent")
-  requestedActionRequests  ActionRequest[]   @relation("ActionRequestRequesterAgent")
-  assignedActionRequests   ActionRequest[]   @relation("ActionRequestAssigneeAgent")
-  actorAuditLogs           AuditLog[]        @relation("AuditLogActorAgent")
-  actorActivityEvents      ActivityEvent[]   @relation("ActivityEventActorAgent")
-  ownedWorkSessions        WorkSession[]     @relation("WorkSessionOwnerAgent")
+  authoredArtifacts        Artifact[]           @relation("ArtifactCreatorAgent")
+  authoredArtifactVersions ArtifactVersion[]    @relation("ArtifactVersionCreatorAgent")
+  artifactGrants           ArtifactGrant[]
+  artifactComments         ArtifactComment[]    @relation("ArtifactCommentAuthorAgent")
+  artifactDeployments      ArtifactDeployment[] @relation("ArtifactDeploymentCreatorAgent")
+  ownedContextSets         ContextSet[]         @relation("ContextSetOwnerAgent")
+  createdExecutionPlans    ExecutionPlan[]      @relation("ExecutionPlanCreatorAgent")
+  createdGoals             Goal[]               @relation("GoalCreatorAgent")
+  executionSteps           ExecutionStep[]      @relation("ExecutionStepAgent")
+  crewMemberships          AgentCrewMember[]    @relation("AgentCrewMember")
+  requestedReviewGates     ReviewGate[]         @relation("ReviewGateRequesterAgent")
+  resolvedReviewGates      ReviewGate[]         @relation("ReviewGateResolverAgent")
+  requestedActionRequests  ActionRequest[]      @relation("ActionRequestRequesterAgent")
+  assignedActionRequests   ActionRequest[]      @relation("ActionRequestAssigneeAgent")
+  actorAuditLogs           AuditLog[]           @relation("AuditLogActorAgent")
+  actorActivityEvents      ActivityEvent[]      @relation("ActivityEventActorAgent")
+  ownedWorkSessions        WorkSession[]        @relation("WorkSessionOwnerAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -3339,49 +3419,65 @@ model IssueWatcher {
 /// agent-run summary, those fields point at the source row so the UI
 /// can render "from chat message in #thread" provenance.
 model Artifact {
-  id               String         @id @default(cuid())
-  workspaceId      String
-  title            String
+  id                 String             @id @default(cuid())
+  workspaceId        String
+  title              String
   /// URL-friendly identifier, unique per workspace. Stable across
   /// title edits; populated server-side at create time.
-  slug             String
-  type             ArtifactType   @default(DOCUMENT)
-  status           ArtifactStatus @default(DRAFT)
+  slug               String
+  type               ArtifactType       @default(DOCUMENT)
+  status             ArtifactStatus     @default(DRAFT)
+  visibility         ArtifactVisibility @default(PRIVATE)
   /// Canonical published body. Edits append a new ArtifactVersion
   /// and (when published) update this column. Markdown.
-  body             String         @db.Text
+  body               String             @db.Text
   /// Optional short summary used by list cards + agent context bundles.
-  summary          String?        @db.Text
-  createdById      String?
-  createdByAgentId String?
+  summary            String?            @db.Text
+  createdById        String?
+  createdByAgentId   String?
   /// Polymorphic source ref for promotions: chat-message, comment,
   /// note, agent-run, issue, etc. Null for artifacts created from
   /// scratch.
-  sourceType       String?
-  sourceId         String?
+  sourceType         String?
+  sourceId           String?
   /// Pointer at the currently-published ArtifactVersion. Null until
   /// the first publish; thereafter set to the latest accepted version.
-  currentVersionId String?
+  currentVersionId   String?
+  /// Last version explicitly accepted through the review lifecycle.
+  acceptedVersionId  String?
+  /// Version pinned by the current publication. Draft saves never move it.
+  publishedVersionId String?
+  reviewRequestedAt  DateTime?
+  acceptedAt         DateTime?
+  acceptedById       String?
   /// Optional convenience pointers — surface artifacts in their
   /// owning issue/project's detail panels without joining ContextSet.
   /// Both are nullable + indexed.
-  issueId          String?
-  projectId        String?
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
-  archivedAt       DateTime?
+  issueId            String?
+  projectId          String?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  archivedAt         DateTime?
 
-  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy      User?             @relation("ArtifactCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  createdByAgent Agent?            @relation("ArtifactCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
-  issue          Issue?            @relation(fields: [issueId], references: [id], onDelete: SetNull)
-  project        Project?          @relation(fields: [projectId], references: [id], onDelete: SetNull)
-  versions       ArtifactVersion[]
-  currentVersion ArtifactVersion?  @relation("ArtifactCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  workspace        Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy        User?                 @relation("ArtifactCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent   Agent?                @relation("ArtifactCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+  issue            Issue?                @relation(fields: [issueId], references: [id], onDelete: SetNull)
+  project          Project?              @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  versions         ArtifactVersion[]
+  currentVersion   ArtifactVersion?      @relation("ArtifactCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+  acceptedVersion  ArtifactVersion?      @relation("ArtifactAcceptedVersion", fields: [acceptedVersionId], references: [id], onDelete: SetNull)
+  publishedVersion ArtifactVersion?      @relation("ArtifactPublishedVersion", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  acceptedBy       User?                 @relation("ArtifactAcceptor", fields: [acceptedById], references: [id], onDelete: SetNull)
+  grants           ArtifactGrant[]
+  comments         ArtifactComment[]
+  publications     ArtifactPublication[]
+  deployments      ArtifactDeployment[]
 
   @@unique([workspaceId, slug])
   @@index([workspaceId, status, updatedAt])
   @@index([workspaceId, type, updatedAt])
+  @@index([workspaceId, visibility, updatedAt])
   @@index([issueId])
   @@index([projectId])
 }
@@ -3391,29 +3487,155 @@ model Artifact {
 /// version is published. Soft-delete on the parent Artifact cascades
 /// here; individual versions are never hard-deleted.
 model ArtifactVersion {
-  id               String   @id @default(cuid())
-  workspaceId      String
-  artifactId       String
+  id                    String              @id @default(cuid())
+  workspaceId           String
+  artifactId            String
   /// Monotonic per-artifact version number, starting at 1.
-  version          Int
-  title            String
-  body             String   @db.Text
+  version               Int
+  title                 String
+  body                  String              @db.Text
   /// Optional short summary captured at publish time.
-  summary          String?  @db.Text
+  summary               String?             @db.Text
   /// Optional changelog blurb explaining what changed in this version.
-  changelog        String?  @db.Text
-  createdById      String?
-  createdByAgentId String?
-  createdAt        DateTime @default(now())
+  changelog             String?             @db.Text
+  contentType           ArtifactContentType @default(MARKDOWN)
+  rendererVersion       Int                 @default(1)
+  contentChecksum       String?
+  assetManifest         Json?
+  restoredFromVersionId String?
+  createdById           String?
+  createdByAgentId      String?
+  createdAt             DateTime            @default(now())
 
-  workspace      Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  artifact       Artifact   @relation(fields: [artifactId], references: [id], onDelete: Cascade)
-  createdBy      User?      @relation("ArtifactVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
-  createdByAgent Agent?     @relation("ArtifactVersionCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
-  currentOf      Artifact[] @relation("ArtifactCurrentVersion")
+  workspace      Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  artifact       Artifact              @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  createdBy      User?                 @relation("ArtifactVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent Agent?                @relation("ArtifactVersionCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+  currentOf      Artifact[]            @relation("ArtifactCurrentVersion")
+  acceptedOf     Artifact[]            @relation("ArtifactAcceptedVersion")
+  publishedOf    Artifact[]            @relation("ArtifactPublishedVersion")
+  restoredFrom   ArtifactVersion?      @relation("ArtifactVersionRestore", fields: [restoredFromVersionId], references: [id], onDelete: SetNull)
+  restores       ArtifactVersion[]     @relation("ArtifactVersionRestore")
+  comments       ArtifactComment[]
+  publications   ArtifactPublication[]
+  deployments    ArtifactDeployment[]
 
   @@unique([artifactId, version])
   @@index([workspaceId, createdAt])
+  @@index([artifactId, contentChecksum])
+}
+
+model ArtifactGrant {
+  id          String       @id @default(cuid())
+  workspaceId String
+  artifactId  String
+  userId      String?
+  agentId     String?
+  role        ArtifactRole
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  artifact  Artifact  @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  user      User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent     Agent?    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([artifactId, userId])
+  @@unique([artifactId, agentId])
+  @@index([workspaceId, userId])
+  @@index([workspaceId, agentId])
+}
+
+model ArtifactComment {
+  id               String                @id @default(cuid())
+  workspaceId      String
+  artifactId       String
+  versionId        String?
+  parentId         String?
+  authorId         String?
+  authoringAgentId String?
+  body             String                @db.Text
+  status           ArtifactCommentStatus @default(OPEN)
+  /// Stable selection descriptor: block id, text offsets, code lines, image id, etc.
+  anchor           Json?
+  /// Quoted source remains visible when a later revision makes the anchor drift.
+  quotedText       String?               @db.Text
+  resolvedAt       DateTime?
+  resolvedById     String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  deletedAt        DateTime?
+
+  workspace      Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  artifact       Artifact          @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  version        ArtifactVersion?  @relation(fields: [versionId], references: [id], onDelete: SetNull)
+  parent         ArtifactComment?  @relation("ArtifactCommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies        ArtifactComment[] @relation("ArtifactCommentReplies")
+  author         User?             @relation("ArtifactCommentAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  authoringAgent Agent?            @relation("ArtifactCommentAuthorAgent", fields: [authoringAgentId], references: [id], onDelete: SetNull)
+  resolvedBy     User?             @relation("ArtifactCommentResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([artifactId, status, createdAt])
+  @@index([versionId, createdAt])
+  @@index([parentId])
+}
+
+model ArtifactPublication {
+  id          String                      @id @default(cuid())
+  workspaceId String
+  artifactId  String
+  versionId   String
+  audience    ArtifactPublicationAudience @default(LINK)
+  status      ArtifactPublicationStatus   @default(ACTIVE)
+  tokenHash   String?                     @unique
+  tokenPrefix String?
+  expiresAt   DateTime?
+  revokedAt   DateTime?
+  createdById String?
+  revokedById String?
+  createdAt   DateTime                    @default(now())
+  updatedAt   DateTime                    @updatedAt
+
+  workspace   Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  artifact    Artifact             @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  version     ArtifactVersion      @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  createdBy   User?                @relation("ArtifactPublicationCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  revokedBy   User?                @relation("ArtifactPublicationRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+  deployments ArtifactDeployment[]
+
+  @@index([artifactId, status, createdAt])
+  @@index([workspaceId, status, expiresAt])
+}
+
+model ArtifactDeployment {
+  id               String                     @id @default(cuid())
+  workspaceId      String
+  artifactId       String
+  versionId        String
+  publicationId    String?
+  provider         ArtifactDeploymentProvider @default(ARTIFACT_PREVIEW)
+  status           ArtifactDeploymentStatus   @default(PENDING)
+  externalId       String?
+  externalUrl      String?
+  bundleChecksum   String?
+  errorMessage     String?                    @db.Text
+  createdById      String?
+  createdByAgentId String?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  deployedAt       DateTime?
+  retiredAt        DateTime?
+
+  workspace      Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  artifact       Artifact             @relation(fields: [artifactId], references: [id], onDelete: Cascade)
+  version        ArtifactVersion      @relation(fields: [versionId], references: [id], onDelete: Restrict)
+  publication    ArtifactPublication? @relation(fields: [publicationId], references: [id], onDelete: SetNull)
+  createdBy      User?                @relation("ArtifactDeploymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  createdByAgent Agent?               @relation("ArtifactDeploymentCreatorAgent", fields: [createdByAgentId], references: [id], onDelete: SetNull)
+
+  @@unique([provider, externalId])
+  @@index([artifactId, status, createdAt])
+  @@index([publicationId])
 }
 
 // ----------------------------------------------------------------------------
