@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import {
   AutoDispatchMode,
+  ArtifactAgentPublishPolicy,
   CompletionAutomation,
   CycleStatus,
   DefaultIssueAssigneeMode,
@@ -114,6 +115,11 @@ export const workspaceRouter = router({
         webhookRetryMaxAttempts: true,
         webhookRetryInitialSeconds: true,
         webhookRetryMaxSeconds: true,
+        artifactExternalSharingEnabled: true,
+        artifactPublicPublishingEnabled: true,
+        artifactDefaultLinkExpiryDays: true,
+        artifactPreviewEnabled: true,
+        artifactAgentPublishPolicy: true,
         defaultIssueAssigneeMode: true,
         defaultIssueAssigneeUserId: true,
         defaultIssueAssigneeUser: {
@@ -308,6 +314,11 @@ export const workspaceRouter = router({
         webhookRetryMaxAttempts: z.number().int().min(1).max(25).optional(),
         webhookRetryInitialSeconds: z.number().int().min(1).max(3600).optional(),
         webhookRetryMaxSeconds: z.number().int().min(1).max(86400).optional(),
+        artifactExternalSharingEnabled: z.boolean().optional(),
+        artifactPublicPublishingEnabled: z.boolean().optional(),
+        artifactDefaultLinkExpiryDays: z.number().int().min(1).max(365).optional(),
+        artifactPreviewEnabled: z.boolean().optional(),
+        artifactAgentPublishPolicy: z.nativeEnum(ArtifactAgentPublishPolicy).optional(),
         autoDispatch: z.boolean().optional(),
         autoDispatchMode: z.nativeEnum(AutoDispatchMode).optional(),
         defaultIssueAssigneeMode: z.nativeEnum(DefaultIssueAssigneeMode).optional(),

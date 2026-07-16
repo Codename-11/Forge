@@ -37,6 +37,11 @@ export interface ApiKeyContext {
 
 export type NarrowEntity = "issue" | "project" | "initiative";
 
+export function hasApiKeyNarrowing(ctx: { apiKey?: ApiKeyContext | null }): boolean {
+  const key = ctx.apiKey;
+  return Boolean(key && (key.projectIds.length || key.labelIds.length || key.initiativeIds.length));
+}
+
 /**
  * Authenticate an incoming plugin/agent request from its `Authorization: Bearer <key>`.
  * Enforces revocation, expiry, and required scopes. Updates `lastUsedAt` lazily.
@@ -187,5 +192,49 @@ export function buildKeyScopeWhere(
       if (!clauses.length) return {};
       return clauses.length === 1 ? clauses[0] : { OR: clauses };
     }
+  }
+}
+
+/**
+ * Artifact scope follows its owning work. A narrowed key may see an artifact
+ * through a permitted issue, a directly permitted project, or a project in a
+ * permitted initiative. Standalone artifacts are intentionally invisible to
+ * narrowed keys because they have no lane from which authority can be derived.
+ */
+export function buildArtifactKeyScopeWhere(ctx: {
+  apiKey?: ApiKeyContext | null;
+}): Record<string, unknown> {
+  if (!hasApiKeyNarrowing(ctx)) return {};
+  const key = ctx.apiKey!;
+  const clauses: Record<string, unknown>[] = [];
+  const issueWhere = buildKeyScopeWhere(ctx, "issue");
+  if (Object.keys(issueWhere).length) clauses.push({ issue: { is: issueWhere } });
+  if (key.projectIds.length) clauses.push({ projectId: { in: key.projectIds } });
+  if (key.initiativeIds.length) {
+    clauses.push({ project: { is: { initiativeId: { in: key.initiativeIds } } } });
+  }
+  // A narrowed key always has at least one issue-derived clause. Keeping the
+  // impossible fallback makes the deny-by-default behavior explicit.
+  return clauses.length ? { OR: clauses } : { id: "__artifact_scope_denied__" };
+}
+
+export async function assertArtifactKeyScope(
+  ctx: { apiKey?: ApiKeyContext | null; db: typeof db },
+  opts: { artifactId: string; workspaceId: string },
+): Promise<void> {
+  if (!hasApiKeyNarrowing(ctx)) return;
+  const artifact = await ctx.db.artifact.findFirst({
+    where: {
+      id: opts.artifactId,
+      workspaceId: opts.workspaceId,
+      ...buildArtifactKeyScopeWhere(ctx),
+    },
+    select: { id: true },
+  });
+  if (!artifact) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "API key scope does not include this artifact.",
+    });
   }
 }

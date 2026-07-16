@@ -101,6 +101,33 @@ crash-stranded `PROCESSING` row. The platform plugin also retains a failed
 final draft and reuses its original event id, preventing duplicate final
 messages on retry. Focused review coverage passes **33/33** TypeScript tests and
 **8/8** Python adapter tests.
+## 2026-07-16 — AXI-86 Artifact Studio
+
+Implemented Forge as the artifact control plane for people and agents. The
+artifact model now separates mutable draft head, accepted revision, published
+revision, share publication, and renderer deployment. New artifacts are
+private by default; existing artifacts migrate as workspace-visible. Explicit
+user/agent grants provide viewer, commenter, editor, and owner roles.
+
+Added optimistic revision saves, SHA-256 render checksums, explicit content
+types, version comparison, restore-as-new, focused source/preview/split editing
+with local recovery, version-bound asset manifests, anchored review comments,
+review/accept/request-changes transitions, expiring hashed share tokens,
+revocation, safe reduced public pages and asset proxying, immutable Markdown or
+HTML export, server-side permission-filtered search, and optional pinned
+deployments to the existing Artifact Preview service. Workspace settings govern
+external sharing, default expiry, public publishing, preview deployment, and
+agent publish authority. MCP gained the corresponding read, revision, review,
+comment, restore, accept, and policy-gated publish tools.
+
+Vault/Synology/Obsidian integration is intentionally not part of the artifact
+core. It remains a future Forge plugin/connector that can import or synchronize
+authorized documents without coupling artifact correctness to a local mount.
+
+Validation included a from-zero 114-migration replay on fresh Postgres, Prisma
+validation/generation, focused security and artifact suites, TypeScript, and a
+production Next.js build. The full lint/test/Playwright release gate is recorded
+with the release handoff.
 
 ## 2026-07-15 — v0.23.0 production verification
 
@@ -437,6 +464,23 @@ Verification: focused dispatcher and operator-attention coverage passed
 passed; the full Vitest suite passed (**1,211 passed; 1 skipped**); a fresh
 production build and the responsive Command Center Playwright contract passed
 (**1/1** across desktop, tablet, and mobile); and `git diff --check` passed.
+## 2026-07-13 — Artifacts system research and implementation brief
+
+Created a documentation-only Artifacts audit in an isolated worktree using
+three independent research lanes: current official ChatGPT Sites/Canvas and
+Claude Artifacts product research, a static audit of Forge's schema/API/UI/
+renderer/security implementation, and an implementation blueprint with phased
+acceptance criteria. Synthesized the results into a concise enhancement and
+delivery brief covering versioning, sharing, permissions, review, images,
+Markdown, files, link cards, typed rendering, exports, discovery,
+collaboration, governance, interactive previews, and later site-class hosting.
+
+The audit found three immediate blockers before richer/public artifacts:
+narrowed API-key authorization gaps, SSRF exposure in link metadata fetching,
+and ambiguous draft/version/publication semantics. No application code,
+database schema, or runtime behavior changed. Verification was limited to
+source cross-checking, official-source link review, and git diff checks
+because the branch contains research documents only.
 
 ## 2026-07-13 — v0.11.0 live agent operations release candidate
 
