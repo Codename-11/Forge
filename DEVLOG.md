@@ -2,6 +2,24 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — v0.26.1 released, deployed, and verified
+
+Merged release PR #60 and tagged exact `main` commit
+`8bdb20d57980558191de7d34a333e59158d39a73` as immutable `v0.26.1`.
+The serialized Docker-Server deployment completed after reclaiming 34 GB of
+Docker build cache older than 24 hours; no running container, volume, or Hermes
+state was removed. Authenticated `system.buildInfo` reported version `0.26.1`,
+release `v0.26.1`, and SHA `8bdb20d`.
+
+The production native Sessions smoke returned HTTP 200 and the exact requested
+Hermes reply. Its durable Forge-owned mapping remained `ACTIVE` on
+`hermes.sessions.v1`, with the outbound user message delivered and ordered
+inbound events 1–14 all persisted as delivered. The separate Hermes runtime
+self-test exercised the unchanged background runs adapter, returned HTTP 200,
+and persisted `PASSED` with `FORGE_RUNTIME_SELF_TEST_OK`. Forge and worker logs
+were clean, both containers had zero restarts, and the Victor and Mizu Hermes
+systemd gateways retained their original start times with `NRestarts=0`.
+
 ## 2026-07-16 — v0.26.1 release preparation
 
 Prepared the patch release from exact `main` at
