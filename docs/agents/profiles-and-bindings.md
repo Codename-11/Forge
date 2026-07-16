@@ -1,6 +1,7 @@
 # Agent Profiles & Bindings
 
-An agent in Forge isn't a single row. It's a **three-tier** model:
+An agent in Forge isn't a single row. Its durable identity and governance use a
+**three-tier** model:
 
 1. A global **profile** — the agent's definition (who it is, what it
    can do), owned by a user, independent of any workspace.
@@ -13,6 +14,12 @@ An agent in Forge isn't a single row. It's a **three-tier** model:
 This is why the same `victor` can work in three workspaces with
 different capacity and dispatch rules in each, while staying one
 identity everywhere.
+
+Execution adds a fourth, attempt-scoped primitive: **AgentConnection**. A
+connection is one concrete managed runtime, MCP client, webhook, or on-demand
+endpoint acting through a workspace binding. It is intentionally not another
+identity tier: one binding may have several connections, and each run or work
+session snapshots the connection that actually performed the work.
 
 ## Tier 1 — Profiles (the definition)
 
@@ -100,11 +107,15 @@ member can **request** one:
 Profiles created directly by an instance admin skip this — they're
 pre-approved at creation (`requestedById` stays null).
 
-## MCP clients (the connection credentials)
+## MCP clients (credentials and connections)
 
 MCP clients are **not execution runtimes**. A profile has at most one primary
 runtime, while each workspace binding may have any number of linked `ApiKey`
-credentials for Codex, Claude, Hermes, or other trusted MCP clients.
+credentials for Codex, Claude, Hermes, or other trusted MCP clients. The key is
+only authentication. An MCP initialize handshake registers an
+`AgentConnection` containing the client name/version, negotiated session id,
+capabilities, and last-seen state. Rotating a key therefore does not rewrite
+the connection recorded on historical runs or deliveries.
 
 Create, inspect, rotate, revoke, and remove those credentials at
 **`/w/[slug]/settings/access`**. Mission Control aggregates the linked clients by
@@ -123,6 +134,7 @@ preselected. The former `/settings/clients` and
   See [Runtimes](/agents/runtimes.html).
 - **MCP clients** — each binding can hold zero-or-many linked credentials;
   these authenticate clients but do not replace the primary execution runtime.
+  The clients themselves appear as distinct Agent Connections.
 - **Auto-dispatch** — `autoDispatchEligible` and the binding's
   `capabilities` feed the workspace dispatcher; `autoDispatchMode`
   (which agent gets picked) is a different axis from engagement mode

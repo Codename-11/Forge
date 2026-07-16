@@ -13611,6 +13611,49 @@ Mission Control Playwright suite passed both journeys.
 
 ---
 
+## 2026-07-16 — Canonical agent connections and delivery ownership
+
+Introduced `AgentConnection` as the durable identity for managed runtimes, MCP
+clients, webhooks, and on-demand execution. Runs, run events, work sessions, and
+participants now preserve connection provenance and liveness confidence, while
+MCP initialization establishes a session identity that is refreshed on every
+request and revoked with its API key.
+
+Separated transport-specific liveness semantics: managed runtimes retain
+heartbeat/stall recovery, while silent MCP clients become quiet and
+unconfirmed without losing delivery ownership or being automatically
+redispatched. Work sessions now enforce one active primary connection, support
+explicit join and handoff operations, and block conflicting runtime dispatch
+with an actionable operator request. PR merge reconciliation also closes
+pre-merge execute runs so delivery state cannot remain falsely active.
+
+Expanded Agent Profile, Access, Command Center, Agent Policy, and issue Delivery
+surfaces with connection type, confidence, last-seen evidence, participants,
+ownership conflicts, and audited reconciliation. Updated the operator and
+transport documentation and refreshed the Agent Studio audit captures.
+
+Release review tightened the migration and recovery edges: a connectionless
+legacy lease can now be adopted only by a valid connection for the same linked
+agent, self-join preserves or repairs the primary participant, and both explicit
+delivery heartbeats and generic authenticated MCP signals resolve obsolete
+quiet-client recovery asks. The compact runtime tool profile keeps the complete
+agent chat loop while moving connector-only negotiation/delivery behind the
+catalog, preserving its combined sub-50 provider budget.
+
+The issue Activity surface now classifies unattributed worker, automation, and
+connector events instead of rendering a bare `system` actor. Generic issue
+updates use payload evidence to summarize delivery actions, changed fields, and
+label deltas, falling back to compact “Updated” copy only when no meaningful
+detail exists.
+
+Verification: Prisma validation passed; lint and typecheck passed (existing
+lint warnings only); focused release-review coverage passed 27/27; the complete
+Vitest suite passed 1,386 tests with one intentional live-connector skip; the
+fresh production Next.js build passed; and the final production-mode Playwright
+run passed all 52 journeys.
+
+---
+
 ## 2026-07-15 — Mission Control attention surfaces
 
 Audited Mission Control, the cross-workspace Inbox, Activity, and top-bar

@@ -10,6 +10,9 @@ A Mission Control agent profile selects **zero or one primary execution runtime*
 Codex, Claude, Hermes, and custom MCP clients connect with separate linked
 credentials in the workspace's **Agent access** page; a binding can have many
 of those clients. Adding an MCP client never changes the profile's runtime.
+Both are represented as concrete `AgentConnection` endpoints when they
+participate in work, so delivery attribution can say “Codex via Codex Desktop
+MCP” or “Victor via Hermes runtime” without changing the Agent identity.
 :::
 
 ::: tip Distinct from `runtimeMode`

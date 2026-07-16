@@ -1,9 +1,16 @@
 import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
-import { AgentStatus, EventKind } from "@prisma/client";
+import {
+  AgentConnectionCapability,
+  AgentConnectionKind,
+  AgentConnectionLiveness,
+  AgentStatus,
+  EventKind,
+} from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
 import { recordChange } from "@/server/audit";
+import { upsertAgentConnection } from "@/server/services/agent-connection";
 
 /**
  * Heartbeat-driven agent auto-offline.
@@ -141,21 +148,31 @@ export async function sweepIdleAgents(
 export async function recordAgentReachable(
   agentId: string,
   client: PrismaClient | Prisma.TransactionClient = db,
-): Promise<void> {
+): Promise<string | null> {
   try {
     const before = await client.agent.findUnique({
       where: { id: agentId },
       select: { id: true, status: true, workspaceId: true, profileKey: true },
     });
-    if (!before) return;
+    if (!before) return null;
 
     const now = new Date();
+    const connection = await upsertAgentConnection(client, {
+      workspaceId: before.workspaceId,
+      agentId: before.id,
+      kind: AgentConnectionKind.WEBHOOK,
+      livenessModel: AgentConnectionLiveness.PUSH_ACK,
+      instanceKey: `agent-webhook:${before.id}`,
+      displayName: `${before.profileKey} webhook`,
+      capabilities: [AgentConnectionCapability.PUSH_ACK],
+      metadata: { signal: "delivery-success" },
+    });
     if (before.status === AgentStatus.ONLINE) {
       await client.agent.update({
         where: { id: agentId },
         data: { lastHeartbeatAt: now },
       });
-      return;
+      return connection.id;
     }
 
     // Status transition. Bump heartbeat + flip status, then audit.
@@ -182,8 +199,10 @@ export async function recordAgentReachable(
         reason: "delivery-success",
       },
     });
+    return connection.id;
   } catch (err) {
     logger.warn({ err, agentId }, "recordAgentReachable failed");
+    return null;
   }
 }
 
@@ -221,6 +240,22 @@ export async function recordRuntimeHeartbeatPresence(
     });
 
     for (const agent of agents) {
+      await upsertAgentConnection(client, {
+        workspaceId: agent.workspaceId,
+        agentId: agent.id,
+        kind: AgentConnectionKind.MANAGED_RUNTIME,
+        livenessModel: AgentConnectionLiveness.HEARTBEAT,
+        runtimeId,
+        instanceKey: `runtime:${runtimeId}`,
+        displayName: `${agent.profileKey} runtime`,
+        capabilities: [
+          AgentConnectionCapability.HEARTBEAT,
+          AgentConnectionCapability.LIFECYCLE_REPORTING,
+          AgentConnectionCapability.CANCELLATION,
+          AgentConnectionCapability.STREAMING,
+        ],
+        metadata: { signal: "runtime-heartbeat" },
+      });
       // ONLINE / BUSY → just refresh the heartbeat (preserve a working agent's
       // BUSY status; the sweep treats both as live).
       if (

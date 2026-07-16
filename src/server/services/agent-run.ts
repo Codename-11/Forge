@@ -1,5 +1,11 @@
 import "server-only";
-import type { PrismaClient, AgentRun, EngagementMode, RunEngine } from "@prisma/client";
+import type {
+  PrismaClient,
+  AgentRun,
+  EngagementMode,
+  RunEngine,
+  LivenessConfidence,
+} from "@prisma/client";
 import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
@@ -159,6 +165,9 @@ export async function openOrTouchRun(
     agentId: string;
     actorId?: string | null;
     actorAgentId?: string | null;
+    /** Concrete runtime/MCP/webhook endpoint responsible for this attempt. */
+    connectionId?: string | null;
+    lifecycleConfidence?: LivenessConfidence;
     assignmentEventId?: string | null;
     currentStep?: string | null;
     /** Set when the run executes a Goal-orchestration ExecutionStep (AXI-57). */
@@ -283,6 +292,17 @@ export async function openOrTouchRun(
           : {}),
         ...(params.triggerEventId !== undefined ? { triggerEventId: params.triggerEventId } : {}),
         ...(params.triggerKind !== undefined ? { triggerKind: params.triggerKind } : {}),
+        // Ownership is sticky for a live attempt. Activity from another
+        // endpoint may be recorded on its event, but cannot silently take over
+        // the run that an existing connection opened.
+        ...(params.connectionId && !existing.connectionId
+          ? {
+              connectionId: params.connectionId,
+              ...(params.lifecycleConfidence
+                ? { lifecycleConfidence: params.lifecycleConfidence }
+                : {}),
+            }
+          : {}),
       },
     });
     return { run: updated, isNew: false };
@@ -293,6 +313,10 @@ export async function openOrTouchRun(
       workspaceId: params.workspaceId,
       issueId: params.issueId,
       agentId: params.agentId,
+      connectionId: params.connectionId ?? null,
+      ...(params.lifecycleConfidence
+        ? { lifecycleConfidence: params.lifecycleConfidence }
+        : {}),
       status: AgentRunStatus.ACTIVE,
       assignmentEventId: params.assignmentEventId ?? null,
       currentStep: params.currentStep ?? null,
@@ -317,6 +341,7 @@ export async function openOrTouchRun(
     data: {
       workspaceId: params.workspaceId,
       runId: run.id,
+      connectionId: params.connectionId ?? null,
       kind: "STARTED",
       payload: { assignmentEventId: params.assignmentEventId ?? null },
     },
@@ -376,6 +401,8 @@ export async function appendRunEvent(
     currentStep?: string | null;
     /** Internal operator audit events may be appended without reviving terminal UI state. */
     allowTerminal?: boolean;
+    /** Endpoint that emitted this event; may differ from the run owner. */
+    connectionId?: string | null;
   },
 ): Promise<void> {
   const now = new Date();
@@ -407,6 +434,7 @@ export async function appendRunEvent(
     data: {
       workspaceId: params.workspaceId,
       runId: params.runId,
+      connectionId: params.connectionId ?? null,
       kind: params.kind,
       payload: params.payload ?? Prisma.JsonNull,
     },
@@ -558,6 +586,7 @@ export async function finishRun(
     data: {
       workspaceId: params.workspaceId,
       runId: params.runId,
+      connectionId: existing.connectionId,
       kind: params.status,
       payload: { summary: params.summary ?? null },
     },

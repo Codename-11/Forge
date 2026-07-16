@@ -292,6 +292,56 @@ enum WorkSessionSource {
   MANUAL
 }
 
+/// The transport or execution endpoint through which an agent binding acts.
+/// This is deliberately separate from AgentProvider: Codex, Hermes, or a
+/// custom profile can each be reached through more than one connection kind.
+enum AgentConnectionKind {
+  MANAGED_RUNTIME
+  MCP_CLIENT
+  WEBHOOK
+  ON_DEMAND
+}
+
+/// How Forge can determine whether an AgentConnection is still available.
+enum AgentConnectionLiveness {
+  HEARTBEAT
+  LEASE
+  ON_DEMAND
+  PUSH_ACK
+}
+
+/// Last observed operational state for a connection. QUIET is not a failure:
+/// it means Forge lacks a recent positive signal for this endpoint.
+enum AgentConnectionStatus {
+  ACTIVE
+  QUIET
+  DISCONNECTED
+  REVOKED
+}
+
+/// Confidence attached to lifecycle assertions. MCP silence and external Git
+/// activity generally produce INFERRED/UNCONFIRMED rather than CONFIRMED.
+enum LivenessConfidence {
+  UNCONFIRMED
+  INFERRED
+  CONFIRMED
+}
+
+enum AgentConnectionCapability {
+  HEARTBEAT
+  LIFECYCLE_REPORTING
+  CANCELLATION
+  STREAMING
+  TOOL_ACTIVITY
+  PUSH_ACK
+}
+
+enum WorkSessionParticipantRole {
+  PRIMARY
+  CONTRIBUTOR
+  REVIEWER
+}
+
 enum ChatRole {
   USER
   AGENT
@@ -1098,22 +1148,22 @@ model Workspace {
   /// Minimum interval between operator/agent manual refresh requests per PR.
   githubManualCooldownSeconds     Int                        @default(30)
   /// Timeout for one interactive runtime connector HTTP request.
-  connectorRequestTimeoutSeconds Int                     @default(15)
+  connectorRequestTimeoutSeconds  Int                        @default(15)
   /// Total connector delivery attempts before the delivery is dead-lettered.
-  connectorDeliveryMaxAttempts   Int                     @default(6)
+  connectorDeliveryMaxAttempts    Int                        @default(6)
   /// Lease for an in-flight connector delivery. The stream heartbeat renews
   /// it; the worker safely reclaims it after a process crash.
-  connectorProcessingLeaseSeconds Int                    @default(300)
+  connectorProcessingLeaseSeconds Int                        @default(300)
   /// Initial retry delay for connector deliveries; retries grow exponentially.
-  connectorRetryInitialSeconds   Int                     @default(2)
+  connectorRetryInitialSeconds    Int                        @default(2)
   /// Maximum connector retry delay.
-  connectorRetryMaxSeconds       Int                     @default(300)
+  connectorRetryMaxSeconds        Int                        @default(300)
   /// Total generic webhook attempts before a delivery is dead-lettered.
-  webhookRetryMaxAttempts        Int                     @default(6)
+  webhookRetryMaxAttempts         Int                        @default(6)
   /// Initial retry delay for generic webhook deliveries.
-  webhookRetryInitialSeconds     Int                     @default(5)
+  webhookRetryInitialSeconds      Int                        @default(5)
   /// Maximum generic webhook retry delay.
-  webhookRetryMaxSeconds         Int                     @default(300)
+  webhookRetryMaxSeconds          Int                        @default(300)
   /// An active code work session with no heartbeat beyond this threshold is
   /// surfaced as stale. 0 disables automatic stale marking.
   workSessionStaleMinutes         Int                        @default(120)
@@ -1168,6 +1218,7 @@ model Workspace {
   notificationStates      NotificationState[]
   plugins                 Plugin[]
   apiKeys                 ApiKey[]
+  agentConnections        AgentConnection[]
   webhooks                Webhook[]
   metrics                 MetricAggregate[]
   skills                  Skill[]
@@ -1199,6 +1250,7 @@ model Workspace {
   externalResourceLinks   ExternalResourceLink[]
   externalWebhookEvents   ExternalWebhookEvent[]
   workSessions            WorkSession[]
+  workSessionParticipants WorkSessionParticipant[]
   pins                    Pin[]
   recentItems             RecentItem[]
   notes                   Note[]
@@ -2013,10 +2065,11 @@ model ApiKey {
   revokedAt     DateTime?
   createdAt     DateTime      @default(now())
 
-  workspace   Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user        User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plugin      Plugin?   @relation(fields: [pluginId], references: [id], onDelete: Cascade)
-  linkedAgent Agent?    @relation("AgentApiKeys", fields: [linkedAgentId], references: [id], onDelete: SetNull)
+  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user             User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plugin           Plugin?           @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  linkedAgent      Agent?            @relation("AgentApiKeys", fields: [linkedAgentId], references: [id], onDelete: SetNull)
+  agentConnections AgentConnection[]
 
   @@index([workspaceId])
   @@index([prefix])
@@ -2246,14 +2299,15 @@ model Runtime {
   createdAt              DateTime               @default(now())
   updatedAt              DateTime               @updatedAt
 
-  workspace     Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  owner         User?           @relation(fields: [ownerId], references: [id], onDelete: SetNull)
-  agents        Agent[]         @relation("AgentRuntime")
-  agentProfiles AgentProfile[]  @relation("AgentProfileRuntime")
-  secrets       RuntimeSecret[]
-  repos         RuntimeRepo[]
-  githubApp     GithubApp?      @relation(fields: [githubAppId], references: [id], onDelete: SetNull)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  owner             User?              @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  agents            Agent[]            @relation("AgentRuntime")
+  agentProfiles     AgentProfile[]     @relation("AgentProfileRuntime")
+  secrets           RuntimeSecret[]
+  repos             RuntimeRepo[]
+  githubApp         GithubApp?         @relation(fields: [githubAppId], references: [id], onDelete: SetNull)
   connectorSessions ConnectorSession[]
+  agentConnections  AgentConnection[]
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
@@ -2559,49 +2613,129 @@ model ExternalResourceLink {
   @@index([createdById])
 }
 
+/// One concrete endpoint through which an Agent workspace binding acts.
+/// Identity (Agent), credential (ApiKey), compute host (Runtime), and active
+/// execution (AgentRun/WorkSession) remain separate concerns.
+model AgentConnection {
+  id             String                      @id @default(cuid())
+  workspaceId    String
+  agentId        String
+  kind           AgentConnectionKind
+  livenessModel  AgentConnectionLiveness
+  status         AgentConnectionStatus       @default(QUIET)
+  confidence     LivenessConfidence          @default(UNCONFIRMED)
+  runtimeId      String?
+  apiKeyId       String?
+  /// Stable identity supplied by the endpoint (for MCP, the negotiated
+  /// session/client id). Null means the endpoint is legacy/unidentified.
+  instanceKey    String?
+  displayName    String?
+  clientName     String?
+  clientVersion  String?
+  capabilities   AgentConnectionCapability[] @default([])
+  /// Sanitized, bounded protocol/runtime metadata only; never credentials or
+  /// raw environment values.
+  metadata       Json?
+  firstSeenAt    DateTime                    @default(now())
+  lastSeenAt     DateTime?
+  connectedAt    DateTime?
+  disconnectedAt DateTime?
+  revokedAt      DateTime?
+  createdAt      DateTime                    @default(now())
+  updatedAt      DateTime                    @updatedAt
+
+  workspace     Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  agent         Agent                    @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  runtime       Runtime?                 @relation(fields: [runtimeId], references: [id], onDelete: SetNull)
+  apiKey        ApiKey?                  @relation(fields: [apiKeyId], references: [id], onDelete: SetNull)
+  runs          AgentRun[]
+  runEvents     AgentRunEvent[]
+  ownedSessions WorkSession[]            @relation("WorkSessionOwnerConnection")
+  participants  WorkSessionParticipant[]
+
+  @@unique([workspaceId, agentId, kind, instanceKey])
+  @@index([workspaceId, status, lastSeenAt])
+  @@index([agentId, kind, status])
+  @@index([runtimeId])
+  @@index([apiKeyId])
+}
+
 /// A shared coordination lease for implementation work. It prevents a Forge
 /// agent, Codex Desktop task, or contributor from silently starting a second
 /// branch for the same issue. Terminal rows remain as the issue's delivery
 /// history; a partial unique index in the migration permits one active row.
 model WorkSession {
-  id              String            @id @default(cuid())
-  workspaceId     String
-  issueId         String
-  ownerUserId     String?
-  ownerAgentId    String?
-  source          WorkSessionSource
-  status          WorkSessionStatus @default(CLAIMED)
-  repoFullName    String
-  branch          String
-  baseBranch      String            @default("main")
+  id                String            @id @default(cuid())
+  workspaceId       String
+  issueId           String
+  ownerUserId       String?
+  ownerAgentId      String?
+  /// Concrete endpoint that owns execution/heartbeat authority. The logical
+  /// owner remains ownerAgentId; nullable preserves legacy/manual sessions.
+  ownerConnectionId String?
+  source            WorkSessionSource
+  status            WorkSessionStatus @default(CLAIMED)
+  repoFullName      String
+  branch            String
+  baseBranch        String            @default("main")
   /// Local path is diagnostic only; it is never used as an execution target.
-  worktreePath    String?
-  headSha         String?
-  pullRequestId   String?
-  releasedVersion String?
-  deployedSha     String?
-  lastHeartbeatAt DateTime          @default(now())
-  staleAt         DateTime?
-  mergedAt        DateTime?
-  releasedAt      DateTime?
-  deployedAt      DateTime?
-  verifiedAt      DateTime?
-  endedAt         DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  worktreePath      String?
+  headSha           String?
+  pullRequestId     String?
+  releasedVersion   String?
+  deployedSha       String?
+  lastHeartbeatAt   DateTime          @default(now())
+  staleAt           DateTime?
+  mergedAt          DateTime?
+  releasedAt        DateTime?
+  deployedAt        DateTime?
+  verifiedAt        DateTime?
+  endedAt           DateTime?
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
 
-  workspace   Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issue       Issue             @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  ownerUser   User?             @relation("WorkSessionOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
-  ownerAgent  Agent?            @relation("WorkSessionOwnerAgent", fields: [ownerAgentId], references: [id], onDelete: SetNull)
-  pullRequest ExternalResource? @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+  workspace       Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue           Issue                    @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  ownerUser       User?                    @relation("WorkSessionOwnerUser", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  ownerAgent      Agent?                   @relation("WorkSessionOwnerAgent", fields: [ownerAgentId], references: [id], onDelete: SetNull)
+  ownerConnection AgentConnection?         @relation("WorkSessionOwnerConnection", fields: [ownerConnectionId], references: [id], onDelete: SetNull)
+  pullRequest     ExternalResource?        @relation(fields: [pullRequestId], references: [id], onDelete: SetNull)
+  participants    WorkSessionParticipant[]
 
   @@unique([workspaceId, repoFullName, branch])
   @@index([workspaceId, status, lastHeartbeatAt])
   @@index([issueId, createdAt])
   @@index([ownerUserId, status])
   @@index([ownerAgentId, status])
+  @@index([ownerConnectionId, status])
   @@index([pullRequestId])
+}
+
+/// Explicit connection-level collaboration on one delivery lease. The
+/// denormalized agentId makes attribution durable and cheap to query even if a
+/// connection is later revoked. Exactly one active PRIMARY is enforced by a
+/// partial unique index in the migration.
+model WorkSessionParticipant {
+  id            String                     @id @default(cuid())
+  workspaceId   String
+  workSessionId String
+  connectionId  String
+  agentId       String
+  role          WorkSessionParticipantRole
+  joinedAt      DateTime                   @default(now())
+  leftAt        DateTime?
+  createdAt     DateTime                   @default(now())
+  updatedAt     DateTime                   @updatedAt
+
+  workspace   Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workSession WorkSession     @relation(fields: [workSessionId], references: [id], onDelete: Cascade)
+  connection  AgentConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  agent       Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
+
+  @@unique([workSessionId, connectionId])
+  @@index([workspaceId, role, leftAt])
+  @@index([agentId, leftAt])
+  @@index([connectionId, leftAt])
 }
 
 /// Inbound external webhook idempotency and diagnostics. For GitHub this
@@ -2782,35 +2916,37 @@ model Agent {
   createdAt                  DateTime         @default(now())
   updatedAt                  DateTime         @updatedAt
 
-  workspace                Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  profile                  AgentProfile?        @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)
-  runtime                  Runtime?             @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
-  assignedIssues           Issue[]              @relation("IssueAssignedAgent")
-  claimedIssues            Issue[]              @relation("IssueClaimedByAgent")
-  apiKeys                  ApiKey[]             @relation("AgentApiKeys")
-  authoredComments         Comment[]            @relation("AgentAuthoredComments")
+  workspace                Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  profile                  AgentProfile?            @relation("AgentProfileBinding", fields: [profileId], references: [id], onDelete: SetNull)
+  runtime                  Runtime?                 @relation("AgentRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
+  assignedIssues           Issue[]                  @relation("IssueAssignedAgent")
+  claimedIssues            Issue[]                  @relation("IssueClaimedByAgent")
+  apiKeys                  ApiKey[]                 @relation("AgentApiKeys")
+  authoredComments         Comment[]                @relation("AgentAuthoredComments")
   dispatchRules            DispatchRule[]
   runs                     AgentRun[]
+  connections              AgentConnection[]
+  workSessionParticipants  WorkSessionParticipant[]
   chatThreads              ChatThread[]
   connectorSessions        ConnectorSession[]
   issueWatches             IssueWatcher[]
-  authoredArtifacts        Artifact[]           @relation("ArtifactCreatorAgent")
-  authoredArtifactVersions ArtifactVersion[]    @relation("ArtifactVersionCreatorAgent")
+  authoredArtifacts        Artifact[]               @relation("ArtifactCreatorAgent")
+  authoredArtifactVersions ArtifactVersion[]        @relation("ArtifactVersionCreatorAgent")
   artifactGrants           ArtifactGrant[]
-  artifactComments         ArtifactComment[]    @relation("ArtifactCommentAuthorAgent")
-  artifactDeployments      ArtifactDeployment[] @relation("ArtifactDeploymentCreatorAgent")
-  ownedContextSets         ContextSet[]         @relation("ContextSetOwnerAgent")
-  createdExecutionPlans    ExecutionPlan[]      @relation("ExecutionPlanCreatorAgent")
-  createdGoals             Goal[]               @relation("GoalCreatorAgent")
-  executionSteps           ExecutionStep[]      @relation("ExecutionStepAgent")
-  crewMemberships          AgentCrewMember[]    @relation("AgentCrewMember")
-  requestedReviewGates     ReviewGate[]         @relation("ReviewGateRequesterAgent")
-  resolvedReviewGates      ReviewGate[]         @relation("ReviewGateResolverAgent")
-  requestedActionRequests  ActionRequest[]      @relation("ActionRequestRequesterAgent")
-  assignedActionRequests   ActionRequest[]      @relation("ActionRequestAssigneeAgent")
-  actorAuditLogs           AuditLog[]           @relation("AuditLogActorAgent")
-  actorActivityEvents      ActivityEvent[]      @relation("ActivityEventActorAgent")
-  ownedWorkSessions        WorkSession[]        @relation("WorkSessionOwnerAgent")
+  artifactComments         ArtifactComment[]        @relation("ArtifactCommentAuthorAgent")
+  artifactDeployments      ArtifactDeployment[]     @relation("ArtifactDeploymentCreatorAgent")
+  ownedContextSets         ContextSet[]             @relation("ContextSetOwnerAgent")
+  createdExecutionPlans    ExecutionPlan[]          @relation("ExecutionPlanCreatorAgent")
+  createdGoals             Goal[]                   @relation("GoalCreatorAgent")
+  executionSteps           ExecutionStep[]          @relation("ExecutionStepAgent")
+  crewMemberships          AgentCrewMember[]        @relation("AgentCrewMember")
+  requestedReviewGates     ReviewGate[]             @relation("ReviewGateRequesterAgent")
+  resolvedReviewGates      ReviewGate[]             @relation("ReviewGateResolverAgent")
+  requestedActionRequests  ActionRequest[]          @relation("ActionRequestRequesterAgent")
+  assignedActionRequests   ActionRequest[]          @relation("ActionRequestAssigneeAgent")
+  actorAuditLogs           AuditLog[]               @relation("AuditLogActorAgent")
+  actorActivityEvents      ActivityEvent[]          @relation("ActivityEventActorAgent")
+  ownedWorkSessions        WorkSession[]            @relation("WorkSessionOwnerAgent")
 
   @@unique([workspaceId, profileKey])
   @@index([workspaceId, status])
@@ -2871,7 +3007,11 @@ model AgentRun {
   workspaceId                  String
   issueId                      String
   agentId                      String
+  /// Endpoint that originated/owns this execution attempt. Nullable for
+  /// legacy runs and manual activity whose transport cannot be established.
+  connectionId                 String?
   status                       AgentRunStatus       @default(ACTIVE)
+  lifecycleConfidence          LivenessConfidence   @default(UNCONFIRMED)
   startedAt                    DateTime             @default(now())
   /// Updated on every appended AgentRunEvent — what the watchdog reads.
   lastEventAt                  DateTime             @default(now())
@@ -3023,21 +3163,23 @@ model AgentRun {
   /// not an enum, for the same anti-churn reason as `triggerKind`.
   runEngineSource  String?
 
-  workspace          Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  issue              Issue           @relation(fields: [issueId], references: [id], onDelete: Cascade)
-  agent              Agent           @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  executionStep      ExecutionStep?  @relation("AgentRunStep", fields: [executionStepId], references: [id], onDelete: SetNull)
-  controlRequestedBy User?           @relation("AgentRunControlRequester", fields: [controlRequestedById], references: [id], onDelete: SetNull)
-  clearedBy          User?           @relation("AgentRunClearer", fields: [clearedById], references: [id], onDelete: SetNull)
-  supersededBy       AgentRun?       @relation("AgentRunSupersede", fields: [supersededByRunId], references: [id], onDelete: SetNull)
-  supersedes         AgentRun[]      @relation("AgentRunSupersede")
+  workspace          Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue              Issue            @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  agent              Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  connection         AgentConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  executionStep      ExecutionStep?   @relation("AgentRunStep", fields: [executionStepId], references: [id], onDelete: SetNull)
+  controlRequestedBy User?            @relation("AgentRunControlRequester", fields: [controlRequestedById], references: [id], onDelete: SetNull)
+  clearedBy          User?            @relation("AgentRunClearer", fields: [clearedById], references: [id], onDelete: SetNull)
+  supersededBy       AgentRun?        @relation("AgentRunSupersede", fields: [supersededByRunId], references: [id], onDelete: SetNull)
+  supersedes         AgentRun[]       @relation("AgentRunSupersede")
   events             AgentRunEvent[]
-  statusComment      Comment?        @relation("AgentRunStatusComment")
+  statusComment      Comment?         @relation("AgentRunStatusComment")
 
   @@index([workspaceId, status, lastEventAt])
   @@index([workspaceId, status, clearedAt, lastEventAt])
   @@index([issueId, startedAt])
   @@index([agentId, status])
+  @@index([connectionId, status])
   /// Inbox query: "what does Victor owe right now?" Filters unacked
   /// (acknowledgedAt IS NULL) active runs ordered by recency.
   @@index([workspaceId, agentId, acknowledgedAt, lastEventAt])
@@ -3064,18 +3206,23 @@ model AgentRun {
 /// their loop without schema churn — STARTED, STEP, TOOL_CALL, STATUS,
 /// BLOCKED, COMPLETED, ERRORED, … are conventional.
 model AgentRunEvent {
-  id          String   @id @default(cuid())
-  workspaceId String
-  runId       String
-  kind        String
-  payload     Json?
-  createdAt   DateTime @default(now())
+  id           String   @id @default(cuid())
+  workspaceId  String
+  runId        String
+  /// Connection that reported this event. It may differ from the run's owner
+  /// for explicitly joined reviewer/contributor activity.
+  connectionId String?
+  kind         String
+  payload      Json?
+  createdAt    DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  run       AgentRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  workspace  Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  run        AgentRun         @relation(fields: [runId], references: [id], onDelete: Cascade)
+  connection AgentConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
 
   @@index([runId, createdAt])
   @@index([workspaceId, createdAt])
+  @@index([connectionId, createdAt])
 }
 
 model ChatThread {
@@ -3104,11 +3251,11 @@ model ChatThread {
   createdAt                DateTime        @default(now())
   archivedAt               DateTime?
 
-  workspace Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  agent     Agent            @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  messages  ChatMessage[]
-  reads     ChatThreadRead[]
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  agent             Agent              @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  messages          ChatMessage[]
+  reads             ChatThreadRead[]
   connectorSessions ConnectorSession[]
 
   @@index([workspaceId, userId, agentId, lastMessageAt])
@@ -3172,14 +3319,14 @@ model ChatMessage {
   lastWakeDeliveryId String?
   createdAt          DateTime  @default(now())
 
-  workspace Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  thread    ChatThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  connectorSession ConnectorSession? @relation(fields: [connectorSessionId], references: [id], onDelete: SetNull)
+  workspace           Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  thread              ChatThread          @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  connectorSession    ConnectorSession?   @relation(fields: [connectorSessionId], references: [id], onDelete: SetNull)
   connectorDeliveries ConnectorDelivery[]
 
-  @@index([threadId, createdAt])
   @@unique([threadId, sequence])
   @@unique([connectorSessionId, externalMessageId])
+  @@index([threadId, createdAt])
   @@index([replyToMessageId])
   @@index([connectorSessionId, createdAt])
   @@index([workspaceId, createdAt])
@@ -3192,41 +3339,41 @@ model ChatMessage {
 /// native interactive session. Hermes `/v1/runs` remains represented by
 /// AgentRun.externalRunId and is intentionally not stored here.
 model ConnectorSession {
-  id                       String                    @id @default(cuid())
-  workspaceId              String
-  runtimeId                String
-  agentId                  String
-  chatThreadId             String?
-  connectorKey             String                    @default("hermes-sessions")
-  externalSessionId        String
-  sessionClass             ChatSessionClass          @default(INTERACTIVE)
-  lifecycle                ConnectorSessionLifecycle @default(CONNECTING)
-  ownership                ConnectorSessionOwnership @default(FORGE)
-  memoryKey                String
-  memoryKeyVersion         Int                       @default(2)
-  protocolVersion          String?
-  capabilities             Json?
-  negotiatedAt             DateTime?
-  negotiationError         String?                   @db.Text
-  resumeCursor             String?
-  lastExternalSequence     Int?
-  subscriptionLeaseOwner   String?
+  id                         String                    @id @default(cuid())
+  workspaceId                String
+  runtimeId                  String
+  agentId                    String
+  chatThreadId               String?
+  connectorKey               String                    @default("hermes-sessions")
+  externalSessionId          String
+  sessionClass               ChatSessionClass          @default(INTERACTIVE)
+  lifecycle                  ConnectorSessionLifecycle @default(CONNECTING)
+  ownership                  ConnectorSessionOwnership @default(FORGE)
+  memoryKey                  String
+  memoryKeyVersion           Int                       @default(2)
+  protocolVersion            String?
+  capabilities               Json?
+  negotiatedAt               DateTime?
+  negotiationError           String?                   @db.Text
+  resumeCursor               String?
+  lastExternalSequence       Int?
+  subscriptionLeaseOwner     String?
   subscriptionLeaseExpiresAt DateTime?
-  lastConnectedAt          DateTime?
-  lastEventAt              DateTime?
-  lastDeliveryAt           DateTime?
-  lastErrorAt              DateTime?
-  lastError                String?                   @db.Text
-  retryCount               Int                       @default(0)
-  nextRetryAt              DateTime?
-  createdAt                DateTime                  @default(now())
-  updatedAt                DateTime                  @updatedAt
-  closedAt                 DateTime?
+  lastConnectedAt            DateTime?
+  lastEventAt                DateTime?
+  lastDeliveryAt             DateTime?
+  lastErrorAt                DateTime?
+  lastError                  String?                   @db.Text
+  retryCount                 Int                       @default(0)
+  nextRetryAt                DateTime?
+  createdAt                  DateTime                  @default(now())
+  updatedAt                  DateTime                  @updatedAt
+  closedAt                   DateTime?
 
-  workspace  Workspace   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  runtime    Runtime     @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
-  agent      Agent       @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  chatThread ChatThread? @relation(fields: [chatThreadId], references: [id], onDelete: Cascade)
+  workspace  Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runtime    Runtime             @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+  agent      Agent               @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  chatThread ChatThread?         @relation(fields: [chatThreadId], references: [id], onDelete: Cascade)
   messages   ChatMessage[]
   deliveries ConnectorDelivery[]
 

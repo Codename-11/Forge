@@ -13,6 +13,36 @@ There are two independent axes:
   runtime) or **Streaming/Completions** (Forge). Orthogonal to tier; see
   [Chat & Dispatch Engines](./engines.md).
 
+There are also four deliberately separate identities in the execution record:
+
+- **Agent profile / binding** — who is acting and what it may do in the
+  workspace.
+- **Agent connection** — the concrete managed runtime, MCP client, webhook, or
+  on-demand endpoint used for this attempt.
+- **Agent run** — one execution attempt against an issue.
+- **Work session** — the primary branch and pull-request coordination lease.
+
+An API key authenticates a caller; it is not the execution identity. Forge
+snapshots the connection on runs and work sessions so key rotation or later
+profile relinking cannot rewrite historical attribution.
+
+## Connection-aware liveness
+
+Availability is interpreted from the connection's declared liveness model,
+not from its provider name:
+
+| Connection | Positive signals | Silence means |
+|---|---|---|
+| Managed runtime | Runtime heartbeat, run events, provider state | A confirmed stall is possible after the workspace threshold |
+| MCP client | MCP initialize/session, tool calls, explicit lease heartbeat | Quiet / status unconfirmed; never a confirmed stall from silence alone |
+| Webhook | Durable delivery plus acknowledgement | Delivery failed or acknowledgement missing |
+| On-demand | Successful probe when invoked | Not currently running; global online/offline is not meaningful |
+
+Git commits, pull-request changes, checks, and reviews count as work evidence,
+but do not claim that a client process is alive. Operator surfaces show both
+the latest lifecycle signal and the latest external work evidence, along with
+the confidence of the resulting state.
+
 ## Tier 1 — First-class agents (managed runtimes)
 
 The agent is a **full workspace member**: always-on presence, realtime chat,

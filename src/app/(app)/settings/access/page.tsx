@@ -179,8 +179,16 @@ export default function AccessPage() {
     message: string;
   }>({ state: "idle", message: "" });
 
-  const [rotateTarget, setRotateTarget] = useState<{ id: string; name: string } | null>(null);
-  const [revokeTarget, setRevokeTarget] = useState<{ id: string; name: string } | null>(null);
+  const [rotateTarget, setRotateTarget] = useState<{
+    id: string;
+    name: string;
+    activeDeliveries?: number;
+  } | null>(null);
+  const [revokeTarget, setRevokeTarget] = useState<{
+    id: string;
+    name: string;
+    activeDeliveries?: number;
+  } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
   const baseUrl =
@@ -537,6 +545,11 @@ export default function AccessPage() {
             <Card>
               {agentKeys.map((k) => {
                 const expired = !!k.expiresAt && !k.revokedAt && new Date(k.expiresAt) < new Date();
+                const activeDeliveries = k.agentConnections.reduce(
+                  (total, connection) => total + connection._count.ownedSessions,
+                  0,
+                );
+                const latestConnection = k.agentConnections[0] ?? null;
                 return (
                   <li key={k.id} className="flex items-start gap-4 px-4 py-3">
                     <div className="min-w-0 flex-1">
@@ -563,13 +576,33 @@ export default function AccessPage() {
                         {k.lastUsedAt ? `used ${relativeTime(k.lastUsedAt)}` : "never used"}
                         {k.expiresAt && !k.revokedAt && <> . expires {relativeTime(k.expiresAt)}</>}
                       </div>
+                      <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[0.6875rem] text-muted-foreground">
+                        <span>
+                          {k.agentConnections.length} registered client
+                          {k.agentConnections.length === 1 ? "" : "s"}
+                        </span>
+                        {latestConnection?.lastSeenAt && (
+                          <span>
+                            · last seen {relativeTime(latestConnection.lastSeenAt)}
+                            {latestConnection.clientName || latestConnection.displayName
+                              ? ` · ${latestConnection.displayName ?? latestConnection.clientName}`
+                              : ""}
+                          </span>
+                        )}
+                        {activeDeliveries > 0 && (
+                          <span className="rounded bg-warning/10 px-1 py-0.5 font-medium text-warning">
+                            {activeDeliveries} active{" "}
+                            {activeDeliveries === 1 ? "delivery" : "deliveries"}
+                          </span>
+                        )}
+                      </div>
                     </div>
                     <KeyActions
                       k={k}
                       rotatePending={rotate.isPending}
                       revokePending={revoke.isPending}
-                      onRotate={() => setRotateTarget({ id: k.id, name: k.name })}
-                      onRevoke={() => setRevokeTarget({ id: k.id, name: k.name })}
+                      onRotate={() => setRotateTarget({ id: k.id, name: k.name, activeDeliveries })}
+                      onRevoke={() => setRevokeTarget({ id: k.id, name: k.name, activeDeliveries })}
                       onDelete={() => setDeleteTarget({ id: k.id, name: k.name })}
                       showRotate
                     />
@@ -1030,7 +1063,11 @@ export default function AccessPage() {
         open={!!rotateTarget}
         onOpenChange={(o) => !o && setRotateTarget(null)}
         title={rotateTarget ? `Rotate ${rotateTarget.name}?` : "Rotate key?"}
-        description="The old key is revoked immediately. Update your agent before closing the reveal."
+        description={
+          rotateTarget?.activeDeliveries
+            ? `The old key is revoked immediately and its clients own ${rotateTarget.activeDeliveries} active ${rotateTarget.activeDeliveries === 1 ? "delivery" : "deliveries"}. Copy the replacement before closing the reveal, then hand off or reconnect those sessions.`
+            : "The old key is revoked immediately. Update your agent before closing the reveal."
+        }
         primaryLabel="Rotate"
         loading={rotate.isPending}
         onConfirm={() => {
@@ -1044,7 +1081,11 @@ export default function AccessPage() {
         onOpenChange={(o) => !o && setRevokeTarget(null)}
         variant="destructive"
         title={revokeTarget ? `Revoke ${revokeTarget.name}?` : "Revoke key?"}
-        description="Disables the key immediately. The row is retained for audit."
+        description={
+          revokeTarget?.activeDeliveries
+            ? `This key's clients own ${revokeTarget.activeDeliveries} active ${revokeTarget.activeDeliveries === 1 ? "delivery" : "deliveries"}. Revoking disconnects future access but does not transfer ownership; hand off or abandon those sessions explicitly.`
+            : "Disables the key immediately. The row is retained for audit."
+        }
         primaryLabel="Revoke"
         loading={revoke.isPending}
         onConfirm={() => {

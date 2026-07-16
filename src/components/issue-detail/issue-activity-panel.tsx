@@ -3,7 +3,12 @@ import { Activity as ActivityIcon } from "lucide-react";
 import { Avatar } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
-import { activityActorName, activityActorOwnerTitle } from "@/lib/activity-actor";
+import {
+  activityActorKind,
+  activityActorName,
+  activityActorOwnerTitle,
+} from "@/lib/activity-actor";
+import { issueUpdateCopy } from "@/lib/activity-update-summary";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 
@@ -152,6 +157,9 @@ function activityCopy(
   payload: unknown,
   actorAgentProfileKey?: string | null,
 ): { label: string; detail?: string | null; phase?: string } {
+  if (kind === "ISSUE_UPDATED") {
+    return issueUpdateCopy(payload) ?? KIND_LABEL.ISSUE_UPDATED!;
+  }
   if (kind === "AGENT_ASSIGNED") {
     const dispatch = readDispatch(payload);
     const handle =
@@ -301,6 +309,7 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
           {rows.map((e) => {
             const agent = e.actorAgent;
             const actorLabel = activityActorName(e);
+            const actorKind = activityActorKind(e);
             const actorOwnerTitle = activityActorOwnerTitle(e);
             const copy = activityCopy(e.kind, e.payload, agent?.profileKey ?? null);
             return (
@@ -315,19 +324,19 @@ export function IssueActivityPanel({ issueId }: { issueId: string }) {
                     size="xs"
                   />
                 ) : (
-                  <Avatar name={e.actor?.name ?? null} image={e.actor?.image ?? null} size={18} />
+                  <Avatar name={actorLabel} image={e.actor?.image ?? null} size={18} />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="flex items-baseline gap-1.5 text-[0.6875rem]">
                     <span className="truncate font-medium" title={actorOwnerTitle}>
                       {actorLabel}
                     </span>
-                    {agent && (
+                    {actorKind !== "human" && (
                       <Badge
                         color="#6366f1"
                         className="font-mono text-[0.6875rem] uppercase tracking-wider"
                       >
-                        agent
+                        {actorKind}
                       </Badge>
                     )}
                     {copy.phase && (

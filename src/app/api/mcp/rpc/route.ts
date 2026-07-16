@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { randomUUID } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
@@ -16,6 +17,9 @@ import { rateLimit } from "@/server/rate-limit";
 import { logger } from "@/server/logger";
 import { mcpServerInfo } from "@/server/build-info";
 import { FORGE_MCP_INSTRUCTIONS } from "@/server/services/mcp-instructions";
+import { db } from "@/server/db";
+import { touchAgentConnection, upsertAgentConnection } from "@/server/services/agent-connection";
+import { resolveMcpQuietRequestsForConnection } from "@/server/services/work-session";
 
 /**
  * Standard MCP (Model Context Protocol) endpoint — Streamable HTTP transport
@@ -160,13 +164,94 @@ type CatalogToolRunResult =
   | { ok: false; rpcError: JsonRpcError }
   | { ok: true; result: unknown; isError?: boolean };
 
-function mcpContext(auth: NonNullable<Awaited<ReturnType<typeof authenticateApiKey>>>): McpContext {
+function mcpContext(
+  auth: NonNullable<Awaited<ReturnType<typeof authenticateApiKey>>>,
+  connectionId?: string | null,
+): McpContext {
   return {
     workspaceId: auth.workspaceId,
     userId: auth.userId,
     pluginId: auth.pluginId,
     apiKey: auth,
+    connectionId: connectionId ?? null,
   };
+}
+
+type McpClientInfo = { name: string; version?: string };
+
+function initializeClient(
+  body: unknown,
+): { clientInfo: McpClientInfo | null; protocol?: string } | null {
+  const messages = Array.isArray(body) ? body : [body];
+  const initialize = messages.find(
+    (item): item is JsonRpcRequest =>
+      !!item && typeof item === "object" && (item as JsonRpcRequest).method === "initialize",
+  );
+  if (!initialize) return null;
+  const params =
+    initialize.params && typeof initialize.params === "object" && !Array.isArray(initialize.params)
+      ? (initialize.params as Record<string, unknown>)
+      : {};
+  const raw =
+    params.clientInfo && typeof params.clientInfo === "object" && !Array.isArray(params.clientInfo)
+      ? (params.clientInfo as Record<string, unknown>)
+      : null;
+  const name = typeof raw?.name === "string" ? raw.name.trim().slice(0, 120) : "";
+  const version = typeof raw?.version === "string" ? raw.version.trim().slice(0, 80) : undefined;
+  return {
+    clientInfo: name ? { name, ...(version ? { version } : {}) } : null,
+    ...(typeof params.protocolVersion === "string"
+      ? { protocol: params.protocolVersion.slice(0, 40) }
+      : {}),
+  };
+}
+
+async function resolveMcpConnection(
+  auth: NonNullable<Awaited<ReturnType<typeof authenticateApiKey>>>,
+  body: unknown,
+  suppliedSessionId: string | null,
+) {
+  const agentId = auth.linkedAgentId;
+  if (!agentId) return null;
+  const initialize = initializeClient(body);
+  const sessionId = suppliedSessionId?.trim().slice(0, 255) || null;
+
+  let connection: Awaited<ReturnType<typeof upsertAgentConnection>> | null = null;
+  if (!initialize && sessionId) {
+    const existing = await db.agentConnection.findFirst({
+      where: {
+        workspaceId: auth.workspaceId,
+        agentId,
+        kind: "MCP_CLIENT",
+        instanceKey: sessionId,
+        revokedAt: null,
+      },
+    });
+    if (existing) connection = await touchAgentConnection(db, existing.id);
+  }
+
+  if (!connection) {
+    const clientName = initialize?.clientInfo?.name ?? null;
+    connection = await upsertAgentConnection(db, {
+      workspaceId: auth.workspaceId,
+      agentId,
+      kind: "MCP_CLIENT",
+      livenessModel: "LEASE",
+      apiKeyId: auth.keyId,
+      instanceKey: sessionId ?? (initialize ? `mcp-${randomUUID()}` : `legacy-${auth.keyId}`),
+      displayName: clientName || "Unidentified MCP client",
+      clientName,
+      clientVersion: initialize?.clientInfo?.version ?? null,
+      capabilities: ["TOOL_ACTIVITY"],
+      metadata: {
+        transport: "streamable-http",
+        protocolVersion: initialize?.protocol ?? PROTOCOL_VERSION,
+        identified: Boolean(clientName),
+      },
+    });
+  }
+  await resolveMcpQuietRequestsForConnection(db, auth.workspaceId, connection.id);
+  return connection;
 }
 
 function toolContent(result: unknown, isError = false) {
@@ -227,6 +312,7 @@ async function handleCatalogTool(
   name: CatalogToolName,
   args: unknown,
   auth: NonNullable<Awaited<ReturnType<typeof authenticateApiKey>>>,
+  connectionId?: string | null,
 ): Promise<CatalogToolRunResult> {
   const parsed = catalogToolDefs[name].input.safeParse(args ?? {});
   if (!parsed.success) {
@@ -287,7 +373,7 @@ async function handleCatalogTool(
   const exec = await executeMcpTool({
     name: input.name,
     input: input.arguments,
-    ctx: mcpContext(auth),
+    ctx: mcpContext(auth, connectionId),
     source: "json-rpc",
   });
   if (exec.ok) return { ok: true, result: { toolName: exec.toolName, result: exec.result } };
@@ -308,6 +394,7 @@ async function handleRpc(
   auth: Awaited<ReturnType<typeof authenticateApiKey>> | null,
   authError: ApiKeyError | null,
   listOptions: ListOptions,
+  connectionId?: string | null,
 ) {
   const { id, method, params } = msg;
 
@@ -358,7 +445,7 @@ async function handleRpc(
       if (!p.name) return fail(id, { code: -32602, message: "Missing tool name." });
 
       if (isCatalogToolName(p.name)) {
-        const catalog = await handleCatalogTool(p.name, p.arguments ?? {}, auth);
+        const catalog = await handleCatalogTool(p.name, p.arguments ?? {}, auth, connectionId);
         if (!catalog.ok) return fail(id, catalog.rpcError);
         return ok(id, toolContent(catalog.result, catalog.isError ?? false));
       }
@@ -366,7 +453,7 @@ async function handleRpc(
       const exec = await executeMcpTool({
         name: p.name,
         input: p.arguments ?? {},
-        ctx: mcpContext(auth),
+        ctx: mcpContext(auth, connectionId),
         source: "json-rpc",
       });
 
@@ -444,6 +531,17 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  // MCP Streamable HTTP is otherwise stateless. Negotiate a durable endpoint
+  // identity on initialize and accept it on later requests via the standard
+  // session header. Older clients that omit the header get one clearly marked
+  // credential-level "Unidentified MCP client" connection.
+  const connection = auth
+    ? await resolveMcpConnection(auth, body, req.headers.get("mcp-session-id"))
+    : null;
+  const responseHeaders = connection?.instanceKey
+    ? { "Mcp-Session-Id": connection.instanceKey }
+    : undefined;
+
   // `tools/list` narrowing (AXI-82): default is the compact runtime profile.
   // `?profile=full` opts into the full direct catalog; `?tools=issues,comments,…`
   // hand-picks namespaces. Configure it on the MCP server URL when a client
@@ -463,15 +561,23 @@ export async function POST(req: NextRequest) {
   // Support both single requests and batched arrays (JSON-RPC 2.0 spec).
   if (Array.isArray(body)) {
     const responses = await Promise.all(
-      body.map((msg) => handleRpc(msg as JsonRpcRequest, auth, authError, listOptions)),
+      body.map((msg) =>
+        handleRpc(msg as JsonRpcRequest, auth, authError, listOptions, connection?.id),
+      ),
     );
     const filtered = responses.filter((r) => r != null);
-    return NextResponse.json(filtered);
+    return NextResponse.json(filtered, { headers: responseHeaders });
   }
 
-  const result = await handleRpc(body as JsonRpcRequest, auth, authError, listOptions);
-  if (result == null) return new NextResponse(null, { status: 204 });
-  return NextResponse.json(result);
+  const result = await handleRpc(
+    body as JsonRpcRequest,
+    auth,
+    authError,
+    listOptions,
+    connection?.id,
+  );
+  if (result == null) return new NextResponse(null, { status: 204, headers: responseHeaders });
+  return NextResponse.json(result, { headers: responseHeaders });
 }
 
 /**

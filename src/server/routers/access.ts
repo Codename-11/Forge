@@ -4,6 +4,7 @@ import { PluginScope, ApiKeyKind } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { createHash, randomBytes } from "node:crypto";
 import { router, adminProcedure, workspaceProcedure } from "@/server/trpc";
+import { revokeAgentConnectionsForApiKey } from "@/server/services/agent-connection";
 import { agentId as agentIdSchema } from "./agent";
 
 function generateApiKey(prefix = "forge_sk"): { raw: string; hashed: string; prefix: string } {
@@ -33,46 +34,40 @@ async function assertIdsInWorkspace(
   if (ids.projectIds?.length) {
     const unique = Array.from(new Set(ids.projectIds));
     checks.push(
-      db.project
-        .count({ where: { id: { in: unique }, workspaceId } })
-        .then((n) => {
-          if (n !== unique.length) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "One or more projectIds not in this workspace.",
-            });
-          }
-        }),
+      db.project.count({ where: { id: { in: unique }, workspaceId } }).then((n) => {
+        if (n !== unique.length) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "One or more projectIds not in this workspace.",
+          });
+        }
+      }),
     );
   }
   if (ids.labelIds?.length) {
     const unique = Array.from(new Set(ids.labelIds));
     checks.push(
-      db.label
-        .count({ where: { id: { in: unique }, workspaceId } })
-        .then((n) => {
-          if (n !== unique.length) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "One or more labelIds not in this workspace.",
-            });
-          }
-        }),
+      db.label.count({ where: { id: { in: unique }, workspaceId } }).then((n) => {
+        if (n !== unique.length) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "One or more labelIds not in this workspace.",
+          });
+        }
+      }),
     );
   }
   if (ids.initiativeIds?.length) {
     const unique = Array.from(new Set(ids.initiativeIds));
     checks.push(
-      db.initiative
-        .count({ where: { id: { in: unique }, workspaceId } })
-        .then((n) => {
-          if (n !== unique.length) {
-            throw new TRPCError({
-              code: "BAD_REQUEST",
-              message: "One or more initiativeIds not in this workspace.",
-            });
-          }
-        }),
+      db.initiative.count({ where: { id: { in: unique }, workspaceId } }).then((n) => {
+        if (n !== unique.length) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "One or more initiativeIds not in this workspace.",
+          });
+        }
+      }),
     );
   }
   await Promise.all(checks);
@@ -135,6 +130,23 @@ export const accessRouter = router({
         linkedAgent: {
           select: { id: true, name: true, profileKey: true, avatar: true },
         },
+        agentConnections: {
+          orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
+          select: {
+            id: true,
+            status: true,
+            displayName: true,
+            clientName: true,
+            lastSeenAt: true,
+            _count: {
+              select: {
+                ownedSessions: {
+                  where: { status: { notIn: ["VERIFIED", "ABANDONED"] } },
+                },
+              },
+            },
+          },
+        },
         createdAt: true,
         lastUsedAt: true,
         expiresAt: true,
@@ -162,14 +174,9 @@ export const accessRouter = router({
         labelIds: input.labelIds,
         initiativeIds: input.initiativeIds,
       });
-      await assertAgentInWorkspace(
-        ctx.db,
-        ctx.workspaceId,
-        input.linkedAgentId,
-      );
+      await assertAgentInWorkspace(ctx.db, ctx.workspaceId, input.linkedAgentId);
       const { raw, hashed, prefix } = generateApiKey();
-      const inferredKind: ApiKeyKind =
-        input.kind ?? (input.linkedAgentId ? "AGENT" : "PERSONAL");
+      const inferredKind: ApiKeyKind = input.kind ?? (input.linkedAgentId ? "AGENT" : "PERSONAL");
       const row = await ctx.db.apiKey.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -232,11 +239,7 @@ export const accessRouter = router({
         initiativeIds: input.initiativeIds,
       });
       if (input.linkedAgentId !== undefined) {
-        await assertAgentInWorkspace(
-          ctx.db,
-          ctx.workspaceId,
-          input.linkedAgentId,
-        );
+        await assertAgentInWorkspace(ctx.db, ctx.workspaceId, input.linkedAgentId);
       }
       return ctx.db.apiKey.update({
         where: { id: prior.id },
@@ -244,12 +247,8 @@ export const accessRouter = router({
           ...(input.name !== undefined ? { name: input.name } : {}),
           ...(input.projectIds !== undefined ? { projectIds: input.projectIds } : {}),
           ...(input.labelIds !== undefined ? { labelIds: input.labelIds } : {}),
-          ...(input.initiativeIds !== undefined
-            ? { initiativeIds: input.initiativeIds }
-            : {}),
-          ...(input.linkedAgentId !== undefined
-            ? { linkedAgentId: input.linkedAgentId }
-            : {}),
+          ...(input.initiativeIds !== undefined ? { initiativeIds: input.initiativeIds } : {}),
+          ...(input.linkedAgentId !== undefined ? { linkedAgentId: input.linkedAgentId } : {}),
         },
         select: {
           id: true,
@@ -274,9 +273,13 @@ export const accessRouter = router({
         where: { id: input.id, workspaceId: ctx.workspaceId },
       });
       if (!key) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.db.apiKey.update({
-        where: { id: input.id },
-        data: { revokedAt: new Date() },
+      const revokedAt = new Date();
+      return ctx.db.$transaction(async (tx) => {
+        await revokeAgentConnectionsForApiKey(tx, key.id, revokedAt);
+        return tx.apiKey.update({
+          where: { id: input.id },
+          data: { revokedAt },
+        });
       });
     }),
 
@@ -287,7 +290,10 @@ export const accessRouter = router({
         where: { id: input.id, workspaceId: ctx.workspaceId, pluginId: null },
       });
       if (!key) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.db.apiKey.delete({ where: { id: input.id } });
+      return ctx.db.$transaction(async (tx) => {
+        await revokeAgentConnectionsForApiKey(tx, key.id);
+        return tx.apiKey.delete({ where: { id: input.id } });
+      });
     }),
 
   /**
@@ -388,12 +394,15 @@ export const accessRouter = router({
         where: { id: input.id, workspaceId: ctx.workspaceId, pluginId: null },
       });
       if (!prior) throw new TRPCError({ code: "NOT_FOUND" });
-      if (prior.revokedAt) throw new TRPCError({ code: "BAD_REQUEST", message: "Key already revoked." });
+      if (prior.revokedAt)
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Key already revoked." });
 
       const { raw, hashed, prefix } = generateApiKey();
-      const [, next] = await ctx.db.$transaction([
-        ctx.db.apiKey.update({ where: { id: prior.id }, data: { revokedAt: new Date() } }),
-        ctx.db.apiKey.create({
+      const revokedAt = new Date();
+      const next = await ctx.db.$transaction(async (tx) => {
+        await revokeAgentConnectionsForApiKey(tx, prior.id, revokedAt);
+        await tx.apiKey.update({ where: { id: prior.id }, data: { revokedAt } });
+        return tx.apiKey.create({
           data: {
             workspaceId: ctx.workspaceId,
             userId: prior.userId,
@@ -410,13 +419,12 @@ export const accessRouter = router({
             linkedAgentId: prior.linkedAgentId,
             expiresAt: prior.expiresAt
               ? new Date(
-                  Date.now() +
-                    Math.max(1, prior.expiresAt.getTime() - prior.createdAt.getTime()),
+                  Date.now() + Math.max(1, prior.expiresAt.getTime() - prior.createdAt.getTime()),
                 )
               : null,
           },
-        }),
-      ]);
+        });
+      });
       return {
         id: next.id,
         name: next.name,

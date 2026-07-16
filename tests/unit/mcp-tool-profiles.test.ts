@@ -75,6 +75,10 @@ describe("mcp tool profiles (AXI-82)", () => {
     expect(runtime).toContain("runs.complete");
     expect(runtime).toContain("actionRequests.list");
     expect(runtime).toContain("workSessions.claim");
+    expect(runtime).toContain("chat.appendMessage");
+    expect(runtime).toContain("chat.finalizeDraft");
+    expect(runtime).not.toContain("chat.connector.negotiate");
+    expect(runtime).not.toContain("chat.connector.deliver");
     expect(runtime.some((n) => mcpToolNamespace(n) === "canvases")).toBe(false);
   });
 
