@@ -9,6 +9,23 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-15] — v0.24.0 · Actionable Mission Control
+
+### Added
+
+- **Global attention uses one shared notification lifecycle.** The Mission Control bell combines persisted alerts and unread assignments in a responsive drawer with recent activity, operational context, and one mark-all-read action.
+- **Cross-workspace Inbox and Activity are inspectable in place.** Operators can review issue metadata, agent and run state, comments, event meaning, grouped updates, and canonical source links before leaving Mission Control.
+
+### Changed
+
+- **Run capacity reflects concurrent execution slots.** Mission Control reports active runs against configured finite capacity and names unlimited-capacity agents explicitly.
+- **Activity emphasizes meaningful changes.** Human-readable timeline interpretation and subject grouping keep repeated watchdog and action-request refreshes from overwhelming the feed.
+
+### Fixed
+
+- **Mission Control agent pages remain fully reachable.** Fleet and profile surfaces establish the correct nested scroll contract at constrained desktop viewports.
+- **Global navigation controls behave as advertised.** The notification bell and keyboard-help button open useful surfaces, the Activity shortcut no longer resembles a stuck unread count, and semantic breadcrumbs navigate to parent pages while marking the current page correctly.
+
 ## [2026-07-15] — v0.23.0 · Mission Control agent fleet
 
 ### Added
