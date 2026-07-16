@@ -16,6 +16,7 @@ import {
   type TestFixture,
 } from "@/server/routers/__tests__/helpers";
 import { agentRunRouter } from "@/server/routers/agent-run";
+import { captureRunApproval, resolveRunApproval } from "@/server/services/run-approval-lifecycle";
 
 const fixtures: TestFixture[] = [];
 
@@ -220,6 +221,146 @@ describe("agent-run lifecycle", () => {
     const after = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
     expect(after.status).toBe(AgentRunStatus.ABANDONED);
     expect(after.finishedAt).not.toBeNull();
+  });
+
+  it("records one actionable approval lifecycle across competing producers", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARA" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "ara-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
+    const approval = {
+      command: "rm -rf /tmp/checkout",
+      description: "delete in root path",
+      choices: ["once", "session", "deny"],
+    };
+
+    const captured = await prisma.$transaction((tx) =>
+      captureRunApproval(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        approval,
+        source: "subscription",
+      }),
+    );
+    const duplicateCapture = await prisma.$transaction((tx) =>
+      captureRunApproval(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        approval: null,
+        source: "poll",
+      }),
+    );
+    expect(captured).toBe(true);
+    expect(duplicateCapture).toBe(false);
+
+    const blocked = await prisma.agentRunEvent.findMany({
+      where: { runId: run.id, kind: "BLOCKED" },
+    });
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0]?.payload).toMatchObject({
+      issueId: issue.id,
+      reason: "runtime-approval-required",
+      approval,
+    });
+    expect(
+      await prisma.activityEvent.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          subjectId: run.id,
+          kind: EventKind.AGENT_RUN_BLOCKED,
+        },
+      }),
+    ).toBe(1);
+    expect(
+      (await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } })).pendingApproval,
+    ).toMatchObject(approval);
+
+    const pollFirstRun = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.ACTIVE,
+      },
+    });
+    await prisma.$transaction((tx) =>
+      captureRunApproval(tx, {
+        runId: pollFirstRun.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        approval: null,
+        source: "poll",
+      }),
+    );
+    await prisma.$transaction((tx) =>
+      captureRunApproval(tx, {
+        runId: pollFirstRun.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        approval,
+        source: "subscription",
+      }),
+    );
+    const pollFirstAfter = await prisma.agentRun.findUniqueOrThrow({
+      where: { id: pollFirstRun.id },
+      include: { events: true },
+    });
+    expect(pollFirstAfter.pendingApproval).toMatchObject(approval);
+    expect(pollFirstAfter.events.filter((event) => event.kind === "BLOCKED")).toHaveLength(1);
+
+    const resolved = await prisma.$transaction((tx) =>
+      resolveRunApproval(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        source: "operator",
+        decision: "session",
+        currentStep: "approved (session) · resuming",
+      }),
+    );
+    const duplicateResolution = await prisma.$transaction((tx) =>
+      resolveRunApproval(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        source: "subscription",
+        decision: "session",
+        currentStep: "approval resolved · resuming",
+      }),
+    );
+    expect(resolved).toBe(true);
+    expect(duplicateResolution).toBe(false);
+
+    const after = await prisma.agentRun.findUniqueOrThrow({
+      where: { id: run.id },
+      include: { events: { orderBy: { createdAt: "asc" } } },
+    });
+    expect(after.awaitingApprovalAt).toBeNull();
+    expect(after.pendingApproval).toBeNull();
+    expect(after.events.filter((event) => event.kind === "STEP")).toHaveLength(1);
+    expect(after.events.at(-1)?.payload).toMatchObject({
+      issueId: issue.id,
+      approvalResolved: true,
+      source: "operator",
+      decision: "session",
+    });
   });
 
   it("rejects in-place engagement mode changes for active runs", async () => {

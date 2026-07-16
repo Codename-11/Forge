@@ -44,6 +44,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Combobox } from "@/components/ui/combobox";
 import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
+import { useRealtime } from "@/hooks/use-realtime";
 
 // Live data for the slash-command VALUE autocomplete (projects / agents /
 // labels), shared by the description + comment composers so `/project`,
@@ -341,12 +342,66 @@ export function IssueMain({
       <ParentIssueBacklink parent={parent} />
       <PlanStepContextCards contexts={executionSteps} />
       <AgentRunStrip issueId={issueId} />
+      <IssueActionRequests issueId={issueId} canResolve={canResolveActions} />
       <IssueGoalsStrip issueId={issueId} />
       <IssuePlansStrip issueId={issueId} />
       <DescriptionBlock issueId={issueId} description={description} onSave={onDescriptionSave} />
       <SubIssuesPanel parentId={issueId} parentProjectId={projectId} parentKind={kind} />
       <Comments issueId={issueId} comments={comments} canResolveActions={canResolveActions} />
     </div>
+  );
+}
+
+/**
+ * Surface every open issue-bound ask even when the agent/runtime created it
+ * outside the comment timeline. Comment-bound requests remain rendered beside
+ * their source comment, so this panel only fills the visibility gap for other
+ * sources (runs, automations, imports, and workspace decision flows).
+ */
+function IssueActionRequests({ issueId, canResolve }: { issueId: string; canResolve: boolean }) {
+  const ws = useWorkspace();
+  const utils = trpc.useUtils();
+  const { data } = trpc.actionRequest.list.useQuery(
+    { issueId, status: "OPEN", limit: 20 },
+    { staleTime: 15_000 },
+  );
+  useRealtime((event) => {
+    if (event.subjectType !== "action-request") return;
+    void utils.actionRequest.list.invalidate();
+  });
+  const requests = (data?.items ?? []).filter((request) => request.sourceType !== "comment");
+  if (requests.length === 0) return null;
+  return (
+    <section className="space-y-2 rounded-lg border border-warning/30 bg-warning/[0.04] p-3">
+      <div className="text-meta font-medium uppercase tracking-wide text-warning">
+        Needs your decision · {requests.length}
+      </div>
+      {requests.map((request) =>
+        request.kind === "FREE_FORM" ? (
+          <div key={request.id} className="rounded-md border border-warning/30 bg-card/50 p-2">
+            <div className="text-sm font-medium">{request.title}</div>
+            {request.body ? (
+              <p className="text-meta mt-1 whitespace-pre-wrap text-muted-foreground">
+                {request.body}
+              </p>
+            ) : null}
+            <Link
+              href={`/w/${ws.slug}/command-center`}
+              className="text-meta mt-2 inline-flex text-ember hover:underline"
+            >
+              Answer in Command Center
+            </Link>
+          </div>
+        ) : (
+          <ActionRequestCard
+            key={request.id}
+            requestId={request.id}
+            issueId={issueId}
+            canResolve={canResolve}
+          />
+        ),
+      )}
+    </section>
   );
 }
 

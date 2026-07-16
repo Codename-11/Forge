@@ -40,7 +40,8 @@ import { useWorkspace } from "@/hooks/use-workspace";
  */
 export type ActionRequestCardProps =
   | ActionRequestCardCommentProps
-  | ActionRequestCardPlanProps;
+  | ActionRequestCardPlanProps
+  | ActionRequestCardDirectProps;
 
 interface ActionRequestCardCommentProps {
   /** Comment row's id — the bound ActionRequest is fetched by this. */
@@ -75,11 +76,86 @@ interface ActionRequestCardPlanProps {
   onResolved?: () => void;
 }
 
+interface ActionRequestCardDirectProps {
+  /** Render an issue-bound request that was not created from a comment. */
+  requestId: string;
+  commentId?: never;
+  planId?: never;
+  issueId: string;
+  canResolve?: boolean;
+  onResolved?: () => void;
+}
+
 export function ActionRequestCard(props: ActionRequestCardProps) {
+  if ("requestId" in props && props.requestId) {
+    return <ActionRequestCardForRequest {...props} />;
+  }
   if ("planId" in props && props.planId) {
     return <ActionRequestCardForPlan {...props} />;
   }
   return <ActionRequestCardForComment {...(props as ActionRequestCardCommentProps)} />;
+}
+
+function ActionRequestCardForRequest({
+  requestId,
+  issueId,
+  canResolve,
+  onResolved,
+}: ActionRequestCardDirectProps) {
+  const utils = trpc.useUtils();
+  const ws = useWorkspace();
+  const isAdmin = ws.role === ("OWNER" as Role) || ws.role === ("ADMIN" as Role);
+  const visibleCanResolve = canResolve || isAdmin;
+  const { data: request, isLoading } = trpc.actionRequest.get.useQuery(
+    { id: requestId },
+    { staleTime: 30_000 },
+  );
+  const [showDeclineReason, setShowDeclineReason] = useState(false);
+  const [declineReason, setDeclineReason] = useState("");
+  const settle = () => {
+    void utils.actionRequest.get.invalidate({ id: requestId });
+    void utils.actionRequest.list.invalidate();
+    void utils.issue.byId.invalidate({ id: issueId });
+    void utils.commandCenter.summary.invalidate();
+    void utils.commandCenter.decisionsCount.invalidate();
+    onResolved?.();
+  };
+  const accept = trpc.actionRequest.accept.useMutation({
+    onError: (error) => toast.error(error.message),
+    onSuccess: settle,
+  });
+  const decline = trpc.actionRequest.decline.useMutation({
+    onError: (error) => toast.error(error.message),
+    onSuccess: () => {
+      setShowDeclineReason(false);
+      setDeclineReason("");
+      settle();
+    },
+  });
+
+  if (isLoading || !request) return null;
+  return (
+    <ActionRequestCardView
+      request={request}
+      visibleCanResolve={visibleCanResolve}
+      showDeclineReason={showDeclineReason}
+      declineReason={declineReason}
+      onDeclineReasonChange={setDeclineReason}
+      onAccept={() => accept.mutate({ id: request.id })}
+      onDecline={() => {
+        if (!showDeclineReason) {
+          setShowDeclineReason(true);
+          return;
+        }
+        decline.mutate({ id: request.id, reason: declineReason || null });
+      }}
+      onCancelDecline={() => {
+        setShowDeclineReason(false);
+        setDeclineReason("");
+      }}
+      pending={accept.isPending || decline.isPending}
+    />
+  );
 }
 
 function ActionRequestCardForComment({

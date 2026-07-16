@@ -465,6 +465,7 @@ export const eventRouter = router({
           const agentRuns = runs.filter((r) => r.agentId === agent.id);
           const blockers = recovery.items.filter((r) => r.run.agentId === agent.id);
           const approvals = agentRuns.filter((r) => r.awaitingApprovalAt);
+          const ordinaryRuns = agentRuns.filter((r) => !r.awaitingApprovalAt);
           const items: AgentAttentionItem[] = [];
 
           for (const request of questions) {
@@ -561,13 +562,13 @@ export const eventRouter = router({
               reviewGates: gates.length,
               approvals: approvals.length,
               blocked: blockers.length,
-              activeRuns: agentRuns.length,
+              activeRuns: ordinaryRuns.length,
               total:
                 questions.length +
                 gates.length +
                 approvals.length +
                 blockers.length +
-                agentRuns.length,
+                ordinaryRuns.length,
             },
             items: items.slice(0, input.itemLimit),
           };

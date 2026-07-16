@@ -11,6 +11,17 @@ date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
 ## [Unreleased]
 
+## [2026-07-13] — v0.10.1 · Human-action visibility
+
+### Changed
+
+- **Runtime permission pauses are now first-class decisions.** Command Center surfaces them in its priority queue with the requested command and inline approve/reject controls, counts them in the Decisions badge, and no longer mislabels a patient approval wait as a stale run that should be abandoned.
+
+### Fixed
+
+- **Human-action stalls no longer disappear when an issue is unassigned.** Issue detail resolves the real active or waiting run independently of current assignment, prioritizes permission and waiting states, and shows the same actionable permission card in the main issue flow and persistent agent rail.
+- **Approval state now refreshes every related surface reliably.** Connector approval capture and resolution write a deduplicated run event plus an audited activity event carrying the issue context, so Mission Control, Command Center, and issue detail converge over realtime updates. Open issue-bound asks created outside comments are also visible on the issue.
+
 ## [2026-07-13] — v0.10.0 · Rich issue rendering & delivery-safe goals
 
 ### Added

@@ -180,7 +180,11 @@ export function classifyRunForRecovery(
     };
   }
 
-  if ((run.status === "ACTIVE" || run.status === "WAITING") && idleMs >= STALE_RUN_MS) {
+  if (
+    (run.status === "ACTIVE" || run.status === "WAITING") &&
+    !run.awaitingApprovalAt &&
+    idleMs >= STALE_RUN_MS
+  ) {
     const detail =
       warningDiagnostic?.description ??
       (run.status === "WAITING"
