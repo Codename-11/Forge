@@ -768,6 +768,9 @@ export async function linkExternalResourceToIssue(
     },
   });
   if (existingLink?.kind === args.kind) return existingLink;
+  // Generic GitHub URL attachment and recovery paths use RELATES_TO. Replaying
+  // those paths must not erase a previously established native semantic link.
+  if (args.kind === "RELATES_TO" && existingLink) return existingLink;
 
   const link = await db.externalResourceLink.upsert({
     where: {

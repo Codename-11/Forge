@@ -26,10 +26,10 @@ WITH ranked AS (
       PARTITION BY "issueId", "externalResourceId"
       ORDER BY
         CASE "kind"
-          WHEN 'SOURCE' THEN 0
-          WHEN 'FIXES' THEN 1
-          WHEN 'IMPLEMENTS' THEN 2
-          WHEN 'RELEASES' THEN 3
+          WHEN 'FIXES' THEN 0
+          WHEN 'IMPLEMENTS' THEN 1
+          WHEN 'RELEASES' THEN 2
+          WHEN 'SOURCE' THEN 3
           WHEN 'REVIEWS' THEN 4
           ELSE 5
         END,

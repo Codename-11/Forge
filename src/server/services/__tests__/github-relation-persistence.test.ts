@@ -104,4 +104,51 @@ describe("native GitHub relation persistence", () => {
       }),
     ).rejects.toThrow("External resource not found");
   });
+
+  it("does not let a generic related replay downgrade implementation evidence", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const resource = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 118,
+        url: "https://github.com/acme/forge/pull/118",
+        title: "Fixes GP-1",
+        state: "open",
+      },
+    });
+    const relation = {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      externalResourceId: resource.id,
+      actor: { actorId: fixture.user.id },
+    };
+
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "FIXES" });
+    const activityAfterFixes = await prisma.activityEvent.count({
+      where: { workspaceId: fixture.workspace.id, subjectId: issue.id },
+    });
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "RELATES_TO" });
+
+    await expect(
+      prisma.externalResourceLink.findUniqueOrThrow({
+        where: {
+          issueId_externalResourceId: {
+            issueId: issue.id,
+            externalResourceId: resource.id,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ kind: "FIXES" });
+    expect(
+      await prisma.activityEvent.count({
+        where: { workspaceId: fixture.workspace.id, subjectId: issue.id },
+      }),
+    ).toBe(activityAfterFixes);
+  });
 });
