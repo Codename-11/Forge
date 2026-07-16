@@ -34,7 +34,7 @@ export default defineConfig({
   webServer: {
     command: "bash scripts/e2e-web.sh",
     url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
+    reuseExistingServer: !process.env.CI && process.env.E2E_FORCE_FRESH_SERVER !== "1",
     // First boot migrates + seeds + runs a full `next build`, so allow headroom.
     timeout: Number(process.env.E2E_WEB_TIMEOUT_MS ?? 360_000),
     stdout: "pipe",

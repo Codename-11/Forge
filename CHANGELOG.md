@@ -9,6 +9,25 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-16] — v0.25.0 · Native Hermes conversations
+
+### Added
+
+- **Hermes chat uses native, resumable Sessions.** Interactive conversations negotiate explicit connector capabilities, preserve one durable tenant-scoped mapping per Forge thread, and support ordered streaming, proactive agent messages, tool events, attachments, approval signals, reconnect, and replay without changing the `/v1/runs` background execution path.
+- **Connector operations are inspectable and recoverable.** Chat diagnostics expose safe session identifiers, negotiated features, delivery state, retries, and errors alongside classification filters and an explicit reconnect control.
+- **Hermes can install Forge as a platform plugin.** The distributable adapter provides an ordered SQLite outbox, idempotent proactive delivery, capability negotiation, and a conservative legacy fallback.
+
+### Changed
+
+- **Memory and delivery identity are isolated by tenant and actor.** Versioned opaque keys include runtime, workspace, operator, agent, thread, and reset-generation identity; durable connector ledgers enforce workspace ownership, sequence, and idempotency boundaries.
+- **Delivery recovery is settings-driven.** Workspace retry, backoff, dead-letter, webhook, and processing-lease controls govern replay across stream, webhook, poll, and worker boundaries.
+
+### Fixed
+
+- **Interrupted interactive turns no longer strand or duplicate replies.** Expired processing leases are atomically reclaimed, Hermes readiness fails closed until Sessions streaming is probed, and final plugin events retain their original idempotency key across retry.
+- **Chat drafts remain attached to the route-selected thread during hydration.** Clear-and-resend flows no longer race the initial client query.
+- **The local release gate starts from isolated disposable state.** `pnpm ci:local` now matches GitHub CI's serial file execution, acquires shared browser-server ownership, waits for stale listener teardown, disables server reuse, refuses to inherit the developer database, and recreates only the explicitly named `forge_e2e` database.
+
 ## [2026-07-15] — v0.24.0 · Actionable Mission Control
 
 ### Added

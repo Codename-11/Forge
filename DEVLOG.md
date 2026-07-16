@@ -2,6 +2,30 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — v0.25.0 release preparation
+
+Squash-merged AXI-112 through implementation PR #52 as
+`45e1f9b8a25b2e16bba9dc4363220015a02424fd` after all three required GitHub CI
+jobs passed and every actionable review finding was addressed. Prepared the
+serialized v0.25.0 feature release from that exact `main` commit with curated
+Hermes Sessions notes and matching package metadata. The implementation gate
+passed lint, typecheck, 1,341 Vitest tests with one intentional live skip, eight
+Python adapter tests, the production build, and all 51 Playwright journeys.
+The canonical local release gate now uses the same no-file-parallelism Vitest
+mode as GitHub CI after its former parallel mode reproduced a shared-database
+stale-work race; the isolated failing case passed immediately. The local
+Playwright gate also now serializes local browser runs with a shared lock and
+safely recreates only the explicit `forge_e2e` database, matching CI's clean-job
+semantics instead of idempotently seeding mutation residue from an earlier run
+or displacing another run's web server. Local E2E refuses to inherit a caller's
+development `DATABASE_URL`; CI continues to use its explicitly provided
+isolated service-container endpoints.
+Release review additionally caught Playwright's local server-reuse default.
+The release commands now acquire the lock before replacing port 3200 and set an
+explicit fresh-server flag, so a stale `e2e:web` process cannot bypass reset or
+rebuild. A bounded port-preparation helper also waits for the Next wrapper to
+finish releasing its child listener before the replacement server starts.
+
 ## 2026-07-16 — Hermes native interactive sessions
 
 Implemented AXI-112 as a complete native Hermes Sessions integration while
