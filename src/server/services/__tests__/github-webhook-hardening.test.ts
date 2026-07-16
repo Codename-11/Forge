@@ -239,6 +239,85 @@ describe("GitHub webhook hardening", () => {
     ).resolves.toBe(1);
   });
 
+  it("preserves the stronger relation when canonical rows collide", async () => {
+    const { fixture, prisma, issue, mapping } = await setup();
+    const canonical = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        connectionMappingId: mapping.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Canonical casing",
+        state: "open",
+        externalUpdatedAt: new Date("2026-07-14T13:00:00Z"),
+      },
+    });
+    const duplicate = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        connectionMappingId: mapping.id,
+        resourceType: "PULL_REQUEST",
+        repoFullName: "Acme/Forge",
+        number: 42,
+        url: "https://github.com/Acme/Forge/pull/42",
+        title: "Legacy casing",
+        state: "open",
+        externalUpdatedAt: new Date("2026-07-14T12:00:00Z"),
+      },
+    });
+    await prisma.externalResourceLink.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          externalResourceId: canonical.id,
+          kind: "RELATES_TO",
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          externalResourceId: duplicate.id,
+          kind: "FIXES",
+        },
+      ],
+    });
+
+    await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      connectionMappingId: mapping.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: "https://github.com/acme/forge/pull/42",
+        title: "Canonical casing",
+        state: "open",
+        externalUpdatedAt: new Date("2026-07-14T14:00:00Z"),
+      },
+    });
+
+    await expect(
+      prisma.externalResourceLink.findMany({
+        where: { workspaceId: fixture.workspace.id, issueId: issue.id },
+      }),
+    ).resolves.toMatchObject([{ externalResourceId: canonical.id, kind: "FIXES" }]);
+    await expect(
+      prisma.externalResource.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          provider: "GITHUB",
+          resourceType: "PULL_REQUEST",
+          number: 42,
+        },
+      }),
+    ).resolves.toBe(1);
+  });
+
   it("applies webhook freshness guards across repository casing", async () => {
     const { fixture, prisma, issue, mapping } = await setup();
     const merged = await prisma.externalResource.create({

@@ -65,6 +65,15 @@ function assertLinkKind(kind: string): asserts kind is ExternalLinkKind {
   }
 }
 
+function externalLinkKindRank(kind: string): number {
+  if (kind === "FIXES") return 5;
+  if (kind === "IMPLEMENTS") return 4;
+  if (kind === "RELEASES") return 3;
+  if (kind === "SOURCE") return 2;
+  if (kind === "REVIEWS") return 1;
+  return 0;
+}
+
 function publicResource(row: ExternalResource) {
   return row;
 }
@@ -552,9 +561,15 @@ export async function canonicalizeGitHubResourceIdentity(
             externalResourceId: canonical.id,
           },
         },
-        select: { id: true },
+        select: { id: true, kind: true },
       });
       if (collision) {
+        if (externalLinkKindRank(link.kind) > externalLinkKindRank(collision.kind)) {
+          await db.externalResourceLink.update({
+            where: { id: collision.id },
+            data: { kind: link.kind, createdById: link.createdById },
+          });
+        }
         await db.externalResourceLink.delete({ where: { id: link.id } });
       } else {
         await db.externalResourceLink.update({
@@ -741,6 +756,7 @@ export async function linkExternalResourceToIssue(
     kind: ExternalLinkKind;
     actor: ActorMeta;
     recordActivity?: boolean;
+    preserveExistingRelation?: boolean;
   },
 ): Promise<ExternalResourceLink> {
   const [issue, resource] = await Promise.all([
@@ -776,7 +792,9 @@ export async function linkExternalResourceToIssue(
   if (existingLink?.kind === args.kind) return existingLink;
   // Generic GitHub URL attachment and recovery paths use RELATES_TO. Replaying
   // those paths must not erase a previously established native semantic link.
-  if (args.kind === "RELATES_TO" && existingLink) return existingLink;
+  if (args.preserveExistingRelation && args.kind === "RELATES_TO" && existingLink) {
+    return existingLink;
+  }
 
   const link = await db.externalResourceLink.upsert({
     where: {
@@ -837,6 +855,7 @@ export async function linkGitHubUrlToIssue(args: {
   kind: string;
   actor: ActorMeta;
   mappingId?: string | null;
+  preserveExistingRelation?: boolean;
 }): Promise<{ resource: ExternalResource; link: ExternalResourceLink }> {
   const kind = args.kind;
   assertLinkKind(kind);
@@ -866,6 +885,7 @@ export async function linkGitHubUrlToIssue(args: {
       externalResourceId: resource.id,
       kind,
       actor: args.actor,
+      preserveExistingRelation: args.preserveExistingRelation,
     });
     return { resource, link };
   });
@@ -964,6 +984,7 @@ export async function recoverGenericGitHubAttachments(
         externalResourceId: attachment.resourceId,
         kind: "RELATES_TO",
         actor: { actorId: null },
+        preserveExistingRelation: true,
       });
       await tx.attachment.deleteMany({
         where: { id: attachment.id, workspaceId: attachment.workspaceId, kind: "LINK" },
@@ -1040,6 +1061,7 @@ export async function migrateGenericGitHubAttachments(
         url: row.url,
         kind: "RELATES_TO",
         actor: { actorId: null },
+        preserveExistingRelation: true,
       });
       const deleted = await db.attachment.deleteMany({
         where: {

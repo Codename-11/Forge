@@ -192,6 +192,7 @@ export const attachmentRouter = router({
           issueId: input.targetId,
           url: safeUrl,
           kind: "RELATES_TO",
+          preserveExistingRelation: true,
           actor: {
             actorId: ctx.session.user.id,
             actorAgentId: ctx.apiKey?.linkedAgentId ?? null,

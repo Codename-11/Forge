@@ -133,7 +133,11 @@ describe("native GitHub relation persistence", () => {
     const activityAfterFixes = await prisma.activityEvent.count({
       where: { workspaceId: fixture.workspace.id, subjectId: issue.id },
     });
-    await linkExternalResourceToIssue(prisma, { ...relation, kind: "RELATES_TO" });
+    await linkExternalResourceToIssue(prisma, {
+      ...relation,
+      kind: "RELATES_TO",
+      preserveExistingRelation: true,
+    });
 
     await expect(
       prisma.externalResourceLink.findUniqueOrThrow({
@@ -150,5 +154,17 @@ describe("native GitHub relation persistence", () => {
         where: { workspaceId: fixture.workspace.id, subjectId: issue.id },
       }),
     ).toBe(activityAfterFixes);
+
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "RELATES_TO" });
+    await expect(
+      prisma.externalResourceLink.findUniqueOrThrow({
+        where: {
+          issueId_externalResourceId: {
+            issueId: issue.id,
+            externalResourceId: resource.id,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ kind: "RELATES_TO" });
   });
 });

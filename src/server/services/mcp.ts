@@ -4843,6 +4843,7 @@ export const mcpTools = {
           issueId: input.targetId,
           url: input.url,
           kind: "RELATES_TO",
+          preserveExistingRelation: true,
           actor: {
             actorId,
             actorAgentId: ctx.apiKey?.linkedAgentId ?? null,

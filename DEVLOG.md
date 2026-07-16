@@ -15,9 +15,10 @@ guessing Codex Desktop or a runtime from agent identity.
 GitHub webhook matching now derives one native relation per issue/resource:
 `IMPLEMENTS`, `FIXES`, `RELEASES`, or `RELATES_TO`. The migration reclassifies
 release assembly PRs, removes legacy duplicate relations deterministically, and
-enforces the singular relation invariant. Generic URL recovery preserves a
-stronger existing relation, and migration dedupe keeps implementation evidence
-ahead of source/context rows. Terminal PR synchronization clears
+enforces the singular relation invariant. Generic URL recovery and repository
+identity canonicalization preserve a stronger existing relation, while explicit
+relinks remain operator-controlled and migration dedupe keeps implementation
+evidence ahead of source/context rows. Terminal PR synchronization clears
 stale mergeability and suppresses pending-check contradictions, while merged
 implementation evidence continues reconciliation until its final checks
 aggregate is trusted and still participates in completion readiness. Passing
