@@ -182,6 +182,7 @@ class DraftState:
     reply_to_message_id: str
     session_id: Optional[str]
     legacy_draft_id: Optional[str] = None
+    final_event_id: Optional[str] = None
 
 
 class ForgeAdapter(BasePlatformAdapter):
@@ -482,7 +483,7 @@ class ForgeAdapter(BasePlatformAdapter):
             return SendResult(success=True)
 
         metadata = metadata or {}
-        state = self._pop_draft(thread_id)
+        draft_key, state = self._find_draft(thread_id)
         reply_to_id = str(
             reply_to
             or (state.reply_to_message_id if state else "")
@@ -498,14 +499,25 @@ class ForgeAdapter(BasePlatformAdapter):
             payload: Dict[str, Any] = {"body": body, "role": "agent"}
             if state:
                 payload["streamId"] = state.stream_id
-            return await self.deliver_event(
+                if not state.final_event_id:
+                    state.final_event_id = f"hermes_{uuid.uuid4().hex}"
+            result = await self.deliver_event(
                 kind=kind,
                 thread_id=thread_id,
                 session_id=session_id,
                 reply_to_message_id=reply_to_id or None,
                 metadata=metadata,
                 payload=payload,
+                event_id=state.final_event_id if state else None,
             )
+            if result.success and draft_key is not None:
+                self._drafts.pop(draft_key, None)
+            return result
+
+        # Legacy finalization has no idempotency key, so retain its established
+        # single-attempt behavior and consume the draft before making the call.
+        if draft_key is not None:
+            self._drafts.pop(draft_key, None)
 
         try:
             if state and state.legacy_draft_id:
@@ -593,11 +605,11 @@ class ForgeAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         return {"id": chat_id, "name": f"Forge thread {chat_id}", "type": "forge_thread"}
 
-    def _pop_draft(self, thread_id: str) -> Optional[DraftState]:
+    def _find_draft(self, thread_id: str) -> tuple[Optional[tuple[str, int]], Optional[DraftState]]:
         for key in list(self._drafts):
             if key[0] == thread_id:
-                return self._drafts.pop(key)
-        return None
+                return key, self._drafts[key]
+        return None, None
 
     def _drop_drafts(self, thread_id: str) -> None:
         for key in list(self._drafts):

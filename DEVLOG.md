@@ -37,6 +37,15 @@ Playwright classification journey. Verification passed lint and typecheck,
 **7/7** Python adapter tests, the complete docs plus production Next.js build,
 and **51/51** serial Playwright journeys on the disposable E2E stack.
 
+The PR review then found three recovery boundary gaps. Hermes chat readiness
+now stays disabled until a sanitized probe explicitly records native Sessions
+streaming support. In-flight deliveries carry a workspace-configurable lease
+renewed by stream checkpoints, allowing the worker to atomically reclaim a
+crash-stranded `PROCESSING` row. The platform plugin also retains a failed
+final draft and reuses its original event id, preventing duplicate final
+messages on retry. Focused review coverage passes **33/33** TypeScript tests and
+**8/8** Python adapter tests.
+
 ## 2026-07-15 — v0.23.0 production verification
 
 Merged the Mission Control agent fleet implementation through PR #46 and the

@@ -20,7 +20,9 @@ afterEach(async () => {
 afterAll(disconnectPrisma);
 
 describe("Hermes connector retry worker", () => {
-  it("replays a due durable outbox row and finalizes the existing reply", async () => {
+  it.each(["RETRY_SCHEDULED", "PROCESSING"] as const)(
+    "replays a due %s outbox row and finalizes the existing reply",
+    async (initialStatus) => {
     const f = await createWorkspaceFixture({ keyPrefix: "HRT" });
     fixtures.push(f);
     const server = createServer((req, res) => {
@@ -102,9 +104,10 @@ describe("Hermes connector retry worker", () => {
         direction: "OUTBOUND",
         externalEventId: "turn-retry-1",
         kind: "user.message",
-        status: "RETRY_SCHEDULED",
+        status: initialStatus,
         chatMessageId: user.id,
         attempt: 1,
+        lastAttemptAt: initialStatus === "PROCESSING" ? new Date(Date.now() - 5_000) : null,
         nextAttemptAt: new Date(Date.now() - 1_000),
         payload: { body: user.body, messageId: user.id, threadId: thread.id },
       },
@@ -121,5 +124,6 @@ describe("Hermes connector retry worker", () => {
     expect(await prisma.connectorSession.findUniqueOrThrow({ where: { id: session.id } })).toEqual(
       expect.objectContaining({ lifecycle: "ACTIVE", retryCount: 0, lastError: null }),
     );
-  });
+    },
+  );
 });

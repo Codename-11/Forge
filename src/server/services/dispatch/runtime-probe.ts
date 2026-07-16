@@ -65,7 +65,8 @@ function probeCodexWs(
       resolve(r);
     };
     const timer = setTimeout(
-      () => finish({ attempted: true, reachable: false, detail: `No response within ${timeoutMs}ms.` }),
+      () =>
+        finish({ attempted: true, reachable: false, detail: `No response within ${timeoutMs}ms.` }),
       timeoutMs,
     );
     try {
@@ -192,8 +193,15 @@ async function probeHermesHttp(
       ? {
           adapterKey: "hermes",
           transport: "runs-api",
-          sessionsProtocolVersion: negotiatedSessions.protocolVersion,
-          sessionsCapabilities: JSON.parse(JSON.stringify(negotiatedSessions)),
+          protocolVersion: negotiatedSessions.protocolVersion,
+          details: {
+            hermesSessions: negotiatedSessions.sessions,
+            hermesSessionsStreaming: negotiatedSessions.streaming,
+            hermesSessionApprovals: negotiatedSessions.approvals,
+            hermesSessionAttachments: negotiatedSessions.attachments,
+            hermesSessionResume: negotiatedSessions.resume,
+            hermesSessionProactiveDelivery: negotiatedSessions.proactiveDelivery,
+          },
         }
       : null;
     try {
@@ -208,11 +216,8 @@ async function probeHermesHttp(
           ...(runtimeInfo ?? {}),
           adapterKey: "hermes",
           transport: "runs-api",
-          runtimeName:
-            typeof payload.platform === "string" ? payload.platform : "hermes-agent",
-          ...(typeof payload.version === "string"
-            ? { runtimeVersion: payload.version }
-            : {}),
+          runtimeName: typeof payload.platform === "string" ? payload.platform : "hermes-agent",
+          ...(typeof payload.version === "string" ? { runtimeVersion: payload.version } : {}),
         };
       }
     } catch {

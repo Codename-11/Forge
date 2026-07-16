@@ -207,6 +207,39 @@ class ForgeAdapterTest(unittest.TestCase):
         self.assertEqual(delivered, ["event-1", "event-1", "event-2"])
         self.assertEqual(adapter._sequences.pending(), [])
 
+    def test_failed_final_reuses_its_event_identity_on_retry(self):
+        adapter = self.make_adapter()
+        adapter._negotiated = True
+        adapter._selected_version = "1.0"
+        adapter.max_retries = 1
+        adapter._call_tool = Mock(return_value={"accepted": True})
+
+        partial = asyncio.run(
+            adapter.send_draft(
+                "thread-1",
+                9,
+                "hello",
+                {"reply_to_message_id": "user-1", "session_id": "session-1"},
+            )
+        )
+        self.assertTrue(partial.success)
+        adapter._call_tool = Mock(
+            side_effect=[RuntimeError("offline"), {"accepted": True, "messageId": "message-1"}]
+        )
+
+        failed = asyncio.run(adapter.send("thread-1", "hello world"))
+        recovered = asyncio.run(adapter.send("thread-1", "hello world"))
+
+        self.assertFalse(failed.success)
+        self.assertTrue(recovered.success)
+        final_ids = [
+            call.args[1]["envelope"]["eventId"] for call in adapter._call_tool.call_args_list
+        ]
+        self.assertEqual(len(final_ids), 2)
+        self.assertEqual(final_ids[0], final_ids[1])
+        self.assertEqual(adapter._sequences.pending(), [])
+        self.assertEqual(adapter._drafts, {})
+
     def test_legacy_draft_contract_is_retained(self):
         adapter = self.make_adapter()
         adapter._negotiated = False

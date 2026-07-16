@@ -8,6 +8,10 @@ import { resolveChatReadiness } from "@/server/services/chat-readiness";
  * connector as an interactive transport.
  */
 describe("resolveChatReadiness", () => {
+  const sessionsRuntimeInfo = {
+    protocolVersion: "hermes.sessions.v1",
+    details: { hermesSessions: "true", hermesSessionsStreaming: "true" },
+  };
   const saved = { ...process.env };
   beforeEach(() => {
     // Start from a clean slate — no direct model keys configured.
@@ -41,12 +45,38 @@ describe("resolveChatReadiness", () => {
     const r = resolveChatReadiness({
       provider: "HERMES",
       runEngine: "RUNS",
-      runtime: { adapterKey: "hermes", endpoint: "https://gw.example/v1", secret: "tok" },
+      runtime: {
+        adapterKey: "hermes",
+        endpoint: "https://gw.example/v1",
+        secret: "tok",
+        runtimeInfo: sessionsRuntimeInfo,
+      },
     });
     expect(r.ready).toBe(true);
     expect(r.mode).toBe("sessions");
     expect(r.reason).toBe("sessions-connector");
     expect(r.transportLabel).toBe("Hermes");
+  });
+
+  it("Hermes remains not ready until a probe explicitly negotiates Sessions streaming", () => {
+    const r = resolveChatReadiness({
+      provider: "HERMES",
+      runEngine: "RUNS",
+      runtime: {
+        adapterKey: "hermes",
+        endpoint: "https://gw.example/v1",
+        secret: "tok",
+        lastProbeAttempted: true,
+        lastProbeReachable: true,
+        runtimeInfo: {
+          details: { hermesSessions: "false", hermesSessionsStreaming: "false" },
+        },
+      },
+    });
+    expect(r.ready).toBe(false);
+    expect(r.mode).toBe("sessions");
+    expect(r.reason).toBe("no-sessions-connector");
+    expect(r.hint).toMatch(/has not passed native Sessions streaming negotiation/);
   });
 
   it("Hermes RUNS agent is not ready when the bound runtime failed its contract probe", () => {
@@ -220,6 +250,7 @@ describe("resolveChatReadiness", () => {
         endpoint: "https://gw.example/v1",
         secret: "tok",
         name: "Hermes East",
+        runtimeInfo: sessionsRuntimeInfo,
       },
     });
     expect(r.transportLabel).toBe("Hermes East");

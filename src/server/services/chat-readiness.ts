@@ -105,6 +105,18 @@ export interface ChatReadinessInput {
   providerAvailable?: (providerId: string) => boolean;
 }
 
+function hasNegotiatedHermesSessions(runtime: AgentRuntimeRef): boolean {
+  const info = runtime?.runtimeInfo;
+  if (!info || typeof info !== "object" || Array.isArray(info)) return false;
+  const details = (info as Record<string, unknown>).details;
+  if (!details || typeof details !== "object" || Array.isArray(details)) return false;
+  const negotiated = details as Record<string, unknown>;
+  return (
+    (negotiated.hermesSessions === true || negotiated.hermesSessions === "true") &&
+    (negotiated.hermesSessionsStreaming === true || negotiated.hermesSessionsStreaming === "true")
+  );
+}
+
 export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
   const provider = input.providerOverride ?? input.provider;
   const engine = resolveRunEngine({
@@ -130,6 +142,19 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
         hint: `The attached Hermes runtime failed its last contract probe: ${input.runtime.lastProbeDetail || "probe did not succeed"}.`,
       };
     }
+    if (!hasNegotiatedHermesSessions(input.runtime)) {
+      return {
+        ready: false,
+        mode: "sessions",
+        provider,
+        transportLabel: runtimeLabel(input, adapter?.title) ?? "Hermes Sessions",
+        reason: "no-sessions-connector",
+        capabilities: chatCapabilities("sessions", provider, false, input, adapter),
+        hint:
+          "The attached Hermes runtime has not passed native Sessions streaming negotiation. " +
+          "Probe the runtime after upgrading Hermes before chatting.",
+      };
+    }
     return {
       ready: true,
       mode: "sessions",
@@ -148,8 +173,7 @@ export function resolveChatReadiness(input: ChatReadinessInput): ChatReadiness {
       transportLabel: "—",
       reason: "no-sessions-connector",
       capabilities: chatCapabilities("none", provider, false, input, adapter),
-      hint:
-        "Interactive Hermes chat requires a bound Hermes runtime that explicitly advertises native Sessions streaming. /v1/runs remains background-only.",
+      hint: "Interactive Hermes chat requires a bound Hermes runtime that explicitly advertises native Sessions streaming. /v1/runs remains background-only.",
     };
   }
 
@@ -272,9 +296,7 @@ function chatCapabilities(
     active &&
     mode === "dispatch" &&
     Boolean(
-      input.daemonLinked ||
-        input.runtimeKind === "LOCAL_DAEMON" ||
-        adapter?.capabilities.streaming,
+      input.daemonLinked || input.runtimeKind === "LOCAL_DAEMON" || adapter?.capabilities.streaming,
     );
   const runsApprovals =
     mode === "runs" &&

@@ -189,9 +189,7 @@ async function prepareHermesSession(input: {
     });
   const deterministicSessionId = `forge_${memoryKey.split(":").at(-1)!.slice(0, 48)}`;
   let externalSessionId =
-    existing?.runtimeId === input.runtimeId
-      ? existing.externalSessionId
-      : deterministicSessionId;
+    existing?.runtimeId === input.runtimeId ? existing.externalSessionId : deterministicSessionId;
 
   try {
     if (existing?.runtimeId === input.runtimeId) {
@@ -207,8 +205,7 @@ async function prepareHermesSession(input: {
       externalSessionId = created.id;
     }
   } catch (error) {
-    const missing =
-      error && typeof error === "object" && "status" in error && error.status === 404;
+    const missing = error && typeof error === "object" && "status" in error && error.status === 404;
     if (!missing) throw error;
     const created = await client.createSession({
       sessionId: deterministicSessionId,
@@ -349,6 +346,7 @@ export async function POST(req: NextRequest) {
               lastProbeAttempted: true,
               lastProbeReachable: true,
               lastProbeDetail: true,
+              runtimeInfo: true,
             },
           },
         },
@@ -390,8 +388,7 @@ export async function POST(req: NextRequest) {
     agent.runtime?.adapterKey === "hermes" &&
     Boolean(agent.runtime.id && agent.runtime.endpoint) &&
     !agent.runtime.disabledAt;
-  const useRuns =
-    effectiveProvider !== "HERMES" && runEngine === "RUNS" && runsConnector != null;
+  const useRuns = effectiveProvider !== "HERMES" && runEngine === "RUNS" && runsConnector != null;
 
   if (effectiveProvider === "HERMES" && !useHermesSessions) {
     return NextResponse.json(
@@ -404,13 +401,19 @@ export async function POST(req: NextRequest) {
   }
 
   let hermesSession: PreparedHermesSession | null = null;
-  let connectorRetrySettings = { maxAttempts: 6, initialSeconds: 2, maxSeconds: 300 };
+  let connectorRetrySettings = {
+    maxAttempts: 6,
+    initialSeconds: 2,
+    maxSeconds: 300,
+    processingLeaseSeconds: 300,
+  };
   if (useHermesSessions && agent.runtime?.id && agent.runtime.endpoint) {
     const connectorSettings = await db.workspace.findUnique({
       where: { id: workspaceId },
       select: {
         connectorRequestTimeoutSeconds: true,
         connectorDeliveryMaxAttempts: true,
+        connectorProcessingLeaseSeconds: true,
         connectorRetryInitialSeconds: true,
         connectorRetryMaxSeconds: true,
       },
@@ -420,6 +423,7 @@ export async function POST(req: NextRequest) {
         maxAttempts: connectorSettings.connectorDeliveryMaxAttempts,
         initialSeconds: connectorSettings.connectorRetryInitialSeconds,
         maxSeconds: connectorSettings.connectorRetryMaxSeconds,
+        processingLeaseSeconds: connectorSettings.connectorProcessingLeaseSeconds,
       };
     }
     try {
@@ -781,6 +785,9 @@ export async function POST(req: NextRequest) {
           chatMessageId: message.id,
           attempt: 1,
           lastAttemptAt: now,
+          nextAttemptAt: new Date(
+            now.getTime() + connectorRetrySettings.processingLeaseSeconds * 1000,
+          ),
           payload: {
             threadId: thread.id,
             messageId: message.id,
@@ -1045,6 +1052,21 @@ export async function POST(req: NextRequest) {
                 } as never,
               },
             });
+            if (hermesSession) {
+              await db.connectorDelivery.updateMany({
+                where: {
+                  connectorSessionId: hermesSession.mapping.id,
+                  direction: ConnectorDeliveryDirection.OUTBOUND,
+                  externalEventId: clientTurnId,
+                  status: ConnectorDeliveryStatus.PROCESSING,
+                },
+                data: {
+                  nextAttemptAt: new Date(
+                    now.getTime() + connectorRetrySettings.processingLeaseSeconds * 1000,
+                  ),
+                },
+              });
+            }
             await publish({
               id: randomUUID(),
               workspaceId,
@@ -1349,7 +1371,8 @@ export async function POST(req: NextRequest) {
                   break;
                 }
                 case "tool.started": {
-                  const id = event.messageId ?? `session_tool_${event.sequence ?? toolCalls.length}`;
+                  const id =
+                    event.messageId ?? `session_tool_${event.sequence ?? toolCalls.length}`;
                   const name =
                     typeof eventData.tool_name === "string" ? eventData.tool_name : "tool";
                   if (!toolCalls.some((call) => call.id === id)) {
@@ -1401,7 +1424,9 @@ export async function POST(req: NextRequest) {
                     tokensIn:
                       typeof rawUsage.input_tokens === "number" ? rawUsage.input_tokens : undefined,
                     tokensOut:
-                      typeof rawUsage.output_tokens === "number" ? rawUsage.output_tokens : undefined,
+                      typeof rawUsage.output_tokens === "number"
+                        ? rawUsage.output_tokens
+                        : undefined,
                     tokensCached:
                       typeof rawUsage.cache_read_tokens === "number"
                         ? rawUsage.cache_read_tokens
@@ -1437,6 +1462,7 @@ export async function POST(req: NextRequest) {
                 status: ConnectorDeliveryStatus.DELIVERED,
                 deliveredAt: new Date(),
                 lastError: null,
+                nextAttemptAt: null,
               },
             });
           } catch (error) {

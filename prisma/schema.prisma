@@ -1026,6 +1026,9 @@ model Workspace {
   connectorRequestTimeoutSeconds Int                     @default(15)
   /// Total connector delivery attempts before the delivery is dead-lettered.
   connectorDeliveryMaxAttempts   Int                     @default(6)
+  /// Lease for an in-flight connector delivery. The stream heartbeat renews
+  /// it; the worker safely reclaims it after a process crash.
+  connectorProcessingLeaseSeconds Int                    @default(300)
   /// Initial retry delay for connector deliveries; retries grow exponentially.
   connectorRetryInitialSeconds   Int                     @default(2)
   /// Maximum connector retry delay.

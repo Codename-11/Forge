@@ -2002,6 +2002,7 @@ export const chatRouter = router({
               lastProbeAttempted: true,
               lastProbeReachable: true,
               lastProbeDetail: true,
+              runtimeInfo: true,
             },
           },
         },

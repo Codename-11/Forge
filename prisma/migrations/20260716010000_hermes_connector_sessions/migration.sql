@@ -12,6 +12,7 @@ CREATE TYPE "ConnectorDeliveryStatus" AS ENUM ('PENDING', 'PROCESSING', 'DELIVER
 ALTER TABLE "Workspace"
   ADD COLUMN "connectorRequestTimeoutSeconds" INTEGER NOT NULL DEFAULT 15,
   ADD COLUMN "connectorDeliveryMaxAttempts" INTEGER NOT NULL DEFAULT 6,
+  ADD COLUMN "connectorProcessingLeaseSeconds" INTEGER NOT NULL DEFAULT 300,
   ADD COLUMN "connectorRetryInitialSeconds" INTEGER NOT NULL DEFAULT 2,
   ADD COLUMN "connectorRetryMaxSeconds" INTEGER NOT NULL DEFAULT 300,
   ADD COLUMN "webhookRetryMaxAttempts" INTEGER NOT NULL DEFAULT 6,

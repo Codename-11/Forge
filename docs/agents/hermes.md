@@ -93,7 +93,10 @@ secret or raw endpoint.
 
 Delivery behavior is workspace-configurable through `workspace.update`:
 `connectorRequestTimeoutSeconds`, `connectorDeliveryMaxAttempts`,
-`connectorRetryInitialSeconds`, and `connectorRetryMaxSeconds`. Generic webhook
+`connectorProcessingLeaseSeconds`, `connectorRetryInitialSeconds`, and
+`connectorRetryMaxSeconds`. The stream heartbeat renews the processing lease;
+after a process crash, the worker atomically reclaims the expired delivery.
+Generic webhook
 delivery has the parallel `webhookRetry*` settings. Maximum backoff must be at
 least the initial value. The maintenance worker drains due connector outbox
 rows even when the initiating browser has gone away.
@@ -434,11 +437,7 @@ export function verifyForgeWebhook(
   if (Number.isNaN(skew) || skew > TOLERANCE_SECONDS) return false;
 
   const expected =
-    "sha256=" +
-    crypto
-      .createHmac("sha256", secret)
-      .update(`${ts}.${rawBody}`)
-      .digest("hex");
+    "sha256=" + crypto.createHmac("sha256", secret).update(`${ts}.${rawBody}`).digest("hex");
 
   return crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
 }

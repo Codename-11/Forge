@@ -118,6 +118,8 @@ export type AgentRuntimeRef = {
   lastProbeAttempted?: boolean | null;
   lastProbeReachable?: boolean | null;
   lastProbeDetail?: string | null;
+  /** Sanitized, explicitly negotiated runtime protocol metadata. */
+  runtimeInfo?: unknown;
   /** Adapter-specific config (`Runtime.config`); parsed per adapter. */
   config?: unknown;
   /** Set when the runtime is paused — see `makeDisabledConnector`. */

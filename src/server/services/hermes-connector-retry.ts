@@ -35,8 +35,16 @@ export async function sweepHermesConnectorRetries(
   const due = await client.connectorDelivery.findMany({
     where: {
       direction: ConnectorDeliveryDirection.OUTBOUND,
-      status: ConnectorDeliveryStatus.RETRY_SCHEDULED,
-      nextAttemptAt: { lte: now },
+      OR: [
+        {
+          status: ConnectorDeliveryStatus.RETRY_SCHEDULED,
+          nextAttemptAt: { lte: now },
+        },
+        {
+          status: ConnectorDeliveryStatus.PROCESSING,
+          nextAttemptAt: { lte: now },
+        },
+      ],
       connectorSession: { connectorKey: "hermes-sessions" },
     },
     orderBy: [{ nextAttemptAt: "asc" }, { createdAt: "asc" }],
@@ -66,8 +74,9 @@ export async function sweepHermesConnectorRetries(
     const claimed = await client.connectorDelivery.updateMany({
       where: {
         id: candidate.id,
-        status: ConnectorDeliveryStatus.RETRY_SCHEDULED,
+        status: candidate.status,
         attempt: candidate.attempt,
+        nextAttemptAt: { lte: now },
       },
       data: {
         status: ConnectorDeliveryStatus.PROCESSING,
@@ -123,17 +132,19 @@ export async function sweepHermesConnectorRetries(
         }
         if (event.messageId) externalMessageId = event.messageId;
         await client.connectorDelivery.createMany({
-          data: [{
-            workspaceId: candidate.workspaceId,
-            connectorSessionId: session.id,
-            direction: ConnectorDeliveryDirection.INBOUND,
-            externalEventId: hermesSessionExternalEventId(event),
-            sequence: event.sequence,
-            kind: event.name,
-            status: ConnectorDeliveryStatus.DELIVERED,
-            payload: event.data as Prisma.InputJsonObject,
-            deliveredAt: new Date(),
-          }],
+          data: [
+            {
+              workspaceId: candidate.workspaceId,
+              connectorSessionId: session.id,
+              direction: ConnectorDeliveryDirection.INBOUND,
+              externalEventId: hermesSessionExternalEventId(event),
+              sequence: event.sequence,
+              kind: event.name,
+              status: ConnectorDeliveryStatus.DELIVERED,
+              payload: event.data as Prisma.InputJsonObject,
+              deliveredAt: new Date(),
+            },
+          ],
           skipDuplicates: true,
         });
       }
