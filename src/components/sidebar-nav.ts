@@ -1,5 +1,6 @@
 import {
   CalendarRange,
+  CalendarDays,
   CalendarClock,
   CircleDot,
   Clock,
@@ -20,6 +21,8 @@ import {
   BookOpen,
   UsersRound,
   Workflow,
+  Sun,
+  NotebookPen,
 } from "lucide-react";
 
 export type WorkspaceNavItem = {
@@ -94,6 +97,30 @@ export const WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
     label: "Insights",
     items: [
       { path: "/analytics", label: "Analytics", icon: LineChart, chord: "a" },
+      { path: "/agents", label: "Agents", icon: Workflow, chord: "o" },
+    ],
+  },
+] as const;
+
+/** A calmer task-first information architecture for personal workspaces. */
+export const PERSONAL_WORKSPACE_NAV_SECTIONS: readonly WorkspaceNavSection[] = [
+  {
+    id: "personal",
+    label: "Personal",
+    items: [
+      { path: "/dashboard", label: "Today", icon: Sun, chord: "d" },
+      { path: "/inbox", label: "Inbox", icon: Inbox, chord: "i", badge: "inbox" },
+      { path: "/issues", label: "Tasks", icon: CircleDot, chord: "s" },
+      { path: "/dashboard#upcoming", label: "Upcoming", icon: CalendarDays, chord: "c" },
+      { path: "/dashboard#personal-notes", label: "Notes", icon: NotebookPen, chord: "n" },
+    ],
+  },
+  {
+    id: "assist",
+    label: "Assist",
+    items: [
+      { path: "/chat", label: "Chat", icon: MessageSquare, chord: "m" },
+      { path: "/scheduled-tasks", label: "Routines", icon: CalendarClock, chord: "q" },
       { path: "/agents", label: "Agents", icon: Workflow, chord: "o" },
     ],
   },

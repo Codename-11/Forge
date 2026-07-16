@@ -13619,3 +13619,32 @@ PR #49 passed GitHub's lint, typecheck, unit, and both Playwright shards. Bumped
 the application version to 0.24.0 and curated the in-app changelog around the
 Mission Control attention lifecycle, inspectable cross-workspace surfaces,
 concurrent run capacity, agent-page scrolling, and semantic navigation.
+
+---
+
+## 2026-07-16 — Personal workspace experience
+
+Added a settings-driven `WorkspaceExperienceProfile` so one tenant model can
+present either the full project/team system or a calmer personal task system.
+Personal creation seeds home/work/errand/waiting labels, assigns new tasks to
+their creator by default, and skips the initial sprint; team creation retains
+the existing project defaults and now consistently names the first iteration
+Sprint 1. Owners and admins can switch profiles later without migrating or
+losing projects, issues, notes, routines, agents, or delivery history.
+
+Personal workspaces now open on a responsive Today dashboard with fast task
+capture, Today/overdue/upcoming grouping, completion, personal notes, planning
+handoff to agent chat, and a narrow collapsible agent companion. The companion
+uses real assigned-task state and update times instead of invented progress.
+Navigation becomes Today, Inbox, Tasks, Upcoming, Notes, Chat, Routines, and
+Agents while preserving full agent management and all underlying routes.
+
+Verification: Prisma generation and migration deployment passed; lint passed
+with existing repository warnings; typecheck and the production Next build
+passed; the personal navigation unit suite passed 11 tests; and the new
+Playwright journey passed workspace creation, task add/complete, note capture,
+companion collapse, and settled-route console checks. The broad Vitest run
+passed 1,322 of 1,323 runnable tests with one intentional live skip; its single
+parallel stale-work failure passed immediately in isolation (9/9), confirming
+test interference rather than a feature regression. Desktop and 390px mobile
+captures passed design QA against the selected mockup; see `design-qa.md`.

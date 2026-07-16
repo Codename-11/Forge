@@ -1,6 +1,6 @@
 "use client";
 import { createContext, useContext } from "react";
-import type { Role } from "@prisma/client";
+import type { Role, WorkspaceExperienceProfile } from "@prisma/client";
 
 /**
  * Shape exposed to the client tree under `/w/[slug]/*`. The shell layout
@@ -14,6 +14,7 @@ export type WorkspaceContextValue = {
   name: string;
   avatarUrl: string | null;
   role: Role;
+  experienceProfile: WorkspaceExperienceProfile;
   /** Number of workspaces the user has access to — gates the switcher UI. */
   membershipCount: number;
   cycleLengthDays: number;

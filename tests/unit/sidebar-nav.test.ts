@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { WORKSPACE_NAV_SECTIONS } from "@/components/sidebar-nav";
+import {
+  PERSONAL_WORKSPACE_NAV_SECTIONS,
+  WORKSPACE_NAV_SECTIONS,
+} from "@/components/sidebar-nav";
 
 describe("workspace sidebar navigation", () => {
   it("surfaces Chat as a top-level Work item with g m shortcut", () => {
@@ -64,6 +67,31 @@ describe("workspace sidebar navigation", () => {
     const chords = WORKSPACE_NAV_SECTIONS.flatMap((s) => s.items)
       .map((i) => i.chord)
       .filter((c): c is string => Boolean(c));
+    expect(new Set(chords).size).toBe(chords.length);
+  });
+});
+
+describe("personal workspace sidebar navigation", () => {
+  it("reframes the primary workflow around today and tasks", () => {
+    const personal = PERSONAL_WORKSPACE_NAV_SECTIONS.find((section) => section.id === "personal");
+    expect(personal?.items.map((item) => item.label)).toEqual([
+      "Today",
+      "Inbox",
+      "Tasks",
+      "Upcoming",
+      "Notes",
+    ]);
+  });
+
+  it("keeps agents, chat, and routines directly available", () => {
+    const assist = PERSONAL_WORKSPACE_NAV_SECTIONS.find((section) => section.id === "assist");
+    expect(assist?.items.map((item) => item.label)).toEqual(["Chat", "Routines", "Agents"]);
+  });
+
+  it("does not double-assign personal navigation chords", () => {
+    const chords = PERSONAL_WORKSPACE_NAV_SECTIONS.flatMap((section) => section.items)
+      .map((item) => item.chord)
+      .filter((chord): chord is string => Boolean(chord));
     expect(new Set(chords).size).toBe(chords.length);
   });
 });

@@ -12,10 +12,12 @@ import { Kbd } from "@/components/ui/kbd";
 import { Confirm } from "@/components/ui/modal";
 import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
+import { cn } from "@/lib/utils";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { workspaceColor } from "@/lib/workspace-color";
 
 type DefaultIssueAssigneeMode = "NONE" | "CREATOR" | "USER";
+type WorkspaceExperienceProfile = "TEAM" | "PERSONAL";
 type CompletionAutomation = "OFF" | "RECOMMEND" | "AUTO_WHEN_SAFE";
 type DeliveryTimelinePolicy = "OFF" | "RECOMMEND" | "REQUIRE_ON_PR" | "AUTO_ON_PR";
 
@@ -30,6 +32,9 @@ export default function WorkspaceSettingsPage() {
   const canDelete = ws.role === "OWNER";
 
   const [name, setName] = useState(ws.name);
+  const [experienceProfile, setExperienceProfile] = useState<WorkspaceExperienceProfile>(
+    ws.experienceProfile,
+  );
   const [avatarUrl, setAvatarUrl] = useState(ws.avatarUrl ?? "");
   const [cycleLengthDays, setCycleLengthDays] = useState(ws.cycleLengthDays);
   const [cycleCooldownDays, setCycleCooldownDays] = useState(ws.cycleCooldownDays);
@@ -84,6 +89,7 @@ export default function WorkspaceSettingsPage() {
   const resetFromCurrent = useCallback(() => {
     if (!current) return;
     setName(current.name);
+    setExperienceProfile(current.experienceProfile);
     setAvatarUrl(current.avatarUrl ?? "");
     setCycleLengthDays(current.cycleLengthDays);
     setCycleCooldownDays(current.cycleCooldownDays);
@@ -167,6 +173,7 @@ export default function WorkspaceSettingsPage() {
     if (!current) return [] as string[];
     const fields: Array<[string, boolean]> = [
       ["name", name.trim() !== current.name],
+      ["experienceProfile", experienceProfile !== current.experienceProfile],
       ["avatarUrl", (avatarUrl.trim() || "") !== (current.avatarUrl ?? "")],
       ["cycleLengthDays", cycleLengthDays !== current.cycleLengthDays],
       ["cycleCooldownDays", cycleCooldownDays !== current.cycleCooldownDays],
@@ -233,6 +240,7 @@ export default function WorkspaceSettingsPage() {
   }, [
     current,
     name,
+    experienceProfile,
     avatarUrl,
     cycleLengthDays,
     cycleCooldownDays,
@@ -279,6 +287,7 @@ export default function WorkspaceSettingsPage() {
     }
     update.mutate({
       name: name.trim() || undefined,
+      experienceProfile,
       avatarUrl: avatarUrl.trim() ? avatarUrl.trim() : null,
       cycleLengthDays,
       cycleCooldownDays,
@@ -320,6 +329,7 @@ export default function WorkspaceSettingsPage() {
     dirty,
     update,
     name,
+    experienceProfile,
     avatarUrl,
     cycleLengthDays,
     cycleCooldownDays,
@@ -419,6 +429,28 @@ export default function WorkspaceSettingsPage() {
           </Section>
 
           <Section
+            title="Experience"
+            hint="Choose the navigation and home view that best fit this workspace. Your data and agent capabilities stay intact."
+          >
+            <FormCard className="grid grid-cols-1 gap-3 p-4 sm:grid-cols-2 sm:p-5">
+              <ProfileChoice
+                selected={experienceProfile === "PERSONAL"}
+                title="Personal"
+                description="A calm Today view for tasks, notes, routines, and agent help."
+                onClick={() => setExperienceProfile("PERSONAL")}
+                disabled={!canEdit}
+              />
+              <ProfileChoice
+                selected={experienceProfile === "TEAM"}
+                title="Project & team"
+                description="The full planning, delivery, analytics, and project workspace."
+                onClick={() => setExperienceProfile("TEAM")}
+                disabled={!canEdit}
+              />
+            </FormCard>
+          </Section>
+
+          {experienceProfile === "TEAM" && <Section
             title="Sprint cadence"
             hint="Default iteration cadence. Each sprint can still override on create; rollover uses these."
           >
@@ -450,7 +482,7 @@ export default function WorkspaceSettingsPage() {
                 />
               </Field>
             </FormCard>
-          </Section>
+          </Section>}
 
           <Section
             title="Tracking & storage"
@@ -1071,6 +1103,44 @@ export default function WorkspaceSettingsPage() {
 function FormCard({ children, className = "" }: { children: React.ReactNode; className?: string }) {
   return (
     <div className={`rounded-lg border border-border bg-card/40 ${className}`}>{children}</div>
+  );
+}
+
+function ProfileChoice({
+  selected,
+  title,
+  description,
+  onClick,
+  disabled,
+}: {
+  selected: boolean;
+  title: string;
+  description: string;
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "focus-ring rounded-lg border p-4 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+        selected ? "border-ember bg-ember/10" : "border-border bg-background/40 hover:bg-subtle/60",
+      )}
+    >
+      <span className="flex items-center gap-2 text-sm font-medium">
+        <span
+          aria-hidden
+          className={cn(
+            "h-2.5 w-2.5 rounded-full border",
+            selected ? "border-ember bg-ember" : "border-muted-foreground/50",
+          )}
+        />
+        {title}
+      </span>
+      <span className="text-meta mt-1.5 block text-muted-foreground">{description}</span>
+    </button>
   );
 }
 
