@@ -26,6 +26,30 @@ explicit fresh-server flag, so a stale `e2e:web` process cannot bypass reset or
 rebuild. A bounded port-preparation helper also waits for the Next wrapper to
 finish releasing its child listener before the replacement server starts.
 
+## 2026-07-16 — Completion evidence freshness and explicit override
+
+Audited the proactive ready-to-close recommendation flow and replaced the
+ambiguous merged-PR evidence summary with a structured, versioned assessment.
+Completion cards now distinguish ready, blocked, verifying, unavailable, and
+stale evidence; show per-fact pass/fail/status badges, timestamps, retry
+guidance, and diagnostics; and refresh GitHub check evidence on webhook events,
+card visibility, window focus, manual request, and the existing reconciliation
+sweep. Realtime action-request events invalidate the affected recommendation so
+the card updates when the trusted aggregate arrives.
+
+Verified recommendations retain the normal **Mark done** action. Every
+unverified or legacy completion recommendation instead exposes **Mark done
+anyway**, with a destructive confirmation that lists unresolved reasons. The
+server records the structured assessment and whether the accepted transition
+was an override in the issue audit trail. Automatic completion remains limited
+to fully ready assessments.
+
+Validation passed lint, typecheck, all 30 focused completion, override, and
+stale-work tests, and the production Next.js build. The expanded full suite
+passed 1,342 tests with one intentional live-connector skip; one unrelated
+stale-work redispatch timing assertion failed under suite contention and passed
+immediately in the focused rerun.
+
 ## 2026-07-16 — Hermes native interactive sessions
 
 Implemented AXI-112 as a complete native Hermes Sessions integration while

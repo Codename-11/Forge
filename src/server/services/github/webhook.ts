@@ -5,6 +5,7 @@ import { recordChange } from "@/server/audit";
 import { decryptSecret } from "@/server/crypto";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
 import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
+import { enqueueGitHubResourceReconciliation } from "@/server/services/github/reconciliation-queue";
 import {
   issueSnapshot,
   pullRequestSnapshot,
@@ -483,6 +484,16 @@ async function processPullRequestEvent(args: {
     actorId: args.actor.actorId,
     actorAgentId: args.actor.actorAgentId,
   });
+  if (resource.state === "merged") {
+    void enqueueGitHubResourceReconciliation({
+      workspaceId,
+      externalResourceId: resource.id,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId,
+    }).catch(() => {
+      // The scheduled reconciliation sweep repairs a missed queue handoff.
+    });
+  }
   return 1;
 }
 
@@ -861,6 +872,15 @@ async function processCheckEvent(args: {
       externalResourceId,
       actorId: args.actor.actorId,
       actorAgentId: args.actor.actorAgentId,
+    });
+    void enqueueGitHubResourceReconciliation({
+      workspaceId,
+      externalResourceId,
+      actorId: args.actor.actorId,
+      actorAgentId: args.actor.actorAgentId,
+    }).catch(() => {
+      // The five-minute reconciliation sweep is the durable repair path when
+      // Redis is unavailable during webhook processing.
     });
   }
   return processed;

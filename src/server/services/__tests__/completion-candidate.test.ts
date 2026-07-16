@@ -231,4 +231,150 @@ describe("completion candidate policy", () => {
     expect(request.sourceType).toBe("github-pr-recovery");
     expect(request.payload).toMatchObject({ intent: "RECOVER" });
   });
+
+  it("rebuilds verifying PR evidence from the latest aggregate during the sweep", async () => {
+    const { fixture, prisma } = await setup(CompletionAutomation.RECOMMEND);
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const merged = await linkedPullRequest(fixture, issue.id, "merged", null);
+    await prisma.externalResource.update({
+      where: { id: merged.id },
+      data: {
+        metadata: {
+          checks: {
+            source: "webhook-hint",
+            status: "dirty",
+            conclusion: null,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+
+    await reconcileGitHubPullRequestCompletion(prisma, {
+      workspaceId: fixture.workspace.id,
+      externalResourceId: merged.id,
+      actorId: fixture.user.id,
+    });
+    const verifying = await prisma.actionRequest.findFirstOrThrow({
+      where: { issueId: issue.id, status: ActionRequestStatus.OPEN },
+    });
+    expect(verifying.payload).toMatchObject({
+      assessment: {
+        version: 1,
+        state: "VERIFYING",
+        facts: expect.arrayContaining([
+          expect.objectContaining({ key: `checks:${merged.id}`, status: "VERIFYING" }),
+        ]),
+      },
+    });
+
+    await prisma.externalResource.update({
+      where: { id: merged.id },
+      data: {
+        metadata: {
+          checks: {
+            source: "api-aggregate",
+            status: "completed",
+            conclusion: "success",
+            suiteCount: 7,
+            statusCount: 2,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+    await sweepCompletionCandidates(prisma, { workspaceId: fixture.workspace.id });
+
+    const ready = await prisma.actionRequest.findUniqueOrThrow({ where: { id: verifying.id } });
+    expect(ready.title).toContain("is ready to close");
+    expect(ready.payload).toMatchObject({
+      assessment: {
+        version: 1,
+        state: "READY",
+        facts: expect.arrayContaining([
+          expect.objectContaining({
+            key: `checks:${merged.id}`,
+            status: "PASS",
+            summary: "9 check signals · checks passed",
+          }),
+        ]),
+      },
+      sourceEvidence: [],
+      autoHeldReasons: [],
+    });
+  });
+
+  it("separates failed, unavailable, and stale check assessments", async () => {
+    const { fixture, prisma } = await setup(CompletionAutomation.RECOMMEND);
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const merged = await linkedPullRequest(fixture, issue.id, "merged", "failure");
+
+    await reconcileGitHubPullRequestCompletion(prisma, {
+      workspaceId: fixture.workspace.id,
+      externalResourceId: merged.id,
+      actorId: fixture.user.id,
+    });
+    let request = await prisma.actionRequest.findFirstOrThrow({
+      where: { issueId: issue.id, status: ActionRequestStatus.OPEN },
+    });
+    expect(request.payload).toMatchObject({
+      assessment: { state: "BLOCKED" },
+      autoHeldReasons: expect.arrayContaining([expect.stringContaining("failed")]),
+    });
+
+    await prisma.externalResource.update({
+      where: { id: merged.id },
+      data: {
+        metadata: {
+          checks: {
+            source: "api-aggregate",
+            status: "unknown",
+            conclusion: null,
+            partial: true,
+            permissionDenied: true,
+            diagnostic: "GitHub App cannot read check suites.",
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+    await sweepCompletionCandidates(prisma, { workspaceId: fixture.workspace.id });
+    request = await prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } });
+    expect(request.payload).toMatchObject({
+      assessment: {
+        state: "UNAVAILABLE",
+        facts: expect.arrayContaining([
+          expect.objectContaining({
+            key: `checks:${merged.id}`,
+            status: "UNAVAILABLE",
+            diagnostic: "GitHub App cannot read check suites.",
+          }),
+        ]),
+      },
+    });
+
+    await prisma.externalResource.update({
+      where: { id: merged.id },
+      data: {
+        metadata: {
+          checks: {
+            source: "api-aggregate",
+            status: "completed",
+            conclusion: "success",
+            updatedAt: new Date(Date.now() - 2 * 24 * 60 * 60_000).toISOString(),
+          },
+        },
+      },
+    });
+    await sweepCompletionCandidates(prisma, { workspaceId: fixture.workspace.id });
+    request = await prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } });
+    expect(request.payload).toMatchObject({
+      assessment: {
+        state: "STALE",
+        facts: expect.arrayContaining([
+          expect.objectContaining({ key: `checks:${merged.id}`, status: "STALE" }),
+        ]),
+      },
+    });
+  });
 });
