@@ -33,8 +33,8 @@ Added a distributable Hermes Forge platform plugin with a SQLite-backed ordered
 outbox and conservative legacy fallback, operator/developer documentation, a
 timestamped migration, unit and real Postgres/Redis integration coverage, and a
 Playwright classification journey. Verification passed lint and typecheck,
-**1,339/1,339** serial Vitest tests (one intentional live-connector skip),
-**7/7** Python adapter tests, the complete docs plus production Next.js build,
+**1,341/1,341** serial Vitest tests (one intentional live-connector skip),
+**8/8** Python adapter tests, the complete docs plus production Next.js build,
 and **51/51** serial Playwright journeys on the disposable E2E stack.
 
 The PR review then found three recovery boundary gaps. Hermes chat readiness
