@@ -119,11 +119,7 @@ export class StorageNotConfiguredError extends Error {
  * `getS3Client()` but never throws and never instantiates the client.
  */
 export function isStorageConfigured(): boolean {
-  return Boolean(
-    process.env.S3_ENDPOINT &&
-      process.env.S3_ACCESS_KEY &&
-      process.env.S3_SECRET_KEY,
-  );
+  return Boolean(process.env.S3_ENDPOINT && process.env.S3_ACCESS_KEY && process.env.S3_SECRET_KEY);
 }
 
 let _client: S3Client | null = null;
@@ -133,8 +129,7 @@ function readSharedConfig() {
   const accessKeyId = process.env.S3_ACCESS_KEY;
   const secretAccessKey = process.env.S3_SECRET_KEY;
   const region = process.env.S3_REGION ?? "us-east-1";
-  const forcePathStyle =
-    (process.env.S3_FORCE_PATH_STYLE ?? "true").toLowerCase() !== "false";
+  const forcePathStyle = (process.env.S3_FORCE_PATH_STYLE ?? "true").toLowerCase() !== "false";
   if (!accessKeyId || !secretAccessKey) {
     throw new StorageNotConfiguredError();
   }
@@ -150,8 +145,7 @@ export function getS3Client(): S3Client {
   if (_client) return _client;
   const endpoint = process.env.S3_ENDPOINT;
   if (!endpoint) throw new StorageNotConfiguredError();
-  const { accessKeyId, secretAccessKey, region, forcePathStyle } =
-    readSharedConfig();
+  const { accessKeyId, secretAccessKey, region, forcePathStyle } = readSharedConfig();
   _client = new S3Client({
     endpoint,
     region,
@@ -174,11 +168,9 @@ export function getS3Client(): S3Client {
  */
 export function getPresignClient(): S3Client {
   if (_presignClient) return _presignClient;
-  const endpoint =
-    process.env.S3_PUBLIC_ENDPOINT ?? process.env.S3_ENDPOINT;
+  const endpoint = process.env.S3_PUBLIC_ENDPOINT ?? process.env.S3_ENDPOINT;
   if (!endpoint) throw new StorageNotConfiguredError();
-  const { accessKeyId, secretAccessKey, region, forcePathStyle } =
-    readSharedConfig();
+  const { accessKeyId, secretAccessKey, region, forcePathStyle } = readSharedConfig();
   _presignClient = new S3Client({
     endpoint,
     region,
@@ -224,8 +216,7 @@ export async function ensureWorkspaceBucket(workspaceId: string): Promise<string
     await s3.send(new HeadBucketCommand({ Bucket: bucket }));
     return bucket;
   } catch (err) {
-    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata
-      ?.httpStatusCode;
+    const status = (err as { $metadata?: { httpStatusCode?: number } })?.$metadata?.httpStatusCode;
     // 404 or NotFound -> create it; anything else rethrow.
     if (status !== 404 && (err as { name?: string })?.name !== "NotFound") {
       // MinIO sometimes reports 301/403 on HEAD for missing buckets; fall through to create.
@@ -239,10 +230,7 @@ export async function ensureWorkspaceBucket(workspaceId: string): Promise<string
   } catch (err) {
     const code = (err as { name?: string })?.name;
     // Race or already exists — fine.
-    if (
-      code !== "BucketAlreadyOwnedByYou" &&
-      code !== "BucketAlreadyExists"
-    ) {
+    if (code !== "BucketAlreadyOwnedByYou" && code !== "BucketAlreadyExists") {
       throw err;
     }
   }
@@ -262,10 +250,7 @@ export async function ensureWorkspaceBucket(workspaceId: string): Promise<string
  * Idempotent — safe to call on every bucket-create.
  */
 async function applyBucketCors(s3: S3Client, bucket: string): Promise<void> {
-  const raw =
-    process.env.S3_CORS_ALLOWED_ORIGINS ??
-    process.env.NEXT_PUBLIC_APP_URL ??
-    "*";
+  const raw = process.env.S3_CORS_ALLOWED_ORIGINS ?? process.env.NEXT_PUBLIC_APP_URL ?? "*";
   const origins = raw
     .split(",")
     .map((o) => o.trim())
@@ -310,7 +295,10 @@ export async function workspaceQuotaStats(
   return { usedBytes, quotaBytes };
 }
 
-function assertTargetShape(targetType: string | null | undefined, targetId: string | null | undefined): {
+function assertTargetShape(
+  targetType: string | null | undefined,
+  targetId: string | null | undefined,
+): {
   targetType: string;
   targetId: string;
 } {
@@ -325,11 +313,7 @@ function assertTargetShape(targetType: string | null | undefined, targetId: stri
   return { targetType, targetId };
 }
 
-function storageKeyFor(
-  targetType: string,
-  targetId: string,
-  filename: string,
-): string {
+function storageKeyFor(targetType: string, targetId: string, filename: string): string {
   const safeName = filename.replace(/[^\w.\-]+/g, "_").slice(0, 120);
   const uid = randomUUID();
   return `${targetType}/${targetId}/${uid}-${safeName}`;
@@ -361,10 +345,7 @@ const TXT_WORKAROUND_INNER_EXTS: ReadonlySet<string> = new Set<string>([
  * agents that learned the bypass don't keep producing `.html.txt`
  * entries in object storage.
  */
-export function normalizeUploadFilename(
-  filename: string,
-  mimeType: string,
-): string {
+export function normalizeUploadFilename(filename: string, mimeType: string): string {
   if (mimeType !== "text/plain") return filename;
   const lower = filename.toLowerCase();
   if (!lower.endsWith(".txt")) return filename;
@@ -394,9 +375,7 @@ export interface PresignUploadResult {
   expiresInSeconds: number;
 }
 
-export async function presignUploadUrl(
-  input: PresignUploadInput,
-): Promise<PresignUploadResult> {
+export async function presignUploadUrl(input: PresignUploadInput): Promise<PresignUploadResult> {
   // Bail before any DB work / bucket-create attempt if S3 isn't wired up.
   if (!isStorageConfigured()) {
     throw new StorageNotConfiguredError();
@@ -565,16 +544,12 @@ export async function getAttachmentInline(
     throw new Error("Attachment not finalized yet.");
   }
   if (row.size > opts.maxBytes) {
-    throw new Error(
-      `Attachment is ${row.size} bytes which exceeds maxBytes ${opts.maxBytes}.`,
-    );
+    throw new Error(`Attachment is ${row.size} bytes which exceeds maxBytes ${opts.maxBytes}.`);
   }
   const ws = await loadWorkspace(row.workspaceId);
   const bucket = bucketNameFromSlug(ws.slug);
   const s3 = getS3Client();
-  const obj = await s3.send(
-    new GetObjectCommand({ Bucket: bucket, Key: row.url }),
-  );
+  const obj = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: row.url }));
   const body = obj.Body;
   if (!body) {
     throw new Error("Attachment has no body in object storage.");
@@ -638,11 +613,9 @@ export async function deleteAttachment(attachmentId: string): Promise<void> {
   const s3 = getS3Client();
   const storageKey = row.url.startsWith("pending:") ? row.url.slice(8) : row.url;
   if (storageKey) {
-    await s3
-      .send(new DeleteObjectCommand({ Bucket: bucket, Key: storageKey }))
-      .catch(() => {
-        // If the object already doesn't exist, swallow so the row still removes.
-      });
+    await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: storageKey })).catch(() => {
+      // If the object already doesn't exist, swallow so the row still removes.
+    });
   }
   await db.attachment.delete({ where: { id: attachmentId } });
 }
@@ -694,12 +667,10 @@ export async function deleteWorkspaceBucket(workspaceId: string): Promise<void> 
     if (!page.IsTruncated) break;
     token = page.NextContinuationToken;
   }
-  await s3
-    .send(new DeleteBucketCommand({ Bucket: bucket }))
-    .catch((err) => {
-      const code = (err as { name?: string })?.name;
-      if (code !== "NoSuchBucket") throw err;
-    });
+  await s3.send(new DeleteBucketCommand({ Bucket: bucket })).catch((err) => {
+    const code = (err as { name?: string })?.name;
+    if (code !== "NoSuchBucket") throw err;
+  });
 }
 
 // -- External link attachments ----------------------------------------------
@@ -755,10 +726,7 @@ function hostnameOf(url: string): string {
 export async function createLinkAttachment(
   input: CreateLinkAttachmentInput,
 ): Promise<CreateLinkAttachmentResult> {
-  const { targetType, targetId } = assertTargetShape(
-    input.targetType,
-    input.targetId,
-  );
+  const { targetType, targetId } = assertTargetShape(input.targetType, input.targetId);
   // Enforce browser-safe external links at storage time as a defense in depth
   // for every caller (tRPC, MCP, future imports/backfills).
   const url = assertSafeExternalUrl(input.url);
@@ -808,61 +776,12 @@ export async function createLinkAttachment(
  * Favicon is computed deterministically client-side as
  * `${origin}/favicon.ico`; we don't probe it here.
  */
-export async function fetchLinkMetadata(
-  url: string,
-): Promise<{ title?: string }> {
-  const ac = new AbortController();
-  const timeout = setTimeout(() => ac.abort(), 5000);
+export async function fetchLinkMetadata(url: string): Promise<{ title?: string }> {
   try {
-    const res = await fetch(url, {
-      method: "GET",
-      redirect: "follow",
-      signal: ac.signal,
-      // Identify ourselves so target servers can decide whether to serve us.
-      headers: {
-        "User-Agent": "ForgeLinkPreview/1.0 (+https://forge.axiom-labs.dev)",
-        Accept: "text/html,application/xhtml+xml",
-      },
-    });
-    if (!res.ok || !res.body) return {};
-    // Stream up to 64 KB. <title> almost always lives in the first few KB
-    // of <head>, so this is plenty of headroom even for chunky CMS pages.
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder("utf-8", { fatal: false });
-    let buf = "";
-    let bytesRead = 0;
-    const cap = 64 * 1024;
-    while (bytesRead < cap) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      bytesRead += value.byteLength;
-      buf += decoder.decode(value, { stream: true });
-      // Early exit once we have a closing </title>.
-      if (/<\/title>/i.test(buf)) break;
-    }
-    try {
-      reader.cancel().catch(() => void 0);
-    } catch {
-      // Ignore — we already have what we need.
-    }
-    const m = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(buf);
-    if (!m) return {};
-    // Decode the most common HTML entities so titles don't render as
-    // "Foo &amp; Bar". Anything more exotic falls through unmolested.
-    const title = m[1]
-      .replace(/\s+/g, " ")
-      .replace(/&amp;/g, "&")
-      .replace(/&lt;/g, "<")
-      .replace(/&gt;/g, ">")
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&nbsp;/g, " ")
-      .trim();
-    if (!title) return {};
-    return { title: title.slice(0, 255) };
+    const { fetchSafeLinkTitle } = await import("@/server/services/safe-link-metadata");
+    const title = await fetchSafeLinkTitle(url);
+    return title ? { title } : {};
   } catch {
     return {};
-  } finally {
-    clearTimeout(timeout);
   }
 }

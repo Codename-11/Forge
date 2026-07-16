@@ -68,8 +68,11 @@ import { buildChatContextBundle } from "@/server/services/chat-context";
 import { agentIdSchema } from "@/server/validators";
 import { TERMINAL_STATUS_CATEGORIES, hasTerminalStatusCategory } from "@/lib/saved-view-filters";
 import {
+  assertArtifactKeyScope,
   assertKeyScope,
+  buildArtifactKeyScopeWhere,
   buildKeyScopeWhere,
+  hasApiKeyNarrowing,
   type ApiKeyContext,
 } from "@/server/services/api-key-auth";
 import {
@@ -181,6 +184,45 @@ export interface McpContext {
  */
 function scopeCtx(ctx: McpContext): { apiKey: ApiKeyContext | null; db: typeof db } {
   return { apiKey: ctx.apiKey, db };
+}
+
+async function assertArtifactAnchorKeyScope(
+  ctx: McpContext,
+  input: { issueId?: string; projectId?: string },
+): Promise<void> {
+  if (input.issueId) {
+    await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+  }
+  if (input.projectId && hasApiKeyNarrowing(scopeCtx(ctx))) {
+    const key = ctx.apiKey!;
+    const allowedProjectClauses: Prisma.ProjectWhereInput[] = [];
+    if (key.projectIds.length) allowedProjectClauses.push({ id: { in: key.projectIds } });
+    if (key.initiativeIds.length) {
+      allowedProjectClauses.push({ initiativeId: { in: key.initiativeIds } });
+    }
+    const project = allowedProjectClauses.length
+      ? await db.project.findFirst({
+          where: {
+            id: input.projectId,
+            workspaceId: ctx.workspaceId,
+            OR: allowedProjectClauses,
+          },
+          select: { id: true },
+        })
+      : null;
+    if (!project) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message: "API key scope does not include this project.",
+      });
+    }
+  }
+  if (!input.issueId && !input.projectId && hasApiKeyNarrowing(scopeCtx(ctx))) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Narrowed API keys must anchor artifacts to an allowed issue or project.",
+    });
+  }
 }
 
 const MCP_BODY_REVISION_CAP = 20;
@@ -8897,6 +8939,7 @@ export const mcpTools = {
       return db.artifact.findMany({
         where: {
           workspaceId: ctx.workspaceId,
+          ...buildArtifactKeyScopeWhere(scopeCtx(ctx)),
           status: input.status,
           type: input.type,
           issueId: input.issueId,
@@ -8934,8 +8977,16 @@ export const mcpTools = {
     async run(input: { id?: string; slug?: string }, ctx: McpContext) {
       const row = await db.artifact.findFirst({
         where: input.id
-          ? { id: input.id, workspaceId: ctx.workspaceId }
-          : { slug: input.slug!, workspaceId: ctx.workspaceId },
+          ? {
+              id: input.id,
+              workspaceId: ctx.workspaceId,
+              ...buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+            }
+          : {
+              slug: input.slug!,
+              workspaceId: ctx.workspaceId,
+              ...buildArtifactKeyScopeWhere(scopeCtx(ctx)),
+            },
         include: {
           versions: {
             orderBy: { version: "desc" },
@@ -8988,8 +9039,8 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
+      await assertArtifactAnchorKeyScope(ctx, input);
       if (input.issueId) {
-        await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
         await assertAgentIssueMutationAllowed(ctx, input.issueId, "artifacts.create");
       }
       const { createArtifact } = await import("@/server/services/artifact-service");
@@ -9041,6 +9092,10 @@ export const mcpTools = {
         where: { id: input.id, workspaceId: ctx.workspaceId },
         select: { issueId: true },
       });
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
+      });
       if (artifact?.issueId) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: artifact.issueId });
         await assertAgentIssueMutationAllowed(ctx, artifact.issueId, "artifacts.update");
@@ -9069,6 +9124,10 @@ export const mcpTools = {
       const artifact = await db.artifact.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         select: { issueId: true },
+      });
+      await assertArtifactKeyScope(scopeCtx(ctx), {
+        artifactId: input.id,
+        workspaceId: ctx.workspaceId,
       });
       if (artifact?.issueId) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: artifact.issueId });
@@ -9111,10 +9170,14 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
-      if (input.issueId) {
-        await assertAgentIssueMutationAllowed(ctx, input.issueId, "artifacts.promote");
-      } else if (input.sourceType === "issue") {
-        await assertAgentIssueMutationAllowed(ctx, input.sourceId, "artifacts.promote");
+      const anchorIssueId =
+        input.issueId ?? (input.sourceType === "issue" ? input.sourceId : undefined);
+      await assertArtifactAnchorKeyScope(ctx, {
+        issueId: anchorIssueId,
+        projectId: input.projectId,
+      });
+      if (anchorIssueId) {
+        await assertAgentIssueMutationAllowed(ctx, anchorIssueId, "artifacts.promote");
       } else {
         await assertMcpWorkspaceMutationPolicy(ctx, "artifacts.promote");
       }
@@ -9129,7 +9192,7 @@ export const mcpTools = {
         body: input.body,
         summary: input.summary ?? null,
         type: input.type,
-        issueId: input.issueId ?? null,
+        issueId: anchorIssueId ?? null,
         projectId: input.projectId ?? null,
       });
     },
