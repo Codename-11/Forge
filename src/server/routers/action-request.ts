@@ -13,6 +13,7 @@ import {
   voteOnActionRequest,
 } from "@/server/services/action-request-service";
 import { enqueueGitHubResourceReconciliation } from "@/server/services/github/reconciliation-queue";
+import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
 
 /**
  * Zod-side mirror of `ActionRequestKind` so the router can accept the
@@ -124,7 +125,7 @@ export const actionRequestRouter = router({
             select: {
               externalLinks: {
                 where: {
-                  kind: "IMPLEMENTS",
+                  kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
                   externalResource: { provider: "GITHUB", resourceType: "PULL_REQUEST" },
                 },
                 select: { externalResourceId: true },

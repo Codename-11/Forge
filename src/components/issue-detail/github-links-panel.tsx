@@ -1,9 +1,18 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, ExternalLink, GitPullRequest, Github, Plus, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  ChevronDown,
+  ExternalLink,
+  GitPullRequest,
+  Github,
+  Plus,
+  RefreshCw,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Tooltip } from "@/components/ui/tooltip";
 import { trpc } from "@/lib/trpc";
 import { formatDate, relativeTime } from "@/lib/utils";
 import { GitHubLinkModal } from "@/components/issue-detail/github-link-modal";
@@ -11,6 +20,8 @@ import { GitHubLinkModal } from "@/components/issue-detail/github-link-modal";
 function kindLabel(kind: string): string {
   if (kind === "SOURCE") return "source";
   if (kind === "IMPLEMENTS") return "implements";
+  if (kind === "FIXES") return "fixes / closes";
+  if (kind === "RELEASES") return "release contains implementation";
   if (kind === "REVIEWS") return "reviews";
   return "related";
 }
@@ -19,6 +30,21 @@ function stateLabel(state: string): string {
   if (state === "merged") return "merged";
   if (state === "draft") return "draft";
   return state || "unknown";
+}
+
+function stateDescription(state: string): string {
+  if (state === "merged") return "GitHub reports that this pull request was merged.";
+  if (state === "draft") return "This pull request is still marked as a draft in GitHub.";
+  if (state === "open") return "This pull request is open and has not been merged.";
+  if (state === "closed") return "This pull request was closed without being merged.";
+  return "Forge has not received a recognized GitHub state for this item.";
+}
+
+function stateTone(state: string): string {
+  if (state === "merged") return "border-success/30 bg-success/10 text-success";
+  if (state === "draft") return "border-warning/30 bg-warning/10 text-warning";
+  if (state === "closed") return "border-danger/30 bg-danger/10 text-danger";
+  return "border-border/70 bg-subtle/50 text-foreground";
 }
 
 function metadataRecord(value: unknown): Record<string, unknown> {
@@ -73,6 +99,8 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
             {links.map((link) => {
               const resource = link.externalResource;
               const isPr = resource.resourceType === "PULL_REQUEST";
+              const terminalPr =
+                isPr && (resource.state === "merged" || resource.state === "closed");
               const metadata = metadataRecord(resource.metadata);
               const head = metadataRecord(metadata.head);
               const checks = metadataRecord(metadata.checks);
@@ -83,8 +111,9 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
                   : typeof review.decision === "string"
                     ? review.decision
                     : null;
-              const checksLabel =
-                checks.partial === true
+              const checksLabel = terminalPr
+                ? null
+                : checks.partial === true
                   ? "checks partial"
                   : typeof checks.conclusion === "string"
                     ? `checks ${checks.conclusion}`
@@ -113,27 +142,46 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
                         <span className="font-mono">
                           {resource.repoFullName}#{resource.number}
                         </span>
-                        <span>{kindLabel(link.kind)}</span>
-                        <span>{stateLabel(resource.state)}</span>
+                        <span className="font-medium text-foreground">{kindLabel(link.kind)}</span>
+                        <Tooltip content={stateDescription(resource.state)}>
+                          <span
+                            tabIndex={0}
+                            className={`rounded-full border px-1.5 py-0.5 font-medium ${stateTone(resource.state)}`}
+                          >
+                            {stateLabel(resource.state)}
+                          </span>
+                        </Tooltip>
                         {resource.lastSyncedAt && (
                           <span>synced {relativeTime(resource.lastSyncedAt)}</span>
                         )}
                       </div>
                       {isPr && (
-                        <div className="mt-1 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-[0.6875rem] text-muted-foreground">
-                          {typeof head.ref === "string" && (
-                            <span className="max-w-full truncate font-mono" title={head.ref}>
-                              {head.ref}
-                            </span>
-                          )}
-                          {reviewDecision && (
-                            <span>{reviewDecision.toLowerCase().replaceAll("_", " ")}</span>
-                          )}
-                          {checksLabel && <span>{checksLabel}</span>}
-                          {typeof metadata.mergeableState === "string" && (
-                            <span>merge {metadata.mergeableState}</span>
-                          )}
-                        </div>
+                        <details className="group mt-2 text-[0.6875rem] text-muted-foreground">
+                          <summary className="focus-ring flex cursor-pointer list-none items-center justify-between rounded border border-border/70 bg-subtle/30 px-2 py-1 font-medium transition-colors hover:border-border hover:bg-subtle/70 hover:text-foreground group-open:border-border group-open:bg-subtle/60 [&::-webkit-details-marker]:hidden">
+                            <span>GitHub evidence</span>
+                            <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
+                          </summary>
+                          <div className="mt-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 px-1">
+                            {typeof head.ref === "string" && (
+                              <span className="max-w-full truncate font-mono" title={head.ref}>
+                                {head.ref}
+                              </span>
+                            )}
+                            {terminalPr && typeof metadata.mergedAt === "string" ? (
+                              <span>merged {relativeTime(metadata.mergedAt)}</span>
+                            ) : (
+                              <>
+                                {reviewDecision && (
+                                  <span>{reviewDecision.toLowerCase().replaceAll("_", " ")}</span>
+                                )}
+                                {checksLabel && <span>{checksLabel}</span>}
+                                {typeof metadata.mergeableState === "string" && (
+                                  <span>merge {metadata.mergeableState}</span>
+                                )}
+                              </>
+                            )}
+                          </div>
+                        </details>
                       )}
                       {resource.syncLastError && (
                         <div

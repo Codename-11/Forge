@@ -3,7 +3,17 @@ import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import type { AgentStatus, WorkItemKind } from "@prisma/client";
-import { Archive, ArchiveRestore, Bot, Paperclip, Plus, Timer, Workflow } from "lucide-react";
+import {
+  Archive,
+  ArchiveRestore,
+  Bot,
+  Clock3,
+  LogOut,
+  Paperclip,
+  Plus,
+  Timer,
+  Workflow,
+} from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Avatar } from "@/components/ui/avatar";
@@ -951,26 +961,45 @@ function ClaimHolderCard({
       ? shortId
       : null;
   return (
-    <div className="rounded-md border border-border bg-card/60 p-2">
-      <div className="flex items-center gap-2">
+    <div className="overflow-hidden rounded-md border border-success/25 bg-success/[0.035]">
+      <div className="flex items-center gap-2.5 p-2.5">
         {claimedByAgent ? (
           <AgentAvatar agent={claimedByAgent} size="sm" />
         ) : (
           <Avatar name={userName} image={claimedBy?.image ?? null} size={22} />
         )}
         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">{primary}</div>
-          {sub && <div className="text-id text-[0.625rem] text-muted-foreground">{sub}</div>}
+          <div className="mb-0.5 flex min-w-0 items-center gap-1.5">
+            <div className="truncate text-xs font-semibold text-foreground">{primary}</div>
+            <span className="shrink-0 rounded border border-success/25 bg-success/10 px-1 py-px text-[0.5625rem] font-semibold uppercase tracking-wider text-success">
+              Active
+            </span>
+          </div>
+          <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            {sub && <span className="text-id truncate text-[0.625rem]">{sub}</span>}
+            <span className="text-[0.625rem]">{claimedByAgent ? "Agent claim" : "Operator claim"}</span>
+          </div>
         </div>
-        {claimExpiresAt && (
-          <span className="text-meta shrink-0 text-muted-foreground">
-            expires {relativeTime(claimExpiresAt)}
-          </span>
-        )}
       </div>
-      <Button size="sm" variant="ghost" className="mt-1.5 w-full" onClick={onRelease}>
-        Release claim
-      </Button>
+      <div className="flex items-center gap-2 border-t border-success/15 bg-background/35 px-2.5 py-1.5">
+        {claimExpiresAt ? (
+          <span className="text-meta flex min-w-0 flex-1 items-center gap-1 text-muted-foreground">
+            <Clock3 className="h-3 w-3 shrink-0" />
+            Expires {relativeTime(claimExpiresAt)}
+          </span>
+        ) : (
+          <span className="text-meta min-w-0 flex-1 text-muted-foreground">No expiry recorded</span>
+        )}
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 shrink-0 gap-1 px-1.5 text-[0.6875rem] text-muted-foreground hover:text-danger"
+          onClick={onRelease}
+        >
+          <LogOut className="h-3 w-3" />
+          Release
+        </Button>
+      </div>
     </div>
   );
 }

@@ -641,7 +641,7 @@ export async function createActionRequest(
 
 /** Resolve / dismiss / snooze an action request. */
 export async function transitionActionRequest(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   params: {
     workspaceId: string;
     actorId: string | null;
@@ -657,7 +657,7 @@ export async function transitionActionRequest(
   if (!row) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
   }
-  await db.$transaction(async (tx) => {
+  const apply = async (tx: Prisma.TransactionClient) => {
     try {
       await tx.actionRequest.update({
         where: { id: row.id },
@@ -693,7 +693,12 @@ export async function transitionActionRequest(
       subjectType: "action-request",
       subjectId: row.id,
     });
-  });
+  };
+  if ("$transaction" in db) {
+    await db.$transaction(apply);
+  } else {
+    await apply(db);
+  }
 }
 
 /**

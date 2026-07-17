@@ -73,6 +73,10 @@ import { isSafeExternalUrl, toRenderableHref } from "@/lib/url-safety";
 
 const FORGE_ATTACHMENT_RE = /(!?)\[([^\]]*)\]\(forge-attachment:([a-z0-9]{20,})\)/gi;
 const FORGE_LINK_RE = /\[([^\]]*)\]\(forge-link:(https?:\/\/[^\s)]+)\)/gi;
+// GitHub's compact owner/repo#number form must be consumed before Forge issue
+// keys. Otherwise an owner such as `CODENAME-11` is incorrectly linked as a
+// local issue and the remainder starts at the slash.
+const GITHUB_REF_RE = /\b([a-z0-9](?:[a-z0-9-]{0,38})\/[a-z0-9._-]+)#(\d+)\b/gi;
 // Issue refs (KEY-NN) and agent mentions (@profileKey). The lookbehind on
 // `@` keeps `email@host` from accidentally matching as a mention.
 const REF_RE = /(\b[A-Z][A-Z0-9]{1,9}-\d+\b)|(?<=^|[\s(,.;:!?])@([a-z0-9][a-z0-9_-]*)/gi;
@@ -88,6 +92,7 @@ type InlineSegment =
   | { type: "image"; alt: string; attachmentId: string }
   | { type: "attachmentLink"; label: string; attachmentId: string }
   | { type: "linkChip"; label: string; url: string }
+  | { type: "githubRef"; repoFullName: string; number: number }
   | { type: "issueRef"; key: string }
   | { type: "mention"; profileKey: string }
   | { type: "mdLink"; label: string; url: string }
@@ -177,7 +182,8 @@ function tokenizeInline(text: string): InlineSegment[] {
     if (lo < t.length) passC.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass D: issue refs + agent mentions.
+  // Pass D: bare URLs. Consume complete URLs before compact GitHub or Forge
+  // issue references so path and fragment tokens remain part of the URL.
   const passD: InlineSegment[] = [];
   for (const seg of passC) {
     if (seg.type !== "text") {
@@ -186,18 +192,17 @@ function tokenizeInline(text: string): InlineSegment[] {
     }
     const t = seg.value;
     let lo = 0;
-    REF_RE.lastIndex = 0;
-    for (const m of t.matchAll(REF_RE)) {
+    URL_RE.lastIndex = 0;
+    for (const m of t.matchAll(URL_RE)) {
       const idx = m.index ?? 0;
       if (idx > lo) passD.push({ type: "text", value: t.slice(lo, idx) });
-      if (m[1]) passD.push({ type: "issueRef", key: m[1].toUpperCase() });
-      else if (m[2]) passD.push({ type: "mention", profileKey: m[2].toLowerCase() });
+      passD.push({ type: "url", url: m[0] });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passD.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass E: bare URLs on what's left.
+  // Pass E: compact GitHub owner/repo#number references on remaining text.
   const passE: InlineSegment[] = [];
   for (const seg of passD) {
     if (seg.type !== "text") {
@@ -206,22 +211,46 @@ function tokenizeInline(text: string): InlineSegment[] {
     }
     const t = seg.value;
     let lo = 0;
-    URL_RE.lastIndex = 0;
-    for (const m of t.matchAll(URL_RE)) {
+    GITHUB_REF_RE.lastIndex = 0;
+    for (const m of t.matchAll(GITHUB_REF_RE)) {
       const idx = m.index ?? 0;
       if (idx > lo) passE.push({ type: "text", value: t.slice(lo, idx) });
-      passE.push({ type: "url", url: m[0] });
+      passE.push({
+        type: "githubRef",
+        repoFullName: m[1],
+        number: Number(m[2]),
+      });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passE.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass F: inline emphasis (bold, italic, code, strikethrough) on
+  // Pass F: issue refs + agent mentions on what's left.
+  const passF: InlineSegment[] = [];
+  for (const seg of passE) {
+    if (seg.type !== "text") {
+      passF.push(seg);
+      continue;
+    }
+    const t = seg.value;
+    let lo = 0;
+    REF_RE.lastIndex = 0;
+    for (const m of t.matchAll(REF_RE)) {
+      const idx = m.index ?? 0;
+      if (idx > lo) passF.push({ type: "text", value: t.slice(lo, idx) });
+      if (m[1]) passF.push({ type: "issueRef", key: m[1].toUpperCase() });
+      else if (m[2]) passF.push({ type: "mention", profileKey: m[2].toLowerCase() });
+      lo = idx + m[0].length;
+    }
+    if (lo < t.length) passF.push({ type: "text", value: t.slice(lo) });
+  }
+
+  // Pass G: inline emphasis (bold, italic, code, strikethrough) on
   // remaining text spans. We do this last so emphasis can't "swallow"
   // the URL of an inline link (`*foo [bar](url)*` still highlights the
   // link), and so an attachment chip wrapped in `*…*` works naturally.
   const out: InlineSegment[] = [];
-  for (const seg of passE) {
+  for (const seg of passF) {
     if (seg.type !== "text") {
       out.push(seg);
       continue;
@@ -727,10 +756,22 @@ function renderInlineSegs(
       }
       return <InlineForgeLink key={key} label={s.label} url={s.url} />;
     }
-    if (s.type === "issueRef")
-      return <InlineIssueRef key={key} issueKey={s.key} />;
-    if (s.type === "mention")
-      return <InlineAgentMention key={key} profileKey={s.profileKey} />;
+    if (s.type === "issueRef") return <InlineIssueRef key={key} issueKey={s.key} />;
+    if (s.type === "githubRef") {
+      const label = `${s.repoFullName}#${s.number}`;
+      return (
+        <a
+          key={key}
+          href={`https://github.com/${s.repoFullName}/issues/${s.number}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-ember underline-offset-2 hover:underline"
+        >
+          {label}
+        </a>
+      );
+    }
+    if (s.type === "mention") return <InlineAgentMention key={key} profileKey={s.profileKey} />;
     if (s.type === "mdLink") {
       // Explicit allowlist: http(s) links open in a new tab, and internal
       // app paths (e.g. `/w/foo/issues/abc`) get an in-app Link. Everything

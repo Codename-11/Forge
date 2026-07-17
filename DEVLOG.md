@@ -2,6 +2,54 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — Truthful Delivery provenance and GitHub relations
+
+AXI-117 audited production Ready to Close, Delivery, and native GitHub cards,
+then separated actor, invocation, connector, runtime, implementation PR, and
+release-containment facts. Browser claims now persist as manual UI actions and
+MCP claims persist as Forge MCP; connector identity comes only from the MCP
+initialize `clientInfo`, while runtime attribution requires an output-producing
+managed run. Compact Delivery cards expose the full evidence on demand without
+guessing Codex Desktop or a runtime from agent identity.
+
+GitHub webhook matching now derives one native relation per issue/resource:
+`IMPLEMENTS`, `FIXES`, `RELEASES`, or `RELATES_TO`. The migration reclassifies
+release assembly PRs, removes legacy duplicate relations deterministically, and
+enforces the singular relation invariant. Generic URL recovery and repository
+identity canonicalization preserve a stronger existing relation, while explicit
+relinks remain operator-controlled. Imported `SOURCE` identity is preserved
+ahead of derived PR relations so later imports cannot duplicate the Forge issue;
+explicit downgrades dismiss stale Ready-to-Close requests when no implementation
+PR remains. Grouped references such as `Fixes AXI-1, AXI-2` retain the keyword
+across the full clause. Duplicate-resource canonicalization also preserves
+`SOURCE`, while imported source PRs retain their mapped status synchronization.
+Both service canonicalization and migration-time release reclassification
+dismiss stale completion requests when they remove the last implementation
+relation, with migration cleanup ordered after legacy relation dedupe. Bare URLs
+are consumed before compact GitHub and issue-reference tokens so paths containing
+`CODENAME-11/Forge#56` or `AXI-123` remain fully clickable. Imported `SOURCE`
+PRs participate in failed-check status rules while related/release links do not.
+Terminal PR synchronization clears
+stale mergeability and suppresses pending-check contradictions, while merged
+implementation evidence continues reconciliation until its final checks
+aggregate is trusted and still participates in completion readiness. Passing
+completion evidence and READY state now use the semantic success token.
+PR lifecycle and failed-check status automation is limited to implementation
+relations, so related mentions and release-containment links remain contextual.
+
+Verification passed lint (existing warnings only), typecheck, a production
+Next build, 1,399 Vitest tests with one intentional skip, focused relation and
+provenance coverage, and the AXI-117 Playwright issue journey. The full
+single-worker browser run passed 51 journeys before Chromium exited while
+opening an unrelated Mission Control context; both affected Mission Control
+tests passed immediately in isolation, covering all 53 journeys.
+
+Release review follow-up applied all 119 migrations to a clean isolated local
+Postgres database and passed nine focused relation/persistence regressions,
+including SOURCE preservation, grouped relation derivation, and audited stale
+completion-request dismissal. The production-snapshot development database was
+not used for migration or test execution.
+
 ## 2026-07-16 — v0.26.1 released, deployed, and verified
 
 Merged release PR #60 and tagged exact `main` commit
@@ -13755,3 +13803,36 @@ activity provenance.
 
 The immutable tag will be cut only from the merged release commit, then
 deployed through the clean-checkout production path and verified live.
+
+---
+
+## 2026-07-16 — Delivery agent and operator identity
+
+Refined the issue Delivery card so execution identity and human ownership are
+not collapsed into one ambiguous Actor label. Registered agents now remain the
+primary identity with their operator shown as supporting context. Manual work
+shows the operator explicitly, while legacy Codex Desktop, MCP, dispatch, and
+scheduled sessions without a registered agent connection are labeled as
+unverified instead of being falsely attributed to the credential owner.
+
+Expanded Delivery evidence now lists Agent and Operator independently alongside
+invocation, connector, and runtime facts. The agent transport documentation and
+the issue-flow Playwright contract were updated to preserve the distinction.
+Connection state now uses a semantic status badge with a hover/focus explanation,
+and the evidence disclosure uses a bordered control and rotating chevron so its
+interactivity is visible without adding density to the collapsed card.
+GitHub PR state now follows the same semantic badge and explanatory tooltip
+pattern, while GitHub evidence uses the same recognizable disclosure control.
+The issue claim card now separates owner identity, active state, expiry, and the
+release action into a clearer compact hierarchy.
+The issue Activity rail now groups only adjacent equivalent events, preserving
+audit order while reducing repeated metadata noise. It shows eight recent
+groups by default and provides an explicit event-counted show-more/show-less
+control for the remaining history.
+The shared Markdown renderer now recognizes compact GitHub
+`owner/repository#number` references before Forge issue keys, preventing
+hyphenated owners from becoming partial links in issue comments, Command
+Center decisions, and every other shared rich-text surface.
+Prepared the reviewed change as patch release `v0.27.1`; the immutable tag is
+cut only after the release-ready commit lands on `main` with all required CI
+checks green.

@@ -290,6 +290,10 @@ enum WorkSessionSource {
   CODEX_DESKTOP
   CONTRIBUTOR
   MANUAL
+  MCP
+  NATIVE_SESSION
+  ISSUE_DISPATCH
+  SCHEDULED
 }
 
 /// The transport or execution endpoint through which an agent binding acts.
@@ -2597,7 +2601,7 @@ model ExternalResourceLink {
   workspaceId        String
   issueId            String
   externalResourceId String
-  /// SOURCE | IMPLEMENTS | REVIEWS | RELATES_TO.
+  /// SOURCE | IMPLEMENTS | FIXES | RELEASES | REVIEWS | RELATES_TO.
   kind               String
   createdById        String?
   createdAt          DateTime @default(now())
@@ -2607,7 +2611,7 @@ model ExternalResourceLink {
   externalResource ExternalResource @relation(fields: [externalResourceId], references: [id], onDelete: Cascade)
   createdBy        User?            @relation("ExternalResourceLinkCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
-  @@unique([issueId, externalResourceId, kind])
+  @@unique([issueId, externalResourceId])
   @@index([workspaceId, issueId])
   @@index([workspaceId, externalResourceId])
   @@index([createdById])

@@ -190,7 +190,7 @@ describe("GitHub status reconciliation", () => {
     expect(calls).toBe(1);
   });
 
-  it("backs off merged PRs with no checks and re-enables terminal rows when reopened", async () => {
+  it("backs off merged PRs with stale checks and re-enables terminal rows when reopened", async () => {
     const { fixture, prisma, resource } = await setupResource();
     const now = new Date("2026-07-14T12:00:00.000Z");
     const syncResource = async () =>
@@ -213,6 +213,7 @@ describe("GitHub status reconciliation", () => {
     const held = await prisma.externalResource.findUniqueOrThrow({ where: { id: resource.id } });
     expect(held.syncFailureCount).toBe(1);
     expect(held.syncRetryAt).toEqual(new Date("2026-07-14T12:05:00.000Z"));
+    expect(held.syncTerminalAt).toBeNull();
 
     await prisma.externalResource.update({
       where: { id: resource.id },
@@ -270,6 +271,60 @@ describe("GitHub status reconciliation", () => {
       },
     });
     expect(newHead.metadata).not.toHaveProperty("checks");
+  });
+
+  it("normalizes merged facts while keeping unknown checks eligible for reconciliation", async () => {
+    const { fixture, prisma, resource } = await setupResource();
+    const merged = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: resource.url,
+        title: resource.title,
+        state: "merged",
+        labels: [],
+        assignees: [],
+        metadata: {
+          mergeableState: "unknown",
+          checks: { status: "unknown", partial: true, diagnostic: "Checks unavailable" },
+        },
+      },
+    });
+    const metadata = merged.metadata as Record<string, unknown>;
+    expect(merged.syncTerminalAt).toBeNull();
+    expect(merged.syncRetryAt).toBeNull();
+    expect(merged.syncFailureCount).toBe(1);
+    expect(merged.syncLastError).toBe("Checks unavailable");
+    expect(metadata.mergeableState).toBeNull();
+
+    const trusted = await upsertExternalResource(prisma, {
+      workspaceId: fixture.workspace.id,
+      snapshot: {
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 42,
+        url: resource.url,
+        title: resource.title,
+        state: "merged",
+        labels: [],
+        assignees: [],
+        metadata: {
+          checks: {
+            source: "api-aggregate",
+            status: "completed",
+            conclusion: "success",
+            partial: false,
+          },
+        },
+      },
+    });
+    expect(trusted.syncTerminalAt).toBeInstanceOf(Date);
+    expect(trusted.syncFailureCount).toBe(0);
+    expect(trusted.syncLastError).toBeNull();
   });
 
   it("does not inspect disabled workspaces, terminal PRs, or an active retry lease", async () => {

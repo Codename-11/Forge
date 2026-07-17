@@ -15,6 +15,7 @@ import { recordChange } from "@/server/audit";
 import { createActionRequest } from "@/server/services/action-request-service";
 import { autoWatchActor } from "@/server/services/issue-watchers";
 import { finishRun } from "@/server/services/agent-run";
+import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -458,63 +459,55 @@ export async function listIssueWorkSessions(
       },
     },
   });
-  const [latestImplementationRun, latestAgentComment] = await Promise.all([
-    db.agentRun.findFirst({
-      where: { workspaceId, issueId, engagementMode: "EXECUTE" },
-      orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
-      select: {
-        lastEventAt: true,
-        agent: {
-          select: {
-            id: true,
-            name: true,
-            profileKey: true,
-            avatar: true,
-            connections: {
-              where: { revokedAt: null },
-              orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
-              take: 1,
-              select: { id: true, displayName: true, clientName: true, kind: true },
-            },
-          },
+  const latestImplementationRun = await db.agentRun.findFirst({
+    where: {
+      workspaceId,
+      issueId,
+      engagementMode: "EXECUTE",
+      outputStartedAt: { not: null },
+    },
+    orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
+    select: {
+      id: true,
+      status: true,
+      startedAt: true,
+      lastEventAt: true,
+      externalRunId: true,
+      triggerKind: true,
+      runEngine: true,
+      runEngineSource: true,
+      runtimePolicy: true,
+      agent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+      connection: {
+        select: {
+          id: true,
+          kind: true,
+          displayName: true,
+          clientName: true,
+          clientVersion: true,
+          runtime: { select: { id: true, name: true, adapterKey: true } },
         },
       },
-    }),
-    db.comment.findFirst({
-      where: { workspaceId, issueId, authoringAgentId: { not: null } },
-      orderBy: { updatedAt: "desc" },
-      select: {
-        updatedAt: true,
-        authoringAgent: {
-          select: {
-            id: true,
-            name: true,
-            profileKey: true,
-            avatar: true,
-            connections: {
-              where: { revokedAt: null },
-              orderBy: [{ lastSeenAt: "desc" }, { createdAt: "desc" }],
-              take: 1,
-              select: { id: true, displayName: true, clientName: true, kind: true },
-            },
-          },
-        },
-      },
-    }),
-  ]);
+    },
+  });
   const observedImplementation = latestImplementationRun
     ? {
         agent: latestImplementationRun.agent,
         observedAt: latestImplementationRun.lastEventAt,
         source: "implementation-run" as const,
+        run: {
+          id: latestImplementationRun.id,
+          status: latestImplementationRun.status,
+          startedAt: latestImplementationRun.startedAt,
+          externalRunId: latestImplementationRun.externalRunId,
+          triggerKind: latestImplementationRun.triggerKind,
+          runEngine: latestImplementationRun.runEngine,
+          runEngineSource: latestImplementationRun.runEngineSource,
+          runtimePolicy: latestImplementationRun.runtimePolicy,
+          connection: latestImplementationRun.connection,
+        },
       }
-    : latestAgentComment?.authoringAgent
-      ? {
-          agent: latestAgentComment.authoringAgent,
-          observedAt: latestAgentComment.updatedAt,
-          source: "agent-comment" as const,
-        }
-      : null;
+    : null;
 
   // Auto-bind an IMPLEMENTS PR whose head branch matches the session. This is
   // intentionally a repair path: explicit linking remains preferred.
@@ -526,7 +519,7 @@ export async function listIssueWorkSessions(
       where: {
         workspaceId,
         issueId,
-        kind: "IMPLEMENTS",
+        kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
         externalResource: { resourceType: "PULL_REQUEST" },
       },
       include: { externalResource: true },

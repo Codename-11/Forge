@@ -13,7 +13,10 @@ import {
 import { recordChange } from "@/server/audit";
 import { syncWorkSessionsFromPullRequest } from "@/server/services/work-session";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
-import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
+import {
+  dismissIssueCompletionCandidate,
+  reconcileGitHubPullRequestCompletion,
+} from "@/server/services/completion-candidate";
 import {
   getGitHubIssue,
   getGitHubPullRequest,
@@ -32,6 +35,7 @@ import {
 import {
   EXTERNAL_LINK_KINDS,
   GITHUB_PROVIDER,
+  IMPLEMENTATION_LINK_KINDS,
   type ExternalLinkKind,
   type GitHubResourceSnapshot,
   type GitHubResourceType,
@@ -63,6 +67,15 @@ function assertLinkKind(kind: string): asserts kind is ExternalLinkKind {
       message: "Unsupported external link kind.",
     });
   }
+}
+
+function externalLinkKindRank(kind: string): number {
+  if (kind === "SOURCE") return 6;
+  if (kind === "FIXES") return 5;
+  if (kind === "IMPLEMENTS") return 4;
+  if (kind === "RELEASES") return 3;
+  if (kind === "REVIEWS") return 1;
+  return 0;
 }
 
 function publicResource(row: ExternalResource) {
@@ -541,21 +554,39 @@ export async function canonicalizeGitHubResourceIdentity(
 
   // Older builds could create one row per repository spelling. Preserve every
   // issue relation on the canonical row, keeping the original link id unless
-  // the same issue/kind relation already exists there.
+  // the same issue/resource relation already exists there.
+  const downgradedIssueIds = new Set<string>();
   for (const duplicate of equivalent) {
     if (duplicate.id === canonical.id) continue;
     for (const link of duplicate.links) {
       const collision = await db.externalResourceLink.findUnique({
         where: {
-          issueId_externalResourceId_kind: {
+          issueId_externalResourceId: {
             issueId: link.issueId,
             externalResourceId: canonical.id,
-            kind: link.kind,
           },
         },
-        select: { id: true },
+        select: { id: true, kind: true },
       });
       if (collision) {
+        const winningKind =
+          externalLinkKindRank(link.kind) > externalLinkKindRank(collision.kind)
+            ? link.kind
+            : collision.kind;
+        if (
+          [link.kind, collision.kind].some((candidate) =>
+            IMPLEMENTATION_LINK_KINDS.some((kind) => kind === candidate),
+          ) &&
+          !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === winningKind)
+        ) {
+          downgradedIssueIds.add(link.issueId);
+        }
+        if (externalLinkKindRank(link.kind) > externalLinkKindRank(collision.kind)) {
+          await db.externalResourceLink.update({
+            where: { id: collision.id },
+            data: { kind: link.kind, createdById: link.createdById },
+          });
+        }
         await db.externalResourceLink.delete({ where: { id: link.id } });
       } else {
         await db.externalResourceLink.update({
@@ -571,6 +602,24 @@ export async function canonicalizeGitHubResourceIdentity(
       where: { id: canonical.id },
       data: { repoFullName: args.snapshot.repoFullName },
     });
+  }
+  for (const issueId of downgradedIssueIds) {
+    const remainingImplementationLinks = await db.externalResourceLink.count({
+      where: {
+        workspaceId: args.workspaceId,
+        issueId,
+        kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+        externalResource: { resourceType: "PULL_REQUEST" },
+      },
+    });
+    if (remainingImplementationLinks === 0) {
+      await dismissIssueCompletionCandidate(db, {
+        workspaceId: args.workspaceId,
+        issueId,
+        actorId: null,
+        resolution: "The canonical GitHub source is no longer implementation evidence.",
+      });
+    }
   }
 }
 
@@ -616,6 +665,10 @@ async function upsertExternalResourceInTransaction(
     ...existingMetadata,
     ...snapshotMetadata,
   };
+  const terminalState =
+    args.snapshot.resourceType === "PULL_REQUEST" &&
+    (args.snapshot.state === "closed" || args.snapshot.state === "merged");
+  if (terminalState) metadata.mergeableState = null;
   const existingHead =
     existingMetadata.head &&
     typeof existingMetadata.head === "object" &&
@@ -640,22 +693,20 @@ async function upsertExternalResourceInTransaction(
     metadata.checks && typeof metadata.checks === "object" && !Array.isArray(metadata.checks)
       ? (metadata.checks as Record<string, unknown>)
       : {};
-  const passingChecks =
-    checks.source === "api-aggregate" &&
-    checks.status === "completed" &&
-    typeof checks.conclusion === "string" &&
-    ["success", "neutral", "skipped"].includes(checks.conclusion);
+  const trustedCompletedChecks =
+    checks.source === "api-aggregate" && checks.status === "completed" && checks.partial !== true;
+  // A merged PR is a terminal GitHub fact, but its synchronization row must
+  // stay eligible for reconciliation until the final checks aggregate is
+  // trusted and complete. Closed, unmerged PRs need no completion evidence.
+  const terminal = terminalState && (args.snapshot.state === "closed" || trustedCompletedChecks);
   const checksDiagnostic =
-    checks.partial === true && typeof checks.diagnostic === "string"
+    !terminal && checks.partial === true && typeof checks.diagnostic === "string"
       ? checks.diagnostic.slice(0, 2_000)
       : null;
   const checksRetryAt =
     typeof checks.retryAt === "string" && Number.isFinite(Date.parse(checks.retryAt))
       ? new Date(checks.retryAt)
       : null;
-  const terminal =
-    args.snapshot.resourceType === "PULL_REQUEST" &&
-    (args.snapshot.state === "closed" || (args.snapshot.state === "merged" && passingChecks));
   const row = await db.externalResource.upsert({
     where: {
       workspaceId_provider_repoFullName_resourceType_number: {
@@ -740,6 +791,7 @@ export async function linkExternalResourceToIssue(
     kind: ExternalLinkKind;
     actor: ActorMeta;
     recordActivity?: boolean;
+    preserveExistingRelation?: boolean;
   },
 ): Promise<ExternalResourceLink> {
   const [issue, resource] = await Promise.all([
@@ -766,21 +818,28 @@ export async function linkExternalResourceToIssue(
 
   const existingLink = await db.externalResourceLink.findUnique({
     where: {
-      issueId_externalResourceId_kind: {
+      issueId_externalResourceId: {
         issueId: args.issueId,
         externalResourceId: args.externalResourceId,
-        kind: args.kind,
       },
     },
   });
-  if (existingLink) return existingLink;
+  if (existingLink?.kind === args.kind) return existingLink;
+  // SOURCE is the durable identity for a Forge issue imported from GitHub.
+  // Derived PR mentions must not erase the link used by future import de-dupe
+  // and source-only title/status synchronization.
+  if (existingLink?.kind === "SOURCE" && args.kind !== "SOURCE") return existingLink;
+  // Generic GitHub URL attachment and recovery paths use RELATES_TO. Replaying
+  // those paths must not erase a previously established native semantic link.
+  if (args.preserveExistingRelation && args.kind === "RELATES_TO" && existingLink) {
+    return existingLink;
+  }
 
   const link = await db.externalResourceLink.upsert({
     where: {
-      issueId_externalResourceId_kind: {
+      issueId_externalResourceId: {
         issueId: args.issueId,
         externalResourceId: args.externalResourceId,
-        kind: args.kind,
       },
     },
     create: {
@@ -790,8 +849,34 @@ export async function linkExternalResourceToIssue(
       kind: args.kind,
       createdById: args.actor.actorId ?? undefined,
     },
-    update: {},
+    update: {
+      kind: args.kind,
+      ...(args.actor.actorId ? { createdById: args.actor.actorId } : {}),
+    },
   });
+
+  const reclassifiedAwayFromImplementation =
+    existingLink !== null &&
+    IMPLEMENTATION_LINK_KINDS.some((kind) => kind === existingLink.kind) &&
+    !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === link.kind);
+  if (reclassifiedAwayFromImplementation) {
+    const remainingImplementationLinks = await db.externalResourceLink.count({
+      where: {
+        workspaceId: args.workspaceId,
+        issueId: args.issueId,
+        kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+        externalResource: { resourceType: "PULL_REQUEST" },
+      },
+    });
+    if (remainingImplementationLinks === 0) {
+      await dismissIssueCompletionCandidate(db, {
+        workspaceId: args.workspaceId,
+        issueId: args.issueId,
+        actorId: args.actor.actorId,
+        resolution: "The linked pull request is no longer implementation evidence.",
+      });
+    }
+  }
 
   if (args.recordActivity ?? true) {
     await recordChange(db, {
@@ -800,14 +885,15 @@ export async function linkExternalResourceToIssue(
       actorAgentId: args.actor.actorAgentId ?? null,
       entity: "Issue",
       entityId: args.issueId,
-      action: "external-resource.link",
+      action: existingLink ? "external-resource.relate" : "external-resource.link",
+      before: existingLink ?? undefined,
       after: link,
       eventKind: EventKind.ISSUE_UPDATED,
       subjectType: "issue",
       subjectId: args.issueId,
       payload: {
         source: "github",
-        change: "external-resource-linked",
+        change: existingLink ? "external-resource-relation-updated" : "external-resource-linked",
         externalResourceId: args.externalResourceId,
         linkKind: args.kind,
         resourceType: resource.resourceType,
@@ -831,6 +917,7 @@ export async function linkGitHubUrlToIssue(args: {
   kind: string;
   actor: ActorMeta;
   mappingId?: string | null;
+  preserveExistingRelation?: boolean;
 }): Promise<{ resource: ExternalResource; link: ExternalResourceLink }> {
   const kind = args.kind;
   assertLinkKind(kind);
@@ -860,6 +947,7 @@ export async function linkGitHubUrlToIssue(args: {
       externalResourceId: resource.id,
       kind,
       actor: args.actor,
+      preserveExistingRelation: args.preserveExistingRelation,
     });
     return { resource, link };
   });
@@ -958,6 +1046,7 @@ export async function recoverGenericGitHubAttachments(
         externalResourceId: attachment.resourceId,
         kind: "RELATES_TO",
         actor: { actorId: null },
+        preserveExistingRelation: true,
       });
       await tx.attachment.deleteMany({
         where: { id: attachment.id, workspaceId: attachment.workspaceId, kind: "LINK" },
@@ -1034,6 +1123,7 @@ export async function migrateGenericGitHubAttachments(
         url: row.url,
         kind: "RELATES_TO",
         actor: { actorId: null },
+        preserveExistingRelation: true,
       });
       const deleted = await db.attachment.deleteMany({
         where: {
@@ -1236,12 +1326,18 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
   });
   const changedIssueIds = new Set<string>();
   for (const link of links) {
+    const statusId =
+      args.snapshot.resourceType === "PULL_REQUEST" &&
+      link.kind !== "SOURCE" &&
+      !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === link.kind)
+        ? null
+        : (args.statusRuleId ?? null);
     const changed = await applyIssuePatchFromGitHub({
       tx: args.tx,
       workspaceId: args.workspaceId,
       issueId: link.issueId,
       title: config.syncTitle && link.kind === "SOURCE" ? args.snapshot.title : undefined,
-      statusId: args.statusRuleId ?? null,
+      statusId,
       actor: args.actor,
       payload: {
         source: "github",

@@ -29,21 +29,28 @@ connection is primary; additional connections must explicitly join as a
 contributor or reviewer, or receive an audited handoff before changing the
 branch or advancing delivery state.
 
+Delivery provenance records separate facts: actor/profile, invocation source,
+connector/transport, and execution runtime. MCP client identity comes from the
+negotiated MCP `clientInfo`; missing identity is displayed as an unidentified
+client rather than guessed as Codex Desktop or CLI. A runtime is shown only
+when an output-producing `AgentRun` carries both a runtime connection and an
+external run id. Direct MCP or UI work does not imply runtime execution.
+
 ## Project branch contract
 
 Branch topology is project configuration, not an Axiom-wide constant. Every
 maintained repository declares these seven facts in `AGENTS.md` or
 `RELEASE.md`:
 
-| Fact | Meaning |
-| --- | --- |
-| Integration branch | Normal feature/fix PR target |
-| Release branch | Durable released-code history |
-| Tag source | Branch/commit from which immutable release tags are cut |
-| Staging source | Exact branch SHA or tag deployed to staging |
-| Production source | Exact tag/SHA accepted by production |
-| Hotfix base | Ref used to begin an emergency fix |
-| Back-merge target | Branches that must receive the hotfix afterward |
+| Fact               | Meaning                                                 |
+| ------------------ | ------------------------------------------------------- |
+| Integration branch | Normal feature/fix PR target                            |
+| Release branch     | Durable released-code history                           |
+| Tag source         | Branch/commit from which immutable release tags are cut |
+| Staging source     | Exact branch SHA or tag deployed to staging             |
+| Production source  | Exact tag/SHA accepted by production                    |
+| Hotfix base        | Ref used to begin an emergency fix                      |
+| Back-merge target  | Branches that must receive the hotfix afterward         |
 
 Supported shapes include trunk-based (`feature → main → tag`), an integration
 train (`feature → dev → release PR → main → tag`), upstream-tracking forks, and
@@ -57,10 +64,14 @@ integration, scheduled stabilization, or an upstream convention.
 - Refresh the work-session heartbeat at meaningful phase changes and after
   commits. Mechanical tool traces do not replace a heartbeat or semantic status.
 - Push early and open a PR early when overlap is likely.
-- Link implementation PRs with Forge's native GitHub relation and kind
-  `IMPLEMENTS`; never use a generic link attachment for a PR.
+- Link implementation PRs with Forge's native GitHub relation: `IMPLEMENTS`
+  for delivered behavior or `FIXES` for closing/fixing semantics. Bare issue
+  references are `RELATES_TO`; release assembly PRs use `RELEASES` to mean the
+  release contains the implementation. Never use a generic link attachment.
 - GitHub owns PR state, reviews, checks, mergeability, and merge state. Forge
   mirrors those facts into the delivery lifecycle.
+- One issue/resource pair has one native relation. Re-linking reclassifies the
+  relation instead of duplicating status cards.
 - Resolve file overlap in the PR. Do not move uncommitted patches between
   worktrees or share one worktree between tasks.
 - If dispatch discovers an existing primary connection, block a second execute

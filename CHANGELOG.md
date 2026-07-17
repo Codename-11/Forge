@@ -9,6 +9,18 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-16] — v0.27.1 · Truthful delivery evidence
+
+### Changed
+
+- **Delivery identity separates the agent from its operator.** Compact and expanded cards distinguish execution identity, invocation, connector, runtime, and human ownership while explaining connection confidence on hover or keyboard focus.
+- **Issue evidence and activity stay compact without hiding history.** Delivery and GitHub disclosures share a clear interaction pattern, repeated adjacent activity is grouped, and operators can expand capped history on demand.
+
+### Fixed
+
+- **GitHub and completion state remain internally consistent.** Native implementation, closing, related, and release-containment relations render distinctly; merged pull requests no longer retain pending or unknown merge metadata.
+- **Compact GitHub references link as one unit.** Shared Markdown surfaces recognize `owner/repository#number` before Forge issue keys instead of splitting hyphenated owners at the slash.
+
 ## [2026-07-16] — v0.27.0 · Personal work and canonical delivery
 
 ### Added

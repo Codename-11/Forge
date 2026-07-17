@@ -135,7 +135,7 @@ model ExternalResourceLink {
   workspaceId        String
   issueId            String
   externalResourceId String
-  kind               String   // SOURCE | IMPLEMENTS | REVIEWS | RELATES_TO
+  kind               String   // SOURCE | IMPLEMENTS | FIXES | RELEASES | REVIEWS | RELATES_TO
   createdById        String?
   createdAt          DateTime @default(now())
 
@@ -154,6 +154,9 @@ Link semantics:
 
 - `SOURCE` - Forge issue was created from this GitHub issue.
 - `IMPLEMENTS` - PR is intended to resolve or implement the Forge issue.
+- `FIXES` - PR uses explicit fix/close/resolve semantics for the Forge issue.
+- `RELEASES` - release assembly PR contains an already-separate implementation.
+- `RELATES_TO` - contextual reference without implementation semantics.
 - `REVIEWS` - PR/review context requires attention for the Forge issue.
 - `RELATES_TO` - soft context link.
 
@@ -354,14 +357,14 @@ subscription category.
 
 Expose the same core operator/agent actions through `github.*` MCP tools:
 
-| Tool | Scope | Notes |
-| --- | --- | --- |
-| `github.parseUrl` | `READ_ISSUES` | Normalize a GitHub URL into repo/type/number. |
-| `github.listLinked` | `READ_ISSUES` | Return linked resources for a Forge issue. |
-| `github.link` | `WRITE_ISSUES` | Link issue/PR URL to a Forge issue with a relation kind. |
+| Tool                 | Scope          | Notes                                                         |
+| -------------------- | -------------- | ------------------------------------------------------------- |
+| `github.parseUrl`    | `READ_ISSUES`  | Normalize a GitHub URL into repo/type/number.                 |
+| `github.listLinked`  | `READ_ISSUES`  | Return linked resources for a Forge issue.                    |
+| `github.link`        | `WRITE_ISSUES` | Link issue/PR URL to a Forge issue with a relation kind.      |
 | `github.importIssue` | `WRITE_ISSUES` | Create or return the Forge issue sourced from a GitHub issue. |
-| `github.sync` | `WRITE_ISSUES` | Refresh one linked resource and apply mapping policy. |
-| `github.search` | `READ_ISSUES` | Search mapped repo issues/PRs for linking/import. |
+| `github.sync`        | `WRITE_ISSUES` | Refresh one linked resource and apply mapping policy.         |
+| `github.search`      | `READ_ISSUES`  | Search mapped repo issues/PRs for linking/import.             |
 
 Add linked GitHub resources to `agent.context.bundle({ issueId })`:
 

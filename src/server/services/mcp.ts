@@ -4843,6 +4843,7 @@ export const mcpTools = {
           issueId: input.targetId,
           url: input.url,
           kind: "RELATES_TO",
+          preserveExistingRelation: true,
           actor: {
             actorId,
             actorAgentId: ctx.apiKey?.linkedAgentId ?? null,
@@ -8399,7 +8400,7 @@ export const mcpTools = {
       return claimWorkSession(db, {
         workspaceId: ctx.workspaceId,
         ...input,
-        source: WorkSessionSource.FORGE_AGENT,
+        source: WorkSessionSource.MCP,
         actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
       });
     },

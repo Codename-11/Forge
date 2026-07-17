@@ -952,7 +952,7 @@ function CompletionEvidenceSummary({
                 <div
                   className={
                     item.tone === "SUCCESS"
-                      ? "text-ember"
+                      ? "text-success"
                       : item.tone === "WARNING"
                         ? "text-warning"
                         : "text-foreground/80"
@@ -989,7 +989,7 @@ function CompletionStateBadge({ state }: { state: CompletionAssessmentPayload["s
             : "Unavailable";
   const className =
     state === "READY"
-      ? "border-ember/30 bg-ember/10 text-ember"
+      ? "border-success/30 bg-success/10 text-success"
       : state === "VERIFYING"
         ? "border-warning/30 bg-warning/10 text-warning"
         : state === "BLOCKED"
@@ -1017,7 +1017,7 @@ function CompletionFactBadge({ status }: { status: CompletionFactStatus }) {
             : "Unavailable";
   const className =
     status === "PASS"
-      ? "border-ember/30 bg-ember/10 text-ember"
+      ? "border-success/30 bg-success/10 text-success"
       : status === "FAIL"
         ? "border-danger/30 bg-danger/10 text-danger"
         : status === "VERIFYING"
