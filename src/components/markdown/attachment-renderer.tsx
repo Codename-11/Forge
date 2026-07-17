@@ -206,7 +206,8 @@ function tokenizeInline(text: string): InlineSegment[] {
     if (lo < t.length) passD.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass E: issue refs + agent mentions.
+  // Pass E: bare URLs. Consume complete URLs before issue references so a
+  // path segment such as `/issues/AXI-123` remains one clickable URL.
   const passE: InlineSegment[] = [];
   for (const seg of passD) {
     if (seg.type !== "text") {
@@ -215,18 +216,17 @@ function tokenizeInline(text: string): InlineSegment[] {
     }
     const t = seg.value;
     let lo = 0;
-    REF_RE.lastIndex = 0;
-    for (const m of t.matchAll(REF_RE)) {
+    URL_RE.lastIndex = 0;
+    for (const m of t.matchAll(URL_RE)) {
       const idx = m.index ?? 0;
       if (idx > lo) passE.push({ type: "text", value: t.slice(lo, idx) });
-      if (m[1]) passE.push({ type: "issueRef", key: m[1].toUpperCase() });
-      else if (m[2]) passE.push({ type: "mention", profileKey: m[2].toLowerCase() });
+      passE.push({ type: "url", url: m[0] });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passE.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass F: bare URLs on what's left.
+  // Pass F: issue refs + agent mentions on what's left.
   const passF: InlineSegment[] = [];
   for (const seg of passE) {
     if (seg.type !== "text") {
@@ -235,11 +235,12 @@ function tokenizeInline(text: string): InlineSegment[] {
     }
     const t = seg.value;
     let lo = 0;
-    URL_RE.lastIndex = 0;
-    for (const m of t.matchAll(URL_RE)) {
+    REF_RE.lastIndex = 0;
+    for (const m of t.matchAll(REF_RE)) {
       const idx = m.index ?? 0;
       if (idx > lo) passF.push({ type: "text", value: t.slice(lo, idx) });
-      passF.push({ type: "url", url: m[0] });
+      if (m[1]) passF.push({ type: "issueRef", key: m[1].toUpperCase() });
+      else if (m[2]) passF.push({ type: "mention", profileKey: m[2].toLowerCase() });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passF.push({ type: "text", value: t.slice(lo) });

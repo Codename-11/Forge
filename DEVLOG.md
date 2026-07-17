@@ -25,7 +25,9 @@ across the full clause. Duplicate-resource canonicalization also preserves
 `SOURCE`, while imported source PRs retain their mapped status synchronization.
 Both service canonicalization and migration-time release reclassification
 dismiss stale completion requests when they remove the last implementation
-relation. Terminal PR synchronization clears
+relation, with migration cleanup ordered after legacy relation dedupe. Bare URLs
+are consumed before issue-reference tokens so paths containing `AXI-123` remain
+fully clickable. Terminal PR synchronization clears
 stale mergeability and suppresses pending-check contradictions, while merged
 implementation evidence continues reconciliation until its final checks
 aggregate is trusted and still participates in completion readiness. Passing
