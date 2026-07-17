@@ -13994,3 +13994,11 @@ Windows shim forms, tunneled credential/schema rejection, and deterministic
 relative-time derivation. Two consecutive scale-2 runs converged to 6
 invitations while preserving 1/10/180/30-minute run ages and a 30-day pending
 invite expiry.
+
+The single material exact-head re-review found one remaining preview mismatch:
+the generic dry-run shortcut described the default start flow for app-only,
+services-only, reset, and scenario commands. Dry-run routing is now mode-aware:
+app-only rejects unavailable services, services-only stops after its health
+plan, reset displays its exact destructive target and reseed plan, and scenario
+validates and prints the selected deterministic fixture counts. Focused command
+decision coverage and executable dry runs verify all four paths.

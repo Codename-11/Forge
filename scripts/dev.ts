@@ -13,6 +13,7 @@ import {
 import {
   LOCAL_DEV,
   assertSafeLocalEnvironment,
+  decideDevDryRun,
   decidePrismaActions,
   parseWindowsPnpmEntry,
   parseDevOptions,
@@ -21,6 +22,7 @@ import {
   type DevOptions,
   type ServiceState,
 } from "./lib/dev-workflow";
+import { buildScenarioPlan, parseScenarioNames } from "./scenarios/plan";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const composeFile = resolve(root, "docker", "docker-compose.yml");
@@ -342,13 +344,32 @@ function dryRunLocal() {
     redis: inspectService("redis"),
     minio: inspectService("minio"),
   };
-  const needed = servicesToStart(states);
+  const decision = decideDevDryRun(options, states);
+  if (decision.unavailableServices.length > 0) {
+    throw new Error(
+      `Local services are not ready (${decision.unavailableServices.join(", ")}); run pnpm dev:services before pnpm dev:app`,
+    );
+  }
   console.log(
-    needed.length > 0
-      ? `[dev] DRY RUN — would start local services: ${needed.join(", ")}`
+    decision.startServices.length > 0
+      ? `[dev] DRY RUN — would start local services: ${decision.startServices.join(", ")}`
       : "[dev] DRY RUN — all local services are already running.",
   );
-  if (states.postgres.healthy) {
+  if (options.mode === "services") {
+    printEndpoints();
+    console.log(
+      "[dev:services] DRY RUN — would wait for local service health, then stop without changing schema, data, or launching Next.",
+    );
+    return;
+  }
+  if (decision.resetDatabase) {
+    console.log(
+      `[dev:reset] DRY RUN — destructive target: ${formatLocalTarget(validateLocalTarget(LOCAL_DATABASE_URL))}`,
+    );
+    console.log(
+      "[dev:reset] DRY RUN — would require 'reset local forge', recreate LOCAL public schema, apply migrations, and seed the stable base fixture.",
+    );
+  } else if (decision.reconcileSchema && states.postgres.healthy) {
     const status = spawnSync(
       pnpm.command,
       [...pnpm.prefix, "exec", "prisma", "migrate", "status"],
@@ -368,11 +389,21 @@ function dryRunLocal() {
       console.log(
         `[dev] DRY RUN — base seed: ${shouldSeedBase(workspaceCount()) ? "needed" : "skip"}.`,
       );
-  } else {
+  } else if (decision.reconcileSchema) {
     console.log("[dev] DRY RUN — schema and seed decisions require healthy local Postgres.");
   }
+  if (decision.seedScenario) {
+    const plan = buildScenarioPlan(parseScenarioNames(options.scenario), options.scale);
+    for (const item of plan) {
+      console.log(
+        `[dev:scenario] DRY RUN — ${item.name} scale=${item.scale}: ${item.issueCount} issues, ${item.eventCount} events (${item.description}).`,
+      );
+    }
+    console.log("[dev:scenario] DRY RUN — would idempotently replace only the selected scenarios.");
+  }
   printEndpoints();
-  console.log("[dev] DRY RUN — would launch host-native next dev --turbo. Nothing was changed.");
+  if (decision.launchApp)
+    console.log("[dev] DRY RUN — would launch host-native next dev --turbo. Nothing was changed.");
 }
 
 function launchApp() {

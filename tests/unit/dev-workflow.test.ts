@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   LOCAL_DEV,
   assertSafeLocalEnvironment,
+  decideDevDryRun,
   decidePrismaActions,
   parseWindowsPnpmEntry,
   parseDevOptions,
@@ -52,6 +53,37 @@ describe("safe local dev command decisions", () => {
         minio: { exists: false, running: false, healthy: false },
       }),
     ).toEqual(["redis", "minio"]);
+  });
+
+  it("keeps dry-run decisions aligned with each command mode", () => {
+    const ready = {
+      postgres: { exists: true, running: true, healthy: true },
+      redis: { exists: true, running: true, healthy: true },
+      minio: { exists: true, running: true, healthy: true },
+    };
+    const missingRedis = {
+      ...ready,
+      redis: { exists: false, running: false, healthy: false },
+    };
+    expect(decideDevDryRun(parseDevOptions(["services", "--dry-run"]), missingRedis)).toMatchObject({
+      startServices: ["redis"],
+      reconcileSchema: false,
+      launchApp: false,
+    });
+    expect(decideDevDryRun(parseDevOptions(["app", "--dry-run"]), missingRedis)).toMatchObject({
+      startServices: [],
+      unavailableServices: ["redis"],
+      reconcileSchema: false,
+      launchApp: true,
+    });
+    expect(decideDevDryRun(parseDevOptions(["reset", "--dry-run"]), ready)).toMatchObject({
+      resetDatabase: true,
+      reconcileSchema: true,
+      launchApp: true,
+    });
+    expect(
+      decideDevDryRun(parseDevOptions(["scenario", "tenancy", "--dry-run"]), ready),
+    ).toMatchObject({ seedScenario: true, reconcileSchema: true, launchApp: true });
   });
 
   it("resolves pnpm and Corepack JavaScript entries from Windows shims", () => {

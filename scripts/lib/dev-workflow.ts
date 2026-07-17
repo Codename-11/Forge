@@ -78,6 +78,33 @@ export function servicesToStart(
   );
 }
 
+export type DevDryRunDecision = {
+  startServices: string[];
+  unavailableServices: string[];
+  reconcileSchema: boolean;
+  resetDatabase: boolean;
+  seedScenario: boolean;
+  launchApp: boolean;
+};
+
+export function decideDevDryRun(
+  options: DevOptions,
+  states: Record<keyof typeof LOCAL_DEV.containers, ServiceState>,
+): DevDryRunDecision {
+  const unavailableServices = (Object.keys(states) as Array<keyof typeof states>).filter(
+    (service) => !states[service].running || !states[service].healthy,
+  );
+  const startServices = options.mode === "app" ? [] : servicesToStart(states);
+  return {
+    startServices,
+    unavailableServices: options.mode === "app" ? unavailableServices : [],
+    reconcileSchema: options.mode !== "app" && options.mode !== "services",
+    resetDatabase: options.fresh,
+    seedScenario: options.mode === "scenario",
+    launchApp: options.mode !== "services",
+  };
+}
+
 export function decidePrismaActions(input: {
   migrationsCurrent: boolean;
   clientCurrent: boolean;
