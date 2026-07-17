@@ -160,27 +160,21 @@ cp .env.example .env            # fill in values (S3 vars are pre-filled for the
 pnpm install
 ```
 
-Then pick a development mode:
+Then start the safe workstation loop:
 
 ```bash
-# A. Isolated local stack (recommended for UI iteration) — boots
-#    docker/docker-compose.yml (Postgres :55432 / Redis :56379 / MinIO
-#    :59000), migrates, seeds rich demo data, then runs HMR dev. One
-#    command, no manual bootstrap. Sign in: owner@forge.local / forge-dev.
-pnpm dev:local                  # http://localhost:3000
-pnpm dev:local --fresh          # wipe + reseed the local DB first
-pnpm dev:local --no-seed        # skip seeding (e.g. after db:clone-prod)
+pnpm dev                         # verify local services/schema/seed, then Turbo HMR
+pnpm dev -- --fresh              # confirmed local reset, reseed, then start
+pnpm dev:services                # local Postgres/Redis/MinIO only
+pnpm dev:app                     # fast app-only start when services are healthy
+pnpm dev:scenario -- delivery-github --scale 2
+pnpm dev:refresh -- --dry-run    # preview read-only prod → confirmed local refresh
 
-# B. Live data — HMR dev server pointed at the *deployed* Postgres / Redis
-#    / MinIO. Instant frontend iteration against real data; edits are real.
-pnpm dev                        # http://localhost:3000
-
-# Optional: clone the deployed DB into the local stack for a safe sandbox
-# with real data (full Postgres-level copy; attachment bytes excluded).
-pnpm db:clone-prod && pnpm dev:local --no-seed
+# Exceptional live-data inspection; real writes, workers disabled by default.
+pnpm dev:live:unsafe
 ```
 
-Manual DB bootstrap (only needed if you're not using `dev:local`):
+Manual DB bootstrap (normally unnecessary because `pnpm dev` is intelligent):
 
 ```bash
 cd docker && docker compose up -d   # Postgres + Redis + MinIO

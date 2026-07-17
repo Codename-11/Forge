@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pnpm dev:all — run the live-data Next dev server (port 3000) and the
+# pnpm dev:all — run the safe local Next dev server (port 3000) and the
 # VitePress docs server (port 5181) side by side. Logs interleave with
 # [app] / [docs] prefixes; ctrl-c kills both cleanly.
 
@@ -17,7 +17,7 @@ echo "[dev:all] app  → http://localhost:3000"
 echo "[dev:all] docs → http://localhost:5181/docs/"
 echo
 
-./scripts/dev-live.sh 2>&1 | sed -u 's/^/[app]  /' &
+pnpm dev 2>&1 | sed -u 's/^/[app]  /' &
 APP_PID=$!
 
 pnpm --dir docs --ignore-workspace dev 2>&1 | sed -u 's/^/[docs] /' &

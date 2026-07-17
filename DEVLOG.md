@@ -13944,3 +13944,28 @@ its first Quick Create click could arrive before the lazy surface subscribed.
 The trigger now records that request in a tiny client-side request seam and the
 lazy surface consumes it on subscription. A clean production rebuild followed
 by the full mobile smoke suite and the AXI-125 load/realtime test passed 8/8.
+
+## 2026-07-17 — Safe local development and scenario fixtures (AXI-124)
+
+Made `pnpm dev` the deterministic workstation default. A cross-platform
+TypeScript orchestrator now loads `.env.local`, rejects non-local database,
+Redis, S3, and container targets, starts only missing local Postgres/Redis/MinIO
+services, waits for health, applies only needed local Prisma migration/client
+work, seeds only an empty database, and launches host-native Turbo HMR while
+preserving containers, volumes, and build cache. Added app-only, services,
+confirmed reset/fresh, scenario, and dry-run commands. Live-data inspection is
+now explicitly named unsafe and keeps local workers disabled by default.
+
+Replaced the production-clone shortcut with a confirmed `dev:refresh` stream:
+remote `pg_dump` reads production through SSH and writes directly to the fixed
+local Postgres target without copying a dump or production secret to the
+workstation. Added deterministic, idempotent, composable named scenarios for
+Delivery/GitHub provenance, lifecycle freshness, activity grouping/overflow,
+tenancy, invitations/concurrency, and large-workspace performance with bounded
+scale controls and stable CUID-compatible fixture identities. The simple base
+seed and `owner@forge.local / forge-dev` login remain unchanged.
+
+Verification covered decision/guard/planning unit tests, repeated real scenario
+application against local Postgres, PowerShell and Git Bash dry runs, local
+service health, lint, typecheck, a production Next E2E build, and a focused
+Playwright journey through large-workspace and Delivery/GitHub scenario UI.

@@ -5,10 +5,10 @@ The env vars Forge reads at boot. Grouped by purpose. Anything marked
 
 ## Database & Redis
 
-| Var            | Required | Notes                                              |
-|----------------|----------|----------------------------------------------------|
-| `DATABASE_URL` | Yes      | Postgres connection string.                        |
-| `REDIS_URL`    | Yes      | Redis URL for pub/sub, rate limit, and BullMQ.     |
+| Var            | Required | Notes                                          |
+| -------------- | -------- | ---------------------------------------------- |
+| `DATABASE_URL` | Yes      | Postgres connection string.                    |
+| `REDIS_URL`    | Yes      | Redis URL for pub/sub, rate limit, and BullMQ. |
 
 ```bash
 DATABASE_URL="postgresql://forge:forge@db:5432/forge?schema=public"
@@ -24,14 +24,14 @@ transaction mode, append `?pgbouncer=true&connection_limit=1` to
 
 ## Auth (NextAuth v5)
 
-| Var               | Required | Notes                                              |
-|-------------------|----------|----------------------------------------------------|
-| `AUTH_URL`        | Yes      | Public app URL (e.g. `https://forge.example`).     |
-| `AUTH_SECRET`     | Yes      | JWT secret. Generate with `openssl rand -base64 32`. Also keys the AES-256-GCM encryption of stored SSO client secrets. |
-| `AUTH_TRUST_HOST` | No       | Set to `true` if proxied behind a load balancer.   |
-| `ADMIN_EMAIL`     | Yes      | Bootstrap admin login **and** the instance admin who manages SSO providers (Settings → Authentication). |
-| `ADMIN_PASSWORD`  | Yes      | Password for the `ADMIN_EMAIL` credential login.   |
-| `ADMIN_NAME` / `ADMIN_HANDLE` | No | Display name / handle for the bootstrap admin. |
+| Var                           | Required | Notes                                                                                                                   |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `AUTH_URL`                    | Yes      | Public app URL (e.g. `https://forge.example`).                                                                          |
+| `AUTH_SECRET`                 | Yes      | JWT secret. Generate with `openssl rand -base64 32`. Also keys the AES-256-GCM encryption of stored SSO client secrets. |
+| `AUTH_TRUST_HOST`             | No       | Set to `true` if proxied behind a load balancer.                                                                        |
+| `ADMIN_EMAIL`                 | Yes      | Bootstrap admin login **and** the instance admin who manages SSO providers (Settings → Authentication).                 |
+| `ADMIN_PASSWORD`              | Yes      | Password for the `ADMIN_EMAIL` credential login.                                                                        |
+| `ADMIN_NAME` / `ADMIN_HANDLE` | No       | Display name / handle for the bootstrap admin.                                                                          |
 
 ```bash
 AUTH_URL="https://forge.example"
@@ -50,12 +50,12 @@ provider row of that type exists yet, a row is seeded from them on first
 boot, then managed in the UI. Leave them blank to manage everything from
 the UI.
 
-| Var                  | Required | Notes                          |
-|----------------------|----------|--------------------------------|
-| `AUTH_GITHUB_ID`     | No       | Seeds a GitHub provider row.   |
-| `AUTH_GITHUB_SECRET` | No       | "                              |
-| `AUTH_GOOGLE_ID`     | No       | Seeds a Google provider row.   |
-| `AUTH_GOOGLE_SECRET` | No       | "                              |
+| Var                  | Required | Notes                        |
+| -------------------- | -------- | ---------------------------- |
+| `AUTH_GITHUB_ID`     | No       | Seeds a GitHub provider row. |
+| `AUTH_GITHUB_SECRET` | No       | "                            |
+| `AUTH_GOOGLE_ID`     | No       | Seeds a Google provider row. |
+| `AUTH_GOOGLE_SECRET` | No       | "                            |
 
 ::: warning
 Rotating `AUTH_SECRET` invalidates all active sessions (users are signed out
@@ -75,12 +75,12 @@ installations that have not moved to workspace-managed Apps. They are no longer
 required when the matching installed Workspace GitHub App has realtime sync
 enabled.
 
-| Var                         | Required | Notes |
-|-----------------------------|----------|-------|
-| `GITHUB_APP_ID`             | No       | Legacy instance App id used for JWT signing. |
-| `GITHUB_APP_SLUG`           | No       | Legacy App slug for `/api/connections/github/install` redirects. |
+| Var                         | Required | Notes                                                               |
+| --------------------------- | -------- | ------------------------------------------------------------------- |
+| `GITHUB_APP_ID`             | No       | Legacy instance App id used for JWT signing.                        |
+| `GITHUB_APP_SLUG`           | No       | Legacy App slug for `/api/connections/github/install` redirects.    |
 | `GITHUB_APP_PRIVATE_KEY`    | No       | Legacy PEM private key. Newlines may be literal or escaped as `\n`. |
-| `GITHUB_APP_WEBHOOK_SECRET` | No       | Legacy HMAC fallback used to verify `/api/ingest/github`. |
+| `GITHUB_APP_WEBHOOK_SECRET` | No       | Legacy HMAC fallback used to verify `/api/ingest/github`.           |
 
 ```bash
 GITHUB_APP_ID="123456"
@@ -127,14 +127,14 @@ docker bridge while the browser hits a public hostname for presigned URLs —
 this is the difference between "`PUT` works server-side" and "`PUT` works
 from the browser".
 
-| Var                    | Required | Notes                                              |
-|------------------------|----------|----------------------------------------------------|
-| `S3_ENDPOINT`          | Yes      | Internal endpoint (e.g. docker bridge IP).         |
-| `S3_PUBLIC_ENDPOINT`   | Yes      | Public hostname presigned URLs are signed against. |
-| `S3_REGION`            | Yes      | Usually `us-east-1`.                               |
-| `S3_ACCESS_KEY`        | Yes      | Credentials.                                       |
-| `S3_SECRET_KEY`        | Yes      | Credentials.                                       |
-| `S3_FORCE_PATH_STYLE`  | No       | `true` for MinIO; `false` for AWS S3.              |
+| Var                   | Required | Notes                                              |
+| --------------------- | -------- | -------------------------------------------------- |
+| `S3_ENDPOINT`         | Yes      | Internal endpoint (e.g. docker bridge IP).         |
+| `S3_PUBLIC_ENDPOINT`  | Yes      | Public hostname presigned URLs are signed against. |
+| `S3_REGION`           | Yes      | Usually `us-east-1`.                               |
+| `S3_ACCESS_KEY`       | Yes      | Credentials.                                       |
+| `S3_SECRET_KEY`       | Yes      | Credentials.                                       |
+| `S3_FORCE_PATH_STYLE` | No       | `true` for MinIO; `false` for AWS S3.              |
 
 ```bash
 S3_ENDPOINT="http://minio:9000"
@@ -152,31 +152,31 @@ matching the chosen `aiProvider`.
 
 ### `aiProvider = hermes`
 
-| Var                    | Notes                                                       |
-|------------------------|-------------------------------------------------------------|
-| `HERMES_GATEWAY_URL`   | Hermes gateway base URL.                                    |
-| `HERMES_GATEWAY_TOKEN` | Bearer token for the gateway.                               |
+| Var                           | Notes                                                                                                                                                            |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `HERMES_GATEWAY_URL`          | Hermes gateway base URL.                                                                                                                                         |
+| `HERMES_GATEWAY_TOKEN`        | Bearer token for the gateway.                                                                                                                                    |
 | `HERMES_GATEWAY_ALLOW_UNAUTH` | Set to `1` only for an intentionally unauthenticated local gateway; otherwise Forge requires a token or runtime secret before showing Hermes Runs as chat-ready. |
 
 ### `aiProvider = openai`
 
-| Var               | Notes                                                            |
-|-------------------|------------------------------------------------------------------|
-| `OPENAI_API_KEY`  | OpenAI API key.                                                  |
-| `OPENAI_BASE_URL` | Optional override (Azure, OpenAI-compatible gateways).           |
+| Var               | Notes                                                  |
+| ----------------- | ------------------------------------------------------ |
+| `OPENAI_API_KEY`  | OpenAI API key.                                        |
+| `OPENAI_BASE_URL` | Optional override (Azure, OpenAI-compatible gateways). |
 
 ### `aiProvider = anthropic`
 
-| Var                 | Notes                                                          |
-|---------------------|----------------------------------------------------------------|
-| `ANTHROPIC_API_KEY` | Anthropic API key.                                             |
+| Var                 | Notes              |
+| ------------------- | ------------------ |
+| `ANTHROPIC_API_KEY` | Anthropic API key. |
 
 ### `aiProvider = custom`
 
-| Var                | Notes                                                           |
-|--------------------|-----------------------------------------------------------------|
-| `FORGE_AI_BASE_URL`| OpenAI-compatible endpoint base URL.                            |
-| `FORGE_AI_API_KEY` | Bearer token.                                                   |
+| Var                 | Notes                                |
+| ------------------- | ------------------------------------ |
+| `FORGE_AI_BASE_URL` | OpenAI-compatible endpoint base URL. |
+| `FORGE_AI_API_KEY`  | Bearer token.                        |
 
 ::: info
 The provider is chosen per workspace via `Workspace.aiProvider`. The env vars
@@ -187,9 +187,9 @@ be set.
 
 ## Plugin runtime
 
-| Var                  | Required | Notes                                                  |
-|----------------------|----------|--------------------------------------------------------|
-| `PLUGIN_JWT_SECRET`  | Yes      | HS256 secret for delegated plugin calls (`runtime: "plugin"`). |
+| Var                 | Required | Notes                                                          |
+| ------------------- | -------- | -------------------------------------------------------------- |
+| `PLUGIN_JWT_SECRET` | Yes      | HS256 secret for delegated plugin calls (`runtime: "plugin"`). |
 
 ```bash
 PLUGIN_JWT_SECRET="..."
@@ -202,24 +202,25 @@ already-completed calls.
 
 ## Dev-only conveniences
 
-| Var             | Notes                                                                     |
-|-----------------|---------------------------------------------------------------------------|
-| `PROD_ENV_FILE` | Path used by `pnpm dev` / `pnpm dev:live` to source env from a deployed env file. |
-| `DEV_HOST`      | Pass to `pnpm dev:host` to expose the dev server on the LAN.              |
-| `AUTH_URL_DEV`  | Overrides `AUTH_URL` in dev (so dev auth callbacks don't fight prod).     |
+| Var                       | Notes                                                                 |
+| ------------------------- | --------------------------------------------------------------------- |
+| `AUTH_URL_DEV`            | Local auth/app origin (default `http://localhost:3000`).              |
+| `FORGE_PROD_SSH_HOST`     | Remote SSH host used only by `pnpm dev:refresh`.                      |
+| `FORGE_PROD_ENV_FILE`     | Env path read only by the remote refresh shell; never copied locally. |
+| `FORGE_PROD_DB_CONTAINER` | Remote Postgres container read by `pg_dump` during refresh.           |
 
 ```bash
-# .env.local
-PROD_ENV_FILE="/home/bailey/docker/forge/.env"
-DEV_HOST="0.0.0.0"
 AUTH_URL_DEV="http://localhost:3000"
+FORGE_PROD_SSH_HOST="docker-server.local"
+FORGE_PROD_ENV_FILE="/home/bailey/docker/forge/.env"
 ```
 
 ::: tip
-`pnpm dev` reads env from the deployed compose env file referenced by
-`PROD_ENV_FILE` so local dev uses the same Postgres, Redis, and MinIO data as
-the live app. Use `pnpm dev:isolated` when you explicitly want the local
-`docker/docker-compose.yml` services.
+`pnpm dev` loads the gitignored `.env.local`, then hard-validates the database,
+Redis, S3, and container targets against the fixed local docker contract. A
+production-like override is rejected rather than silently used. Production
+env is consulted only by the remote shell during an explicit, confirmed
+`pnpm dev:refresh`.
 :::
 
 ## Boot order

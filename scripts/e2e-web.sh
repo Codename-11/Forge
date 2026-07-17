@@ -89,6 +89,9 @@ echo "[e2e] Applying migrations + seeding (idempotent)…"
 pnpm exec prisma migrate deploy >/dev/null
 pnpm exec prisma generate >/dev/null
 pnpm exec tsx prisma/seed.ts
+if [[ "${FORGE_SCENARIOS:-0}" == "1" ]]; then
+  pnpm exec tsx scripts/seed-scenarios.ts --scenarios "${FORGE_SCENARIO_NAMES:-all}" --scale "${FORGE_SCENARIO_SCALE:-1}"
+fi
 
 # Production build → `next start` (NOT `next dev`): no on-demand compilation, so
 # the server doesn't stall under parallel workers — the source of E2E flakiness.

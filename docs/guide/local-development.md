@@ -3,68 +3,30 @@
 How to run Forge on your machine for fast UI iteration, how to get data
 into your local database, and how to move a workspace between instances.
 
-## Two dev modes
+## Safe workstation commands
 
-Forge ships two `next dev` entry points. Both give you Hot Module
-Reload — the difference is _which database they talk to_.
+`pnpm dev` is deterministic and local-only. It loads the gitignored
+`.env.local`, rejects production-like database/S3/Redis/container overrides,
+starts only missing local services, waits for all three health checks, applies
+only needed local Prisma migration/client work, seeds only an empty verified
+local database, and immediately launches host-native `next dev --turbo`.
+Containers, volumes, and `.next` Turbopack cache survive restarts.
 
-| Command               | Database / services                      | Use it for                                                                                       |
-| --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `pnpm dev:local`      | **Isolated** local docker stack          | Rapid UI work in a safe sandbox. Auto-boots Postgres/Redis/MinIO, migrates, and seeds demo data. |
-| `pnpm dev`            | **Deployed** (live) data                 | Iterating against real production data. Edits are real.                                          |
-| `pnpm dev:live:ui`    | **Deployed** data, prod worker           | Fast UI/API reproduction against live rows without running a second local worker.                |
-| `pnpm dev:live:stack` | **Deployed** data + watched local worker | Short-lived worker/runtime debugging against live rows and live runtimes.                        |
-| `pnpm dev:live:lan`   | **Deployed** data + watched local worker | Same as `dev:live:stack`, but binds on LAN and uses the LAN URL for auth redirects.              |
+| Command                                   | Behavior                                                                            |
+| ----------------------------------------- | ----------------------------------------------------------------------------------- |
+| `pnpm dev`                                | Intelligent local services/schema/seed check, then Turbo HMR.                       |
+| `pnpm dev -- --fresh`                     | Confirmed local schema reset, migrate, base seed, start.                            |
+| `pnpm dev:reset`                          | Same confirmed reset workflow.                                                      |
+| `pnpm dev:services`                       | Verify/start local Postgres, Redis, and MinIO; do not start Next.                   |
+| `pnpm dev:app`                            | Verify services are already healthy, then start Next without migration/seed checks. |
+| `pnpm dev:scenario -- <name> [--scale N]` | Compose named fixtures on the base seed, then start Next.                           |
+| `pnpm dev:refresh [-- --dry-run]`         | Confirmed read-only production snapshot streamed into local Postgres.               |
 
-`pnpm dev` is an alias for the live-data server (`scripts/dev-live.sh`),
-which resolves the deployed container IPs at boot and points `next dev` at
-them. It's the fastest way to reproduce something against real data, but
-**every write hits production** — use it deliberately.
+Every command prints what it started, skipped, migrated, generated, seeded,
+or replaced plus the selected local database and endpoints. The TypeScript
+orchestrator works when invoked from Windows PowerShell or Git Bash.
 
-For most live-data UI work, prefer:
-
-```bash
-pnpm dev:live:ui
-```
-
-That starts `next dev` with in-process background workers disabled. The
-deployed worker remains authoritative, so you can inspect and patch UI/API
-behavior without racing the production worker.
-
-When you need to iterate worker-driven logic such as runtime dispatch,
-stale-run recovery, webhook fan-out, or Hermes/Codex run ingestion, use:
-
-```bash
-pnpm dev:live:stack
-```
-
-It runs the app with workers disabled and a separate `tsx watch`
-`src/server/worker.ts` process against the same live Postgres/Redis/MinIO.
-Keep this mode short-lived: it intentionally runs a local worker against
-live queues and data so code changes can be validated before a Docker build.
-
-For device or in-app-browser testing without a localhost port forward, use:
-
-```bash
-PORT=3002 pnpm dev:live:lan
-```
-
-That binds Next to `0.0.0.0`, detects the primary LAN IP, and sets
-`AUTH_URL` / `NEXT_PUBLIC_APP_URL` to the LAN origin so sign-in callbacks,
-cookies, and app redirects stay on the same host.
-
-`pnpm dev:local` (`scripts/dev-local.sh`) is the isolated loop:
-
-```bash
-pnpm dev:local            # boot stack → migrate → seed-if-empty → HMR dev
-pnpm dev:local --fresh    # drop & recreate the schema first, then reseed
-pnpm dev:local --no-seed  # skip seeding (e.g. right after db:clone-prod)
-```
-
-It brings up `docker/docker-compose.yml` (Postgres on `:55432`, Redis on
-`:56379`, MinIO on `:59000` / console `:59001`), applies migrations,
-seeds rich demo fixtures into an empty database, and starts the dev
-server at `http://localhost:3000`.
+Sign in with the stable bootstrap credentials it prints:
 
 Sign in with the bootstrap credentials it prints:
 
@@ -75,14 +37,29 @@ owner@forge.local / forge-dev
 (Override via `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars before running.)
 
 ::: tip
-The seed (`prisma/seed.ts`) is idempotent. Re-running `pnpm dev:local`
-on a populated database **skips** seeding so you don't get duplicates;
-use `--fresh` when you actually want a clean slate.
+The base seed (`prisma/seed.ts`) is deliberately simple and idempotent.
+Re-running `pnpm dev` on a populated database skips it; use `--fresh`
+when you want a clean base. Named scenarios are a separate, composable layer.
 :::
+
+### Exceptional live-data inspection
+
+Normal workstation commands never target deployed services. If a production
+row must be inspected with local UI code, the deliberately alarming command is:
+
+```bash
+pnpm dev:live:unsafe
+```
+
+It prints a production-write warning and disables in-process workers by
+default, leaving the deployed worker authoritative. The even higher-risk
+`pnpm dev:live:workers:unsafe` and `dev:live:stack:unsafe` commands are reserved
+for short, explicitly authorized worker investigations. They are not part of
+the normal local loop.
 
 ## What the seed gives you
 
-`pnpm prisma:seed` (run automatically by `dev:local` on an empty DB)
+`pnpm prisma:seed` (run automatically by `pnpm dev` on an empty DB)
 creates a realistic workspace so the UI isn't empty:
 
 - Workspace **Forge** (`FRG`) with time-tracking and capability-match
@@ -91,6 +68,31 @@ creates a realistic workspace so the UI isn't empty:
 - Two sprints (one active, one planned) and two agents (`victor`, `mizu`).
 - ~24 issues spread across statuses, priorities, projects, and sprints,
   with assignees, labels, relations, and a few comment threads.
+
+## Composable scenario fixtures
+
+Build focused local states on top of the base demo without adding permanent
+complexity to `prisma/seed.ts`:
+
+```bash
+pnpm seed:scenarios -- --list
+pnpm seed:scenarios -- --scenarios delivery-github,status-freshness
+pnpm seed:scenarios -- --scenarios activity-overflow,large-workspace --scale 4
+pnpm seed:scenarios -- --scenarios all --scale 2 --dry-run
+```
+
+The named scenarios cover Delivery/GitHub provenance, fresh/quiet/stale/waiting
+statuses, activity grouping and overflow, cross-tenant isolation, member-invite
+and agent-concurrency states, and large-workspace performance. Names compose in
+any order. IDs, timestamps, issue numbers, and generated content are stable;
+each selected scenario replaces only its own stable CUID-prefixed rows, so
+re-running is idempotent and changing scale produces the exact requested size.
+The runner refuses non-local database hosts and accepts only the local docker
+databases `forge`, `forge_e2e`, and `forge_lifecycle` on port `55432`.
+
+To add a future scenario, add its declarative count/description to
+`scripts/scenarios/plan.ts` and its isolated seeder branch in
+`scripts/seed-scenarios.ts`; the base demo seed does not need to change.
 
 ## Getting real data locally
 
@@ -103,14 +105,26 @@ Clones the deployed database into the local docker stack at the Postgres
 level — every table, every row, correct foreign keys:
 
 ```bash
-pnpm db:clone-prod
-pnpm dev:local --no-seed   # iterate against the cloned data
+pnpm dev:refresh -- --dry-run # inspect exact source, target, and actions
+pnpm dev:refresh              # type the required confirmation phrase
+pnpm dev:app                  # iterate against the refreshed local data
 ```
 
-It `pg_dump`s the live container straight into the local one
-(`--clean --if-exists --no-owner --no-acl`) and then applies any newer
-local migrations. `pg_dump` is read-only, so **production is never
-written**.
+The command prints and validates the exact destructive target:
+`forge-dev-postgres`, `localhost:55432`, database `forge`, schema `public`,
+user `forge`. It refuses any mismatch. By default it requires an interactive
+confirmation; automation must opt in with `--yes`. The read-only `pg_dump`
+runs over SSH on `FORGE_PROD_SSH_HOST` (default `docker-server.local`) and is
+streamed directly into local Postgres. The production env and password are
+read and expanded only by the remote shell, never copied to or persisted on
+the workstation. The dump is never written to disk.
+
+After import, Prisma migrations run with the fixed local `DATABASE_URL` only.
+Re-running repeats the same confirmed replacement of the local database, which
+is useful for refreshing an older snapshot. It never writes to production.
+If either side of the stream fails, treat the local database as partial and
+rerun `pnpm dev:refresh` or recover a clean base with `pnpm dev:reset`; the
+command reports both stream exit codes and never attempts production repair.
 
 ::: warning
 Attachment **bytes** live in MinIO and are _not_ copied. FILE attachment
@@ -137,14 +151,14 @@ import** (admin only):
   and comments are rewired onto the new issue ids; unknown authors fall
   back to you. Nothing is deleted.
 
-A common loop is: export your production workspace, spin up `pnpm
-dev:local`, then import the JSON into the fresh local workspace.
+A common loop is: export your production workspace, spin up `pnpm dev`, then
+import the JSON into the fresh local workspace.
 
 ## Running the worker
 
 The Next dev server boots the BullMQ workers in-process via
 `src/instrumentation.ts`, so webhook delivery, presence sweeps, and SLA
-checks already run under `pnpm dev` / `pnpm dev:local`. To run the worker
+checks already run under `pnpm dev`. To run the worker
 as a standalone process (as production does):
 
 ```bash
