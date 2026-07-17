@@ -18,6 +18,7 @@ import { maybeAutoDispatch, recordManualDispatchReason } from "@/server/services
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { triageIssue } from "@/server/services/ai-triage";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
+import { issueSearchWhere } from "@/server/services/issue-search";
 import {
   abandonRunsForAgentReassignment,
   finishRunsForIssue,
@@ -399,14 +400,8 @@ async function buildIssueListWhere(
       OR: [{ projectId: null }, { project: { initiativeId: null } }],
     });
   }
-  if (input.query) {
-    andClauses.push({
-      OR: [
-        { title: { contains: input.query, mode: "insensitive" } },
-        { description: { contains: input.query, mode: "insensitive" } },
-      ],
-    });
-  }
+  const searchWhere = issueSearchWhere(input.query);
+  if (searchWhere) andClauses.push(searchWhere);
 
   // `unassigned` = no human assignees AND no agent. Implemented as a
   // single AND so it composes with explicit assigneeIds / assignedAgentId.
@@ -575,6 +570,7 @@ export const issueRouter = router({
       const rows = await ctx.db.issue.findMany({
         where,
         take: input.limit + 1,
+        skip: input.cursor ? 1 : 0,
         cursor: input.cursor ? { id: input.cursor } : undefined,
         orderBy,
         include: {
@@ -603,7 +599,10 @@ export const issueRouter = router({
         },
       });
       let nextCursor: string | undefined;
-      if (rows.length > input.limit) nextCursor = rows.pop()!.id;
+      if (rows.length > input.limit) {
+        rows.pop();
+        nextCursor = rows.at(-1)?.id;
+      }
       const withFlags = await annotateUnblocked(ctx, rows);
       return { items: withFlags, nextCursor };
     }),

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { router, protectedProcedure } from "@/server/trpc";
+import { issueSearchWhere, parseIssueSearch } from "@/server/services/issue-search";
 
 /**
  * Command palette search — fans out across every entity type the
@@ -8,9 +9,9 @@ import { router, protectedProcedure } from "@/server/trpc";
  * views / cycles / agents) and returns a per-type bucket so the
  * client can render section headers without re-grouping.
  *
- * Matching: simple ILIKE on the relevant fields per type. Good enough
- * for now; full-text + ranking comes later. Each bucket is capped at
- * `limit` (default 6) so the UI doesn't have to truncate post-hoc.
+ * Matching: issues use the shared direct-identifier/metadata contract;
+ * other entities use simple ILIKE on their relevant fields. Each bucket
+ * is capped at `limit` (default 6) so the UI doesn't truncate post-hoc.
  *
  * Scoping:
  *   - `workspaceId` provided → only that workspace.
@@ -121,55 +122,33 @@ export const commandPaletteRouter = router({
       ...(input.workspaceId ? { id: input.workspaceId } : {}),
     };
 
-    // Issue queries are special: support `KEY-N` direct match on the
-    // composite (workspace.key + number). Most users will type "AXI-12"
-    // and expect to land on that issue, not a fuzzy title match.
-    const keyMatch = /^([A-Z]{1,8})-(\d+)$/i.exec(q);
+    const parsedIssueSearch = parseIssueSearch(q);
 
     const [issues, projects, initiatives, savedViews, cycles, agents, goals, crews, plans] =
       await Promise.all([
         // ---- Issues -----------------------------------------------------
-        keyMatch
-          ? ctx.db.issue.findMany({
-              where: {
-                deletedAt: null,
-                workspace: workspaceGate,
-                AND: [
-                  { workspace: { key: keyMatch[1].toUpperCase() } },
-                  { number: parseInt(keyMatch[2], 10) },
-                ],
-              },
-              take: input.limit,
-              select: {
-                id: true,
-                number: true,
-                title: true,
-                projectId: true,
-                workspaceId: true,
-                workspace: { select: { slug: true, key: true } },
-                project: { select: { key: true } },
-                status: { select: { name: true, color: true } },
-              },
-            })
-          : ctx.db.issue.findMany({
-              where: {
-                deletedAt: null,
-                workspace: workspaceGate,
-                title: { contains: q, mode: "insensitive" },
-              },
-              take: input.limit,
-              orderBy: { updatedAt: "desc" },
-              select: {
-                id: true,
-                number: true,
-                title: true,
-                projectId: true,
-                workspaceId: true,
-                workspace: { select: { slug: true, key: true } },
-                project: { select: { key: true } },
-                status: { select: { name: true, color: true } },
-              },
-            }),
+        ctx.db.issue.findMany({
+          where: {
+            deletedAt: null,
+            workspace: workspaceGate,
+            AND: [issueSearchWhere(q)!],
+          },
+          take: input.limit,
+          orderBy:
+            parsedIssueSearch.kind === "identifier"
+              ? [{ workspaceId: "asc" }, { number: "asc" }, { id: "asc" }]
+              : [{ updatedAt: "desc" }, { id: "desc" }],
+          select: {
+            id: true,
+            number: true,
+            title: true,
+            projectId: true,
+            workspaceId: true,
+            workspace: { select: { slug: true, key: true } },
+            project: { select: { key: true } },
+            status: { select: { name: true, color: true } },
+          },
+        }),
         // ---- Projects ---------------------------------------------------
         ctx.db.project.findMany({
           where: {

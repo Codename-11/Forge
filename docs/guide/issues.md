@@ -50,6 +50,26 @@ within each category, but the category set is fixed.
 | `DONE`        | Shipped, closed positively |
 | `CANCELED`    | Closed without shipping    |
 
+## Search
+
+Issue search is workspace-scoped and uses one contract across the Issues page,
+relation and time-entry pickers, the command palette, and MCP `issues.list`.
+
+- `AXI-117`, `117`, and `#117` are direct identifiers. They match the exact
+  issue number; full keys are case-insensitive and the prefix must equal the
+  current workspace key.
+- Other text searches the issue title and description plus operator-facing
+  metadata: project key/name, label name, human assignee name/handle/email, and
+  assigned-agent name/profile key.
+- Status and priority remain facets, not free-text terms. Lifecycle scope,
+  archive mode, saved-view facets, board columns, and API-key narrowing still
+  apply to every result, including direct identifiers.
+
+Search does not inspect comments, attachments, audit text, AI reasoning, or
+external-resource bodies. Forge currently uses ordinary indexed relational
+filters and deterministic cursor sorting; the current data scale does not
+justify a full-text or trigram extension.
+
 ## The two assignment slots
 
 Forge keeps human and agent assignment **independent**. An issue can have:

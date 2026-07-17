@@ -2,6 +2,29 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-16 — AXI-119 shared issue search semantics
+
+Implemented a shared issue-search parser and Prisma predicate for tRPC
+`issue.list`/`issue.count`, MCP `issues.list`, and command-palette issue results.
+Case-insensitive `KEY-N`, bare `N`, and `#N` are exact direct identifiers; full
+keys remain workspace-bound. Ordinary text now covers title, description,
+project key/name, label name, human assignee name/handle/email, and assigned
+agent name/profile key while preserving tenant, API-key, lifecycle, archive,
+saved-facet, and board filters. Status and priority remain explicit facets.
+
+Fixed tRPC issue-list cursor boundaries to skip the prior cursor row and emit
+the last returned row as the next cursor, matching deterministic sort
+tiebreakers without duplicate or skipped results. Updated Issues-page guidance,
+MCP/tRPC/product docs, focused integration coverage, and Playwright coverage for
+full-key/bare-number search, URL persistence, lifecycle scope, and list/Kanban
+parity. No database extension, index, migration, notification change, or agent
+wake path was added.
+
+Post-rebase verification on v0.27.1 passed lint (existing warnings only),
+typecheck, all 119 local migrations, 1,425 Vitest tests with one intentional
+skip, a fresh production E2E build, and both focused Issues Playwright journeys
+against the dedicated `forge_e2e` database and Redis DB 15.
+
 ## 2026-07-16 — Truthful Delivery provenance and GitHub relations
 
 AXI-117 audited production Ready to Close, Delivery, and native GitHub cards,

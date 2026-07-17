@@ -399,11 +399,12 @@ export default function IssuesPage() {
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder={
                     showArchived
-                      ? "Search archived issues…"
+                      ? "Search archived issues by key, number, or metadata…"
                       : scope === "open"
-                        ? "Search open issues…"
-                        : "Search all issues…"
+                        ? "Search open issues by key, number, or metadata…"
+                        : "Search all issues by key, number, or metadata…"
                   }
+                  title="Use KEY-N, N, or #N for an exact issue; otherwise search titles, descriptions, projects, labels, assignees, and agents."
                   aria-label={
                     showArchived
                       ? "Search archived issues"

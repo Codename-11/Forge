@@ -127,7 +127,7 @@ long tail without advertising every direct tool:
 
 | Tool           | Summary                                                                                                                                            |
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `list`         | Paged list with filters: `status`, `priority`, `projectId`, `assignedAgentId`, `labelIds[]`, `queued`.                                             |
+| `list`         | Paged, cursor-stable list with lifecycle/scope filters and shared issue search semantics (below).                                                  |
 | `get`          | Fetch by `id`. Optional `include` hydrates description / comments / attachments / relations / currentRun / labels in one round-trip.               |
 | `create`       | `{ title, description?, projectId?, priority?, statusId?, labelIds? }` → full issue.                                                               |
 | `queue`        | Set `queued: true`. Dispatcher only sees queued + unassigned issues.                                                                               |
@@ -161,6 +161,15 @@ with `400`.
 no argument at all — in which case it uses the calling key's
 `linkedAgentId`. Keys without a linked agent that omit the argument get
 `400`.
+
+**`list` search** — pass `query` as `KEY-N`, bare `N`, or `#N` for an exact
+direct lookup. Full keys are case-insensitive and must use the authenticated
+workspace key. Other text searches title, description, project key/name,
+label name, human assignee name/handle/email, and assigned-agent name/profile
+key. Direct and text searches both compose with lifecycle, project, label,
+initiative, cycle, priority, agent, and API-key narrowing. Status and priority
+are facets rather than free-text fields. Comments, attachments, audit text, AI
+reasoning, and external-resource bodies are intentionally excluded.
 
 **`get` with `include`** — by default, `issues.get` returns the lean shape
 (status + project + assignees) for backward compat. Pass an `include` object

@@ -269,7 +269,7 @@ describe("apiKey (access) router — narrowing", () => {
       data: { workspaceId: fixture.workspace.id, name: "bot", color: "#b0b" },
     });
     const scoped = await createIssue(fixture);
-    await createIssue(fixture); // unscoped
+    const otherIssue = await createIssue(fixture); // unscoped
     await prisma.issueLabel.create({
       data: { issueId: scoped.id, labelId: label.id },
     });
@@ -293,5 +293,10 @@ describe("apiKey (access) router — narrowing", () => {
     const ids = items.map((i) => i.id);
     expect(ids).toContain(scoped.id);
     expect(ids.length).toBe(1);
+
+    const directAllowed = await caller.list({ query: String(scoped.number) });
+    expect(directAllowed.items.map((issue) => issue.id)).toEqual([scoped.id]);
+    const directDenied = await caller.list({ query: String(otherIssue.number) });
+    expect(directDenied.items).toEqual([]);
   });
 });
