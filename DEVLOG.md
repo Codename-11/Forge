@@ -14002,3 +14002,24 @@ app-only rejects unavailable services, services-only stops after its health
 plan, reset displays its exact destructive target and reseed plan, and scenario
 validates and prints the selected deterministic fixture counts. Focused command
 decision coverage and executable dry runs verify all four paths.
+
+## 2026-07-17 — Forge v0.28.0 release (AXI-127)
+
+Prepared the serialized v0.28.0 release from exact `origin/main` commit
+`bbb46d8`. This release contains secure workspace email invitations (AXI-2),
+consistent scoped issue search (AXI-119), the safe local development and data
+scenario workflow (AXI-124), and issue-page load/realtime improvements
+(AXI-125). Updated the package version and curated the user-facing changelog.
+
+Release validation, tag creation, production deployment, and live verification
+remain separate recorded phases and are completed only against the merged
+release commit and immutable tag.
+
+Release validation passed against the dedicated local `forge_e2e` Postgres,
+Redis, and MinIO services: lint completed with existing warnings, typecheck
+passed, all 1,448 Vitest tests passed with 12 intentional skips, the fresh Next
+production build passed, and Playwright passed 55 tests with one intentional
+named-scenario skip. On Windows, `pnpm ci:local` completed through Vitest but
+could not invoke Unix `flock` through `cmd.exe`; its exact locked payload was
+therefore run directly through Git-for-Windows Bash after the repository's port
+ownership guard, matching the documented Windows validation path.
