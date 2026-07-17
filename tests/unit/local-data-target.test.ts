@@ -39,6 +39,14 @@ describe("local production-data refresh target guard", () => {
     ).not.toThrow();
     expect(() =>
       validateLocalScenarioTarget("postgresql://forge:forge@prod:5432/forge?schema=public"),
-    ).toThrow(/only against a Forge local docker database/);
+    ).toThrow(/exact Forge local docker/);
+    expect(() =>
+      validateLocalScenarioTarget(
+        "postgresql://production:secret@localhost:55432/forge?schema=public",
+      ),
+    ).toThrow(/exact Forge local docker/);
+    expect(() =>
+      validateLocalScenarioTarget("postgresql://forge:forge@localhost:55432/forge?schema=private"),
+    ).toThrow(/exact Forge local docker/);
   });
 });

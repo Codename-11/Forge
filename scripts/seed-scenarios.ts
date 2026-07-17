@@ -16,6 +16,7 @@ import {
 import { LOCAL_DATABASE_URL, validateLocalScenarioTarget } from "./lib/local-data-target";
 import {
   buildScenarioPlan,
+  buildRelativeScenarioTimes,
   parseScenarioNames,
   scenarioId,
   scenarioPrefix,
@@ -25,6 +26,8 @@ import {
 
 const ANCHOR = new Date("2026-07-01T12:00:00.000Z");
 const MINUTE = 60_000;
+const SEED_TIME = new Date();
+const relativeTimes = buildRelativeScenarioTimes(SEED_TIME);
 
 function argValue(flag: string): string | undefined {
   const at = process.argv.indexOf(flag);
@@ -233,10 +236,10 @@ async function seedFreshness(plan: ScenarioPlan, ctx: Awaited<ReturnType<typeof 
       instanceKey: "scenario-freshness",
       displayName: "Scenario MCP",
       firstSeenAt: ANCHOR,
-      lastSeenAt: ANCHOR,
+      lastSeenAt: relativeTimes.connectionLastSeenAt,
       connectedAt: ANCHOR,
       createdAt: ANCHOR,
-      updatedAt: ANCHOR,
+      updatedAt: relativeTimes.connectionLastSeenAt,
     },
   });
   for (let i = 0; i < plan.issueCount; i++) {
@@ -250,7 +253,7 @@ async function seedFreshness(plan: ScenarioPlan, ctx: Awaited<ReturnType<typeof 
       authorId: ctx.owner.id,
       agentId: agent.id,
     });
-    const lastEventAt = new Date(ANCHOR.getTime() - [1, 10, 180, 30][i] * MINUTE);
+    const lastEventAt = relativeTimes.runLastEventAt[i]!;
     await prisma.agentRun.create({
       data: {
         id: scenarioId(plan.name, "run", i),
@@ -260,7 +263,7 @@ async function seedFreshness(plan: ScenarioPlan, ctx: Awaited<ReturnType<typeof 
         connectionId: connection.id,
         status: states[i],
         lifecycleConfidence: LivenessConfidence.CONFIRMED,
-        startedAt: new Date(ANCHOR.getTime() - 240 * MINUTE),
+        startedAt: relativeTimes.runStartedAt,
         lastEventAt,
         currentStep: labels[i],
         finishedAt: i === 2 ? lastEventAt : null,
@@ -392,8 +395,8 @@ async function seedConcurrency(plan: ScenarioPlan, ctx: Awaited<ReturnType<typeo
         note: "Deterministic invitation lifecycle fixture",
         invitedById: ctx.owner.id,
         acceptedById: user?.id,
-        expiresAt: new Date(ANCHOR.getTime() + 30 * 24 * 60 * MINUTE),
-        lastSentAt: new Date(ANCHOR.getTime() + i * MINUTE),
+        expiresAt: relativeTimes.invitationExpiresAt,
+        lastSentAt: new Date(SEED_TIME.getTime() - (i + 1) * MINUTE),
         sendCount: 1,
         acceptedAt: status === InvitationStatus.ACCEPTED ? ANCHOR : null,
         revokedAt: status === InvitationStatus.REVOKED ? ANCHOR : null,

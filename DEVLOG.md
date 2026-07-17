@@ -13984,3 +13984,13 @@ fresh production build, the focused scenario Playwright journey, and the full
 single-worker Playwright suite (54 passed, 1 intentional scenario skip). The
 full serial Vitest suite also passed before the rebase (1,441 passed, 1 skip);
 fresh GitHub CI is required on the final published head.
+
+The bounded PR review found and resolved three actionable gaps: Windows pnpm
+shim parsing now supports Corepack's `pnpm.js`, scenario targets require the
+exact local user/password/public-schema tuple in addition to host/port/database,
+and freshness-sensitive run/invitation timestamps are derived from seed time so
+their advertised states do not age out. Regression coverage exercises both
+Windows shim forms, tunneled credential/schema rejection, and deterministic
+relative-time derivation. Two consecutive scale-2 runs converged to 6
+invitations while preserving 1/10/180/30-minute run ages and a 30-day pending
+invite expiry.

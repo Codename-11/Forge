@@ -14,6 +14,7 @@ import {
   LOCAL_DEV,
   assertSafeLocalEnvironment,
   decidePrismaActions,
+  parseWindowsPnpmEntry,
   parseDevOptions,
   servicesToStart,
   shouldSeedBase,
@@ -63,9 +64,9 @@ function resolvePnpm(): { command: string; prefix: string[] } {
   const wrapper = located.stdout?.split(/\r?\n/).find(Boolean);
   if (!wrapper) throw new Error("pnpm.cmd was not found on PATH");
   const contents = readFileSync(wrapper, "utf8");
-  const match = contents.match(/%~dp0\\([^"\r\n]*pnpm\.(?:mjs|cjs))/i);
-  if (!match) throw new Error(`Could not resolve the pnpm JavaScript entry from ${wrapper}`);
-  return { command: process.execPath, prefix: [resolve(dirname(wrapper), match[1])] };
+  const entry = parseWindowsPnpmEntry(contents);
+  if (!entry) throw new Error(`Could not resolve the pnpm JavaScript entry from ${wrapper}`);
+  return { command: process.execPath, prefix: [resolve(dirname(wrapper), entry)] };
 }
 
 const pnpm = resolvePnpm();

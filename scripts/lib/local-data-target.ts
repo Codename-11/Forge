@@ -61,9 +61,14 @@ export function validateLocalScenarioTarget(databaseUrl: string): void {
     url.protocol !== "postgresql:" ||
     url.hostname !== "localhost" ||
     url.port !== "55432" ||
+    decodeURIComponent(url.username) !== "forge" ||
+    decodeURIComponent(url.password) !== "forge" ||
+    url.searchParams.get("schema") !== "public" ||
     !["forge", "forge_e2e", "forge_lifecycle"].includes(database)
   ) {
-    throw new Error("Named scenarios may run only against a Forge local docker database");
+    throw new Error(
+      "Named scenarios require the exact Forge local docker host, port, database, credentials, and public schema",
+    );
   }
 }
 

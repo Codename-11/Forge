@@ -20,6 +20,10 @@ export type DevOptions = {
   scale: number;
 };
 
+export function parseWindowsPnpmEntry(shim: string): string | undefined {
+  return shim.match(/%~dp0\\([^"\r\n]*pnpm\.(?:mjs|cjs|js))/i)?.[1];
+}
+
 export function parseDevOptions(argv: string[]): DevOptions {
   argv = argv.filter((value) => value !== "--");
   const knownModes: DevMode[] = ["start", "app", "services", "refresh", "reset", "scenario"];

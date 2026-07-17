@@ -106,3 +106,15 @@ export function scenarioId(name: ScenarioName, kind: string, index = 0): string 
 export function scenarioPrefix(name: ScenarioName): string {
   return `cscenario${name.replace(/[^a-z0-9]/gi, "").toLowerCase()}`;
 }
+
+export function buildRelativeScenarioTimes(seedTime: Date) {
+  const seedMs = seedTime.getTime();
+  if (!Number.isFinite(seedMs)) throw new Error("Scenario seed time must be valid");
+  const minute = 60_000;
+  return {
+    connectionLastSeenAt: new Date(seedMs),
+    runStartedAt: new Date(seedMs - 240 * minute),
+    runLastEventAt: [1, 10, 180, 30].map((minutes) => new Date(seedMs - minutes * minute)),
+    invitationExpiresAt: new Date(seedMs + 30 * 24 * 60 * minute),
+  };
+}

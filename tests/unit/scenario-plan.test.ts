@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildScenarioPlan, parseScenarioNames, scenarioId } from "../../scripts/scenarios/plan";
+import {
+  buildRelativeScenarioTimes,
+  buildScenarioPlan,
+  parseScenarioNames,
+  scenarioId,
+} from "../../scripts/scenarios/plan";
 
 describe("named scenario planning", () => {
   it("composes names in caller order and removes duplicates", () => {
@@ -28,5 +33,15 @@ describe("named scenario planning", () => {
     expect(() => parseScenarioNames("tenancy,not-real")).toThrow(/Unknown scenario/);
     expect(() => buildScenarioPlan(["tenancy"], 0)).toThrow(/1 to 100/);
     expect(() => buildScenarioPlan(["tenancy"], 101)).toThrow(/1 to 100/);
+  });
+
+  it("derives freshness and invitation expiry from a supplied seed time", () => {
+    const seedTime = new Date("2030-05-10T12:00:00.000Z");
+    const first = buildRelativeScenarioTimes(seedTime);
+    expect(buildRelativeScenarioTimes(seedTime)).toEqual(first);
+    expect(
+      first.runLastEventAt.map((date) => (seedTime.getTime() - date.getTime()) / 60_000),
+    ).toEqual([1, 10, 180, 30]);
+    expect(first.invitationExpiresAt.getTime() - seedTime.getTime()).toBe(30 * 24 * 60 * 60_000);
   });
 });

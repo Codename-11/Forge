@@ -3,6 +3,7 @@ import {
   LOCAL_DEV,
   assertSafeLocalEnvironment,
   decidePrismaActions,
+  parseWindowsPnpmEntry,
   parseDevOptions,
   servicesToStart,
   shouldSeedBase,
@@ -51,6 +52,13 @@ describe("safe local dev command decisions", () => {
         minio: { exists: false, running: false, healthy: false },
       }),
     ).toEqual(["redis", "minio"]);
+  });
+
+  it("resolves pnpm and Corepack JavaScript entries from Windows shims", () => {
+    expect(parseWindowsPnpmEntry('node "%~dp0\\pnpm.mjs" %*')).toBe("pnpm.mjs");
+    expect(parseWindowsPnpmEntry('node "%~dp0\\node_modules\\corepack\\dist\\pnpm.js" %*')).toBe(
+      "node_modules\\corepack\\dist\\pnpm.js",
+    );
   });
 
   it("runs only necessary Prisma and seed work", () => {

@@ -84,11 +84,13 @@ pnpm seed:scenarios -- --scenarios all --scale 2 --dry-run
 The named scenarios cover Delivery/GitHub provenance, fresh/quiet/stale/waiting
 statuses, activity grouping and overflow, cross-tenant isolation, member-invite
 and agent-concurrency states, and large-workspace performance. Names compose in
-any order. IDs, timestamps, issue numbers, and generated content are stable;
-each selected scenario replaces only its own stable CUID-prefixed rows, so
-re-running is idempotent and changing scale produces the exact requested size.
-The runner refuses non-local database hosts and accepts only the local docker
-databases `forge`, `forge_e2e`, and `forge_lifecycle` on port `55432`.
+any order. IDs, structural timestamps, issue numbers, and generated content are
+stable; freshness and pending-invitation deadlines are derived from each seed
+execution so their advertised states do not age out. Each selected scenario
+replaces only its own stable CUID-prefixed rows, so re-running is idempotent and
+changing scale produces the exact requested size. The runner requires the exact
+local Docker credentials and public schema and accepts only `forge`,
+`forge_e2e`, and `forge_lifecycle` on `localhost:55432`.
 
 To add a future scenario, add its declarative count/description to
 `scripts/scenarios/plan.ts` and its isolated seeder branch in
