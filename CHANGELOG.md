@@ -9,6 +9,22 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-17] — v0.28.0 · Faster local delivery
+
+### Added
+
+- **Workspace invitations are secure and lifecycle-aware.** Administrators can issue, revoke, resend, and accept expiring email invitations with tenant-safe membership and concurrency controls.
+- **Local development is fast, deterministic, and production-safe.** One command starts host-native Turbo HMR against local containerized services, while explicit refresh, reset, and scalable scenario commands provide reproducible test data without persisting production credentials.
+
+### Changed
+
+- **Issue search uses one consistent semantic model.** Issue lists, command search, and MCP recognize exact keys, bare numbers, titles, descriptions, projects, labels, people, and agents while preserving tenant and API-key scope.
+- **Issue pages load less work up front.** Secondary surfaces hydrate on demand, realtime invalidation targets relevant caches, and successful tRPC logging stays quiet by default without losing live updates.
+
+### Fixed
+
+- **Lazy workspace controls retain the first interaction.** Quick Create and other deferred surfaces consume early requests reliably instead of requiring a second click during hydration.
+
 ## [2026-07-16] — v0.27.1 · Truthful delivery evidence
 
 ### Changed
