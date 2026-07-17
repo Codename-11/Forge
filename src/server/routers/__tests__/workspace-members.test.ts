@@ -1,6 +1,5 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
 import { AutoDispatchMode, DefaultIssueAssigneeMode, InvitationStatus, Role } from "@prisma/client";
-import { TRPCError } from "@trpc/server";
 import { workspaceRouter } from "@/server/routers/workspace";
 import {
   acceptWorkspaceInvitation,
@@ -385,9 +384,9 @@ describe("workspaceRouter — admin member management", () => {
 
   it("removeMember rejects removing the last admin (including self)", async () => {
     const { caller, fixture } = await adminSetup();
-    await expect(
-      caller.removeMember({ userId: fixture.user.id }),
-    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    await expect(caller.removeMember({ userId: fixture.user.id })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
   });
 
   it("removeMember rejects NOT_FOUND when the user isn't a member", async () => {
@@ -397,9 +396,9 @@ describe("workspaceRouter — admin member management", () => {
       data: { email: `ghost-${Date.now()}@example.com` },
     });
     try {
-      await expect(
-        caller.removeMember({ userId: ghost.id }),
-      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      await expect(caller.removeMember({ userId: ghost.id })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
     } finally {
       await prisma.user.delete({ where: { id: ghost.id } }).catch(() => {});
     }
@@ -418,8 +417,18 @@ describe("workspaceRouter — admin member management", () => {
     await expect(
       memberCaller.setMemberRole({ userId: fixture.user.id, role: Role.MEMBER }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(memberCaller.removeMember({ userId: fixture.user.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    await expect(memberCaller.listInvitations()).rejects.toMatchObject({ code: "FORBIDDEN" });
     await expect(
-      memberCaller.removeMember({ userId: fixture.user.id }),
+      memberCaller.invite({ email: "invite@example.com", role: Role.MEMBER }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      memberCaller.resendInvitation({ invitationId: fixture.workspace.id }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(
+      memberCaller.revokeInvitation({ invitationId: fixture.workspace.id }),
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
   });
 
@@ -457,7 +466,11 @@ describe("workspaceRouter — admin member management", () => {
     expect(first.outcome).toBe("sent");
     expect(second.outcome).toBe("duplicate");
     expect(second.invitation.id).toBe(first.invitation.id);
-    expect(await prisma.workspaceInvitation.count({ where: { workspaceId: fixture.workspace.id, email } })).toBe(1);
+    expect(
+      await prisma.workspaceInvitation.count({
+        where: { workspaceId: fixture.workspace.id, email },
+      }),
+    ).toBe(1);
   });
 
   it("resolves concurrent duplicate creation without an internal error", async () => {
@@ -469,7 +482,11 @@ describe("workspaceRouter — admin member management", () => {
       caller.invite({ email, role: Role.MEMBER }),
     ]);
     expect(results.map((result) => result.outcome).sort()).toEqual(["duplicate", "sent"]);
-    expect(await prisma.workspaceInvitation.count({ where: { workspaceId: fixture.workspace.id, email } })).toBe(1);
+    expect(
+      await prisma.workspaceInvitation.count({
+        where: { workspaceId: fixture.workspace.id, email },
+      }),
+    ).toBe(1);
   });
 
   it("rotates the secure token on resend and allows pending invites to be revoked", async () => {
@@ -539,7 +556,11 @@ describe("workspaceRouter — admin member management", () => {
       });
       expect(mismatch.state).toBe("EMAIL_MISMATCH");
 
-      const accepted = await acceptWorkspaceInvitation({ token, userId: recipient.id, userEmail: email });
+      const accepted = await acceptWorkspaceInvitation({
+        token,
+        userId: recipient.id,
+        userEmail: email,
+      });
       expect(accepted.state).toBe("ACCEPTED");
       expect(accepted.workspaceSlug).toBe(fixture.workspace.slug);
       const membership = await prisma.membership.findUnique({
@@ -576,12 +597,60 @@ describe("workspaceRouter — admin member management", () => {
         acceptWorkspaceInvitation({ token, userId: recipient.id, userEmail: email }),
         acceptWorkspaceInvitation({ token, userId: recipient.id, userEmail: email }),
       ]);
-      expect(results.map((result) => result.state).sort()).toEqual(["ACCEPTED", "ALREADY_ACCEPTED"]);
+      expect(results.map((result) => result.state).sort()).toEqual([
+        "ACCEPTED",
+        "ALREADY_ACCEPTED",
+      ]);
       expect(
         await prisma.membership.count({
           where: { userId: recipient.id, workspaceId: fixture.workspace.id },
         }),
       ).toBe(1);
+    } finally {
+      await prisma.user.delete({ where: { id: recipient.id } }).catch(() => {});
+    }
+  });
+
+  it("serializes acceptance and revocation without overwriting the winner", async () => {
+    const { caller, fixture } = await adminSetup();
+    const prisma = getPrisma();
+    const token = `accept-revoke-${Date.now()}`;
+    const email = `accept-revoke-${Date.now()}@example.com`;
+    const recipient = await prisma.user.create({ data: { email } });
+    const invitation = await prisma.workspaceInvitation.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        email,
+        invitedById: fixture.user.id,
+        tokenHash: invitationTokenHash(token),
+        expiresAt: new Date(Date.now() + 60_000),
+      },
+    });
+    try {
+      const [acceptResult, revokeResult] = await Promise.allSettled([
+        acceptWorkspaceInvitation({ token, userId: recipient.id, userEmail: email }),
+        caller.revokeInvitation({ invitationId: invitation.id }),
+      ]);
+      const current = await prisma.workspaceInvitation.findUniqueOrThrow({
+        where: { id: invitation.id },
+      });
+      const membership = await prisma.membership.findUnique({
+        where: { userId_workspaceId: { userId: recipient.id, workspaceId: fixture.workspace.id } },
+      });
+
+      expect([InvitationStatus.ACCEPTED, InvitationStatus.REVOKED]).toContain(current.status);
+      if (current.status === InvitationStatus.ACCEPTED) {
+        expect(acceptResult.status).toBe("fulfilled");
+        expect(membership).not.toBeNull();
+        expect(revokeResult.status).toBe("rejected");
+      } else {
+        expect(revokeResult.status).toBe("fulfilled");
+        expect(membership).toBeNull();
+        expect(acceptResult.status).toBe("fulfilled");
+        if (acceptResult.status === "fulfilled") {
+          expect(acceptResult.value.state).toBe("REVOKED");
+        }
+      }
     } finally {
       await prisma.user.delete({ where: { id: recipient.id } }).catch(() => {});
     }
@@ -612,7 +681,9 @@ describe("workspaceRouter — admin member management", () => {
       expect(result.state).toBe("INVALID");
       expect(
         await prisma.membership.findUnique({
-          where: { userId_workspaceId: { userId: recipient.id, workspaceId: fixture.workspace.id } },
+          where: {
+            userId_workspaceId: { userId: recipient.id, workspaceId: fixture.workspace.id },
+          },
         }),
       ).toBeNull();
     } finally {
@@ -636,16 +707,22 @@ describe("workspaceRouter — admin member management", () => {
       },
     });
     try {
-      const result = await acceptWorkspaceInvitation({ token, userId: recipient.id, userEmail: email });
+      const result = await acceptWorkspaceInvitation({
+        token,
+        userId: recipient.id,
+        userEmail: email,
+      });
       expect(result.state).toBe("EXPIRED");
       expect(
         await prisma.membership.findUnique({
-          where: { userId_workspaceId: { userId: recipient.id, workspaceId: fixture.workspace.id } },
+          where: {
+            userId_workspaceId: { userId: recipient.id, workspaceId: fixture.workspace.id },
+          },
         }),
       ).toBeNull();
-      expect((await prisma.workspaceInvitation.findUnique({ where: { id: invitation.id } }))?.status).toBe(
-        InvitationStatus.EXPIRED,
-      );
+      expect(
+        (await prisma.workspaceInvitation.findUnique({ where: { id: invitation.id } }))?.status,
+      ).toBe(InvitationStatus.EXPIRED);
     } finally {
       await prisma.user.delete({ where: { id: recipient.id } }).catch(() => {});
     }

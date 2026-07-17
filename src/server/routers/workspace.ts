@@ -17,12 +17,7 @@ import {
   RunBudgetAction,
   WorkspaceExperienceProfile,
 } from "@prisma/client";
-import {
-  router,
-  protectedProcedure,
-  workspaceProcedure,
-  adminProcedure,
-} from "@/server/trpc";
+import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { rateLimit } from "@/server/rate-limit";
 import { recordChange } from "@/server/audit";
 import {
@@ -227,9 +222,9 @@ export const workspaceRouter = router({
         slug: slugSchema,
         name: z.string().min(1).max(80),
         key: keySchema,
-        experienceProfile: z.nativeEnum(WorkspaceExperienceProfile).default(
-          WorkspaceExperienceProfile.TEAM,
-        ),
+        experienceProfile: z
+          .nativeEnum(WorkspaceExperienceProfile)
+          .default(WorkspaceExperienceProfile.TEAM),
         cycleLengthDays: z.number().int().min(1).max(90).optional(),
         timeTrackingEnabled: z.boolean().optional(),
       }),
@@ -775,11 +770,17 @@ export const workspaceRouter = router({
       await expireWorkspaceInvitations(ctx.workspaceId);
 
       const member = await ctx.db.membership.findFirst({
-        where: { workspaceId: ctx.workspaceId, user: { email } },
+        where: {
+          workspaceId: ctx.workspaceId,
+          user: { email: { equals: email, mode: "insensitive" } },
+        },
         select: { id: true },
       });
       if (member) {
-        throw new TRPCError({ code: "CONFLICT", message: "That email already belongs to this workspace." });
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "That email already belongs to this workspace.",
+        });
       }
       const duplicate = await ctx.db.workspaceInvitation.findFirst({
         where: { workspaceId: ctx.workspaceId, email, status: InvitationStatus.PENDING },
@@ -844,7 +845,9 @@ export const workspaceRouter = router({
       }
       return {
         outcome: "sent" as const,
-        invitation: await ctx.db.workspaceInvitation.findUniqueOrThrow({ where: { id: invitation.id } }),
+        invitation: await ctx.db.workspaceInvitation.findUniqueOrThrow({
+          where: { id: invitation.id },
+        }),
       };
     }),
 
@@ -933,10 +936,10 @@ export const workspaceRouter = router({
           where: { id: existing.id, deliveryLockAt: lockAt },
           data: {
             deliveryLockAt: null,
-            lastSendError: (error instanceof Error ? error.message : "Invitation email delivery failed.").slice(
-              0,
-              2000,
-            ),
+            lastSendError: (error instanceof Error
+              ? error.message
+              : "Invitation email delivery failed."
+            ).slice(0, 2000),
           },
         });
         throw new TRPCError({
@@ -967,7 +970,8 @@ export const workspaceRouter = router({
         if (activated.count !== 1) {
           throw new TRPCError({
             code: "CONFLICT",
-            message: "The invitation changed while the resend was in flight; the newer state was preserved.",
+            message:
+              "The invitation changed while the resend was in flight; the newer state was preserved.",
           });
         }
         await recordChange(tx, {
@@ -1004,13 +1008,31 @@ export const workspaceRouter = router({
         });
       }
       return ctx.db.$transaction(async (tx) => {
-        const revoked = await tx.workspaceInvitation.update({
-          where: { id: existing.id },
+        // Claim the exact pending token generation. Acceptance and resend use
+        // the same conditional boundary, so a late revoke can never overwrite
+        // an accepted invitation or a newer token generation.
+        const claimed = await tx.workspaceInvitation.updateMany({
+          where: {
+            id: existing.id,
+            workspaceId: ctx.workspaceId,
+            status: InvitationStatus.PENDING,
+            tokenHash: existing.tokenHash,
+          },
           data: {
             status: InvitationStatus.REVOKED,
             revokedAt: new Date(),
             deliveryLockAt: null,
           },
+        });
+        if (claimed.count !== 1) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The invitation changed before it could be revoked. Refresh to see its current state.",
+          });
+        }
+        const revoked = await tx.workspaceInvitation.findUniqueOrThrow({
+          where: { id: existing.id },
         });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
