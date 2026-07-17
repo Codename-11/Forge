@@ -2,6 +2,15 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-17 — v0.28.1 release preparation
+
+Prepared the patch release for AXI-128 from merged `main` at `1d968b9`.
+The release metadata documents executable GitHub check aggregation, explicit
+MCP run ownership, conservative repair of historical comment-only runs, and
+transport-aware stale handling. No application logic changed during release
+assembly; the exact release commit is gated through the normal GitHub CI before
+tagging and production deployment.
+
 ## 2026-07-17 — AXI-128 GitHub and MCP lifecycle reconciliation
 
 Corrected completion evidence so permanently queued GitHub App suites with
