@@ -17,8 +17,11 @@ GitHub webhook matching now derives one native relation per issue/resource:
 release assembly PRs, removes legacy duplicate relations deterministically, and
 enforces the singular relation invariant. Generic URL recovery and repository
 identity canonicalization preserve a stronger existing relation, while explicit
-relinks remain operator-controlled and migration dedupe keeps implementation
-evidence ahead of source/context rows. Terminal PR synchronization clears
+relinks remain operator-controlled. Imported `SOURCE` identity is preserved
+ahead of derived PR relations so later imports cannot duplicate the Forge issue;
+explicit downgrades dismiss stale Ready-to-Close requests when no implementation
+PR remains. Grouped references such as `Fixes AXI-1, AXI-2` retain the keyword
+across the full clause. Terminal PR synchronization clears
 stale mergeability and suppresses pending-check contradictions, while merged
 implementation evidence continues reconciliation until its final checks
 aggregate is trusted and still participates in completion readiness. Passing
@@ -32,6 +35,12 @@ provenance coverage, and the AXI-117 Playwright issue journey. The full
 single-worker browser run passed 51 journeys before Chromium exited while
 opening an unrelated Mission Control context; both affected Mission Control
 tests passed immediately in isolation, covering all 53 journeys.
+
+Release review follow-up applied all 119 migrations to a clean isolated local
+Postgres database and passed nine focused relation/persistence regressions,
+including SOURCE preservation, grouped relation derivation, and audited stale
+completion-request dismissal. The production-snapshot development database was
+not used for migration or test execution.
 
 ## 2026-07-16 — v0.26.1 released, deployed, and verified
 

@@ -167,4 +167,89 @@ describe("native GitHub relation persistence", () => {
       }),
     ).resolves.toMatchObject({ kind: "RELATES_TO" });
   });
+
+  it("preserves imported SOURCE identity when derived relations are replayed", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const resource = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 119,
+        url: "https://github.com/acme/forge/pull/119",
+        title: "Imported pull request",
+        state: "open",
+      },
+    });
+    const relation = {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      externalResourceId: resource.id,
+      actor: { actorId: fixture.user.id },
+    };
+
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "SOURCE" });
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "FIXES" });
+
+    await expect(
+      prisma.externalResourceLink.findUniqueOrThrow({
+        where: {
+          issueId_externalResourceId: {
+            issueId: issue.id,
+            externalResourceId: resource.id,
+          },
+        },
+      }),
+    ).resolves.toMatchObject({ kind: "SOURCE" });
+  });
+
+  it("dismisses stale completion requests when the last implementation PR is reclassified", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "GD" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const resource = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 120,
+        url: "https://github.com/acme/forge/pull/120",
+        title: "Implementation pull request",
+        state: "merged",
+      },
+    });
+    const relation = {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      externalResourceId: resource.id,
+      actor: { actorId: fixture.user.id },
+    };
+
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "IMPLEMENTS" });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        title: "Ready to close",
+        sourceType: "completion-candidate",
+        sourceId: resource.id,
+        dedupeKey: `issue-completion:${issue.id}`,
+      },
+    });
+
+    await linkExternalResourceToIssue(prisma, { ...relation, kind: "RELEASES" });
+
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({
+      status: "DISMISSED",
+      resolution: "The linked pull request is no longer implementation evidence.",
+    });
+  });
 });

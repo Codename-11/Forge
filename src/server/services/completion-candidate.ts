@@ -6,6 +6,7 @@ import {
   EventKind,
   NotificationSeverity,
   type PrismaClient,
+  type Prisma,
 } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import {
@@ -103,7 +104,7 @@ function canonicalJson(value: unknown): unknown {
 }
 
 async function dismissOpenRequests(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   params: {
     workspaceId: string;
     actorId: string | null;
@@ -132,6 +133,18 @@ async function dismissOpenRequests(
       resolution: params.resolution,
     });
   }
+}
+
+export async function dismissIssueCompletionCandidate(
+  db: PrismaClient | Prisma.TransactionClient,
+  params: { workspaceId: string; issueId: string; actorId: string | null; resolution: string },
+): Promise<void> {
+  await dismissOpenRequests(db, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    dedupeKey: completionDedupeKey(params.issueId),
+    resolution: params.resolution,
+  });
 }
 
 async function completionContext(db: PrismaClient, workspaceId: string, issueId: string) {

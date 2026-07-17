@@ -13,7 +13,10 @@ import {
 import { recordChange } from "@/server/audit";
 import { syncWorkSessionsFromPullRequest } from "@/server/services/work-session";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
-import { reconcileGitHubPullRequestCompletion } from "@/server/services/completion-candidate";
+import {
+  dismissIssueCompletionCandidate,
+  reconcileGitHubPullRequestCompletion,
+} from "@/server/services/completion-candidate";
 import {
   getGitHubIssue,
   getGitHubPullRequest,
@@ -791,6 +794,10 @@ export async function linkExternalResourceToIssue(
     },
   });
   if (existingLink?.kind === args.kind) return existingLink;
+  // SOURCE is the durable identity for a Forge issue imported from GitHub.
+  // Derived PR mentions must not erase the link used by future import de-dupe
+  // and source-only title/status synchronization.
+  if (existingLink?.kind === "SOURCE" && args.kind !== "SOURCE") return existingLink;
   // Generic GitHub URL attachment and recovery paths use RELATES_TO. Replaying
   // those paths must not erase a previously established native semantic link.
   if (args.preserveExistingRelation && args.kind === "RELATES_TO" && existingLink) {
@@ -816,6 +823,29 @@ export async function linkExternalResourceToIssue(
       ...(args.actor.actorId ? { createdById: args.actor.actorId } : {}),
     },
   });
+
+  const reclassifiedAwayFromImplementation =
+    existingLink !== null &&
+    IMPLEMENTATION_LINK_KINDS.some((kind) => kind === existingLink.kind) &&
+    !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === link.kind);
+  if (reclassifiedAwayFromImplementation) {
+    const remainingImplementationLinks = await db.externalResourceLink.count({
+      where: {
+        workspaceId: args.workspaceId,
+        issueId: args.issueId,
+        kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+        externalResource: { resourceType: "PULL_REQUEST" },
+      },
+    });
+    if (remainingImplementationLinks === 0) {
+      await dismissIssueCompletionCandidate(db, {
+        workspaceId: args.workspaceId,
+        issueId: args.issueId,
+        actorId: args.actor.actorId,
+        resolution: "The linked pull request is no longer implementation evidence.",
+      });
+    }
+  }
 
   if (args.recordActivity ?? true) {
     await recordChange(db, {

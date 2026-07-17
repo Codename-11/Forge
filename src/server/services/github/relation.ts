@@ -4,6 +4,7 @@ const IMPLEMENTS_PATTERN = /\bimplements?\s*[:#-]?\s*$/i;
 const FIXES_PATTERN = /\b(?:fix(?:e[sd])?|close[sd]?|resolve[sd]?)\s*[:#-]?\s*$/i;
 const RELEASE_TITLE_PATTERN = /^\s*release\s+v?\d/i;
 const RELEASE_BRANCH_PATTERN = /(?:^|\/)release(?:[-/]|$)/i;
+const GROUPED_REFERENCE_SEPARATOR = /^\s*(?:,\s*(?:(?:and|&)\s*)?|(?:and|&)\s*)$/i;
 
 function relationRank(kind: ExternalLinkKind): number {
   if (kind === "FIXES") return 3;
@@ -35,21 +36,32 @@ export function derivePullRequestIssueRelations(input: {
 
   for (const text of [input.title, input.body ?? ""]) {
     let match: RegExpExecArray | null;
+    let previousMatchEnd: number | null = null;
+    let previousKind: ExternalLinkKind | null = null;
     while ((match = issuePattern.exec(text))) {
       const number = Number(match[1]);
       if (!Number.isInteger(number) || number <= 0) continue;
       const prefix = text.slice(Math.max(0, match.index - 48), match.index);
+      const directKind: ExternalLinkKind | null = FIXES_PATTERN.test(prefix)
+        ? "FIXES"
+        : IMPLEMENTS_PATTERN.test(prefix)
+          ? "IMPLEMENTS"
+          : null;
+      const groupedKind: ExternalLinkKind | null =
+        previousMatchEnd !== null &&
+        previousKind !== null &&
+        GROUPED_REFERENCE_SEPARATOR.test(text.slice(previousMatchEnd, match.index))
+          ? previousKind
+          : null;
       const kind: ExternalLinkKind = release
         ? "RELEASES"
-        : FIXES_PATTERN.test(prefix)
-          ? "FIXES"
-          : IMPLEMENTS_PATTERN.test(prefix)
-            ? "IMPLEMENTS"
-            : "RELATES_TO";
+        : (directKind ?? groupedKind ?? "RELATES_TO");
       const current = relations.get(number);
       if (!current || release || relationRank(kind) > relationRank(current)) {
         relations.set(number, kind);
       }
+      previousMatchEnd = issuePattern.lastIndex;
+      previousKind = kind;
     }
   }
   return relations;
