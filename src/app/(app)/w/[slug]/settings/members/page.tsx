@@ -1,7 +1,7 @@
 "use client";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import { ChevronRight, Send, Users, X } from "lucide-react";
+import { Ban, ChevronRight, RefreshCw, Send, Users, X } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,14 +17,12 @@ import { trpc } from "@/lib/trpc";
 import { initials, relativeTime } from "@/lib/utils";
 
 /**
- * Workspace members settings — admin-gated.
+ * Workspace members and invitation settings — admin-gated.
  *
- * Authelia owns identity; email-based self-service invites don't make
- * sense behind SSO. This page is the one place to grant access by email
- * (creates a `Membership` that will bind whenever Authelia lets that
- * email through), flip roles inline, or remove members. All mutations
- * route through `adminProcedure` so non-admins hit a FORBIDDEN even if
- * they guess the URL.
+ * Admins issue expiring email invitations; recipients receive membership only
+ * after authenticating as the invited email. Existing members remain managed
+ * through the role and removal controls below. Every mutation is server-gated
+ * by `adminProcedure`, even if a non-admin guesses this route.
  */
 const ROLES = ["OWNER", "ADMIN", "MEMBER", "GUEST"] as const;
 type Role = (typeof ROLES)[number];
@@ -63,15 +61,15 @@ const INVITE_ROLES = ["ADMIN", "MEMBER", "GUEST"] as const satisfies readonly Ro
 // closely enough to flag obvious typos client-side without false rejects.
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-type ChipStatus = "ready" | "exists" | "invalid";
+type ChipStatus = "ready" | "exists" | "pending" | "invalid";
 type Chip = { email: string; status: ChipStatus };
 
 /**
  * Parse a raw recipients blob into de-duped, validated chips. Splits on
- * commas, whitespace, and newlines; lowercases for both de-dup and the
- * already-a-member check (membership emails are stored lowercased).
+ * commas, whitespace, and newlines; lowercases for both de-dup and existing
+ * member / pending-invite checks.
  */
-function parseRecipients(raw: string, memberEmails: Set<string>): Chip[] {
+function parseRecipients(raw: string, memberEmails: Set<string>, pendingEmails: Set<string>): Chip[] {
   const seen = new Set<string>();
   const chips: Chip[] = [];
   for (const tokenRaw of raw.split(/[\s,]+/)) {
@@ -83,7 +81,9 @@ function parseRecipients(raw: string, memberEmails: Set<string>): Chip[] {
       ? "invalid"
       : memberEmails.has(email)
         ? "exists"
-        : "ready";
+        : pendingEmails.has(email)
+          ? "pending"
+          : "ready";
     chips.push({ email, status });
   }
   return chips;
@@ -93,6 +93,7 @@ export default function MembersPage() {
   const utils = trpc.useUtils();
   const { data: members, refetch, isLoading } =
     trpc.workspace.listMembers.useQuery();
+  const { data: invitations } = trpc.workspace.listInvitations.useQuery();
   const { data: me } = trpc.workspace.me.useQuery();
   const { data: workspace } = trpc.workspace.current.useQuery();
   const [removeTarget, setRemoveTarget] = useState<{
@@ -112,12 +113,22 @@ export default function MembersPage() {
     () => new Set((members ?? []).map((m) => m.email.toLowerCase())),
     [members],
   );
+  const pendingEmails = useMemo(
+    () =>
+      new Set(
+        (invitations ?? [])
+          .filter((invite) => invite.status === "PENDING")
+          .map((invite) => invite.email.toLowerCase()),
+      ),
+    [invitations],
+  );
   const chips = useMemo(
-    () => parseRecipients(recipientsRaw, memberEmails),
-    [recipientsRaw, memberEmails],
+    () => parseRecipients(recipientsRaw, memberEmails, pendingEmails),
+    [recipientsRaw, memberEmails, pendingEmails],
   );
   const readyChips = chips.filter((c) => c.status === "ready");
   const existsCount = chips.filter((c) => c.status === "exists").length;
+  const pendingCount = chips.filter((c) => c.status === "pending").length;
   const invalidCount = chips.filter((c) => c.status === "invalid").length;
   const readyCount = readyChips.length;
 
@@ -133,40 +144,53 @@ export default function MembersPage() {
     setNote("");
   }
 
-  const addMember = trpc.workspace.addMember.useMutation();
+  const inviteMember = trpc.workspace.invite.useMutation();
+  const resendInvitation = trpc.workspace.resendInvitation.useMutation({
+    onSuccess: async () => {
+      toast.success("Invitation resent with a new secure link.");
+      await utils.workspace.listInvitations.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const revokeInvitation = trpc.workspace.revokeInvitation.useMutation({
+    onSuccess: async () => {
+      toast.success("Invitation revoked.");
+      await utils.workspace.listInvitations.invalidate();
+    },
+    onError: (error) => toast.error(error.message),
+  });
 
-  /**
-   * Send one invite per ready recipient by looping the existing
-   * single-email `addMember` mutation (no bulk endpoint exists — by
-   * design). Fired in parallel; we tally created vs. already-existing
-   * vs. failed from the settled results, toast a summary, then refetch.
-   */
+  /** Send one secure invitation per ready recipient and summarize outcomes. */
   async function sendInvites() {
     if (readyCount === 0 || sending) return;
+    if (readyCount > 20) {
+      toast.error("Send at most 20 invitations at a time.");
+      return;
+    }
     setSending(true);
     try {
       const results = await Promise.allSettled(
         readyChips.map((c) =>
-          addMember.mutateAsync({ email: c.email, role: inviteRole }),
+          inviteMember.mutateAsync({ email: c.email, role: inviteRole, note: note.trim() || undefined }),
         ),
       );
-      let invited = 0;
-      let skipped = 0;
+      let sent = 0;
+      let duplicates = 0;
       let failed = 0;
-      for (const r of results) {
-        if (r.status === "rejected") failed += 1;
-        else if (r.value.created) invited += 1;
-        else skipped += 1;
+      for (const result of results) {
+        if (result.status === "rejected") failed += 1;
+        else if (result.value.outcome === "sent") sent += 1;
+        else duplicates += 1;
       }
       const parts: string[] = [];
-      if (invited) parts.push(`Invited ${invited}`);
-      if (skipped) parts.push(`skipped ${skipped} existing`);
+      if (sent) parts.push(`Sent ${sent}`);
+      if (duplicates) parts.push(`${duplicates} already pending`);
       if (failed) parts.push(`${failed} failed`);
       const summary = parts.join(" · ") || "Nothing to send.";
-      if (failed && !invited) toast.error(summary);
+      if (failed && !sent) toast.error(summary);
       else toast.success(summary);
 
-      await utils.workspace.listMembers.invalidate();
+      await utils.workspace.listInvitations.invalidate();
       if (!failed) {
         setInviteOpen(false);
         resetComposer();
@@ -196,7 +220,7 @@ export default function MembersPage() {
     <>
       <Topbar
         title="Members"
-        subtitle="Admin-gated access. Authelia owns identity — this is the one place to grant access by email."
+        subtitle="Invite teammates securely, then manage workspace roles and access."
         actions={
           <Button variant="ember" size="sm" onClick={() => setInviteOpen(true)}>
             Invite members
@@ -207,7 +231,7 @@ export default function MembersPage() {
         <div className="mx-auto max-w-3xl space-y-8 p-4 sm:p-6">
           <Section
             title="Roster"
-            hint="Email-based access. A member binds to a real identity on first SSO login; until then they hold their assigned role in waiting."
+            hint="People who accepted an invitation or already had access. Change roles or remove access here."
             actions={
               members && members.length > 0 ? (
                 <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
@@ -221,7 +245,7 @@ export default function MembersPage() {
                 as="div"
                 icon={Users}
                 title="No members yet"
-                hint="Members are people who can sign in to this workspace. Add a teammate by email and they'll bind to their account on first SSO login — then change their role any time."
+                hint="Members are people with active workspace access. Invite a teammate by email and they’ll appear here after accepting with the invited account."
                 action={
                   <Button variant="ember" size="sm" onClick={() => setInviteOpen(true)}>
                     Invite your first member
@@ -292,6 +316,84 @@ export default function MembersPage() {
           </Section>
 
           <Section
+            title="Invitations"
+            hint="Secure links expire automatically. Resending rotates the link; revoking disables it immediately."
+            actions={
+              invitations && invitations.length > 0 ? (
+                <span className="text-meta tabular-nums text-muted-foreground">
+                  {invitations.filter((invite) => invite.status === "PENDING").length} pending
+                </span>
+              ) : undefined
+            }
+          >
+            {!invitations?.length ? (
+              <EmptyState
+                as="div"
+                icon={Send}
+                title="No invitations yet"
+                hint="Pending and completed invitation history will appear here."
+              />
+            ) : (
+              <Card>
+                {invitations.map((invite) => (
+                  <li key={invite.id} className="flex flex-col gap-3 px-4 py-3 sm:flex-row sm:items-center">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="truncate font-mono text-sm text-foreground">{invite.email}</span>
+                        <Badge
+                          className={cn(
+                            invite.status === "PENDING" && "bg-warning/10 text-warning",
+                            invite.status === "ACCEPTED" && "bg-success/10 text-success",
+                            invite.status === "REVOKED" && "bg-danger/10 text-danger",
+                          )}
+                        >
+                          {invite.status.toLowerCase()}
+                        </Badge>
+                        <Badge>{invite.role.toLowerCase()}</Badge>
+                      </div>
+                      <p className="mt-1 text-meta text-muted-foreground">
+                        {invite.status === "PENDING"
+                          ? `Expires ${relativeTime(invite.expiresAt)}`
+                          : invite.status === "ACCEPTED" && invite.acceptedAt
+                            ? `Accepted ${relativeTime(invite.acceptedAt)}`
+                            : invite.status === "REVOKED" && invite.revokedAt
+                              ? `Revoked ${relativeTime(invite.revokedAt)}`
+                              : `Expired ${relativeTime(invite.expiresAt)}`}
+                        {invite.sendCount > 0 ? ` · sent ${invite.sendCount}×` : ""}
+                      </p>
+                      {invite.lastSendError && (
+                        <p className="mt-1 text-meta text-danger">Delivery failed: {invite.lastSendError}</p>
+                      )}
+                    </div>
+                    {invite.status === "PENDING" && (
+                      <div className="flex items-center gap-2">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={resendInvitation.isPending || revokeInvitation.isPending}
+                          onClick={() => resendInvitation.mutate({ invitationId: invite.id })}
+                        >
+                          <RefreshCw className="h-3.5 w-3.5" />
+                          Resend
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={resendInvitation.isPending || revokeInvitation.isPending}
+                          onClick={() => revokeInvitation.mutate({ invitationId: invite.id })}
+                        >
+                          <Ban className="h-3.5 w-3.5" />
+                          Revoke
+                        </Button>
+                      </div>
+                    )}
+                  </li>
+                ))}
+              </Card>
+            )}
+          </Section>
+
+          <Section
             title="Roles"
             hint="What each role can do in this workspace. Change a member's role from the dropdown on their row."
           >
@@ -319,13 +421,15 @@ export default function MembersPage() {
         }}
         size="md"
         title="Invite members"
-        description="Authelia owns identity — invitees sign in with their existing SSO account on first visit."
+        description="Recipients receive a secure, expiring link and join only after signing in as the invited email."
         footer={
           <div className="flex w-full flex-wrap items-center justify-between gap-2">
             <span className="text-[0.6875rem] text-muted-foreground">
               {readyCount === 0
                 ? "Add at least one valid email"
-                : `${readyCount} invite${readyCount === 1 ? "" : "s"} will be sent`}{" "}
+                : readyCount > 20
+                  ? "Send at most 20 invitations at a time"
+                  : `${readyCount} invite${readyCount === 1 ? "" : "s"} will be sent`}{" "}
               · <Kbd>⌘⏎</Kbd> send
             </span>
             <div className="flex flex-wrap items-center justify-end gap-2">
@@ -345,7 +449,7 @@ export default function MembersPage() {
                 type="button"
                 variant="ember"
                 size="sm"
-                disabled={sending || readyCount === 0}
+                disabled={sending || readyCount === 0 || readyCount > 20}
                 onClick={sendInvites}
               >
                 <Send className="h-3.5 w-3.5" />
@@ -380,6 +484,8 @@ export default function MembersPage() {
                       "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[0.6875rem]",
                       c.status === "exists" &&
                         "border-warning/40 bg-warning/10 text-warning",
+                      c.status === "pending" &&
+                        "border-ember/40 bg-ember/10 text-ember",
                       c.status === "invalid" &&
                         "border-danger/40 bg-danger/10 text-danger",
                       c.status === "ready" &&
@@ -389,6 +495,9 @@ export default function MembersPage() {
                     <span className="font-mono">{c.email}</span>
                     {c.status === "exists" && (
                       <span className="text-[10px]">already a member</span>
+                    )}
+                    {c.status === "pending" && (
+                      <span className="text-[10px]">invite pending</span>
                     )}
                     {c.status === "invalid" && (
                       <span className="text-[10px]">invalid</span>
@@ -425,6 +534,12 @@ export default function MembersPage() {
                       <span className="text-warning">
                         {existsCount} already {existsCount === 1 ? "a member" : "members"}
                       </span>
+                    </>
+                  )}
+                  {pendingCount > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="text-ember">{pendingCount} already pending</span>
                     </>
                   )}
                   {invalidCount > 0 && (
@@ -476,7 +591,7 @@ export default function MembersPage() {
           {/* Optional note ───────────────────────────────────────── */}
           <Section
             title="Optional note"
-            hint="Appears in the invite email. Markdown supported."
+            hint="Included as plain text in the invitation email."
           >
             <textarea
               rows={3}
@@ -496,7 +611,7 @@ export default function MembersPage() {
             <div className="border-t border-border/60 bg-background px-4 py-3 text-[0.6875rem] text-muted-foreground">
               <div>
                 <span className="text-foreground">From</span> · Forge
-                &lt;no-reply@forge.local&gt;
+                &lt;configured sender&gt;
               </div>
               <div className="mt-0.5">
                 <span className="text-foreground">Subject</span> ·{" "}
@@ -505,7 +620,7 @@ export default function MembersPage() {
               </div>
               <div className="mt-2 rounded-md border border-border bg-card/30 p-3 text-sm leading-relaxed text-foreground/90">
                 {note.trim() ||
-                  "Hey — you've been added to our Forge workspace. Sign in with your SSO account to get started."}
+                  "Hey — you’ve been invited to our Forge workspace. Use the secure link, then sign in or create an account to join."}
                 <br />
                 <br />
                 <span className="text-ember underline">Accept the invite →</span>

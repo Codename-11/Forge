@@ -89,16 +89,24 @@ interact with the dispatch mode.
 
 ### Members
 
-Add and remove members; set roles.
+Invite, remove, and manage members.
 
-- Add — by email or handle. The user must already have a Forge account.
+- Invite — send an expiring, single-use email link for `ADMIN`, `MEMBER`, or
+  `GUEST`. The recipient must authenticate as the invited email before Forge
+  creates membership; `OWNER` remains transfer-only.
+- Invitations — pending invites appear before accepted, expired, and revoked
+  history. Resend rotates the bearer token only after the replacement email is
+  accepted by the configured provider; revoke disables the pending token.
+- Add existing user — the compatibility API can still add a known Forge user
+  directly by email or handle.
 - Remove — keeps audit history; the row stays attributable.
 - Role change — `OWNER` / `ADMIN` / `MEMBER` / `GUEST`. Only an owner can
   promote to owner; admins can manage other admins and below.
 
-::: info
-Forge does not support self-service joining. Members are added by
-admins, by design. See [Workspaces](/guide/workspaces.html#members-and-roles).
+::: warning
+Production invitation delivery fails closed unless `EMAIL_SERVER` or
+`SMTP_HOST` (plus any credentials), or `RESEND_API_KEY`, is configured with
+`EMAIL_FROM`. Invite attempts never grant membership by themselves.
 :::
 
 ### Plugins

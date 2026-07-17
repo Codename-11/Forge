@@ -55,22 +55,22 @@ Forge has four roles:
 | `MEMBER` | Create/edit issues, projects, sprints, comments |
 | `GUEST` | Read-only on issues they're explicitly added to |
 
-Self-service email invitation is **disabled by design**. Forge does not have
-"invite anyone with a link" or "anyone at this email domain joins
-automatically" flows. Instead, an admin uses `workspace.addMember` (or the
-Members panel in Settings, which is the same call) to add a known user by
-email or handle. The added user must already have a Forge account.
+Workspace admins can invite a specific email from **Settings → Members**.
+Forge sends a random 256-bit bearer token, stores only its SHA-256 digest, and
+requires the signed-in account email to match before creating membership. The
+link supports an existing account or the instance's configured identity
+provider for first sign-in. Links expire, are single-use, and can be resent or
+revoked; Forge does not support domain-wide or unauthenticated auto-join.
 
 ::: info
-This is a deliberate posture, not a missing feature. Forge instances often
-host multiple sensitive workspaces on shared infrastructure; auto-join
-flows leak surface area and create audit gaps. Keeping membership
-admin-gated keeps the audit log meaningful.
+Invitation creation, resend, revoke, and acceptance are tenant-scoped and
+audited. Resend preserves the previous working token if outbound delivery
+fails, then rotates it only after the provider accepts the replacement email.
 :::
 
-To change a member's role, use the Members panel — the same row that adds
-also exposes role-change. To remove a member, the same row. All three are
-admin-only.
+The compatibility `workspace.addMember` operation remains available for an
+already-known Forge account. Role changes, removal, invite history, resend,
+and revoke are all admin-only.
 
 ## The configurability principle
 
@@ -95,6 +95,7 @@ what they govern.
 | `cycleCooldownDays` | 0 | Gap between sprints |
 | `timeTrackingEnabled` | false | Surfaces the time-tracker widget |
 | `attachmentQuotaMb` | 1024 | Per-workspace MinIO quota |
+| `inviteExpiryHours` | 168 | Lifetime of a newly issued or resent invitation link |
 
 ### Dispatch
 

@@ -2,6 +2,50 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-17 — AXI-2 email invitation recovery and hardening
+
+Recovered the preserved AXI-2 implementation from PR #65 onto exact current
+`main` at `1b90aad`, retaining that PR and branch as the single delivery. The
+reconciliation restored the complete current DEVLOG, rebuilt dependencies and
+the lockfile, regenerated Prisma, and replaced the colliding numeric migration
+directories with `20260717114500_workspace_invitations` and
+`20260717114600_invitation_delivery_lock`.
+
+Audited tenant isolation, admin-only invitation management, invited-email
+binding, 256-bit bearer generation with hash-only persistence, expiry,
+duplicate creation, delivery failure, resend serialization, revocation, and
+acceptance races. Revoke now claims the exact pending token generation instead
+of unconditionally overwriting a concurrently accepted invitation, and the
+existing-member lookup is case-insensitive. Added non-admin and accept/revoke
+race integration coverage, a focused invitation Playwright journey, and
+updated settings, workspace, tRPC, and outbound-email documentation.
+
+Verification used only local Postgres, Redis, and MinIO: all 121 migrations
+applied; Prisma generation, lint (existing warnings only), typecheck, the
+focused member/invitation suite (30/30), the full serial Vitest suite (1,434
+passed, 1 intentional skip), a fresh production E2E build, and the complete
+single-worker Playwright suite (54/54) passed. On Windows, the repository's
+`pnpm ci:local` wrapper cannot execute its Linux-only `flock` tail through
+`cmd.exe`; its lint/typecheck/test components and the same fresh E2E component
+were therefore run and passed separately. GitHub CI remains the authoritative
+combined Linux gate before merge.
+
+## 2026-07-14 — AXI-2 email invitation recovery snapshot
+
+Replaced the disabled invite stub with a tenant-scoped invitation lifecycle:
+hashed expiring tokens, authenticated email matching, SMTP/Resend delivery,
+accepted/expired/revoked/duplicate states, admin history with resend/revoke,
+configurable expiry, audit events, and delivery/race safeguards. Added the
+invitation UI and acceptance route plus integration coverage for duplicate
+creation, token rotation, failed delivery, simultaneous acceptance, expiry,
+and revocation behavior.
+
+The preserved branch recorded successful migration application, lint,
+typecheck, production build, a 28-test focused suite, and a 1,267-test full
+suite before the final race-hardening changes. Those results are recovery
+provenance only; the reconciled branch must be regenerated and revalidated
+against current `main` before merge.
+
 ## 2026-07-16 — AXI-119 shared issue search semantics
 
 Implemented a shared issue-search parser and Prisma predicate for tRPC
