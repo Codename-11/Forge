@@ -13969,3 +13969,18 @@ Verification covered decision/guard/planning unit tests, repeated real scenario
 application against local Postgres, PowerShell and Git Bash dry runs, local
 service health, lint, typecheck, a production Next E2E build, and a focused
 Playwright journey through large-workspace and Delivery/GitHub scenario UI.
+
+After AXI-2 merged, rebased onto `52cf513` and upgraded the
+invitations/concurrency scenario to use the real secure invitation model. Scale
+now controls pending, accepted, and revoked invitation history alongside
+accepted memberships and bounded agent work. Added browser assertions for the
+invitation lifecycle. Shell entrypoints are LF-pinned, and Playwright selects
+Git-for-Windows Bash instead of WSL Bash on Windows (with
+`FORGE_GIT_BASH_PATH` available for nonstandard installs).
+
+Post-rebase verification passed lint (existing warnings only), typecheck, 16
+focused unit tests, repeated scale-2 scenario application with exact counts, a
+fresh production build, the focused scenario Playwright journey, and the full
+single-worker Playwright suite (54 passed, 1 intentional scenario skip). The
+full serial Vitest suite also passed before the rebase (1,441 passed, 1 skip);
+fresh GitHub CI is required on the final published head.
