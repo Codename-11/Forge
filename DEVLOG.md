@@ -13944,3 +13944,61 @@ its first Quick Create click could arrive before the lazy surface subscribed.
 The trigger now records that request in a tiny client-side request seam and the
 lazy surface consumes it on subscription. A clean production rebuild followed
 by the full mobile smoke suite and the AXI-125 load/realtime test passed 8/8.
+
+## 2026-07-17 — Safe local development and scenario fixtures (AXI-124)
+
+Made `pnpm dev` the deterministic workstation default. A cross-platform
+TypeScript orchestrator now loads `.env.local`, rejects non-local database,
+Redis, S3, and container targets, starts only missing local Postgres/Redis/MinIO
+services, waits for health, applies only needed local Prisma migration/client
+work, seeds only an empty database, and launches host-native Turbo HMR while
+preserving containers, volumes, and build cache. Added app-only, services,
+confirmed reset/fresh, scenario, and dry-run commands. Live-data inspection is
+now explicitly named unsafe and keeps local workers disabled by default.
+
+Replaced the production-clone shortcut with a confirmed `dev:refresh` stream:
+remote `pg_dump` reads production through SSH and writes directly to the fixed
+local Postgres target without copying a dump or production secret to the
+workstation. Added deterministic, idempotent, composable named scenarios for
+Delivery/GitHub provenance, lifecycle freshness, activity grouping/overflow,
+tenancy, invitations/concurrency, and large-workspace performance with bounded
+scale controls and stable CUID-compatible fixture identities. The simple base
+seed and `owner@forge.local / forge-dev` login remain unchanged.
+
+Verification covered decision/guard/planning unit tests, repeated real scenario
+application against local Postgres, PowerShell and Git Bash dry runs, local
+service health, lint, typecheck, a production Next E2E build, and a focused
+Playwright journey through large-workspace and Delivery/GitHub scenario UI.
+
+After AXI-2 merged, rebased onto `52cf513` and upgraded the
+invitations/concurrency scenario to use the real secure invitation model. Scale
+now controls pending, accepted, and revoked invitation history alongside
+accepted memberships and bounded agent work. Added browser assertions for the
+invitation lifecycle. Shell entrypoints are LF-pinned, and Playwright selects
+Git-for-Windows Bash instead of WSL Bash on Windows (with
+`FORGE_GIT_BASH_PATH` available for nonstandard installs).
+
+Post-rebase verification passed lint (existing warnings only), typecheck, 16
+focused unit tests, repeated scale-2 scenario application with exact counts, a
+fresh production build, the focused scenario Playwright journey, and the full
+single-worker Playwright suite (54 passed, 1 intentional scenario skip). The
+full serial Vitest suite also passed before the rebase (1,441 passed, 1 skip);
+fresh GitHub CI is required on the final published head.
+
+The bounded PR review found and resolved three actionable gaps: Windows pnpm
+shim parsing now supports Corepack's `pnpm.js`, scenario targets require the
+exact local user/password/public-schema tuple in addition to host/port/database,
+and freshness-sensitive run/invitation timestamps are derived from seed time so
+their advertised states do not age out. Regression coverage exercises both
+Windows shim forms, tunneled credential/schema rejection, and deterministic
+relative-time derivation. Two consecutive scale-2 runs converged to 6
+invitations while preserving 1/10/180/30-minute run ages and a 30-day pending
+invite expiry.
+
+The single material exact-head re-review found one remaining preview mismatch:
+the generic dry-run shortcut described the default start flow for app-only,
+services-only, reset, and scenario commands. Dry-run routing is now mode-aware:
+app-only rejects unavailable services, services-only stops after its health
+plan, reset displays its exact destructive target and reseed plan, and scenario
+validates and prints the selected deterministic fixture counts. Focused command
+decision coverage and executable dry runs verify all four paths.

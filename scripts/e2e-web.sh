@@ -3,7 +3,8 @@
 # disposable database (`forge_e2e`) on the isolated docker stack, fully
 # separate from both prod (dev:live) and the shared dev:local data. Boots the
 # stack if needed, migrates + seeds (idempotent, with FORGE_E2E fixtures), then
-# runs the server. Nothing here can touch production.
+# runs the server. Nothing here can touch production. Shell scripts are LF-pinned
+# by .gitattributes so this entrypoint also works from Git Bash on Windows.
 #
 #   pnpm e2e            # provisions + runs Playwright (spawns this)
 #   bash scripts/e2e-web.sh   # just the server (manual)
@@ -89,6 +90,9 @@ echo "[e2e] Applying migrations + seeding (idempotent)…"
 pnpm exec prisma migrate deploy >/dev/null
 pnpm exec prisma generate >/dev/null
 pnpm exec tsx prisma/seed.ts
+if [[ "${FORGE_SCENARIOS:-0}" == "1" ]]; then
+  pnpm exec tsx scripts/seed-scenarios.ts --scenarios "${FORGE_SCENARIO_NAMES:-all}" --scale "${FORGE_SCENARIO_SCALE:-1}"
+fi
 
 # Production build → `next start` (NOT `next dev`): no on-demand compilation, so
 # the server doesn't stall under parallel workers — the source of E2E flakiness.

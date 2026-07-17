@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
 
 /**
@@ -8,6 +9,13 @@ import { defineConfig, devices } from "@playwright/test";
  */
 const PORT = Number(process.env.E2E_PORT ?? 3200);
 const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PORT}`;
+const windowsGitBash = process.env.FORGE_GIT_BASH_PATH ?? "C:\\Program Files\\Git\\bin\\bash.exe";
+if (process.platform === "win32" && !existsSync(windowsGitBash)) {
+  throw new Error(
+    `Git Bash was not found at ${windowsGitBash}. Set FORGE_GIT_BASH_PATH to bash.exe.`,
+  );
+}
+const bashCommand = process.platform === "win32" ? `"${windowsGitBash}"` : "bash";
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -32,7 +40,7 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: devices["Desktop Chrome"] }],
   webServer: {
-    command: "bash scripts/e2e-web.sh",
+    command: `${bashCommand} scripts/e2e-web.sh`,
     url: BASE_URL,
     reuseExistingServer: !process.env.CI && process.env.E2E_FORCE_FRESH_SERVER !== "1",
     // First boot migrates + seeds + runs a full `next build`, so allow headroom.

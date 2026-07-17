@@ -7,9 +7,9 @@ or against a deployed instance.
 
 ::: info
 If you don't have Forge running yet, see [Local Development](/guide/local-development.html)
-for the full setup. In short: `pnpm dev:local` runs an isolated local stack
-that auto-migrates and seeds demo data, while `pnpm dev` points the dev
-server at the *deployed* database (real data, real writes).
+for the full setup. In short: `pnpm dev` verifies or starts the isolated local
+stack, applies only needed local schema/client work, seeds an empty database,
+and starts Turbo HMR. It never silently connects to production.
 :::
 
 ## 1. Sign in

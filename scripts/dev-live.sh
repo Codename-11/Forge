@@ -1,15 +1,14 @@
 #!/usr/bin/env bash
-# pnpm dev / pnpm dev:live - run `next dev` against the deployed Postgres /
-# Redis / MinIO instead of a local docker compose stack.
+# pnpm dev:live:unsafe - exceptional LF-pinned live-data inspection only.
 #
 # Frontend HMR is instant; server routes (tRPC, MCP, webhook delivery) hit the
-# live DB. By default this preserves the historical behavior and boots workers
-# in-process via Next instrumentation. For UI/API-only live dev, use
-# `pnpm dev:live:ui` or pass `--no-workers`.
+# live DB. Workers are disabled by default so the deployed worker remains
+# authoritative. Starting local workers requires the explicit
+# `pnpm dev:live:workers:unsafe` command.
 
 set -euo pipefail
 
-RUN_WORKERS="${RUN_WORKERS:-1}"
+RUN_WORKERS="${RUN_WORKERS:-0}"
 for arg in "$@"; do
   case "$arg" in
     --workers) RUN_WORKERS=1 ;;
@@ -21,6 +20,9 @@ done
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck disable=SC1091
 source "$ROOT/scripts/dev-live-env.sh"
+
+echo "[dev:live:unsafe] WARNING: this app process reads and writes DEPLOYED production data."
+echo "[dev:live:unsafe] Use pnpm dev for normal workstation development."
 
 if [[ "$RUN_WORKERS" == "0" ]]; then
   export FORGE_DISABLE_IN_PROCESS_WORKER="1"
