@@ -164,6 +164,70 @@ describe("GitHub REST client resilience", () => {
     expect(urls[1]).toContain("page=2");
   });
 
+  it("ignores queued GitHub App suites that contain no check runs", async () => {
+    vi.spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            total_count: 5,
+            check_suites: [
+              { status: "queued", conclusion: null, latest_check_runs_count: 0 },
+              { status: "queued", conclusion: null, latest_check_runs_count: 0 },
+              { status: "queued", conclusion: null, latest_check_runs_count: 0 },
+              { status: "queued", conclusion: null, latest_check_runs_count: 0 },
+              { status: "completed", conclusion: "success", latest_check_runs_count: 3 },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ state: "success", total_count: 0 }), { status: 200 }),
+      );
+
+    await expect(
+      getGitHubPullRequestChecks({
+        installationId: 1,
+        owner: "acme",
+        repo: "forge",
+        headSha: "abc123",
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      conclusion: "success",
+      suiteCount: 1,
+      ignoredSuiteCount: 4,
+      statusCount: 0,
+    });
+  });
+
+  it("keeps queued suites with real or unknown check-run counts pending", async () => {
+    for (const pendingSuite of [
+      { status: "queued", conclusion: null, latest_check_runs_count: 1 },
+      { status: "queued", conclusion: null },
+    ]) {
+      vi.spyOn(globalThis, "fetch")
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ total_count: 1, check_suites: [pendingSuite] }), {
+            status: 200,
+          }),
+        )
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ state: "success", total_count: 0 }), { status: 200 }),
+        );
+
+      await expect(
+        getGitHubPullRequestChecks({
+          installationId: 1,
+          owner: "acme",
+          repo: "forge",
+          headSha: "abc123",
+        }),
+      ).resolves.toMatchObject({ status: "pending", conclusion: null, suiteCount: 1 });
+      vi.restoreAllMocks();
+    }
+  });
+
   it("keeps a completed suite with a null conclusion untrusted", async () => {
     vi.spyOn(globalThis, "fetch")
       .mockResolvedValueOnce(

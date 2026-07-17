@@ -189,4 +189,166 @@ describe("agent-run-stale — sweepStalledRuns", () => {
       prisma.agentConnection.findUniqueOrThrow({ where: { id: connection.id } }),
     ).resolves.toMatchObject({ status: "QUIET", confidence: "UNCONFIRMED" });
   });
+
+  it("reconciles only passive post-merge MCP comment runs without duplicating comments", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { agentRunStaleMinutes: 30 },
+    });
+    const agent = await createAgent(fixture.workspace.id, "arp-mcp");
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "QUIET",
+        confidence: "UNCONFIRMED",
+        instanceKey: `passive-${Date.now()}`,
+      },
+    });
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const mergedAt = new Date(Date.now() - 2 * 60 * 60_000);
+    await prisma.workSession.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        ownerAgentId: agent.id,
+        source: "MCP",
+        status: "MERGED",
+        repoFullName: "acme/forge",
+        branch: "codex/passive-mcp",
+        baseBranch: "main",
+        mergedAt,
+        lastHeartbeatAt: mergedAt,
+      },
+    });
+    const commentAt = new Date(Date.now() - 90 * 60_000);
+    const comment = await prisma.comment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        authorId: fixture.user.id,
+        authoringAgentId: agent.id,
+        kind: "BODY",
+        body: "Merged and verified in GitHub.",
+        createdAt: commentAt,
+        updatedAt: commentAt,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+        status: "ACTIVE",
+        lifecycleConfidence: "UNCONFIRMED",
+        startedAt: new Date(commentAt.getTime() + 500),
+        lastEventAt: new Date(commentAt.getTime() + 500),
+        outputStartedAt: new Date(commentAt.getTime() + 500),
+      },
+    });
+    await prisma.agentRunEvent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        runId: run.id,
+        connectionId: connection.id,
+        kind: "STARTED",
+      },
+    });
+
+    const result = await sweepStalledRuns();
+
+    expect(result.reconciledPassiveMcp).toContain(run.id);
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).resolves.toMatchObject({
+      status: "COMPLETED",
+      engagementMode: "DISCUSS",
+      completionMeta: {
+        completionCommentId: comment.id,
+        terminalCommentId: comment.id,
+        lifecycleReconciliation: { kind: "PASSIVE_MCP_METADATA" },
+      },
+    });
+    expect(await prisma.comment.count({ where: { issueId: issue.id } })).toBe(1);
+  });
+
+  it("keeps a post-merge MCP run active when it has explicit work evidence", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARE" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { agentRunStaleMinutes: 30 },
+    });
+    const agent = await createAgent(fixture.workspace.id, "are-mcp");
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "QUIET",
+        confidence: "UNCONFIRMED",
+        instanceKey: `explicit-${Date.now()}`,
+      },
+    });
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    await prisma.workSession.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        ownerAgentId: agent.id,
+        source: "MCP",
+        status: "MERGED",
+        repoFullName: "acme/forge",
+        branch: "codex/real-mcp",
+        baseBranch: "main",
+        mergedAt: new Date(Date.now() - 2 * 60 * 60_000),
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+        status: "ACTIVE",
+        currentStep: "Awaiting device verification",
+        externalRunId: null,
+      },
+    });
+    await backdateRun(run.id, new Date(Date.now() - 90 * 60_000));
+    await prisma.agentRunEvent.createMany({
+      data: [
+        {
+          workspaceId: fixture.workspace.id,
+          runId: run.id,
+          connectionId: connection.id,
+          kind: "STARTED",
+        },
+        {
+          workspaceId: fixture.workspace.id,
+          runId: run.id,
+          connectionId: connection.id,
+          kind: "STATUS",
+        },
+      ],
+    });
+
+    const result = await sweepStalledRuns();
+
+    expect(result.reconciledPassiveMcp).not.toContain(run.id);
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).resolves.toMatchObject({
+      status: "ACTIVE",
+      currentStep: "Awaiting device verification",
+    });
+  });
 });

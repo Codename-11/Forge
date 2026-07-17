@@ -8,6 +8,7 @@ import {
   claimWorkSession,
   listIssueWorkSessions,
   resolveMcpQuietRequestsForConnection,
+  syncWorkSessionsFromPullRequest,
   sweepStaleWorkSessions,
   touchWorkSession,
 } from "@/server/services/work-session";
@@ -430,6 +431,118 @@ describe("work session coordination", () => {
     });
   });
 
+  it("resolves obsolete quiet and stale recovery asks when GitHub confirms the PR merged", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/recovery-merged",
+      source: WorkSessionSource.MCP,
+      actor: { userId: fixture.user.id },
+    });
+    const pr = await prisma.externalResource.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        provider: "GITHUB",
+        resourceType: "PULL_REQUEST",
+        repoFullName: "acme/forge",
+        number: 76,
+        url: "https://github.com/acme/forge/pull/76",
+        title: "Merge recovery",
+        state: "open",
+        metadata: { head: { ref: session.branch, sha: "abcdef1234567" } },
+      },
+    });
+    await prisma.workSession.update({
+      where: { id: session.id },
+      data: { pullRequestId: pr.id, status: "STALE", staleAt: new Date() },
+    });
+    for (const dedupeKey of [
+      `work-session-stale:${session.id}`,
+      `work-session-mcp-quiet:${session.id}`,
+    ]) {
+      await prisma.actionRequest.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          title: "Delivery needs recovery",
+          kind: "FREE_FORM",
+          severity: "WARNING",
+          dedupeKey,
+          sourceType: "work-session",
+          sourceId: session.id,
+        },
+      });
+    }
+    const mergedAt = new Date();
+    const merged = await prisma.externalResource.update({
+      where: { id: pr.id },
+      data: {
+        state: "merged",
+        metadata: {
+          mergedAt: mergedAt.toISOString(),
+          head: { ref: session.branch, sha: "abcdef1234567" },
+        },
+      },
+    });
+
+    expect(await syncWorkSessionsFromPullRequest(prisma, merged)).toBe(1);
+    await expect(
+      prisma.workSession.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({ status: "MERGED", staleAt: null });
+    const requests = await prisma.actionRequest.findMany({
+      where: { sourceId: session.id },
+      select: { status: true, resolution: true },
+    });
+    expect(requests).toHaveLength(2);
+    expect(requests).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          status: "RESOLVED",
+          resolution: "Implementation pull request merged.",
+        }),
+      ]),
+    );
+  });
+
+  it("repairs an open recovery ask for an already-delivered session during the stale sweep", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const session = await prisma.workSession.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        ownerUserId: fixture.user.id,
+        source: "MCP",
+        status: "MERGED",
+        repoFullName: "acme/forge",
+        branch: "codex/already-merged",
+        baseBranch: "main",
+        mergedAt: new Date(),
+      },
+    });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        title: "Old recovery ask",
+        kind: "FREE_FORM",
+        severity: "WARNING",
+        dedupeKey: `work-session-mcp-quiet:${session.id}`,
+        sourceType: "work-session",
+        sourceId: session.id,
+      },
+    });
+
+    expect(await sweepStaleWorkSessions(prisma)).toBe(0);
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({
+      status: "RESOLVED",
+      resolution: "Implementation pull request merged.",
+    });
+  });
+
   it("automatically posts one human-readable PR handoff when configured", async () => {
     const { fixture, prisma, issue } = await setup();
     await prisma.workspace.update({
@@ -538,6 +651,7 @@ describe("work session coordination", () => {
   });
 
   it("advertises the human-readable delivery contract in MCP instructions", () => {
+    expect(FORGE_MCP_INSTRUCTIONS).toContain("runs.open");
     expect(FORGE_MCP_INSTRUCTIONS).toContain("comments.upsertStatus");
     expect(FORGE_MCP_INSTRUCTIONS).toContain("comments.create");
     expect(FORGE_MCP_INSTRUCTIONS).toContain("workSessions.attachPullRequest");

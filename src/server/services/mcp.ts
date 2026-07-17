@@ -53,6 +53,7 @@ import { issueSearchWhere } from "@/server/services/issue-search";
 import {
   abandonRunsForAgentReassignment,
   openOrTouchRun,
+  touchActiveRun,
   appendRunEvent,
   finishRun,
   finishRunsForIssue,
@@ -3068,27 +3069,18 @@ export const mcpTools = {
           confidence: input.confidence ?? null,
         },
       });
-      // Touch the agent run on every agent-authored comment so the live
-      // pulse strip stays warm. Comments are usually big-picture turn
-      // markers, so we keep the kind as COMMENT (not STATUS — that's a
-      // separate dedicated tool).
+      // A comment is metadata, not proof that a runtime-dispatched attempt
+      // exists. Enrich an explicitly open run when present, but never create
+      // execution provenance from the transport write itself.
       if (authoringAgentId) {
         await db.$transaction(async (tx) => {
-          const { run, isNew } = await openOrTouchRun(tx, {
-            workspaceId: ctx.workspaceId,
+          const run = await touchActiveRun(tx, {
             issueId: input.issueId,
             agentId: authoringAgentId,
-            actorId: authorId,
-            actorAgentId: authoringAgentId,
             connectionId: ctx.connectionId ?? null,
             lifecycleConfidence: "UNCONFIRMED",
           });
-          if (isNew) {
-            await tx.agentRun.updateMany({
-              where: { id: run.id, outputStartedAt: null },
-              data: { outputStartedAt: new Date() },
-            });
-          } else {
+          if (run) {
             await appendRunEvent(tx, {
               runId: run.id,
               workspaceId: ctx.workspaceId,
@@ -3342,9 +3334,9 @@ export const mcpTools = {
    * Rolling live status comment. Idempotent — agents call it on every
    * loop turn with the current step + body, and Forge upserts a single
    * STATUS-kind Comment per AgentRun (rolling history kept in
-   * `revisions`). Implicitly opens an AgentRun if one isn't active for
-   * (issueId, callingAgent), giving the issue page a live pulse strip
-   * to render. Only callable by agent-linked API keys.
+   * `revisions`). Requires an explicitly opened AgentRun for
+   * (issueId, callingAgent); transport metadata never creates execution
+   * provenance. Only callable by agent-linked API keys.
    *
    * Best practice: call this *before* you start a turn ("Reading…",
    * "Running tests…") so the live strip reflects what's happening right
@@ -3370,21 +3362,17 @@ export const mcpTools = {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const authorId = await resolveActorId(ctx);
       return db.$transaction(async (tx) => {
-        const { run, isNew } = await openOrTouchRun(tx, {
-          workspaceId: ctx.workspaceId,
+        const run = await touchActiveRun(tx, {
           issueId: input.issueId,
           agentId,
-          actorId: authorId,
-          actorAgentId: agentId,
           connectionId: ctx.connectionId ?? null,
           lifecycleConfidence: "UNCONFIRMED",
           currentStep: input.currentStep ?? null,
         });
-        if (isNew) {
-          await tx.agentRun.updateMany({
-            where: { id: run.id, outputStartedAt: null },
-            data: { outputStartedAt: new Date() },
-          });
+        if (!run) {
+          throw new Error(
+            "comments.upsertStatus requires an active run. Call runs.open before publishing execution status.",
+          );
         }
 
         const existing = await tx.comment.findFirst({
@@ -3429,18 +3417,16 @@ export const mcpTools = {
           });
         }
 
-        if (!isNew) {
-          await appendRunEvent(tx, {
-            runId: run.id,
-            workspaceId: ctx.workspaceId,
-            issueId: input.issueId,
-            agentId,
-            connectionId: ctx.connectionId ?? null,
-            kind: "STATUS",
-            payload: { commentId: comment.id, preview: input.body.slice(0, 120) },
-            currentStep: input.currentStep ?? null,
-          });
-        }
+        await appendRunEvent(tx, {
+          runId: run.id,
+          workspaceId: ctx.workspaceId,
+          issueId: input.issueId,
+          agentId,
+          connectionId: ctx.connectionId ?? null,
+          kind: "STATUS",
+          payload: { commentId: comment.id, preview: input.body.slice(0, 120) },
+          currentStep: input.currentStep ?? null,
+        });
 
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,

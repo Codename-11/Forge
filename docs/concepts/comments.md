@@ -38,9 +38,11 @@ enum ConfidenceLevel {
 }
 ```
 
-`STATUS` rows are upserted via `comment.upsertStatus` — one row per
-`AgentRun`. They render inside the same chronological issue timeline as
-BODY and SYSTEM rows, but their effective timestamp is `updatedAt` so a
+`STATUS` rows are upserted via `comments.upsertStatus` — one row per
+explicitly active `AgentRun`. Agent-initiated MCP work opens that lifecycle
+with `runs.open`; a BODY comment is conversation metadata and never creates a
+run by itself. Status rows render inside the same chronological issue timeline
+as BODY and SYSTEM rows, but their effective timestamp is `updatedAt` so a
 rolling live-status update moves to the point where the agent actually
 reported progress. Active / stalled / waiting status rows render with a
 soft ember "live status" chip; terminal rows render as "run status".
