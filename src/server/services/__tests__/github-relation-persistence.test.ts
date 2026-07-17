@@ -304,6 +304,16 @@ describe("native GitHub relation persistence", () => {
         },
       ],
     });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        title: "Stale canonicalization candidate",
+        sourceType: "completion-candidate",
+        sourceId: duplicate.id,
+        dedupeKey: `issue-completion:${issue.id}`,
+      },
+    });
 
     await canonicalizeGitHubResourceIdentity(prisma, {
       workspaceId: fixture.workspace.id,
@@ -328,6 +338,12 @@ describe("native GitHub relation persistence", () => {
     await expect(
       prisma.externalResource.findUnique({ where: { id: duplicate.id } }),
     ).resolves.toBeNull();
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({
+      status: "DISMISSED",
+      resolution: "The canonical GitHub source is no longer implementation evidence.",
+    });
   });
 
   it("keeps imported SOURCE pull requests eligible for mapped status synchronization", async () => {

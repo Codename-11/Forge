@@ -555,6 +555,7 @@ export async function canonicalizeGitHubResourceIdentity(
   // Older builds could create one row per repository spelling. Preserve every
   // issue relation on the canonical row, keeping the original link id unless
   // the same issue/resource relation already exists there.
+  const downgradedIssueIds = new Set<string>();
   for (const duplicate of equivalent) {
     if (duplicate.id === canonical.id) continue;
     for (const link of duplicate.links) {
@@ -568,6 +569,18 @@ export async function canonicalizeGitHubResourceIdentity(
         select: { id: true, kind: true },
       });
       if (collision) {
+        const winningKind =
+          externalLinkKindRank(link.kind) > externalLinkKindRank(collision.kind)
+            ? link.kind
+            : collision.kind;
+        if (
+          [link.kind, collision.kind].some((candidate) =>
+            IMPLEMENTATION_LINK_KINDS.some((kind) => kind === candidate),
+          ) &&
+          !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === winningKind)
+        ) {
+          downgradedIssueIds.add(link.issueId);
+        }
         if (externalLinkKindRank(link.kind) > externalLinkKindRank(collision.kind)) {
           await db.externalResourceLink.update({
             where: { id: collision.id },
@@ -589,6 +602,24 @@ export async function canonicalizeGitHubResourceIdentity(
       where: { id: canonical.id },
       data: { repoFullName: args.snapshot.repoFullName },
     });
+  }
+  for (const issueId of downgradedIssueIds) {
+    const remainingImplementationLinks = await db.externalResourceLink.count({
+      where: {
+        workspaceId: args.workspaceId,
+        issueId,
+        kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+        externalResource: { resourceType: "PULL_REQUEST" },
+      },
+    });
+    if (remainingImplementationLinks === 0) {
+      await dismissIssueCompletionCandidate(db, {
+        workspaceId: args.workspaceId,
+        issueId,
+        actorId: null,
+        resolution: "The canonical GitHub source is no longer implementation evidence.",
+      });
+    }
   }
 }
 
