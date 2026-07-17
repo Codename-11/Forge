@@ -21,7 +21,9 @@ relinks remain operator-controlled. Imported `SOURCE` identity is preserved
 ahead of derived PR relations so later imports cannot duplicate the Forge issue;
 explicit downgrades dismiss stale Ready-to-Close requests when no implementation
 PR remains. Grouped references such as `Fixes AXI-1, AXI-2` retain the keyword
-across the full clause. Terminal PR synchronization clears
+across the full clause. Duplicate-resource canonicalization also preserves
+`SOURCE`, while imported source PRs retain their mapped status synchronization.
+Terminal PR synchronization clears
 stale mergeability and suppresses pending-check contradictions, while merged
 implementation evidence continues reconciliation until its final checks
 aggregate is trusted and still participates in completion readiness. Passing

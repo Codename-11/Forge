@@ -70,10 +70,10 @@ function assertLinkKind(kind: string): asserts kind is ExternalLinkKind {
 }
 
 function externalLinkKindRank(kind: string): number {
+  if (kind === "SOURCE") return 6;
   if (kind === "FIXES") return 5;
   if (kind === "IMPLEMENTS") return 4;
   if (kind === "RELEASES") return 3;
-  if (kind === "SOURCE") return 2;
   if (kind === "REVIEWS") return 1;
   return 0;
 }
@@ -1297,6 +1297,7 @@ export async function applyGitHubSnapshotToLinkedIssues(args: {
   for (const link of links) {
     const statusId =
       args.snapshot.resourceType === "PULL_REQUEST" &&
+      link.kind !== "SOURCE" &&
       !IMPLEMENTATION_LINK_KINDS.some((kind) => kind === link.kind)
         ? null
         : (args.statusRuleId ?? null);
