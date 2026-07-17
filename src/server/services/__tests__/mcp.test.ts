@@ -3100,6 +3100,79 @@ describe("mcp — Phase A: filter passthrough, generic update, labels", () => {
     expect(compound.map((i) => i.id)).toEqual([a.id]);
   });
 
+  it("issues.list shares direct identifier and metadata search semantics", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MSR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "SEARCH",
+        name: "MCP Search Project",
+        createdById: fixture.user.id,
+      },
+    });
+    const label = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "MCP Search Label", color: "#765432" },
+    });
+    await prisma.user.update({
+      where: { id: fixture.secondUser.id },
+      data: { name: "MCP Search Person", handle: `mcp-search-${Date.now()}` },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "MCP Search Agent",
+        profileKey: `mcp-agent-${Date.now()}`,
+      },
+    });
+    const issue = await createIssue(fixture, { title: "MCP Search Title", projectId: project.id });
+    const outside = await createIssue(fixture, { title: "Outside scoped issue" });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { description: "MCP Search Description", assignedAgentId: agent.id },
+    });
+    await prisma.issueAssignee.create({
+      data: { issueId: issue.id, userId: fixture.secondUser.id },
+    });
+    await prisma.issueLabel.create({ data: { issueId: issue.id, labelId: label.id } });
+    const { ctx } = buildMcpCtx(fixture, { labelIds: [label.id] });
+
+    for (const query of [
+      `${fixture.workspace.key.toLowerCase()}-${issue.number}`,
+      String(issue.number),
+      `#${issue.number}`,
+      "MCP Search Title",
+      "MCP Search Description",
+      "SEARCH",
+      "MCP Search Project",
+      "MCP Search Label",
+      "MCP Search Person",
+      fixture.secondUser.email,
+      "MCP Search Agent",
+      agent.profileKey,
+    ]) {
+      const result = dataOf<{ id: string }>(
+        await call("issues.list", { query, includeDone: true }, ctx),
+      );
+      expect(
+        result.map((row) => row.id),
+        query,
+      ).toEqual([issue.id]);
+    }
+
+    expect(
+      dataOf<{ id: string }>(
+        await call("issues.list", { query: String(outside.number), includeDone: true }, ctx),
+      ),
+    ).toEqual([]);
+    expect(
+      dataOf<{ id: string }>(
+        await call("issues.list", { query: `WRONG-${issue.number}`, includeDone: true }, ctx),
+      ),
+    ).toEqual([]);
+  });
+
   it("issues.list returns the Orca DTO, honors sort params, and paginates by cursor", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ORC" });
     fixtures.push(fixture);

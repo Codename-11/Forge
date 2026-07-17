@@ -38,6 +38,174 @@ async function setup() {
 }
 
 describe("issueRouter — list filtering", () => {
+  it("searches exact identifiers without crossing workspace or lifecycle boundaries", async () => {
+    const { caller, fixture } = await setup();
+    const other = await createWorkspaceFixture({ keyPrefix: "OTH" });
+    fixtures.push(other);
+    const target = await createIssue(fixture, { title: "Direct target" });
+    await createIssue(other, { title: "Same number elsewhere" });
+
+    for (const query of [
+      `${fixture.workspace.key.toLowerCase()}-${target.number}`,
+      String(target.number),
+      `#${target.number}`,
+    ]) {
+      const result = await caller.list({ query, includeDone: true, limit: 50 });
+      expect(result.items.map((row) => row.id)).toEqual([target.id]);
+      await expect(caller.count({ query, includeDone: true, limit: 50 })).resolves.toEqual({
+        count: 1,
+      });
+    }
+
+    const wrongKey = await caller.list({
+      query: `${other.workspace.key}-${target.number}`,
+      includeDone: true,
+      limit: 50,
+    });
+    expect(wrongKey.items).toEqual([]);
+
+    const done = await createIssue(fixture, { title: "Terminal direct", statusCategory: "DONE" });
+    expect(
+      (await caller.list({ query: String(done.number), includeDone: false, limit: 50 })).items,
+    ).toEqual([]);
+    expect(
+      (
+        await caller.list({
+          query: String(done.number),
+          statusCategories: ["DONE"],
+          includeDone: false,
+          limit: 50,
+        })
+      ).items.map((row) => row.id),
+    ).toEqual([done.id]);
+    const canceled = await createIssue(fixture, {
+      title: "Canceled direct",
+      statusCategory: "CANCELED",
+    });
+    expect(
+      (
+        await caller.list({
+          query: `#${canceled.number}`,
+          statusCategories: ["CANCELED"],
+          includeDone: false,
+          limit: 50,
+        })
+      ).items.map((row) => row.id),
+    ).toEqual([canceled.id]);
+
+    await getPrisma().issue.update({
+      where: { id: target.id },
+      data: { deletedAt: new Date() },
+    });
+    expect(
+      (await caller.list({ query: String(target.number), archived: false, limit: 50 })).items,
+    ).toEqual([]);
+    expect(
+      (
+        await caller.list({
+          query: String(target.number),
+          archived: true,
+          includeDone: true,
+          limit: 50,
+        })
+      ).items.map((row) => row.id),
+    ).toEqual([target.id]);
+  });
+
+  it("searches operator-facing issue metadata and composes with facets", async () => {
+    const { caller, fixture } = await setup();
+    const prisma = getPrisma();
+    await prisma.user.update({
+      where: { id: fixture.secondUser.id },
+      data: { name: "Search Person", handle: `search-person-${Date.now()}` },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "META",
+        name: "Metadata Project",
+        createdById: fixture.user.id,
+      },
+    });
+    const label = await prisma.label.create({
+      data: { workspaceId: fixture.workspace.id, name: "Search Label", color: "#123456" },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Search Agent",
+        profileKey: `search-agent-${Date.now()}`,
+      },
+    });
+    const issue = await createIssue(fixture, { title: "Title Needle", projectId: project.id });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { description: "Description Needle", assignedAgentId: agent.id },
+    });
+    await prisma.issueAssignee.create({
+      data: { issueId: issue.id, userId: fixture.secondUser.id },
+    });
+    await prisma.issueLabel.create({ data: { issueId: issue.id, labelId: label.id } });
+
+    for (const query of [
+      "Title Needle",
+      "Description Needle",
+      "META",
+      "Metadata Project",
+      "Search Label",
+      "Search Person",
+      fixture.secondUser.email,
+      "Search Agent",
+      agent.profileKey,
+    ]) {
+      const result = await caller.list({ query, includeDone: false, limit: 50 });
+      expect(
+        result.items.map((row) => row.id),
+        query,
+      ).toContain(issue.id);
+      await expect(caller.count({ query, includeDone: false, limit: 50 })).resolves.toEqual({
+        count: 1,
+      });
+    }
+
+    const faceted = await caller.list({
+      query: "Search Label",
+      projectIds: [project.id],
+      labelIds: [label.id],
+      statusCategories: ["TODO"],
+      includeDone: false,
+      limit: 50,
+    });
+    expect(faceted.items.map((row) => row.id)).toEqual([issue.id]);
+  });
+
+  it("keeps ordinary-text sorting stable across cursor pages", async () => {
+    const { caller, fixture } = await setup();
+    const created = [];
+    for (const title of ["Alpha page token", "Bravo page token", "Charlie page token"]) {
+      created.push(await createIssue(fixture, { title }));
+    }
+    const first = await caller.list({
+      query: "page token",
+      includeDone: true,
+      sort: "title",
+      limit: 2,
+    });
+    expect(first.items.map((row) => row.title)).toEqual(["Alpha page token", "Bravo page token"]);
+    expect(first.nextCursor).toBeTruthy();
+    const second = await caller.list({
+      query: "page token",
+      includeDone: true,
+      sort: "title",
+      cursor: first.nextCursor,
+      limit: 2,
+    });
+    expect(second.items.map((row) => row.title)).toEqual(["Charlie page token"]);
+    expect(new Set([...first.items, ...second.items].map((row) => row.id))).toEqual(
+      new Set(created.map((row) => row.id)),
+    );
+  });
+
   it("keeps terminal statuses reachable when explicitly filtered", async () => {
     const { caller, fixture } = await setup();
     const prisma = getPrisma();

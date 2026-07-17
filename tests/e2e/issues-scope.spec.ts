@@ -1,8 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("lifecycle scope stays consistent when switching between list and kanban", async ({
-  page,
-}) => {
+test("identifier search persists across lifecycle scope, list, and kanban", async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem("forge:view:issues", "list");
   });
@@ -15,9 +13,13 @@ test("lifecycle scope stays consistent when switching between list and kanban", 
     .filter({ hasText: "Webhook delivery retry backoff" });
   await expect(openScope).toHaveAttribute("aria-pressed", "true");
 
-  await page
-    .getByRole("textbox", { name: "Search open issues" })
-    .fill("Webhook delivery retry backoff");
+  const search = page.getByRole("textbox", { name: "Search open issues" });
+  await expect(search).toHaveAttribute(
+    "placeholder",
+    "Search open issues by key, number, or metadata…",
+  );
+  await search.fill("frg-13");
+  await expect(page).toHaveURL(/(?:\?|&)q=frg-13(?:&|$)/);
   await expect(page.getByText("No issues match this view")).toBeVisible();
   await expect(page.getByText("Webhook delivery retry backoff", { exact: true })).toHaveCount(0);
 
@@ -27,6 +29,14 @@ test("lifecycle scope stays consistent when switching between list and kanban", 
 
   await allScope.click();
   await expect(page.getByRole("textbox", { name: "Search all issues" })).toBeVisible();
+  await expect(visibleCompletedIssue).toBeVisible();
+
+  await page.reload();
+  await expect(page.getByRole("textbox", { name: "Search all issues" })).toHaveValue("frg-13");
+  await expect(visibleCompletedIssue).toBeVisible();
+
+  await page.getByRole("textbox", { name: "Search all issues" }).fill("13");
+  await expect(page).toHaveURL(/(?:\?|&)q=13(?:&|$)/);
   await expect(visibleCompletedIssue).toBeVisible();
 
   await page.getByRole("button", { name: "List", exact: true }).click();

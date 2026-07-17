@@ -62,6 +62,20 @@ error shapes all flow from this router definition.
 
 ## Notable procedures
 
+### `issue.list` / `issue.count` search
+
+Both procedures share the same filter builder, including search, so counts and
+rows cannot diverge. `query` recognizes case-insensitive `KEY-N`, bare `N`, and
+`#N` as exact issue identifiers. A full key must match the active workspace.
+Ordinary text searches title, description, project key/name, label name, human
+assignee name/handle/email, and assigned-agent name/profile key. Existing
+workspace, archive, lifecycle, saved-view, board-column, and API-key scope
+clauses are composed with the search predicate rather than bypassed.
+
+Normal-text ordering retains the requested configured sort plus a unique `id`
+tiebreaker. Cursor pages skip the cursor row and return the last emitted row as
+the next cursor, preventing duplicates and gaps at tied sort values.
+
 ### `agent.pipeline`
 
 Returns the operator's per-agent dashboard data:

@@ -49,6 +49,7 @@ import {
   setIssueAgentWakeTarget,
 } from "@/server/services/issue-watchers";
 import { extractMentions } from "@/server/services/mentions";
+import { issueSearchWhere } from "@/server/services/issue-search";
 import {
   abandonRunsForAgentReassignment,
   openOrTouchRun,
@@ -1211,7 +1212,9 @@ export const mcpTools = {
         .string()
         .max(200)
         .optional()
-        .describe("Fulltext search on title + description (case-insensitive)"),
+        .describe(
+          "Exact KEY-N, N, or #N lookup; otherwise case-insensitive search across title, description, project, label, human assignee, and assigned-agent metadata.",
+        ),
       // Singleton filters
       projectId: z.string().cuid().optional(),
       statusId: z.string().cuid().optional(),
@@ -1294,11 +1297,8 @@ export const mcpTools = {
       const keyWhere = buildKeyScopeWhere(scopeCtx(ctx), "issue");
       const createdByViewerId = input.createdByViewer ? await resolveActorId(ctx) : null;
 
-      // Mirrors the tRPC `issue.list` where-construction (issue.ts:294-428).
-      // Kept inline rather than DRY'd because the tRPC procedure consumes
-      // the full session context (cursor, blocked-set helper bound to
-      // `ctx.db`) and the MCP path only needs the simpler subset. Future
-      // refactor: extract a shared `buildIssueListWhere(filter, scope)`.
+      // Mirrors the tRPC `issue.list` where-construction. Search itself is
+      // shared so identifiers and metadata never drift between UI and MCP.
       const andClauses: Array<Record<string, unknown>> = [];
 
       if (input.initiativeId === null || input.withoutInitiative === true) {
@@ -1306,14 +1306,8 @@ export const mcpTools = {
           OR: [{ projectId: null }, { project: { initiativeId: null } }],
         });
       }
-      if (input.query) {
-        andClauses.push({
-          OR: [
-            { title: { contains: input.query, mode: "insensitive" as const } },
-            { description: { contains: input.query, mode: "insensitive" as const } },
-          ],
-        });
-      }
+      const searchWhere = issueSearchWhere(input.query);
+      if (searchWhere) andClauses.push(searchWhere);
       if (input.unassigned === true) {
         andClauses.push({
           AND: [{ assignees: { none: {} } }, { assignedAgentId: null }],
