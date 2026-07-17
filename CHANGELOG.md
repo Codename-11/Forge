@@ -9,6 +9,17 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-17] — v0.28.1 · Reliable lifecycle reconciliation
+
+### Changed
+
+- **MCP activity no longer masquerades as runtime execution.** Direct MCP comments update an explicitly opened run without fabricating one, while silent MCP connections become quiet and recoverable instead of being reported as failed managed runtimes.
+
+### Fixed
+
+- **GitHub completion checks settle from executable evidence.** Empty GitHub App check suites no longer hold completed pull requests in verification, while real, unknown, pending, and failed checks remain fail-closed.
+- **Historical comment-only MCP runs reconcile without duplicate output.** Narrowly identified post-merge metadata runs close safely, while any run carrying execution evidence is preserved for normal stale-run handling.
+
 ## [2026-07-17] — v0.28.0 · Faster local delivery
 
 ### Added
