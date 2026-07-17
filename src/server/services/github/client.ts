@@ -100,6 +100,8 @@ type GitHubListReposResponse = {
 type GitHubCheckSuite = {
   status?: string | null;
   conclusion?: string | null;
+  /** GitHub emits queued suites for installed Apps even when they create no check runs. */
+  latest_check_runs_count?: number | null;
 };
 
 type GitHubCheckSuitesResponse = {
@@ -116,6 +118,7 @@ export type GitHubChecksSnapshot = {
   status: "completed" | "pending" | "unknown";
   conclusion: string | null;
   suiteCount: number;
+  ignoredSuiteCount: number;
   statusCount: number;
   updatedAt: string;
   source: "api-aggregate";
@@ -406,8 +409,14 @@ export async function getGitHubPullRequestChecks(args: {
     suiteResult.status === "fulfilled" ? suiteResult.value : {};
   const statuses: GitHubCombinedStatusResponse =
     statusResult.status === "fulfilled" ? statusResult.value : {};
-  const rows = suites.check_suites ?? [];
-  const suiteCount = suites.total_count ?? rows.length;
+  const rawRows = suites.check_suites ?? [];
+  // An installed GitHub App can leave a permanently queued suite on every
+  // commit without ever creating a check run. That suite is not executable
+  // CI evidence and cannot settle. Ignore only the explicit zero-run shape;
+  // missing counts remain fail-closed for older or partial API responses.
+  const rows = rawRows.filter((suite) => suite.latest_check_runs_count !== 0);
+  const ignoredSuiteCount = rawRows.length - rows.length;
+  const suiteCount = rows.length;
   const statusCount = statuses.total_count ?? 0;
   const discovered = suiteCount + statusCount;
   const pending = rows.some((suite) => suite.status !== "completed");
@@ -463,6 +472,7 @@ export async function getGitHubPullRequestChecks(args: {
             : "completed",
     conclusion: conclusion ?? (!partial && discovered > 0 && !unresolved ? "success" : null),
     suiteCount,
+    ignoredSuiteCount,
     statusCount,
     updatedAt: new Date().toISOString(),
     source: "api-aggregate",

@@ -117,9 +117,11 @@ Each mode has a canonical instruction block injected into the agent's turn (via
   approval clauses when set.)
 
 Forge also injects the shared run protocol, including a contract version:
-ack the inbox item, mark output started when real work begins, use rolling
-status comments only for meaningful operator-facing checkpoints, call
-`runs.setWaiting` when blocked, and finish with `runs.complete`.
+ack the inbox item (or call `runs.open` for agent-initiated MCP work), mark
+output started when real work begins, use rolling status comments only for
+meaningful operator-facing checkpoints, call `runs.setWaiting` when blocked,
+and finish with `runs.complete`. MCP comments and status metadata do not create
+an execution record implicitly; `comments.upsertStatus` requires an active run.
 
 The run trace and the rolling status serve different audiences:
 

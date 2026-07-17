@@ -57,7 +57,7 @@ export type DeliveryTimelineUpdate = {
 };
 
 async function resolveRecoveryRequests(
-  db: PrismaClient,
+  db: DbClient,
   workspaceId: string,
   sessionId: string,
   resolution: string,
@@ -722,6 +722,12 @@ export async function attachPullRequest(
       issueId: result.issueId,
       mergedAt: result.mergedAt,
     });
+    await resolveRecoveryRequests(
+      db,
+      input.workspaceId,
+      result.id,
+      "Implementation pull request merged.",
+    );
   }
   return result;
 }
@@ -772,6 +778,12 @@ export async function syncWorkSessionsFromPullRequest(
         issueId: session.issueId,
         mergedAt,
       });
+      await resolveRecoveryRequests(
+        db,
+        resource.workspaceId,
+        session.id,
+        "Implementation pull request merged.",
+      );
     }
     count += 1;
   }
@@ -855,6 +867,47 @@ export async function advanceWorkSession(
 }
 
 export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> {
+  // Repair requests created before merge-time cleanup was introduced. Query
+  // from the small open-request set rather than scanning delivery history on
+  // every worker tick.
+  const openRecoveryRequests = await db.actionRequest.findMany({
+    where: {
+      status: ActionRequestStatus.OPEN,
+      sourceType: "work-session",
+      OR: [
+        { dedupeKey: { startsWith: "work-session-stale:" } },
+        { dedupeKey: { startsWith: "work-session-mcp-quiet:" } },
+      ],
+    },
+    select: { workspaceId: true, sourceId: true },
+  });
+  const recoverySessionIds = [
+    ...new Set(
+      openRecoveryRequests
+        .map((request) => request.sourceId)
+        .filter((sourceId): sourceId is string => Boolean(sourceId)),
+    ),
+  ];
+  if (recoverySessionIds.length > 0) {
+    const deliveredSessions = await db.workSession.findMany({
+      where: {
+        id: { in: recoverySessionIds },
+        status: { in: ["MERGED", "RELEASED", "DEPLOYED", "VERIFIED", "ABANDONED"] },
+      },
+      select: { id: true, workspaceId: true, status: true },
+    });
+    for (const session of deliveredSessions) {
+      await resolveRecoveryRequests(
+        db,
+        session.workspaceId,
+        session.id,
+        session.status === WorkSessionStatus.ABANDONED
+          ? "Work session abandoned."
+          : "Implementation pull request merged.",
+      );
+    }
+  }
+
   const workspaces = await db.workspace.findMany({
     where: { deletedAt: null, workSessionStaleMinutes: { gt: 0 } },
     select: { id: true, workSessionStaleMinutes: true },

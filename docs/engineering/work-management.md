@@ -70,6 +70,10 @@ integration, scheduled stabilization, or an upstream convention.
   release contains the implementation. Never use a generic link attachment.
 - GitHub owns PR state, reviews, checks, mergeability, and merge state. Forge
   mirrors those facts into the delivery lifecycle.
+- Check aggregation counts suites that contain executable check runs. GitHub
+  App suites explicitly reporting zero check runs are diagnostic installation
+  artifacts, not pending CI; suites with real or unknown run counts remain
+  fail-closed until GitHub reports a terminal result.
 - One issue/resource pair has one native relation. Re-linking reclassifies the
   relation instead of duplicating status cards.
 - Resolve file overlap in the PR. Do not move uncommitted patches between

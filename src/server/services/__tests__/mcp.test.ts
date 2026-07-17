@@ -227,6 +227,96 @@ describe("mcp tool registry", () => {
   });
 });
 
+describe("mcp comment lifecycle", () => {
+  it("keeps an agent-authored body comment as metadata when no run was explicitly opened", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCL" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `metadata-${Date.now()}`,
+        name: "Metadata agent",
+      },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+
+    const comment = (await call(
+      "comments.create",
+      { issueId: issue.id, body: "The implementation PR has merged." },
+      ctx,
+    )) as { id: string; authoringAgentId: string | null };
+
+    expect(comment.authoringAgentId).toBe(agent.id);
+    expect(await prisma.agentRun.count({ where: { issueId: issue.id, agentId: agent.id } })).toBe(
+      0,
+    );
+  });
+
+  it("records comments and rolling status only against an explicitly active run", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `explicit-${Date.now()}`,
+        name: "Explicit agent",
+      },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+
+    await expect(
+      call(
+        "comments.upsertStatus",
+        { issueId: issue.id, body: "Running tests", currentStep: "Testing" },
+        ctx,
+      ),
+    ).rejects.toThrow(/runs\.open/i);
+    expect(await prisma.agentRun.count({ where: { issueId: issue.id, agentId: agent.id } })).toBe(
+      0,
+    );
+
+    const opened = (await call(
+      "runs.open",
+      { issueId: issue.id, summary: "Implementing lifecycle fixes" },
+      ctx,
+    )) as { runId: string };
+    const body = (await call(
+      "comments.create",
+      { issueId: issue.id, body: "Implementation is underway." },
+      ctx,
+    )) as { id: string };
+    const status = (await call(
+      "comments.upsertStatus",
+      { issueId: issue.id, body: "Focused tests are green", currentStep: "Validating" },
+      ctx,
+    )) as { runId: string };
+
+    expect(status.runId).toBe(opened.runId);
+    expect(await prisma.agentRun.count({ where: { issueId: issue.id, agentId: agent.id } })).toBe(
+      1,
+    );
+    await expect(
+      prisma.agentRunEvent.findMany({
+        where: { runId: opened.runId },
+        orderBy: { createdAt: "asc" },
+        select: { kind: true, payload: true },
+      }),
+    ).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "COMMENT",
+          payload: expect.objectContaining({ commentId: body.id }),
+        }),
+        expect.objectContaining({ kind: "STATUS" }),
+      ]),
+    );
+  });
+});
+
 describe("mcp workspace and access keys", () => {
   it("lists workspace keys but keeps non-admin API keys pinned to their issuing workspace", async () => {
     const source = await createWorkspaceFixture({ keyPrefix: "MWA" });
@@ -5398,8 +5488,14 @@ describe("mcp — orchestration loop tools", () => {
       messageId: string;
     };
     expect(first.duplicate).toBe(false);
-    expect(duplicate).toEqual(expect.objectContaining({ duplicate: true, messageId: first.messageId }));
-    expect(await prisma.chatMessage.count({ where: { threadId: thread.id, body: "Unsolicited update" } })).toBe(1);
+    expect(duplicate).toEqual(
+      expect.objectContaining({ duplicate: true, messageId: first.messageId }),
+    );
+    expect(
+      await prisma.chatMessage.count({
+        where: { threadId: thread.id, body: "Unsolicited update" },
+      }),
+    ).toBe(1);
 
     const other = await createWorkspaceFixture({ keyPrefix: "HSX" });
     fixtures.push(other);

@@ -100,6 +100,46 @@ export async function findActiveRun(
 }
 
 /**
+ * Touch an already-open run without creating one. Metadata transports such as
+ * MCP comments use this boundary so a write can enrich explicit execution
+ * provenance but can never manufacture execution provenance by itself.
+ */
+export async function touchActiveRun(
+  tx: Tx,
+  params: {
+    issueId: string;
+    agentId: string;
+    connectionId?: string | null;
+    lifecycleConfidence?: LivenessConfidence;
+    currentStep?: string | null;
+  },
+): Promise<AgentRun | null> {
+  const existing = await findActiveRun(tx, params);
+  if (!existing) return null;
+  const preserveParkedWaiting = existing.status === AgentRunStatus.WAITING;
+  const claimed = await tx.agentRun.updateMany({
+    where: {
+      id: existing.id,
+      status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+    },
+    data: {
+      ...(!preserveParkedWaiting ? { lastEventAt: new Date() } : {}),
+      ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
+      ...(params.connectionId && !existing.connectionId
+        ? {
+            connectionId: params.connectionId,
+            ...(params.lifecycleConfidence
+              ? { lifecycleConfidence: params.lifecycleConfidence }
+              : {}),
+          }
+        : {}),
+    },
+  });
+  if (claimed.count !== 1) return null;
+  return tx.agentRun.findUnique({ where: { id: existing.id } });
+}
+
+/**
  * Collapse stacked attempts. When a *fresh* run opens for (issue, agent),
  * link the prior STALLED attempts to it via `supersededByRunId` so operator
  * surfaces render one thread (newest run, with an "N earlier attempts"
@@ -314,9 +354,7 @@ export async function openOrTouchRun(
       issueId: params.issueId,
       agentId: params.agentId,
       connectionId: params.connectionId ?? null,
-      ...(params.lifecycleConfidence
-        ? { lifecycleConfidence: params.lifecycleConfidence }
-        : {}),
+      ...(params.lifecycleConfidence ? { lifecycleConfidence: params.lifecycleConfidence } : {}),
       status: AgentRunStatus.ACTIVE,
       assignmentEventId: params.assignmentEventId ?? null,
       currentStep: params.currentStep ?? null,

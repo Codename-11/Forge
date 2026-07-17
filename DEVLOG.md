@@ -2,6 +2,31 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-17 — AXI-128 GitHub and MCP lifecycle reconciliation
+
+Corrected completion evidence so permanently queued GitHub App suites with
+zero check runs no longer hold an otherwise green pull request in `verifying`.
+Suites with real or unknown run counts, null conclusions, partial responses,
+failures, and pending commit statuses remain fail-closed. The aggregate keeps
+the ignored-suite count as diagnostic metadata while reporting only executable
+suite signals to status cards.
+
+Separated MCP transport activity from execution provenance. Agent BODY
+comments now touch an existing run without opening one; rolling status requires
+an explicit `runs.open`. The stale-run worker conservatively repairs historical
+post-merge comment-only MCP rows by adopting the existing comment, reclassifying
+the row as discussion metadata, and closing it without duplicate comments or
+notifications. Runs with any execution evidence remain untouched. GitHub merge
+reconciliation also resolves obsolete work-session quiet/stale action requests
+while preserving merged, released, deployed, and verified as distinct facts.
+
+Verification used local Postgres and Redis containers: Prisma generation,
+typecheck, the GitHub client unit suite (11/11), and focused MCP, work-session,
+and stale-run integration suites (154/154) passed. Lint passed with existing
+warnings only; the full serial Vitest suite passed (1,456 passed, 12 intentional
+skips). A fresh production E2E build and the focused issue-flow Playwright path
+also passed (1/1) against the dedicated disposable `forge_e2e` database.
+
 ## 2026-07-17 — AXI-2 email invitation recovery and hardening
 
 Recovered the preserved AXI-2 implementation from PR #65 onto exact current
