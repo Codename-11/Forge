@@ -57,7 +57,7 @@ const definitions: Record<
     eventCount: 0,
     scaleIssues: 3,
     scaleEvents: 0,
-    description: "member roster and assigned work around a bounded agent concurrency cap",
+    description: "invitation lifecycle, member roster, and work around a bounded concurrency cap",
   },
   "large-workspace": {
     issueCount: 50,

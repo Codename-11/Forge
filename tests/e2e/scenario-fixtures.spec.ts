@@ -14,5 +14,13 @@ test.describe("named local scenarios", () => {
     const delivery = page.getByRole("region", { name: "Code work coordination" });
     await expect(delivery.getByText("In review", { exact: true })).toBeVisible();
     await expect(page.getByText("implements", { exact: true })).toBeVisible();
+
+    await page.goto("/w/forge/settings/members");
+    await expect(page.getByText("scenario-invite-0@forge.local", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("scenario-invite-1@forge.local", { exact: true }).first(),
+    ).toBeVisible();
+    await expect(page.getByText("pending", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("accepted", { exact: true }).first()).toBeVisible();
   });
 });

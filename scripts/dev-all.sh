@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pnpm dev:all — run the safe local Next dev server (port 3000) and the
+# pnpm dev:all — run the LF-pinned safe local Next dev server (port 3000) and the
 # VitePress docs server (port 5181) side by side. Logs interleave with
 # [app] / [docs] prefixes; ctrl-c kills both cleanly.
 

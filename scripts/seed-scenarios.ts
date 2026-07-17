@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import {
   AgentConnectionKind,
   AgentConnectionLiveness,
   AgentConnectionStatus,
   AgentRunStatus,
   EventKind,
+  InvitationStatus,
   LivenessConfidence,
   PrismaClient,
   Priority,
@@ -62,6 +64,7 @@ async function removeScenario(name: ScenarioName) {
     prisma.externalResourceLink.deleteMany({ where: owned }),
     prisma.externalResource.deleteMany({ where: owned }),
     prisma.agentConnection.deleteMany({ where: owned }),
+    prisma.workspaceInvitation.deleteMany({ where: owned }),
     prisma.issue.deleteMany({ where: owned }),
     prisma.agent.deleteMany({ where: owned }),
     prisma.user.deleteMany({ where: owned }),
@@ -347,27 +350,55 @@ async function seedConcurrency(plan: ScenarioPlan, ctx: Awaited<ReturnType<typeo
       authorId: ctx.owner.id,
       agentId: agent.id,
     });
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < plan.issueCount; i++) {
     const email = `scenario-invite-${i}@forge.local`;
-    const user = await prisma.user.upsert({
-      where: { email },
-      update: { name: `Scenario Invite ${i + 1}` },
-      create: {
-        id: scenarioId(plan.name, "user", i),
-        email,
-        name: `Scenario Invite ${i + 1}`,
-        handle: `scenario-invite-${i}`,
-      },
-    });
-    await prisma.membership.upsert({
-      where: { userId_workspaceId: { userId: user.id, workspaceId: ctx.workspace.id } },
-      update: { role: i === 0 ? Role.ADMIN : Role.MEMBER },
-      create: {
-        id: scenarioId(plan.name, "membership", i),
-        userId: user.id,
+    const status = [InvitationStatus.PENDING, InvitationStatus.ACCEPTED, InvitationStatus.REVOKED][
+      i % 3
+    ]!;
+    const user =
+      status === InvitationStatus.ACCEPTED
+        ? await prisma.user.upsert({
+            where: { email },
+            update: { name: `Scenario Invite ${i + 1}` },
+            create: {
+              id: scenarioId(plan.name, "user", i),
+              email,
+              name: `Scenario Invite ${i + 1}`,
+              handle: `scenario-invite-${i}`,
+            },
+          })
+        : null;
+    if (user) {
+      await prisma.membership.upsert({
+        where: { userId_workspaceId: { userId: user.id, workspaceId: ctx.workspace.id } },
+        update: { role: Role.MEMBER },
+        create: {
+          id: scenarioId(plan.name, "membership", i),
+          userId: user.id,
+          workspaceId: ctx.workspace.id,
+          role: Role.MEMBER,
+          createdAt: ANCHOR,
+        },
+      });
+    }
+    await prisma.workspaceInvitation.create({
+      data: {
+        id: scenarioId(plan.name, "invitation", i),
         workspaceId: ctx.workspace.id,
+        email,
         role: i === 0 ? Role.ADMIN : Role.MEMBER,
-        createdAt: ANCHOR,
+        status,
+        tokenHash: createHash("sha256").update(`scenario:${plan.name}:${i}`).digest("hex"),
+        note: "Deterministic invitation lifecycle fixture",
+        invitedById: ctx.owner.id,
+        acceptedById: user?.id,
+        expiresAt: new Date(ANCHOR.getTime() + 30 * 24 * 60 * MINUTE),
+        lastSentAt: new Date(ANCHOR.getTime() + i * MINUTE),
+        sendCount: 1,
+        acceptedAt: status === InvitationStatus.ACCEPTED ? ANCHOR : null,
+        revokedAt: status === InvitationStatus.REVOKED ? ANCHOR : null,
+        createdAt: new Date(ANCHOR.getTime() + i * MINUTE),
+        updatedAt: new Date(ANCHOR.getTime() + i * MINUTE),
       },
     });
   }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pnpm dev:live:unsafe - exceptional live-data inspection only.
+# pnpm dev:live:unsafe - exceptional LF-pinned live-data inspection only.
 #
 # Frontend HMR is instant; server routes (tRPC, MCP, webhook delivery) hit the
 # live DB. Workers are disabled by default so the deployed worker remains

@@ -3,7 +3,8 @@
 # disposable database (`forge_e2e`) on the isolated docker stack, fully
 # separate from both prod (dev:live) and the shared dev:local data. Boots the
 # stack if needed, migrates + seeds (idempotent, with FORGE_E2E fixtures), then
-# runs the server. Nothing here can touch production.
+# runs the server. Nothing here can touch production. Shell scripts are LF-pinned
+# by .gitattributes so this entrypoint also works from Git Bash on Windows.
 #
 #   pnpm e2e            # provisions + runs Playwright (spawns this)
 #   bash scripts/e2e-web.sh   # just the server (manual)
