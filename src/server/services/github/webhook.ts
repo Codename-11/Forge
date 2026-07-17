@@ -800,7 +800,7 @@ async function processCheckEvent(args: {
           where: {
             workspaceId,
             externalResourceId: resource.id,
-            kind: { in: [...IMPLEMENTATION_LINK_KINDS] },
+            kind: { in: ["SOURCE", ...IMPLEMENTATION_LINK_KINDS] },
           },
           select: { issueId: true },
         });

@@ -43,6 +43,15 @@ describe("MarkdownWithAttachments URL safety", () => {
     expect(html).not.toContain('href="/issues/AXI-123"');
   });
 
+  it("keeps compact GitHub-looking fragments inside bare URLs as one URL", () => {
+    const url = "https://example.com/CODENAME-11/Forge#56";
+    const html = renderMarkdown(`Inspect ${url} before closing.`);
+
+    expect(html).toContain(`href="${url}"`);
+    expect(html).toContain(`>${url}</a>`);
+    expect(html).not.toContain('href="https://github.com/CODENAME-11/Forge/issues/56"');
+  });
+
   it("does not render javascript or data markdown links as clickable hrefs", () => {
     const jsHtml = renderMarkdown("[bad](javascript:alert(1))");
     const dataHtml = renderMarkdown("[bad](data:text/html,<h1>x</h1>)");

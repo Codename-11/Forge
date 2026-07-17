@@ -182,8 +182,8 @@ function tokenizeInline(text: string): InlineSegment[] {
     if (lo < t.length) passC.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass D: compact GitHub owner/repo#number references. This runs before
-  // Forge issue refs so hyphenated organization names are not split at `/`.
+  // Pass D: bare URLs. Consume complete URLs before compact GitHub or Forge
+  // issue references so path and fragment tokens remain part of the URL.
   const passD: InlineSegment[] = [];
   for (const seg of passC) {
     if (seg.type !== "text") {
@@ -192,22 +192,17 @@ function tokenizeInline(text: string): InlineSegment[] {
     }
     const t = seg.value;
     let lo = 0;
-    GITHUB_REF_RE.lastIndex = 0;
-    for (const m of t.matchAll(GITHUB_REF_RE)) {
+    URL_RE.lastIndex = 0;
+    for (const m of t.matchAll(URL_RE)) {
       const idx = m.index ?? 0;
       if (idx > lo) passD.push({ type: "text", value: t.slice(lo, idx) });
-      passD.push({
-        type: "githubRef",
-        repoFullName: m[1],
-        number: Number(m[2]),
-      });
+      passD.push({ type: "url", url: m[0] });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passD.push({ type: "text", value: t.slice(lo) });
   }
 
-  // Pass E: bare URLs. Consume complete URLs before issue references so a
-  // path segment such as `/issues/AXI-123` remains one clickable URL.
+  // Pass E: compact GitHub owner/repo#number references on remaining text.
   const passE: InlineSegment[] = [];
   for (const seg of passD) {
     if (seg.type !== "text") {
@@ -216,11 +211,15 @@ function tokenizeInline(text: string): InlineSegment[] {
     }
     const t = seg.value;
     let lo = 0;
-    URL_RE.lastIndex = 0;
-    for (const m of t.matchAll(URL_RE)) {
+    GITHUB_REF_RE.lastIndex = 0;
+    for (const m of t.matchAll(GITHUB_REF_RE)) {
       const idx = m.index ?? 0;
       if (idx > lo) passE.push({ type: "text", value: t.slice(lo, idx) });
-      passE.push({ type: "url", url: m[0] });
+      passE.push({
+        type: "githubRef",
+        repoFullName: m[1],
+        number: Number(m[2]),
+      });
       lo = idx + m[0].length;
     }
     if (lo < t.length) passE.push({ type: "text", value: t.slice(lo) });

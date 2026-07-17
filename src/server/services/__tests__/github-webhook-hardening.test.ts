@@ -842,6 +842,15 @@ describe("GitHub webhook hardening", () => {
         },
       }),
     ).resolves.toMatchObject({ kind: "RELATES_TO" });
+    const sourceIssue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    await prisma.externalResourceLink.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: sourceIssue.id,
+        externalResourceId: resource.id,
+        kind: "SOURCE",
+      },
+    });
 
     await processGitHubWebhook({
       db: prisma,
@@ -863,6 +872,12 @@ describe("GitHub webhook hardening", () => {
     await expect(
       prisma.issue.findUniqueOrThrow({ where: { id: issue.id }, include: { status: true } }),
     ).resolves.toMatchObject({ status: { category: "IN_PROGRESS" } });
+    await expect(
+      prisma.issue.findUniqueOrThrow({
+        where: { id: sourceIssue.id },
+        include: { status: true },
+      }),
+    ).resolves.toMatchObject({ status: { category: "CANCELED" } });
   });
 
   it("ignores an older review hint instead of replacing a newer decision", async () => {
