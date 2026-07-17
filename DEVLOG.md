@@ -13903,3 +13903,44 @@ Center decisions, and every other shared rich-text surface.
 Prepared the reviewed change as patch release `v0.27.1`; the immutable tag is
 cut only after the release-ready commit lands on `main` with all required CI
 checks green.
+
+---
+
+## 2026-07-17 — AXI-125 local UI load and realtime correctness
+
+Reduced the initial issue-detail workload without weakening live state. Closed
+Command Palette and Quick Create overlays now mount only on first use, Mission
+Control begins after the primary route settles, and issue status, assignee,
+project, sprint, label, mention, slash-command, and AI-triage datasets wait until
+their owning picker or panel is active. Workspace layout membership work now
+runs in parallel and passes existing settings through the workspace context.
+Successful tRPC logging is opt-in through `NEXT_PUBLIC_TRPC_VERBOSE=1` while
+errors remain visible.
+
+Realtime invalidation now resolves exact issue and current/previous sprint
+targets from event payloads instead of broadly invalidating every issue or
+sprint cache. The open issue remains SSE-driven and uses a scoped, visible-tab
+30-second fallback only while reconnecting. No long stale cache, broad polling,
+notification, or agent wakeup was added.
+
+Added a reproducible local benchmark and retained before/after JSON evidence.
+The already-compiled issue reload dropped from 42 to 29 tRPC procedures, from
+38 to 37 script resources, and from 1,358,771 to 1,269,739 script-transfer
+bytes. Verbose successful tRPC console messages dropped from 82 to zero by
+default. The sampled wall-clock reload was noisy and slightly slower, so it is
+reported explicitly in the performance note rather than presented as a gain.
+
+Verification: lint and typecheck passed on the AXI-2-refreshed base; the full
+serial Vitest gate passed 1,431 tests in 185 files with one intentional skip;
+and a fresh production build passed. The broad Playwright run passed 51/54
+before exposing immediate lazy-trigger regressions and one browser teardown.
+After fixing the lazy triggers, the exact mobile Quick Create, Mission Control,
+admin-shell, deferred-query, and cross-tab SSE cases all passed on the rebased
+head. The `ci:local` wrapper itself cannot invoke Unix `flock` through Windows
+`cmd.exe`, so its Playwright payload was run directly through Git Bash.
+
+Fresh GitHub CI then exposed a selective-hydration race in the mobile topbar:
+its first Quick Create click could arrive before the lazy surface subscribed.
+The trigger now records that request in a tiny client-side request seam and the
+lazy surface consumes it on subscription. A clean production rebuild followed
+by the full mobile smoke suite and the AXI-125 load/realtime test passed 8/8.

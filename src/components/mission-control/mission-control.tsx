@@ -67,7 +67,7 @@ const BASE_TABS: { id: MissionControlTab; label: string; chord: string }[] = [
   { id: "chat", label: "Chat", chord: "4" },
 ];
 
-export function MissionControl() {
+export function MissionControl({ initialOpen = false }: { initialOpen?: boolean }) {
   const workspace = useMaybeWorkspace();
   const slug = workspace?.slug ?? "";
   const pathname = usePathname();
@@ -85,6 +85,13 @@ export function MissionControl() {
   } = useMissionControl(slug);
   const modKey = useModKeyLabel();
   const utils = trpc.useUtils();
+  const initialOpenRef = useRef(initialOpen);
+
+  useEffect(() => {
+    if (!initialOpenRef.current) return;
+    initialOpenRef.current = false;
+    setSize("panel");
+  }, [setSize]);
 
   // Live data for the pill (always fetched even when collapsed so the
   // ambient indicator is honest). Cheap query — bounded at 25.

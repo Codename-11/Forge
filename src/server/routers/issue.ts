@@ -1246,7 +1246,12 @@ export const issueRouter = router({
           eventKind: kind,
           subjectType: "issue",
           subjectId: id,
-          payload: patch,
+          payload: {
+            ...patch,
+            ...(Object.prototype.hasOwnProperty.call(patch, "cycleId")
+              ? { previousCycleId: before.cycleId }
+              : {}),
+          },
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         });
@@ -1795,9 +1800,10 @@ export const issueRouter = router({
       return ctx.db.$transaction(async (tx) => {
         const issues = await tx.issue.findMany({
           where: { id: { in: input.issueIds }, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, cycleId: true },
         });
         const validIds = issues.map((i) => i.id);
+        const previousCycleByIssue = new Map(issues.map((issue) => [issue.id, issue.cycleId]));
         if (validIds.length === 0) return { updated: 0 };
         await tx.issue.updateMany({
           where: { id: { in: validIds }, workspaceId: ctx.workspaceId },
@@ -1815,7 +1821,10 @@ export const issueRouter = router({
             eventKind: EventKind.ISSUE_UPDATED,
             subjectType: "issue",
             subjectId: issueId,
-            payload: { cycleId: input.cycleId },
+            payload: {
+              cycleId: input.cycleId,
+              previousCycleId: previousCycleByIssue.get(issueId) ?? null,
+            },
             ip: ctx.ip,
             userAgent: ctx.userAgent,
           });

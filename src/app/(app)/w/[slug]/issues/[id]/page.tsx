@@ -63,6 +63,7 @@ import { CycleChip } from "@/components/cycle-chip";
 import { DispatchReasonChip, type DispatchReason } from "@/components/dispatch-reason-chip";
 import { IssueSiblingNav } from "@/components/issue-sibling-nav";
 import { useHotkey } from "@/lib/keyboard";
+import { useRealtimeConnection } from "@/hooks/use-realtime";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
@@ -91,36 +92,22 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
   const searchParams = useSearchParams();
   const includeArchived = searchParams?.get("archived") === "1";
+  const issueQueryInput = includeArchived ? { id, includeArchived: true as const } : { id };
   const workspace = useWorkspace();
   const slug = workspace.slug;
   const isAdmin = workspace.role === "OWNER" || workspace.role === "ADMIN";
-  const { data: ws } = trpc.workspace.current.useQuery();
-  // 15s refetch keeps the topbar's RunActivityChip (and other live
-  // surfaces on this page) honest without a manual reload while an
-  // agent is working the issue. Cheap — the byId payload is small
-  // relative to the page render cost.
+  const realtime = useRealtimeConnection();
   const {
     data: issue,
     isLoading,
     error,
-  } = trpc.issue.byId.useQuery({ id, includeArchived }, { refetchInterval: 15_000 });
-  const { data: statuses } = trpc.status.list.useQuery();
-  const { data: members } = trpc.workspace.members.useQuery();
-  const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
-  const { data: cycles } = trpc.cycle.list.useQuery({});
-  const { data: allLabels } = trpc.label.list.useQuery();
-  // Pre-loaded for the reassign confirmation toast — both the agent
-  // list (for the new-assignee display name) and a cap-50 activity
-  // window (for the "X events shared" hint). Neither is on the
-  // critical render path so a brief stale read is fine; they cost
-  // one tRPC call each but are reused by the picker / activity rail.
-  const { data: agentListData } = trpc.agent.list.useQuery({
-    includeArchived: false,
+  } = trpc.issue.byId.useQuery(issueQueryInput, {
+    // SSE is the primary source of truth. Only a visible tab whose
+    // stream is reconnecting gets a narrow, exact-issue fallback poll.
+    refetchInterval: realtime.status === "reconnecting" ? 30_000 : false,
+    refetchIntervalInBackground: false,
+    refetchOnWindowFocus: realtime.status !== "live",
   });
-  const { data: recentEvents } = trpc.issue.activity.useQuery(
-    { issueId: id, limit: 50 },
-    { staleTime: 30_000 },
-  );
   // Used to gate the ActionRequest Accept/Decline buttons rendered
   // inline in agent comments. Stays in this page so the byId payload
   // doesn't have to teach every nested consumer about the current user.
@@ -144,9 +131,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   const update = trpc.issue.update.useMutation({
     onMutate: async (input) => {
-      await utils.issue.byId.cancel({ id: input.id, includeArchived });
-      const prev = utils.issue.byId.getData({ id: input.id, includeArchived });
-      utils.issue.byId.setData({ id: input.id, includeArchived }, (old) => {
+      await utils.issue.byId.cancel(issueQueryInput);
+      const prev = utils.issue.byId.getData(issueQueryInput);
+      utils.issue.byId.setData(issueQueryInput, (old) => {
         if (!old) return old;
         return { ...old, ...input } as typeof old;
       });
@@ -154,11 +141,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     },
     onError: (err, input, ctx) => {
       if (ctx?.prev) {
-        utils.issue.byId.setData({ id: input.id, includeArchived }, ctx.prev);
+        utils.issue.byId.setData(issueQueryInput, ctx.prev);
       }
       toast.error(err.message);
     },
-    onSettled: () => utils.issue.byId.invalidate({ id, includeArchived }),
+    onSettled: () => utils.issue.byId.invalidate(issueQueryInput),
   });
 
   const assign = trpc.issue.assign.useMutation({
@@ -279,7 +266,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       </div>
     );
 
-  const issueKey = ws ? formatIssueId(ws.key, issue.number) : "Issue";
+  const issueKey = formatIssueId(workspace.key, issue.number);
 
   // Phase 1B: replace the title-only header with a real path. Project →
   // issue when the issue is grouped; otherwise fall back to the issues
@@ -517,7 +504,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
           <div className="flex w-full flex-wrap items-center gap-1.5">
             <InlineStatus
               value={issue.statusId}
-              options={statuses ?? []}
+              current={{ id: issue.status.id, name: issue.status.name, color: issue.status.color }}
               onChange={(statusId) => update.mutate({ id: issue.id, statusId })}
             />
             <InlinePriority
@@ -529,11 +516,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 userId: a.userId,
                 name: a.user.name,
                 image: a.user.image,
-              }))}
-              members={(members ?? []).map((m) => ({
-                userId: m.user.id,
-                name: m.user.name ?? m.user.email,
-                image: m.user.image,
               }))}
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
             />
@@ -577,7 +559,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 statusCategory: issue.status.category,
                 updatedAt: issue.updatedAt,
                 snoozedUntil: issue.snoozedUntil,
-                assignmentSlaMinutes: ws?.assignmentSlaMinutes ?? 0,
+                assignmentSlaMinutes: workspace.assignmentSlaMinutes,
                 assignedAgent: issue.assignedAgent
                   ? {
                       id: issue.assignedAgent.id,
@@ -626,7 +608,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             <div className="rounded-lg border border-border bg-card/30">
               <IssueRail
                 issueId={issue.id}
-                activityCount={recentEvents?.length ?? 0}
                 header={
                   <div className="space-y-2">
                     <WorkCoordinationPanel issueId={issue.id} issueKey={issueKey} />
@@ -634,14 +615,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                     <SidebarField label="Project">
                       <ProjectPickerField
                         value={issue.projectId ?? null}
-                        projects={projects?.items ?? []}
+                        current={issue.project ?? null}
                         onChange={(projectId) => update.mutate({ id: issue.id, projectId })}
                       />
                     </SidebarField>
                     <SidebarField label="Sprint">
                       <CyclePickerField
                         value={issue.cycleId ?? null}
-                        cycles={cycles ?? []}
+                        current={cycleData ?? null}
                         onChange={(cycleId) => update.mutate({ id: issue.id, cycleId })}
                       />
                     </SidebarField>
@@ -670,7 +651,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                           name: l.label.name,
                           color: l.label.color,
                         }))}
-                        all={allLabels ?? []}
                         canCreate={isAdmin}
                         onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
                       />
@@ -771,10 +751,10 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         currentAgentId={issue.assignedAgent?.id ?? null}
         defaultMode={
           (issue.assignedAgent?.engagementMode as EngagementModeValue | null) ??
-          (ws?.assignmentEngagementMode as EngagementModeValue) ??
+          (workspace.assignmentEngagementMode as EngagementModeValue) ??
           "EXECUTE"
         }
-        onSelect={(agentId, mode) => {
+        onSelect={(agentId, mode, selectedAgent) => {
           // Reassignment-confirmation toast: when the assigned agent
           // *changes* (not on the initial assign), reassure the
           // operator that context is preserved. The standard
@@ -784,11 +764,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
           // doesn't trigger an extra fetch.
           const wasAssigned = !!issue.assignedAgent;
           const isReassign = wasAssigned && agentId !== issue.assignedAgent?.id;
-          let nextAgentName: string | null = null;
-          if (agentId) {
-            const next = agentListData?.find((a) => a.id === agentId);
-            if (next) nextAgentName = `@${next.profileKey}`;
-          }
+          const nextAgentName = selectedAgent ? `@${selectedAgent.profileKey}` : null;
           update.mutate(
             // Only stamp the mode when actually assigning an agent;
             // unassign carries no engagement intent.
@@ -800,17 +776,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             {
               onSuccess: () => {
                 if (isReassign && nextAgentName) {
-                  // 7-day activity count for the issue. Falls back to
-                  // total events if the timeline isn't loaded.
-                  const cutoff = Date.now() - 7 * 86_400_000;
-                  const eventCount = recentEvents
-                    ? recentEvents.filter((e) => new Date(e.createdAt).getTime() >= cutoff).length
-                    : null;
                   toast.success(`Reassigned ${issueKey} to ${nextAgentName}`, {
                     description:
-                      eventCount !== null
-                        ? `Context preserved · ${eventCount} event${eventCount === 1 ? "" : "s"} shared via comment thread`
-                        : "Context preserved · the new agent receives the full issue snapshot",
+                      "Context preserved · the new agent receives the full issue snapshot",
                   });
                 } else if (!wasAssigned && nextAgentName) {
                   toast.success(`Assigned ${issueKey} to ${nextAgentName}`);
@@ -833,13 +801,16 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
 function InlineStatus({
   value,
-  options,
+  current,
   onChange,
 }: {
   value: string;
-  options: { id: string; name: string; color: string }[];
+  current: { id: string; name: string; color: string };
   onChange: (id: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const { data } = trpc.status.list.useQuery(undefined, { enabled: open });
+  const options = data ?? [current];
   return (
     <Combobox
       value={value}
@@ -847,6 +818,7 @@ function InlineStatus({
       options={options.map((s) => ({ value: s.id, label: s.name, color: s.color }))}
       ariaLabel="Status"
       matchTriggerWidth
+      onOpenChange={setOpen}
     />
   );
 }
@@ -977,7 +949,9 @@ function ClaimHolderCard({
           </div>
           <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             {sub && <span className="text-id truncate text-[0.625rem]">{sub}</span>}
-            <span className="text-[0.625rem]">{claimedByAgent ? "Agent claim" : "Operator claim"}</span>
+            <span className="text-[0.625rem]">
+              {claimedByAgent ? "Agent claim" : "Operator claim"}
+            </span>
           </div>
         </div>
       </div>
@@ -1195,23 +1169,24 @@ type ProjectRow =
  */
 function ProjectPickerField({
   value,
-  projects,
+  current,
   onChange,
 }: {
   value: string | null;
-  projects: Array<{
+  current: {
     id: string;
     name: string;
     color?: string | null;
     icon?: string | null;
     initiative?: { name: string } | null;
     _count?: { issues: number };
-  }>;
+  } | null;
   onChange: (projectId: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const current = projects.find((p) => p.id === value) ?? null;
+  const { data } = trpc.project.list.useQuery({ archived: false, limit: 100 }, { enabled: open });
+  const projects = data?.items ?? [];
   const q = query.trim().toLowerCase();
   const filtered = projects.filter(
     (p) =>
@@ -1312,16 +1287,16 @@ type CycleRow =
 /** Searchable Sprint (cycle) picker for the issue sidebar. */
 function CyclePickerField({
   value,
-  cycles,
+  current,
   onChange,
 }: {
   value: string | null;
-  cycles: Array<{ id: string; name: string; status: string; _count?: { issues: number } }>;
+  current: { id: string; name: string; status: string; _count?: { issues: number } } | null;
   onChange: (cycleId: string | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const current = cycles.find((c) => c.id === value) ?? null;
+  const { data: cycles = [] } = trpc.cycle.list.useQuery({}, { enabled: open });
   const q = query.trim().toLowerCase();
   const filtered = cycles.filter((c) => !q || c.name.toLowerCase().includes(q));
   const items: CycleRow[] = [
@@ -1388,12 +1363,10 @@ function CyclePickerField({
 
 function LabelPicker({
   current,
-  all,
   onChange,
   canCreate = false,
 }: {
   current: { id: string; name: string; color: string }[];
-  all: { id: string; name: string; color: string }[];
   onChange: (labelIds: string[]) => void;
   /** Admin-only: show the inline "Create '<query>'" affordance. */
   canCreate?: boolean;
@@ -1401,6 +1374,7 @@ function LabelPicker({
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const { data: all = [] } = trpc.label.list.useQuery(undefined, { enabled: open });
   const selected = new Set(current.map((l) => l.id));
 
   function toggle(labelId: string) {
@@ -1511,14 +1485,18 @@ function LabelPicker({
 
 function AssigneePicker({
   current,
-  members,
   onChange,
 }: {
   current: { userId: string; name: string | null; image: string | null }[];
-  members: { userId: string; name: string; image: string | null }[];
   onChange: (userIds: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const { data } = trpc.workspace.members.useQuery(undefined, { enabled: open });
+  const members = (data ?? []).map((member) => ({
+    userId: member.user.id,
+    name: member.user.name ?? member.user.email,
+    image: member.user.image,
+  }));
   const selected = new Set(current.map((a) => a.userId));
 
   function toggle(userId: string) {
@@ -1669,7 +1647,11 @@ function AgentPickerModal({
   currentAgentId: string | null;
   /** Workspace `assignmentEngagementMode` — the picker's starting mode. */
   defaultMode: EngagementModeValue;
-  onSelect: (agentId: string | null, mode: EngagementModeValue) => void;
+  onSelect: (
+    agentId: string | null,
+    mode: EngagementModeValue,
+    agent?: { profileKey: string },
+  ) => void;
 }) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<EngagementModeValue>(defaultMode);
@@ -1726,7 +1708,7 @@ function AgentPickerModal({
       emptyLabel="No active agents match."
       onSelect={(it) => {
         if (it.kind === "unassign") onSelect(null, mode);
-        else onSelect(it.id, mode);
+        else onSelect(it.id, mode, it);
       }}
       footer={
         <div className="flex flex-col gap-1.5">

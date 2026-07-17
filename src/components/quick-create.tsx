@@ -328,8 +328,11 @@ type DraftShape = {
  * description + color, project wants key + color), `⌘⏎` escalates to the
  * existing full-form dialog with the typed value pre-filled as the name.
  */
-export function QuickCreate() {
-  const [open, setOpen] = useState(false);
+export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride }) {
+  // A lazy-mounted first request must render the dialog in its initial
+  // commit. The follow-up effect still applies contextual mode/project/seed
+  // data through openFor, but does not leave the first click waiting on it.
+  const [open, setOpen] = useState(Boolean(initialOpen));
   const [mode, setMode] = useState<Mode>({ kind: "issue" });
   const [text, setText] = useState("");
   const [priority, setPriority] = useState<Priority>("NONE");
@@ -566,6 +569,14 @@ export function QuickCreate() {
     },
     [pathname],
   );
+
+  const initialOpenRef = useRef(initialOpen);
+  useEffect(() => {
+    if (!initialOpenRef.current) return;
+    const request = initialOpenRef.current;
+    initialOpenRef.current = undefined;
+    openFor(request);
+  }, [openFor]);
 
   // Hotkey: ⇧C (does not fire inside editable fields unless the leader
   // modifier matches — which it doesn't here, so typing ⇧C in a textarea

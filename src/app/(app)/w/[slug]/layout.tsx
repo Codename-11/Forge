@@ -3,8 +3,6 @@ import { auth } from "@/server/auth";
 import { db } from "@/server/db";
 import { Sidebar } from "@/components/sidebar";
 import { TopBar } from "@/components/top-bar";
-import { CommandPalette } from "@/components/command-palette";
-import { QuickCreate } from "@/components/quick-create";
 import { RealtimeProvider } from "@/components/realtime-provider";
 import RealtimeToaster from "@/components/realtime-toaster";
 import { TrpcProvider } from "@/lib/trpc-provider";
@@ -13,7 +11,7 @@ import { WorkspaceCookieSync } from "@/components/workspace-cookie-sync";
 import { AppearanceProvider } from "@/components/appearance-provider";
 import { ForgeBackgroundCanvasGate } from "@/components/forge-background-canvas";
 import { TimeTrackerWidget } from "@/components/time-tracker/time-tracker-widget";
-import { MissionControl } from "@/components/mission-control/mission-control";
+import { WorkspaceLazySurfaces } from "@/components/workspace-lazy-surfaces";
 import { AttachmentLightboxProvider } from "@/components/attachments/attachment-lightbox";
 import { ChatContextProvider } from "@/contexts/chat-context-provider";
 import type { WorkspaceContextValue } from "@/hooks/use-workspace";
@@ -56,15 +54,26 @@ export default async function WorkspaceShellLayout({
       attachmentQuotaMb: true,
       agentProgressUpdateMinutes: true,
       agentRunQuietMinutes: true,
+      assignmentSlaMinutes: true,
+      assignmentEngagementMode: true,
       deletedAt: true,
     },
   });
   if (!workspace || workspace.deletedAt) notFound();
 
-  const membership = await db.membership.findUnique({
-    where: { userId_workspaceId: { userId: session.user.id, workspaceId: workspace.id } },
-    select: { role: true },
-  });
+  const [membership, membershipCount, user] = await Promise.all([
+    db.membership.findUnique({
+      where: { userId_workspaceId: { userId: session.user.id, workspaceId: workspace.id } },
+      select: { role: true },
+    }),
+    db.membership.count({
+      where: { userId: session.user.id, workspace: { deletedAt: null } },
+    }),
+    db.user.findUnique({
+      where: { id: session.user.id },
+      select: { lastWorkspaceId: true },
+    }),
+  ]);
   if (!membership) {
     // Not a member — send them somewhere they can be. Prefer their saved
     // default; fall back to the workspace picker.
@@ -76,16 +85,8 @@ export default async function WorkspaceShellLayout({
     redirect(fallback ? `/w/${fallback.workspace.slug}/inbox` : "/settings/workspaces");
   }
 
-  const membershipCount = await db.membership.count({
-    where: { userId: session.user.id, workspace: { deletedAt: null } },
-  });
-
   // Remember this workspace so root "/" resumes here next time. Best-effort:
   // skip the write if it already matches to avoid chatty UPDATEs on nav.
-  const user = await db.user.findUnique({
-    where: { id: session.user.id },
-    select: { lastWorkspaceId: true },
-  });
   if (user?.lastWorkspaceId !== workspace.id) {
     await db.user
       .update({
@@ -110,6 +111,8 @@ export default async function WorkspaceShellLayout({
     attachmentQuotaMb: workspace.attachmentQuotaMb,
     agentProgressUpdateMinutes: workspace.agentProgressUpdateMinutes,
     agentRunQuietMinutes: workspace.agentRunQuietMinutes,
+    assignmentSlaMinutes: workspace.assignmentSlaMinutes,
+    assignmentEngagementMode: workspace.assignmentEngagementMode,
   };
 
   return (
@@ -146,11 +149,9 @@ export default async function WorkspaceShellLayout({
                     }}
                   />
                   {children}
-                  <MissionControl />
                 </main>
               </div>
-              <CommandPalette />
-              <QuickCreate />
+              <WorkspaceLazySurfaces />
               <TimeTrackerWidget />
               <RealtimeProvider workspaceId={workspace.id} />
               <RealtimeToaster />

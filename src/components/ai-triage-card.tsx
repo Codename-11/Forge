@@ -46,9 +46,9 @@ const PRIORITY_TONE: Record<Issue["priority"], string> = {
 
 export function AiTriageCard({ issue, slug }: { issue: Issue; slug: string }) {
   const utils = trpc.useUtils();
-  const { data: allLabels } = trpc.label.list.useQuery();
-  const { data: agents } = trpc.agent.list.useQuery();
   const status = issue.aiTriageStatus;
+  const { data: allLabels } = trpc.label.list.useQuery(undefined, { enabled: status === "READY" });
+  const { data: agents } = trpc.agent.list.useQuery(undefined, { enabled: status === "READY" });
 
   // Local controls — operator can deselect parts of the suggestion before
   // pressing Apply. Default everything on; flip off if the suggested value
@@ -81,16 +81,6 @@ export function AiTriageCard({ issue, slug }: { issue: Issue; slug: string }) {
     },
     onError: (e) => toast.error(e.message),
   });
-
-  // Soft-poll while PENDING so the card updates without realtime wiring.
-  const refetch = utils.issue.byId.refetch;
-  useEffect(() => {
-    if (status !== "PENDING") return;
-    const t = window.setInterval(() => {
-      void refetch({ id: issue.id });
-    }, 2000);
-    return () => window.clearInterval(t);
-  }, [status, refetch, issue.id]);
 
   if (!status) return null;
   if (status === "APPLIED" || status === "DISMISSED") return null;

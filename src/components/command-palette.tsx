@@ -72,11 +72,11 @@ type FlatRow =
 
 const SEARCH_DEBOUNCE_MS = 150;
 
-export function CommandPalette() {
+export function CommandPalette({ initialOpen = false }: { initialOpen?: boolean }) {
   const router = useRouter();
   const ws = useMaybeWorkspace();
   const utils = trpc.useUtils();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(initialOpen);
   const [rawQuery, setRawQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
