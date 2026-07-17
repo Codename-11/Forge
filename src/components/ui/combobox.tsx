@@ -50,6 +50,7 @@ export function Combobox({
   leadingIcon,
   emptyText = "No matches",
   ariaLabel,
+  onOpenChange,
 }: {
   value: string | null;
   onChange: (value: string | null) => void;
@@ -73,6 +74,7 @@ export function Combobox({
   leadingIcon?: ReactNode;
   emptyText?: string;
   ariaLabel?: string;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [internalQuery, setInternalQuery] = useState("");
@@ -111,6 +113,7 @@ export function Combobox({
   const choose = (row: ComboOption | null) => {
     onChange(row ? row.value : null);
     setOpen(false);
+    onOpenChange?.(false);
     setInternalQuery("");
   };
 
@@ -127,6 +130,7 @@ export function Combobox({
     } else if (e.key === "Escape") {
       e.preventDefault();
       setOpen(false);
+      onOpenChange?.(false);
     }
   };
 
@@ -141,7 +145,13 @@ export function Combobox({
         aria-expanded={open}
         aria-controls={listboxId}
         aria-label={ariaLabel}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() =>
+          setOpen((value) => {
+            const next = !value;
+            onOpenChange?.(next);
+            return next;
+          })
+        }
         className={cn(
           "focus-ring inline-flex items-center gap-1.5 rounded-md border border-input bg-background/40 px-2 py-1 text-sm disabled:opacity-50",
           className,
@@ -166,7 +176,10 @@ export function Combobox({
       <AnchoredPopover
         anchorRef={triggerRef}
         open={open}
-        onClose={() => setOpen(false)}
+        onClose={() => {
+          setOpen(false);
+          onOpenChange?.(false);
+        }}
         align={align}
         matchWidth={matchTriggerWidth}
         role="listbox"

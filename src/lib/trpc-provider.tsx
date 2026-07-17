@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { httpBatchLink, loggerLink } from "@trpc/client";
 import superjson from "superjson";
 import { trpc } from "@/lib/trpc";
+import { shouldLogTrpcOperation } from "@/lib/trpc-logger";
 
 /**
  * Client-side tRPC provider.
@@ -41,9 +42,7 @@ export function TrpcProvider({
     trpc.createClient({
       links: [
         loggerLink({
-          enabled: (opts) =>
-            process.env.NODE_ENV === "development" ||
-            (opts.direction === "down" && opts.result instanceof Error),
+          enabled: shouldLogTrpcOperation,
         }),
         httpBatchLink({
           url: "/api/trpc",

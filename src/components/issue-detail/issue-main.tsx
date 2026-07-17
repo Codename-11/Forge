@@ -49,16 +49,17 @@ import { useRealtime } from "@/hooks/use-realtime";
 // labels), shared by the description + comment composers so `/project`,
 // `/assign`, `/label` complete against real entities. React Query dedupes
 // the underlying calls across the three composers.
-function useSlashAttributes() {
+function useSlashAttributes(enabled: boolean) {
   const { data: projects } = trpc.project.list.useQuery(
     { archived: false, limit: 100 },
-    { staleTime: 60_000 },
+    { enabled, staleTime: 60_000 },
   );
   const { data: agents } = trpc.agent.list.useQuery(
     { includeArchived: false },
-    { staleTime: 60_000 },
+    { enabled, staleTime: 60_000 },
   );
   const { data: labels } = trpc.label.list.useQuery(undefined, {
+    enabled,
     staleTime: 60_000,
   });
   return useMemo(() => ({ projects: projects?.items, agents, labels }), [projects, agents, labels]);
@@ -511,7 +512,7 @@ function DescriptionBlock({
   // model as the comment composer (suppressed while the @-mention list
   // owns the caret). Templates are off: a description isn't a comment, so
   // `/status` etc. don't apply.
-  const slashAttributes = useSlashAttributes();
+  const slashAttributes = useSlashAttributes(editing);
   const slash = useSlashAutocomplete({
     value: draft,
     onChange: setDraft,
@@ -773,12 +774,13 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
   // slash picker so the two autocompletes never coexist at the caret —
   // whichever is open owns Arrow/Enter/Tab/Esc.
   const [mentionOpen, setMentionOpen] = useState(false);
+  const [composerActive, setComposerActive] = useState(false);
   const [agentRequestOverrides, setAgentRequestOverrides] = useState<
     Record<string, { mode: AgentRequestMode; assignIssue?: boolean }>
   >({});
   const { data: agentRoster = [] } = trpc.agent.list.useQuery(
     { includeArchived: false },
-    { staleTime: 60_000 },
+    { enabled: composerActive || draft.includes("@"), staleTime: 60_000 },
   );
   // Hydrate the draft from localStorage on mount (and when the issue
   // changes — guards against the page re-keying without remounting).
@@ -836,7 +838,7 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
   // `/approve`, `/handoff`) — quick-comment expanders. Picking a
   // template with a side-effect (e.g. `/blocked`) queues the
   // mutation; it fires when the comment lands.
-  const slashAttributes = useSlashAttributes();
+  const slashAttributes = useSlashAttributes(composerActive || draft.includes("/"));
   const slash = useSlashAutocomplete({
     value: draft,
     onChange: (next) => setDraft(next),
@@ -1205,7 +1207,10 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
             onKeyUp={slash.bind.onKeyUp}
             onClick={slash.bind.onClick}
             onSelect={slash.bind.onSelect}
-            onFocus={slash.bind.onFocus}
+            onFocus={() => {
+              setComposerActive(true);
+              slash.bind.onFocus();
+            }}
             placeholder="Leave a comment…  @ to mention · / for commands · paste or drop to attach"
             className="focus-ring w-full rounded-md border border-input bg-background p-2 text-[0.8125rem]"
             ariaLabel="Comment composer"
@@ -1552,7 +1557,7 @@ function CommentEditor({
   const [mentionOpen, setMentionOpen] = useState(false);
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
 
-  const slashAttributes = useSlashAttributes();
+  const slashAttributes = useSlashAttributes(true);
   const slash = useSlashAutocomplete({
     value: body,
     onChange: setBody,

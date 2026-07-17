@@ -25,6 +25,8 @@ export type WorkspaceContextValue = {
   agentProgressUpdateMinutes: number;
   /** Non-terminal quiet threshold used by live run surfaces. */
   agentRunQuietMinutes: number;
+  assignmentSlaMinutes: number;
+  assignmentEngagementMode: string;
 };
 
 export const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);

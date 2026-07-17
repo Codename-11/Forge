@@ -160,6 +160,23 @@ pnpm test:e2e        # needs Postgres + Redis
 
 Then append a line to `DEVLOG.md` and commit.
 
+## Measuring issue UI load
+
+Use the local-only benchmark harness with a synthetic issue id:
+
+```bash
+node scripts/benchmark-ui-load.mjs \
+  --issue-id <local-synthetic-issue-id> \
+  --label local \
+  --output output/playwright/ui-load-local.json
+```
+
+See [UI load performance](/engineering/ui-load-performance.html) for the
+captured signals and interpretation guidance. Successful tRPC client operations
+stay quiet by default; start Next with `NEXT_PUBLIC_TRPC_VERBOSE=1` when that
+diagnostic stream is intentionally needed. Errors continue to log in either
+mode.
+
 ## Where to next
 
 - [Quickstart](/guide/quickstart.html) — first-run product walkthrough.

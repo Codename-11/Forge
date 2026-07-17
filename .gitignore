@@ -40,4 +40,5 @@ playwright-report/
 test-results/
 .next-e2e/
 .next-lifecycle/
+.next-benchmark-*/
 playwright-report-lifecycle/

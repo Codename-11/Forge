@@ -22,6 +22,7 @@ import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { cn } from "@/lib/utils";
 import { signOutAction } from "@/server/actions/auth";
 import { MOTION } from "@/lib/motion";
+import { requestQuickCreate } from "@/lib/workspace-surface-requests";
 
 /**
  * Workspace-shell top bar.
@@ -76,6 +77,7 @@ export function TopBar({
           data-quick-create
           aria-label="New issue"
           title="New issue (Shift+C)"
+          onClick={() => requestQuickCreate()}
           className={cn(
             "focus-ring inline-flex h-10 items-center gap-1.5 rounded-md bg-ember px-2.5 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 sm:h-7 sm:px-2",
             MOTION.fast,

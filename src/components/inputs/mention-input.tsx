@@ -172,18 +172,6 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
     const [active, setActive] = useState(0);
     const [caretRect, setCaretRect] = useState<{ top: number; left: number } | null>(null);
 
-    // ---- Data sources ------------------------------------------------------
-    // Skipping when there's no workspace context (e.g. global surfaces).
-    const agentsQ = trpc.agent.list.useQuery(
-      { includeArchived: false },
-      { enabled: Boolean(ws), staleTime: 60_000 },
-    );
-    const membersQ = trpc.workspace.members.useQuery(undefined, {
-      enabled: Boolean(ws),
-      staleTime: 60_000,
-    });
-    const queriesLoading = agentsQ.isLoading || membersQ.isLoading;
-
     // ---- Mention trigger detection ----------------------------------------
     const trigger = useMemo(() => {
       const el = elRef.current;
@@ -195,6 +183,20 @@ export const MentionInput = forwardRef<MentionInputHandle, MentionInputProps>(
       // memo even when `value` is stable.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [value, tick]);
+
+    // ---- Data sources ------------------------------------------------------
+    // Mention candidates are picker-only data. Fetch them only after an `@`
+    // trigger is active instead of for every closed composer on the page.
+    const mentionOpen = Boolean(ws && trigger && !forceClosed);
+    const agentsQ = trpc.agent.list.useQuery(
+      { includeArchived: false },
+      { enabled: mentionOpen, staleTime: 60_000 },
+    );
+    const membersQ = trpc.workspace.members.useQuery(undefined, {
+      enabled: mentionOpen,
+      staleTime: 60_000,
+    });
+    const queriesLoading = agentsQ.isLoading || membersQ.isLoading;
 
     // ---- Filtered candidates ----------------------------------------------
     const candidates = useMemo(() => {

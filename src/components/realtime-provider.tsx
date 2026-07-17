@@ -6,6 +6,7 @@ import {
   setRealtimeConnectionHealth,
   type RealtimeEventShape,
 } from "@/hooks/use-realtime";
+import { realtimeTargets } from "@/lib/realtime-targets";
 
 /**
  * Subscribes to the workspace SSE stream and invalidates tRPC queries on
@@ -79,6 +80,7 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
       dispatchRealtimeEvent(evt);
 
       if (!evt.subjectType && !evt.kind) return;
+      const targets = realtimeTargets(evt);
 
       // tRPC cache invalidations — coarse but cheap. Individual hook
       // subscribers can do finer-grained optimistic patching.
@@ -86,14 +88,14 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
         void utils.issue.list.invalidate();
         void utils.inbox.badge.invalidate();
         // Activity tab + relations panel both hang off an issueId.
-        if (evt.subjectId) {
-          void utils.issue.activity.invalidate({ issueId: evt.subjectId });
-          void utils.issue.byId.invalidate({ id: evt.subjectId });
-          void utils.comment.listForIssue.invalidate({ issueId: evt.subjectId });
+        if (targets.issueId) {
+          void utils.issue.activity.invalidate({ issueId: targets.issueId });
+          void utils.issue.byId.invalidate({ id: targets.issueId });
+          void utils.comment.listForIssue.invalidate({ issueId: targets.issueId });
         }
-        // Cycle planning board reads cycle.get(cycleId).issues — trigger
-        // a refresh whenever an issue changes in this workspace.
-        void utils.cycle.get.invalidate();
+        for (const cycleId of targets.cycleIds) {
+          void utils.cycle.get.invalidate({ id: cycleId });
+        }
       }
       if (evt.subjectType === "project") {
         void utils.project.list.invalidate();
@@ -105,6 +107,16 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
       if (evt.subjectType === "initiative") {
         void utils.initiative.list.invalidate();
         void utils.initiative.get.invalidate();
+      }
+      if (evt.subjectType === "workspace") {
+        void utils.workspace.current.invalidate();
+        void utils.workspace.me.invalidate();
+        void utils.workspace.members.invalidate();
+      }
+      if (evt.subjectType === "notification" || evt.kind?.startsWith("NOTIFICATION_")) {
+        void utils.notification.list.invalidate();
+        void utils.notification.unreadCount.invalidate();
+        void utils.inbox.badge.invalidate();
       }
       if (evt.subjectType === "action-request") {
         void utils.actionRequest.list.invalidate();
@@ -126,22 +138,22 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
           void utils.agent.byId.invalidate({ id: evt.subjectId });
         }
         void utils.issue.list.invalidate();
-        void utils.issue.byId.invalidate();
       }
       if (evt.kind?.startsWith("COMMENT_")) {
-        void utils.issue.byId.invalidate();
-        void utils.comment.listForIssue.invalidate();
+        if (targets.issueId && evt.subjectType !== "issue") {
+          void utils.issue.byId.invalidate({ id: targets.issueId });
+          void utils.comment.listForIssue.invalidate({ issueId: targets.issueId });
+        }
         void utils.inbox.badge.invalidate();
       }
       // AgentRun lifecycle: every STARTED/STEP/STALLED/COMPLETED event
       // invalidates the active-run query for the run's issue so the
       // live pulse strip patches in real time without polling.
       if (evt.subjectType === "agent-run" || evt.kind?.startsWith("AGENT_RUN_")) {
-        const payload = evt.payload as { issueId?: string } | null;
-        if (payload?.issueId) {
-          void utils.agentRun.activeForIssue.invalidate({ issueId: payload.issueId });
+        if (targets.issueId) {
+          void utils.agentRun.activeForIssue.invalidate({ issueId: targets.issueId });
           // STATUS comment lives inside the issue's comments tree; refresh too.
-          void utils.issue.byId.invalidate({ id: payload.issueId });
+          void utils.issue.byId.invalidate({ id: targets.issueId });
         }
       }
       // Relation router also emits ISSUE_UPDATED with subjectType=issue, so
