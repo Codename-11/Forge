@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -8,12 +8,15 @@ import {
   Bot,
   CalendarClock,
   Check,
-  CircleDot,
+  ChevronDown,
+  ChevronUp,
   Clock,
   Eraser,
+  ExternalLink,
   FileText,
   Inbox,
   Loader2,
+  MoreHorizontal,
   ShieldCheck,
   Sparkles,
   StopCircle,
@@ -24,12 +27,20 @@ import {
 import type { Role } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
+import { AnchoredPopover } from "@/components/ui/anchored-popover";
 import { ExpandableText } from "@/components/ui/expandable-text";
-import { Picker, useConfirm } from "@/components/ui/modal";
+import { useConfirm } from "@/components/ui/modal";
 import { EmptyState, SkeletonList } from "@/components/ui";
 import { AgentAttentionPanel } from "@/components/agent-attention-panel";
 import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
+import {
+  isDeliveryConflictDecision,
+  safeAttentionActions,
+  type AttentionAction,
+  type AttentionRequestPresentation,
+} from "@/components/action-requests/attention-request-model";
+import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
@@ -224,6 +235,7 @@ export default function CommandCenterPage() {
                         title="Asks"
                         count={data.counts.actionRequests}
                         empty="No agent asks."
+                        unbounded
                       >
                         {data.actionRequests.map((row) =>
                           completionIntent(row.payload) && row.issue ? (
@@ -538,6 +550,8 @@ type CCActionRequest = {
   /** ActionRequestKind — FREE_FORM asks need an answer, not just Accept. */
   kind: string;
   payload: unknown;
+  issueOpenCount?: number;
+  presentation?: AttentionRequestPresentation | null;
   issue: {
     id: string;
     number: number;
@@ -625,19 +639,17 @@ function ActionRequestDecisionCard({
   onResolved: () => void;
 }) {
   const utils = trpc.useUtils();
+  const { confirm, confirmElement } = useConfirm();
   const [showDecline, setShowDecline] = useState(false);
   const [reason, setReason] = useState("");
-  // FREE_FORM asks are the agent asking *us* for info — the primary
-  // action is to answer, not a bare Accept (which delivers nothing).
-  const needsAnswer = request.kind === "FREE_FORM";
   const [showRespond, setShowRespond] = useState(false);
   const [answer, setAnswer] = useState("");
-  // Operator can move the linked issue's status straight from the ask —
-  // e.g. the agent blocked asking a question, but you've decided the
-  // issue is actually Done. This is independent of Accept/Decline: it
-  // does NOT resolve the ask or record a decline resolution, it just
-  // transitions the issue (which closes any active runs on DONE/CANCELED).
-  const [showStatus, setShowStatus] = useState(false);
+  const presentation = request.presentation ?? null;
+  const replyTarget = presentation?.replyTarget ?? null;
+  const isDeliveryConflict = presentation?.protocol === "DELIVERY_CONNECTION_CONFLICT";
+  const issueHref = request.issue
+    ? `/w/${request.issue.workspace.slug || slug}/i/${request.issue.workspace.key}-${request.issue.number}`
+    : null;
 
   const settle = () => {
     void utils.commandCenter.summary.invalidate();
@@ -666,12 +678,81 @@ function ActionRequestDecisionCard({
     onSuccess: () => toast.success("Declined."),
     onSettled: settle,
   });
+  const dismiss = trpc.actionRequest.dismiss.useMutation({
+    onMutate: () => onResolved(),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: () => toast.success("Dismissed."),
+    onSettled: settle,
+  });
+  const resolveDeliveryConflict = trpc.actionRequest.resolveDeliveryConflict.useMutation({
+    onMutate: () => onResolved(),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: () => toast.success("Delivery decision applied."),
+    onSettled: settle,
+  });
 
-  const pending = accept.isPending || decline.isPending;
+  const pending =
+    accept.isPending || decline.isPending || dismiss.isPending || resolveDeliveryConflict.isPending;
+
+  const runAction = async (action: AttentionAction) => {
+    if (!action.enabled) return;
+    if (action.requiresConfirmation || action.tone === "DANGER") {
+      const approved = await confirm({
+        title: action.label,
+        description: action.description,
+        primaryLabel: action.label,
+        secondaryLabel: "Keep reviewing",
+        variant: action.tone === "DANGER" ? "destructive" : "default",
+      });
+      if (!approved) return;
+    }
+
+    if (action.id === "DISMISS") {
+      dismiss.mutate({ id: request.id });
+      return;
+    }
+
+    if (isDeliveryConflict) {
+      if (!isDeliveryConflictDecision(action.id)) {
+        toast.error("This delivery action is not supported. Open the issue to continue safely.");
+        return;
+      }
+      resolveDeliveryConflict.mutate({ id: request.id, decision: action.id });
+      return;
+    }
+
+    switch (action.id) {
+      case "ACCEPT":
+        accept.mutate({ id: request.id });
+        return;
+      case "DECLINE":
+        setShowDecline(true);
+        return;
+      case "RESPOND":
+        if (replyTarget) setShowRespond(true);
+        return;
+      default:
+        toast.error("This action is not available here. Open the issue to continue safely.");
+    }
+  };
+
+  const safeActions = safeAttentionActions(presentation);
+  const visibleActions = safeActions.slice(0, 2);
+  const overflowActions = safeActions.slice(2);
 
   return (
     <div className="flex flex-col gap-1.5 rounded-md border border-border bg-card/40 p-2">
-      {request.requestedByAgent ? (
+      {presentation?.category ? (
+        <div className="text-meta font-medium uppercase tracking-wide text-muted-foreground">
+          {presentation.category.replace(/_/g, " ").toLowerCase()}
+        </div>
+      ) : request.requestedByAgent ? (
         <div className="text-meta flex items-center gap-1.5 text-muted-foreground">
           <span
             aria-hidden
@@ -701,13 +782,18 @@ function ActionRequestDecisionCard({
         )}
         <SeverityChip severity={request.severity} />
       </div>
-      {request.body ? (
-        <ExpandableText content={request.body} className="text-meta text-muted-foreground" />
-      ) : null}
+      <AttentionRequestContent request={request} />
       {request.issue ? (
-        <span className="text-meta break-words text-muted-foreground">
-          {request.issue.workspace.key}-{request.issue.number} · {request.issue.title}
-        </span>
+        <div className="text-meta flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground">
+          <span className="break-words">
+            {request.issue.workspace.key}-{request.issue.number} · {request.issue.title}
+          </span>
+          {(request.issueOpenCount ?? 1) > 1 ? (
+            <span className="rounded bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem]">
+              {request.issueOpenCount} open decisions
+            </span>
+          ) : null}
+        </div>
       ) : null}
       {showDecline ? (
         <div className="flex flex-col gap-1.5 pt-0.5">
@@ -749,7 +835,18 @@ function ActionRequestDecisionCard({
             autoFocus
             value={answer}
             onChange={(e) => setAnswer(e.target.value)}
-            placeholder={`Answer ${request.requestedByAgent?.profileKey ? `@${request.requestedByAgent.profileKey}` : "the agent"}…`}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                setShowRespond(false);
+                setAnswer("");
+                return;
+              }
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && answer.trim()) {
+                e.preventDefault();
+                accept.mutate({ id: request.id, resolution: answer.trim() });
+              }
+            }}
+            placeholder={`Reply to ${replyTarget ? `@${replyTarget}` : "the requester"}…`}
             maxLength={10_000}
             rows={3}
             className="focus-ring text-meta w-full rounded-md border border-input bg-background px-2 py-1"
@@ -782,137 +879,340 @@ function ActionRequestDecisionCard({
             </Button>
           </div>
         </div>
+      ) : safeActions.length > 0 ? (
+        <AttentionActionBar
+          requestId={request.id}
+          actions={visibleActions}
+          overflowActions={overflowActions}
+          pending={pending}
+          issueHref={issueHref}
+          onAction={(action) => void runAction(action)}
+        />
       ) : (
-        <div className="flex flex-wrap gap-2 pt-0.5">
-          {needsAnswer ? (
-            <Button
-              size="sm"
-              variant="ember"
-              disabled={pending}
-              onClick={() => setShowRespond(true)}
-              aria-label="Respond to this ask"
-            >
-              <Sparkles className="h-3 w-3" />
-              Respond
-            </Button>
-          ) : (
-            <Button
-              size="sm"
-              variant="ember"
-              disabled={pending}
-              onClick={() => accept.mutate({ id: request.id })}
-              aria-label="Accept this ask"
-            >
-              {pending ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <Sparkles className="h-3 w-3" />
-              )}
-              Accept
-            </Button>
-          )}
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={pending}
-            onClick={() => setShowDecline(true)}
-            aria-label="Decline this ask"
-          >
-            Decline
-          </Button>
-          {request.issue ? (
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={pending}
-              onClick={() => setShowStatus(true)}
-              aria-label="Set the linked issue's status"
-              title="Move the linked issue to another status without resolving this ask"
-            >
-              <CircleDot className="h-3 w-3" />
-              Set status…
-            </Button>
+        <SafeAttentionFallback
+          issueHref={issueHref}
+          canReply={Boolean(replyTarget)}
+          pending={pending}
+          onRespond={() => setShowRespond(true)}
+          onDismiss={() => dismiss.mutate({ id: request.id })}
+        />
+      )}
+      {confirmElement}
+    </div>
+  );
+}
+
+function AttentionRequestContent({ request }: { request: CCActionRequest }) {
+  const [expanded, setExpanded] = useState(false);
+  const contentId = `attention-request-${request.id}-details`;
+  const presentation = request.presentation;
+  const summary = presentation?.summary ?? request.body;
+  const details = presentation?.details ?? [];
+  const technicalDetails = presentation?.technicalDetails ?? [];
+  const hasLongBody = Boolean(
+    request.body && (request.body.length > 180 || request.body.includes("\n")),
+  );
+  const hasExpandedContent = hasLongBody || details.length > 0 || technicalDetails.length > 0;
+
+  if (!hasExpandedContent) {
+    return request.body ? (
+      <MarkdownWithAttachments body={request.body} className="text-meta text-muted-foreground" />
+    ) : summary ? (
+      <p className="text-meta whitespace-pre-wrap break-words text-muted-foreground">{summary}</p>
+    ) : null;
+  }
+
+  return (
+    <div className="min-w-0 rounded-md border border-border/70 bg-background/30">
+      {!expanded && summary ? (
+        <p className="text-meta line-clamp-2 whitespace-pre-wrap break-words px-2.5 pt-2 text-muted-foreground">
+          {summary}
+        </p>
+      ) : null}
+      <button
+        type="button"
+        className="focus-ring flex w-full items-center justify-between gap-2 rounded-md px-2.5 py-2 text-left text-[0.6875rem] font-medium text-muted-foreground transition-colors hover:bg-subtle/60 hover:text-foreground"
+        aria-controls={contentId}
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+      >
+        <span>{expanded ? "Hide request details" : "Show request details"}</span>
+        {expanded ? (
+          <ChevronUp className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        ) : (
+          <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden />
+        )}
+      </button>
+      {expanded ? (
+        <div id={contentId} className="space-y-3 border-t border-border/70 px-2.5 py-2.5">
+          {request.body ? (
+            <MarkdownWithAttachments
+              body={request.body}
+              className="text-[0.8125rem] text-foreground/90"
+            />
+          ) : summary ? (
+            <p className="text-meta whitespace-pre-wrap break-words text-foreground/90">
+              {summary}
+            </p>
+          ) : null}
+          {details.length > 0 ? <AttentionDetailList rows={details} /> : null}
+          {technicalDetails.length > 0 ? (
+            <details className="rounded-md border border-border/60 bg-card/30 px-2.5 py-2">
+              <summary className="focus-ring cursor-pointer rounded text-[0.6875rem] font-medium text-muted-foreground hover:text-foreground">
+                Technical details
+              </summary>
+              <div className="mt-2">
+                <AttentionDetailList rows={technicalDetails} technical />
+              </div>
+            </details>
           ) : null}
         </div>
-      )}
-      {request.issue ? (
-        <IssueStatusPicker
-          issueId={request.issue.id}
-          open={showStatus}
-          onOpenChange={setShowStatus}
-        />
       ) : null}
     </div>
   );
 }
 
-/**
- * Inline status picker for the linked issue of an ask. Reuses the
- * shared `Picker` (command-palette chooser) and drives `issue.update`
- * with the chosen `statusId`. Transitioning to a terminal status
- * (DONE/CANCELED) closes the issue's active runs server-side — see
- * `issue.ts` `finishRunsForIssue`. Deliberately does NOT touch the
- * ActionRequest: the ask stays open for a separate Accept/Decline, so
- * marking an issue Done never writes a decline resolution.
- */
-function IssueStatusPicker({
-  issueId,
-  open,
-  onOpenChange,
+function AttentionDetailList({
+  rows,
+  technical = false,
 }: {
-  issueId: string;
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
+  rows: Array<{ label: string; value: string }>;
+  technical?: boolean;
 }) {
-  const utils = trpc.useUtils();
-  const { data: statuses, isLoading } = trpc.status.list.useQuery(undefined, {
-    enabled: open,
-  });
-  const [query, setQuery] = useState("");
-  const q = query.trim().toLowerCase();
-  const items = (statuses ?? []).filter((s) => !q || s.name.toLowerCase().includes(q));
+  return (
+    <dl className="grid min-w-0 grid-cols-[minmax(6rem,auto)_minmax(0,1fr)] gap-x-3 gap-y-1.5 text-[0.75rem]">
+      {rows.map((row, index) => (
+        <div key={`${row.label}-${index}`} className="contents">
+          <dt className="text-muted-foreground">{row.label}</dt>
+          <dd
+            className={cn(
+              "min-w-0 whitespace-pre-wrap break-words text-foreground/90",
+              technical && "font-mono text-[0.6875rem] text-muted-foreground",
+            )}
+          >
+            {row.value}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
 
-  const update = trpc.issue.update.useMutation({
-    onError: (e) => toast.error(e.message),
-    onSuccess: (_d, vars) => {
-      const name = statuses?.find((s) => s.id === vars.statusId)?.name;
-      toast.success(name ? `Moved to ${name}.` : "Issue status updated.");
-    },
-    onSettled: () => {
-      void utils.commandCenter.summary.invalidate();
-      void utils.commandCenter.decisionsCount.invalidate();
-      void utils.inbox.get.invalidate();
-    },
-  });
+function actionVariant(tone: AttentionAction["tone"]): "ember" | "outline" | "danger" {
+  if (tone === "PRIMARY") return "ember";
+  if (tone === "DANGER") return "danger";
+  return "outline";
+}
+
+function AttentionActionBar({
+  requestId,
+  actions,
+  overflowActions,
+  pending,
+  issueHref,
+  onAction,
+}: {
+  requestId: string;
+  actions: AttentionAction[];
+  overflowActions: AttentionAction[];
+  pending: boolean;
+  issueHref: string | null;
+  onAction: (action: AttentionAction) => void;
+}) {
+  const initialAction =
+    actions.find((action) => action.enabled) ?? actions[0] ?? overflowActions[0];
+  const [focusedActionId, setFocusedActionId] = useState(initialAction?.id ?? null);
+  const describedAction = [...actions, ...overflowActions].find(
+    (action) => action.id === focusedActionId,
+  );
+  const descriptionId = describedAction
+    ? `attention-action-${requestId}-${describedAction.id}-description`
+    : undefined;
 
   return (
-    <Picker
-      open={open}
-      onOpenChange={onOpenChange}
-      placeholder="Move issue to status…"
-      items={items}
-      getKey={(s) => s.id}
-      onQueryChange={setQuery}
-      loading={isLoading}
-      emptyLabel="No statuses match."
-      onSelect={(s) => {
-        onOpenChange(false);
-        update.mutate({ id: issueId, statusId: s.id });
-      }}
-      renderItem={(s) => (
-        <div className="flex items-center gap-2">
-          <span
-            aria-hidden
-            className="inline-block h-2.5 w-2.5 rounded-full"
-            style={{ backgroundColor: s.color }}
+    <div className="space-y-1.5 pt-0.5" role="group" aria-label="Available responses">
+      <div className="flex flex-wrap items-center gap-2">
+        {actions.map((action) =>
+          action.id === "OPEN_ISSUE" && issueHref ? (
+            <Link
+              key={action.id}
+              href={issueHref}
+              className="focus-ring inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-md border border-border px-2 text-xs font-medium transition-colors hover:bg-subtle"
+              aria-describedby={focusedActionId === action.id ? descriptionId : undefined}
+              onFocus={() => setFocusedActionId(action.id)}
+              onMouseEnter={() => setFocusedActionId(action.id)}
+            >
+              {action.label} <ExternalLink className="h-3 w-3" aria-hidden />
+            </Link>
+          ) : (
+            <Button
+              key={action.id}
+              size="sm"
+              variant={actionVariant(action.tone)}
+              className={cn(action.tone === "DANGER" && "border-destructive/50")}
+              disabled={pending || !action.enabled}
+              aria-describedby={focusedActionId === action.id ? descriptionId : undefined}
+              onFocus={() => setFocusedActionId(action.id)}
+              onMouseEnter={() => setFocusedActionId(action.id)}
+              onClick={() => onAction(action)}
+            >
+              {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+              {action.label}
+            </Button>
+          ),
+        )}
+        {overflowActions.length > 0 ? (
+          <AttentionActionOverflow
+            actions={overflowActions}
+            pending={pending}
+            issueHref={issueHref}
+            onAction={onAction}
+            onPreview={setFocusedActionId}
           />
-          <span className="truncate">{s.name}</span>
-          <span className="ml-auto font-mono text-[0.6875rem] text-muted-foreground">
-            {s.category.toLowerCase().replace(/_/g, " ")}
-          </span>
-        </div>
-      )}
-    />
+        ) : null}
+      </div>
+      {describedAction ? (
+        <p
+          id={descriptionId}
+          className={cn(
+            "text-meta text-muted-foreground",
+            !describedAction.enabled && "text-warning",
+          )}
+        >
+          {describedAction.enabled
+            ? describedAction.description
+            : (describedAction.disabledReason ?? describedAction.description)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function AttentionActionOverflow({
+  actions,
+  pending,
+  issueHref,
+  onAction,
+  onPreview,
+}: {
+  actions: AttentionAction[];
+  pending: boolean;
+  issueHref: string | null;
+  onAction: (action: AttentionAction) => void;
+  onPreview: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLDivElement | null>(null);
+  return (
+    <div ref={anchorRef} className="relative">
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={pending}
+        aria-label="More responses"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" aria-hidden />
+        More
+      </Button>
+      <AnchoredPopover
+        anchorRef={anchorRef}
+        open={open}
+        onClose={() => setOpen(false)}
+        align="left"
+        role="menu"
+        className="w-72 rounded-md border border-border bg-card py-1 shadow-md"
+      >
+        {actions.map((action) =>
+          action.id === "OPEN_ISSUE" && issueHref ? (
+            <Link
+              key={action.id}
+              href={issueHref}
+              role="menuitem"
+              className="focus-ring flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-subtle"
+              onFocus={() => onPreview(action.id)}
+              onMouseEnter={() => onPreview(action.id)}
+              onClick={() => setOpen(false)}
+            >
+              <span className="text-[0.75rem] font-medium">{action.label}</span>
+              <span className="text-meta text-muted-foreground">{action.description}</span>
+            </Link>
+          ) : (
+            <button
+              key={action.id}
+              type="button"
+              role="menuitem"
+              disabled={pending || !action.enabled}
+              className={cn(
+                "focus-ring flex w-full flex-col items-start gap-0.5 px-2.5 py-2 text-left hover:bg-subtle disabled:opacity-60 disabled:hover:bg-transparent",
+                action.tone === "DANGER" && "text-destructive",
+              )}
+              onFocus={() => onPreview(action.id)}
+              onMouseEnter={() => onPreview(action.id)}
+              onClick={() => {
+                setOpen(false);
+                onAction(action);
+              }}
+            >
+              <span className="text-[0.75rem] font-medium">{action.label}</span>
+              <span className="text-meta text-muted-foreground">
+                {action.enabled
+                  ? action.description
+                  : (action.disabledReason ?? action.description)}
+              </span>
+            </button>
+          ),
+        )}
+      </AnchoredPopover>
+    </div>
+  );
+}
+
+function SafeAttentionFallback({
+  issueHref,
+  canReply,
+  pending,
+  onRespond,
+  onDismiss,
+}: {
+  issueHref: string | null;
+  canReply: boolean;
+  pending: boolean;
+  onRespond: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="space-y-1.5 pt-0.5">
+      <p className="text-meta text-muted-foreground">
+        Forge cannot safely complete this decision from the queue. Review the current context before
+        continuing.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {issueHref ? (
+          <Link
+            href={issueHref}
+            className="focus-ring inline-flex h-7 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-2 text-xs font-medium text-ember-foreground transition-colors hover:bg-ember/90"
+          >
+            Open issue <ExternalLink className="h-3 w-3" aria-hidden />
+          </Link>
+        ) : null}
+        {canReply ? (
+          <Button
+            size="sm"
+            variant={issueHref ? "outline" : "ember"}
+            disabled={pending}
+            onClick={onRespond}
+          >
+            Respond
+          </Button>
+        ) : null}
+        <Button size="sm" variant="ghost" disabled={pending} onClick={onDismiss}>
+          Dismiss
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -1186,12 +1486,14 @@ function AttentionGroup({
   count,
   empty,
   action,
+  unbounded = false,
   children,
 }: {
   title: string;
   count: number;
   empty: string;
   action?: React.ReactNode;
+  unbounded?: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -1208,7 +1510,9 @@ function AttentionGroup({
         </span>
         {action ? <span className="ml-auto flex shrink-0 items-center gap-1">{action}</span> : null}
       </header>
-      <div className="max-h-[22rem] min-h-0 space-y-2 overflow-y-auto p-2">
+      <div
+        className={cn("min-h-0 space-y-2 p-2", unbounded ? "" : "max-h-[22rem] overflow-y-auto")}
+      >
         {count === 0 ? (
           <div className="text-meta rounded-md border border-dashed border-border bg-card/20 p-3 text-muted-foreground">
             {empty}
@@ -1564,7 +1868,7 @@ function SeverityChip({ severity }: { severity: string }) {
         : severity === "WARNING"
           ? "bg-warning/10 text-warning"
           : severity === "SUCCESS"
-            ? "bg-emerald-500/10 text-emerald-600"
+            ? "bg-success/10 text-success"
             : "bg-subtle text-muted-foreground";
   return (
     <span className={`rounded px-1 py-0.5 text-[10px] uppercase ${tone}`}>

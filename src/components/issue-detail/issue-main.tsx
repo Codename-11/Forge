@@ -366,7 +366,7 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
         Needs your decision · {requests.length}
       </div>
       {requests.map((request) =>
-        request.kind === "FREE_FORM" ? (
+        request.kind === "FREE_FORM" || request.kind === "DELIVERY_CONNECTION_CONFLICT" ? (
           <div key={request.id} className="rounded-md border border-warning/30 bg-card/50 p-2">
             <div className="text-sm font-medium">{request.title}</div>
             {request.body ? (
@@ -378,7 +378,9 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
               href={`/w/${ws.slug}/command-center`}
               className="text-meta mt-2 inline-flex text-ember hover:underline"
             >
-              Answer in Command Center
+              {request.kind === "DELIVERY_CONNECTION_CONFLICT"
+                ? "Choose a delivery action in Command Center"
+                : "Answer in Command Center"}
             </Link>
           </div>
         ) : (

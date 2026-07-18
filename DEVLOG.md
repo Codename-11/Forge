@@ -2,6 +2,43 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-18 — AXI-130 typed Attention Queue responses
+
+Replaced the Command Center's universal text/decline/status response pattern
+with a server-derived presentation contract for each ActionRequest. Cards now
+show only supported actions, keep the primary queue compact, provide explicit
+outcome and disabled-state descriptions, reveal readable structured and
+technical evidence on expansion, and fall back safely to the linked issue when
+Forge has no actionable typed protocol or valid reply destination.
+
+Added the system-owned `DELIVERY_CONNECTION_CONFLICT` request for managed
+runtime collisions. A candidate run is parked before execution and can be
+joined as a contributor or reviewer, handed off by an admin, or cancelled
+without disturbing the active primary. The resolver revalidates tenant,
+session, connection, trigger, run, and attempted engagement mode under scoped
+row locks. Review dispatches cannot escalate to write-capable execution;
+session owners/admins may join or cancel, while handoff remains admin-only.
+Stale requests expose only safe dismissal and issue navigation.
+
+The same ownership gate now covers assignment dispatch and recovery of
+unbacked runs, closing the path where recovery could start work behind an
+active primary connection. Issue detail directs typed decisions to Command
+Center rather than offering a misleading generic Accept action.
+
+Verification used only local Postgres and Redis. Prisma generation and the
+new timestamped migration completed; lint and typecheck passed. Focused real-DB
+delivery-conflict and presentation suites passed 21/21, and the full serial
+Vitest suite passed 1,477 tests with 12 intentional skips. A fresh production
+build and focused Command Center Playwright scenario passed against the
+disposable `forge_e2e` database. The Windows-native equivalents of every local
+release gate passed; invoking the Linux-only `ci:local` wrapper through WSL
+stopped at Vitest because its Linux Rollup binary is intentionally absent from
+the Windows dependency tree.
+
+Prepared the additive schema and operator workflow as v0.29.0, including the
+curated What's New entry. Tagging and production deployment remain separate
+release facts and use the exact merged `main` SHA.
+
 ## 2026-07-17 — v0.28.1 release preparation
 
 Prepared the patch release for AXI-128 from merged `main` at `1d968b9`.

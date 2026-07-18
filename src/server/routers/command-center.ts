@@ -1,5 +1,12 @@
 import { z } from "zod";
-import { ActionRequestStatus, AgentRunStatus, GoalStatus, ReviewGateStatus } from "@prisma/client";
+import {
+  ActionRequestKind,
+  ActionRequestStatus,
+  AgentRunStatus,
+  GoalStatus,
+  ReviewGateStatus,
+  type PrismaClient,
+} from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { listRunRecoveryItems } from "@/server/services/agent-run-recovery";
 import { listReviewGatesWithContext } from "@/server/services/review-gate-context";
@@ -45,6 +52,283 @@ function collapsePerIssue<T extends { issueId: string | null }>(
     out.push({ ...r, issueOpenCount: r.issueId ? (counts.get(r.issueId) ?? 1) : 1 });
   }
   return out;
+}
+
+type AttentionAction = {
+  id: string;
+  label: string;
+  description: string;
+  tone: "PRIMARY" | "NEUTRAL" | "DANGER";
+  requiresConfirmation: boolean;
+  enabled: boolean;
+  disabledReason: string | null;
+};
+
+async function actionRequestPresentation(
+  db: PrismaClient,
+  workspaceId: string,
+  viewer: { userId: string | null; role: string },
+  request: {
+    id: string;
+    kind: ActionRequestKind;
+    title: string;
+    body: string | null;
+    payload: unknown;
+    issueId: string | null;
+    sourceType: string | null;
+    sourceId: string | null;
+    requestedByAgent: {
+      id: string;
+      name: string;
+      profileKey: string;
+      avatar: string | null;
+    } | null;
+  },
+) {
+  const openIssue: AttentionAction | null = request.issueId
+    ? {
+        id: "OPEN_ISSUE",
+        label: "Open issue",
+        description: "Review the issue and its current delivery state.",
+        tone: "NEUTRAL",
+        requiresConfirmation: false,
+        enabled: true,
+        disabledReason: null,
+      }
+    : null;
+  const base = {
+    summary: request.body ?? request.title,
+    details: [] as Array<{ label: string; value: string }>,
+    technicalDetails: [
+      { label: "Action request", value: request.id },
+      ...(request.sourceType ? [{ label: "Source type", value: request.sourceType }] : []),
+      ...(request.sourceId ? [{ label: "Source", value: request.sourceId }] : []),
+      ...(request.issueId ? [{ label: "Issue", value: request.issueId }] : []),
+    ],
+  };
+  const dismiss: AttentionAction = {
+    id: "DISMISS",
+    label: "Dismiss",
+    description: "Remove this stale request from the attention queue.",
+    tone: "NEUTRAL",
+    requiresConfirmation: false,
+    enabled: true,
+    disabledReason: null,
+  };
+
+  if (request.kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT) {
+    const raw =
+      request.payload && typeof request.payload === "object" && !Array.isArray(request.payload)
+        ? (request.payload as Record<string, unknown>)
+        : {};
+    const workSessionId = typeof raw.workSessionId === "string" ? raw.workSessionId : null;
+    const expectedOwnerConnectionId =
+      typeof raw.expectedOwnerConnectionId === "string" ? raw.expectedOwnerConnectionId : null;
+    const candidateConnectionId =
+      typeof raw.candidateConnectionId === "string" ? raw.candidateConnectionId : null;
+    const queuedRunId = typeof raw.queuedRunId === "string" ? raw.queuedRunId : null;
+    const validPayload =
+      raw.version === 1 &&
+      (raw.attemptedMode === "EXECUTE" || raw.attemptedMode === "REVIEW") &&
+      workSessionId !== null &&
+      expectedOwnerConnectionId !== null &&
+      candidateConnectionId !== null &&
+      queuedRunId !== null;
+    const [session, run, candidate] = validPayload
+      ? await Promise.all([
+          db.workSession.findFirst({
+            where: { id: workSessionId!, workspaceId },
+            select: { endedAt: true, ownerConnectionId: true, ownerUserId: true },
+          }),
+          db.agentRun.findFirst({
+            where: { id: queuedRunId!, workspaceId },
+            select: {
+              status: true,
+              externalRunId: true,
+              connectionId: true,
+              engagementMode: true,
+            },
+          }),
+          db.agentConnection.findFirst({
+            where: {
+              id: candidateConnectionId!,
+              workspaceId,
+              kind: "MANAGED_RUNTIME",
+              revokedAt: null,
+            },
+            select: { displayName: true },
+          }),
+        ])
+      : [null, null, null];
+    const staleReason = !validPayload
+      ? "This request has an unsupported or incomplete delivery payload."
+      : !session || session.endedAt
+        ? "The delivery session has ended."
+        : session.ownerConnectionId !== expectedOwnerConnectionId
+          ? "Primary delivery ownership changed after this request was created."
+          : !candidate
+            ? "The requesting runtime connection is no longer available."
+            : !run ||
+                run.externalRunId ||
+                run.connectionId !== candidateConnectionId ||
+                run.engagementMode !== raw.attemptedMode
+              ? "The queued runtime attempt is no longer safely actionable."
+              : run.status !== AgentRunStatus.WAITING && run.status !== AgentRunStatus.ACTIVE
+                ? "The queued runtime attempt is already terminal."
+                : null;
+    const isAdmin = viewer.role === "OWNER" || viewer.role === "ADMIN";
+    const canManage = isAdmin || (viewer.userId !== null && session?.ownerUserId === viewer.userId);
+    const managerReason = canManage
+      ? null
+      : "Only the work-session owner or a workspace admin can choose this action.";
+    const adminReason = isAdmin
+      ? null
+      : "Workspace admin authority is required to hand off primary ownership.";
+    const attemptedMode = raw.attemptedMode === "REVIEW" ? "REVIEW" : "EXECUTE";
+    const executeActions: AttentionAction[] = [
+      {
+        id: "JOIN_CONTRIBUTOR",
+        label: "Continue as contributor",
+        description:
+          "Keep the current primary and let this runtime execute on the shared delivery session.",
+        tone: "PRIMARY",
+        requiresConfirmation: false,
+        enabled: staleReason === null && canManage,
+        disabledReason: staleReason ?? managerReason,
+      },
+      {
+        id: "JOIN_REVIEWER",
+        label: "Join as reviewer",
+        description:
+          "Keep the current primary and convert this queued attempt to read-only review mode.",
+        tone: "NEUTRAL",
+        requiresConfirmation: false,
+        enabled: staleReason === null && canManage,
+        disabledReason: staleReason ?? managerReason,
+      },
+      {
+        id: "HANDOFF_PRIMARY",
+        label: "Hand off primary",
+        description:
+          "Transfer delivery ownership to this runtime and continue the queued execution.",
+        tone: "DANGER",
+        requiresConfirmation: true,
+        enabled: staleReason === null && isAdmin,
+        disabledReason: staleReason ?? adminReason,
+      },
+      {
+        id: "CANCEL_DISPATCH",
+        label: "Cancel new dispatch",
+        description:
+          "Abandon only this queued runtime attempt; the current primary connection is untouched.",
+        tone: "DANGER",
+        requiresConfirmation: true,
+        enabled: staleReason === null && canManage,
+        disabledReason: staleReason ?? managerReason,
+      },
+    ];
+    const reviewActions = executeActions.filter(
+      (action) => action.id === "JOIN_REVIEWER" || action.id === "CANCEL_DISPATCH",
+    );
+    const conflictActions = attemptedMode === "REVIEW" ? reviewActions : executeActions;
+    const visibleActions = staleReason
+      ? [dismiss, ...(openIssue ? [openIssue] : [])]
+      : [...conflictActions, dismiss, ...(openIssue ? [openIssue] : [])];
+    return {
+      ...base,
+      category: "OWNERSHIP_CONFLICT",
+      protocol: "DELIVERY_CONNECTION_CONFLICT",
+      replyTarget: null,
+      actions: visibleActions,
+      details: [
+        ...base.details,
+        { label: "Requested mode", value: attemptedMode },
+        { label: "Current state", value: staleReason ?? "Waiting for an ownership decision." },
+        ...(candidate?.displayName
+          ? [{ label: "Attempted connection", value: candidate.displayName }]
+          : []),
+      ],
+      technicalDetails: [
+        ...base.technicalDetails,
+        ...(workSessionId ? [{ label: "Work session", value: workSessionId }] : []),
+        ...(expectedOwnerConnectionId
+          ? [{ label: "Expected primary connection", value: expectedOwnerConnectionId }]
+          : []),
+        ...(candidateConnectionId
+          ? [{ label: "Candidate connection", value: candidateConnectionId }]
+          : []),
+        ...(queuedRunId ? [{ label: "Queued run", value: queuedRunId }] : []),
+        { label: "Attempted mode", value: attemptedMode },
+        ...(typeof raw.triggerEventId === "string"
+          ? [{ label: "Trigger event", value: raw.triggerEventId }]
+          : []),
+      ],
+    };
+  }
+
+  if (request.kind === ActionRequestKind.FREE_FORM) {
+    const replyTarget =
+      request.requestedByAgent && request.issueId
+        ? {
+            type: "ISSUE_AGENT_REPLY" as const,
+            issueId: request.issueId,
+            agentId: request.requestedByAgent.id,
+            profileKey: request.requestedByAgent.profileKey,
+          }
+        : null;
+    const actions: AttentionAction[] = replyTarget
+      ? [
+          {
+            id: "RESPOND",
+            label: "Respond",
+            description: `Reply to @${replyTarget.profileKey} on the linked issue.`,
+            tone: "PRIMARY",
+            requiresConfirmation: false,
+            enabled: true,
+            disabledReason: null,
+          },
+          ...(openIssue ? [openIssue] : []),
+        ]
+      : openIssue
+        ? [openIssue]
+        : [];
+    return {
+      ...base,
+      category: "INFORMATION_REQUIRED",
+      protocol: replyTarget ? "TEXT_REPLY" : "GENERIC_FALLBACK",
+      replyTarget: replyTarget?.profileKey ?? null,
+      actions,
+    };
+  }
+
+  const decisionActions: AttentionAction[] = [
+    {
+      id: "ACCEPT",
+      label: "Accept",
+      description: "Apply the typed action attached to this request.",
+      tone: "PRIMARY",
+      requiresConfirmation: false,
+      enabled: true,
+      disabledReason: null,
+    },
+    {
+      id: "DECLINE",
+      label: "Decline",
+      description: "Reject this request without applying its action.",
+      tone: "NEUTRAL",
+      requiresConfirmation: false,
+      enabled: true,
+      disabledReason: null,
+    },
+    ...(openIssue ? [openIssue] : []),
+  ];
+  return {
+    ...base,
+    category: "DECISION_REQUIRED",
+    protocol: "SINGLE_DECISION",
+    replyTarget: null,
+    actions: decisionActions,
+  };
 }
 
 /**
@@ -266,9 +550,20 @@ export const commandCenterRouter = router({
       // Collapse near-duplicate action-request cards to one per issue, then
       // slice to the requested limit (collapse runs over the full open set).
       const groupedActionRequests = collapsePerIssue(actionRequests).slice(0, input.limit);
+      const presentedActionRequests = await Promise.all(
+        groupedActionRequests.map(async (request) => ({
+          ...request,
+          presentation: await actionRequestPresentation(
+            ctx.db,
+            ctx.workspaceId,
+            { userId, role: ctx.membership.role },
+            request,
+          ),
+        })),
+      );
 
       return {
-        actionRequests: groupedActionRequests,
+        actionRequests: presentedActionRequests,
         reviewGates,
         activeRuns: visibleActiveRuns,
         runtimeApprovals,

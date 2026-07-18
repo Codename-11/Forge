@@ -9,6 +9,18 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-18] — v0.29.0 · Actionable attention decisions
+
+### Added
+
+- **Attention Queue decisions are typed and outcome-aware.** Cards derive valid actions, permissions, explanations, and readable evidence from current server state, with safe issue-navigation fallbacks when a request has no actionable protocol.
+- **Delivery collisions pause for an explicit ownership decision.** Managed runtime attempts can join the active session, transfer primary ownership with admin authority, or cancel only the blocked candidate without disturbing existing MCP or runtime work.
+
+### Fixed
+
+- **Review dispatches cannot escalate into write-capable execution.** Attempted engagement mode, session authority, tenant scope, and run freshness are revalidated atomically before any blocked delivery continues.
+- **Stale ownership asks leave the queue cleanly.** Obsolete conflict requests offer safe dismissal instead of permanent disabled actions, while issue detail routes typed decisions to Command Center rather than presenting a misleading generic Accept.
+
 ## [2026-07-17] — v0.28.1 · Reliable lifecycle reconciliation
 
 ### Changed

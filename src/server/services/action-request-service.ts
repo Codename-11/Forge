@@ -5,6 +5,7 @@ import {
   ActionRequestStatus,
   AgentRunStatus,
   EngagementMode,
+  EngagementSource,
   EventKind,
   NotificationSeverity,
   Prisma,
@@ -21,7 +22,7 @@ import {
 } from "@/lib/runtime-tools";
 import { buildRuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import { recordChange } from "@/server/audit";
-import { openOrTouchRun, appendRunEvent } from "@/server/services/agent-run";
+import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/agent-run";
 import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { archiveIssue } from "@/server/services/issue-archive";
@@ -89,8 +90,18 @@ const runtimeToolGrantPayload = z.object({
   scopePath: z.string().trim().min(1).max(500),
   reason: z.string().trim().max(2_000).optional(),
 });
+const deliveryConnectionConflictPayload = z.object({
+  version: z.literal(1),
+  workSessionId: z.string().cuid(),
+  expectedOwnerConnectionId: z.string().cuid(),
+  candidateConnectionId: z.string().cuid(),
+  queuedRunId: z.string().cuid(),
+  triggerEventId: z.string().cuid(),
+  attemptedMode: z.enum(["EXECUTE", "REVIEW"]),
+});
 
 export const actionRequestPayloadSchemas = {
+  DELIVERY_CONNECTION_CONFLICT: deliveryConnectionConflictPayload,
   TRANSITION: transitionPayload,
   SET_LABELS: setLabelsPayload,
   ASSIGN: assignPayload,
@@ -101,6 +112,7 @@ export const actionRequestPayloadSchemas = {
 } as const;
 
 export type ActionRequestPayloadMap = {
+  DELIVERY_CONNECTION_CONFLICT: z.infer<typeof deliveryConnectionConflictPayload>;
   TRANSITION: z.infer<typeof transitionPayload>;
   SET_LABELS: z.infer<typeof setLabelsPayload>;
   ASSIGN: z.infer<typeof assignPayload>;
@@ -159,6 +171,8 @@ export interface CreateActionRequestInput {
   dedupeKey?: string | null;
   issueId?: string | null;
   dueAt?: Date | null;
+  /** Internal producers only; never expose this capability at API boundaries. */
+  systemOwned?: boolean;
 }
 
 export interface ActionRequestPollOption {
@@ -219,6 +233,58 @@ async function validatePayloadWorkspaceScope(
       code: "BAD_REQUEST",
       message: `ActionRequest kind=${kind} requires issueId to be set.`,
     });
+  }
+  if (kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT) {
+    const p = payload as ActionRequestPayloadMap["DELIVERY_CONNECTION_CONFLICT"];
+    const [session, candidate, run, trigger] = await Promise.all([
+      db.workSession.findFirst({
+        where: {
+          id: p.workSessionId,
+          workspaceId,
+          issueId,
+          ownerConnectionId: p.expectedOwnerConnectionId,
+          endedAt: null,
+        },
+        select: { id: true },
+      }),
+      db.agentConnection.findFirst({
+        where: {
+          id: p.candidateConnectionId,
+          workspaceId,
+          kind: "MANAGED_RUNTIME",
+          revokedAt: null,
+        },
+        select: { id: true, agentId: true },
+      }),
+      db.agentRun.findFirst({
+        where: {
+          id: p.queuedRunId,
+          workspaceId,
+          issueId,
+          externalRunId: null,
+          triggerEventId: p.triggerEventId,
+        },
+        select: { id: true, agentId: true, engagementMode: true },
+      }),
+      db.activityEvent.findFirst({
+        where: { id: p.triggerEventId, workspaceId, subjectId: issueId },
+        select: { id: true },
+      }),
+    ]);
+    if (
+      !session ||
+      !candidate ||
+      !run ||
+      !trigger ||
+      run.agentId !== candidate.agentId ||
+      run.engagementMode !== p.attemptedMode
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Delivery conflict payload does not match a current queued run in this workspace.",
+      });
+    }
+    return;
   }
   if (kind === ActionRequestKind.ARCHIVE) return;
 
@@ -396,7 +462,7 @@ function sameJson(left: unknown, right: unknown): boolean {
 }
 
 export async function createActionRequest(
-  db: PrismaClient,
+  db: PrismaClient | Prisma.TransactionClient,
   input: CreateActionRequestInput,
 ): Promise<{ id: string }> {
   if (input.issueId) {
@@ -409,6 +475,13 @@ export async function createActionRequest(
     }
   }
   const kind = input.kind ?? ActionRequestKind.FREE_FORM;
+  if (kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT && input.systemOwned !== true) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message:
+        "Delivery connection conflicts can only be created by Forge dispatch reconciliation.",
+    });
+  }
   const parsedPayload = parseActionRequestPayload(kind, input.payload);
   await validatePayloadWorkspaceScope(
     db,
@@ -450,183 +523,184 @@ export async function createActionRequest(
   const legacyDedupable = Boolean(input.issueId && requesterAgentId && dedupScopePath !== null);
   const dedupable = Boolean(genericDedupeKey || legacyDedupable);
 
-  const createOnce = () =>
-    db.$transaction(async (tx) => {
-      let supersededId: string | null = null;
-      if (dedupable) {
-        const match = genericDedupeKey
-          ? await tx.actionRequest.findFirst({
+  const createInTransaction = async (tx: Prisma.TransactionClient) => {
+    let supersededId: string | null = null;
+    if (dedupable) {
+      const match = genericDedupeKey
+        ? await tx.actionRequest.findFirst({
+            where: {
+              workspaceId: input.workspaceId,
+              dedupeKey: genericDedupeKey,
+              status: ActionRequestStatus.OPEN,
+            },
+            select: { id: true },
+          })
+        : (
+            await tx.actionRequest.findMany({
               where: {
                 workspaceId: input.workspaceId,
-                dedupeKey: genericDedupeKey,
+                issueId: input.issueId!,
+                kind,
+                requestedByAgentId: requesterAgentId!,
                 status: ActionRequestStatus.OPEN,
               },
-              select: { id: true },
+              select: { id: true, payload: true },
             })
-          : (
-              await tx.actionRequest.findMany({
-                where: {
-                  workspaceId: input.workspaceId,
-                  issueId: input.issueId!,
-                  kind,
-                  requestedByAgentId: requesterAgentId!,
-                  status: ActionRequestStatus.OPEN,
-                },
-                select: { id: true, payload: true },
-              })
-            ).find((row) => {
-              const ps =
-                row.payload && typeof row.payload === "object" && "scopePath" in row.payload
-                  ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
-                  : "";
-              return ps === (dedupScopePath ?? "");
-            });
-        if (genericDedupeKey && match) {
-          const existing = await tx.actionRequest.findUniqueOrThrow({
-            where: { id: match.id },
+          ).find((row) => {
+            const ps =
+              row.payload && typeof row.payload === "object" && "scopePath" in row.payload
+                ? String((row.payload as { scopePath?: unknown }).scopePath ?? "")
+                : "";
+            return ps === (dedupScopePath ?? "");
           });
-          const nextPayload =
-            parsedPayload === null ? null : (parsedPayload as Prisma.InputJsonValue);
-          const nextOptions =
-            parsedOptions === null ? null : (parsedOptions as unknown as Prisma.InputJsonValue);
-          const unchanged =
-            existing.title === input.title.trim() &&
-            existing.body === (input.body ?? null) &&
-            existing.severity === (input.severity ?? NotificationSeverity.INFO) &&
-            existing.kind === kind &&
-            sameJson(existing.payload, nextPayload) &&
-            sameJson(existing.options, nextOptions) &&
-            existing.requestedByUserId === (input.actorAgentId ? null : input.actorId) &&
-            existing.requestedByAgentId === (input.actorAgentId ?? null) &&
-            existing.assignedUserId === (input.assignedUserId ?? null) &&
-            existing.assignedAgentId === (input.assignedAgentId ?? null) &&
-            existing.sourceType === (input.sourceType ?? null) &&
-            existing.sourceId === (input.sourceId ?? null) &&
-            existing.issueId === (input.issueId ?? null) &&
-            existing.dueAt?.getTime() === input.dueAt?.getTime();
-          if (unchanged) return { id: existing.id };
-
-          const refreshed = await tx.actionRequest.update({
-            where: { id: match.id },
-            data: {
-              title: input.title.trim(),
-              body: input.body ?? null,
-              severity: input.severity ?? NotificationSeverity.INFO,
-              kind,
-              payload:
-                parsedPayload === null ? Prisma.JsonNull : (parsedPayload as Prisma.InputJsonValue),
-              options:
-                parsedOptions === null
-                  ? Prisma.JsonNull
-                  : (parsedOptions as unknown as Prisma.InputJsonValue),
-              requestedByUserId: input.actorAgentId ? null : input.actorId,
-              requestedByAgentId: input.actorAgentId ?? null,
-              assignedUserId: input.assignedUserId ?? null,
-              assignedAgentId: input.assignedAgentId ?? null,
-              sourceType: input.sourceType ?? null,
-              sourceId: input.sourceId ?? null,
-              issueId: input.issueId ?? null,
-              dueAt: input.dueAt ?? null,
-            },
-          });
-          await recordChange(tx, {
-            workspaceId: input.workspaceId,
-            actorId: input.actorId,
-            actorAgentId: input.actorAgentId ?? null,
-            entity: "action-request",
-            entityId: refreshed.id,
-            action: "refreshed",
-            after: { title: refreshed.title, severity: refreshed.severity, kind: refreshed.kind },
-            eventKind: EventKind.ISSUE_UPDATED,
-            subjectType: "action-request",
-            subjectId: refreshed.id,
-            payload: {
-              title: refreshed.title,
-              severity: refreshed.severity,
-              kind: refreshed.kind,
-              sourceType: refreshed.sourceType,
-              sourceId: refreshed.sourceId,
-              issueId: refreshed.issueId,
-              dedupeKey: refreshed.dedupeKey,
-              refreshed: true,
-            } as Prisma.InputJsonValue,
-          });
-          return { id: refreshed.id };
-        }
-        if (match) {
-          // Supersede FIRST: flip the prior row out of OPEN so it leaves the
-          // partial-unique index before the replacement is inserted.
-          // `supersededById` is backfilled once the new row id exists.
-          await tx.actionRequest.update({
-            where: { id: match.id },
-            data: {
-              status: ActionRequestStatus.SUPERSEDED,
-              resolvedAt: new Date(),
-              resolution: "Superseded by a newer request on the same issue.",
-            },
-          });
-          supersededId = match.id;
-        }
-      }
-
-      const row = await tx.actionRequest.create({
-        data: {
-          workspaceId: input.workspaceId,
-          title: input.title.trim(),
-          body: input.body ?? null,
-          severity: input.severity ?? NotificationSeverity.INFO,
-          kind,
-          payload:
-            parsedPayload === null ? Prisma.JsonNull : (parsedPayload as Prisma.InputJsonValue),
-          options:
-            parsedOptions === null
-              ? Prisma.JsonNull
-              : (parsedOptions as unknown as Prisma.InputJsonValue),
-          requestedByUserId: input.actorAgentId ? null : input.actorId,
-          requestedByAgentId: input.actorAgentId ?? null,
-          assignedUserId: input.assignedUserId ?? null,
-          assignedAgentId: input.assignedAgentId ?? null,
-          sourceType: input.sourceType ?? null,
-          sourceId: input.sourceId ?? null,
-          dedupeKey: genericDedupeKey,
-          issueId: input.issueId ?? null,
-          dueAt: input.dueAt ?? null,
-        },
-      });
-
-      if (supersededId) {
-        await tx.actionRequest.update({
-          where: { id: supersededId },
-          data: { supersededById: row.id },
+      if (genericDedupeKey && match) {
+        const existing = await tx.actionRequest.findUniqueOrThrow({
+          where: { id: match.id },
         });
-      }
+        const nextPayload =
+          parsedPayload === null ? null : (parsedPayload as Prisma.InputJsonValue);
+        const nextOptions =
+          parsedOptions === null ? null : (parsedOptions as unknown as Prisma.InputJsonValue);
+        const unchanged =
+          existing.title === input.title.trim() &&
+          existing.body === (input.body ?? null) &&
+          existing.severity === (input.severity ?? NotificationSeverity.INFO) &&
+          existing.kind === kind &&
+          sameJson(existing.payload, nextPayload) &&
+          sameJson(existing.options, nextOptions) &&
+          existing.requestedByUserId === (input.actorAgentId ? null : input.actorId) &&
+          existing.requestedByAgentId === (input.actorAgentId ?? null) &&
+          existing.assignedUserId === (input.assignedUserId ?? null) &&
+          existing.assignedAgentId === (input.assignedAgentId ?? null) &&
+          existing.sourceType === (input.sourceType ?? null) &&
+          existing.sourceId === (input.sourceId ?? null) &&
+          existing.issueId === (input.issueId ?? null) &&
+          existing.dueAt?.getTime() === input.dueAt?.getTime();
+        if (unchanged) return { id: existing.id };
 
-      await recordChange(tx, {
+        const refreshed = await tx.actionRequest.update({
+          where: { id: match.id },
+          data: {
+            title: input.title.trim(),
+            body: input.body ?? null,
+            severity: input.severity ?? NotificationSeverity.INFO,
+            kind,
+            payload:
+              parsedPayload === null ? Prisma.JsonNull : (parsedPayload as Prisma.InputJsonValue),
+            options:
+              parsedOptions === null
+                ? Prisma.JsonNull
+                : (parsedOptions as unknown as Prisma.InputJsonValue),
+            requestedByUserId: input.actorAgentId ? null : input.actorId,
+            requestedByAgentId: input.actorAgentId ?? null,
+            assignedUserId: input.assignedUserId ?? null,
+            assignedAgentId: input.assignedAgentId ?? null,
+            sourceType: input.sourceType ?? null,
+            sourceId: input.sourceId ?? null,
+            issueId: input.issueId ?? null,
+            dueAt: input.dueAt ?? null,
+          },
+        });
+        await recordChange(tx, {
+          workspaceId: input.workspaceId,
+          actorId: input.actorId,
+          actorAgentId: input.actorAgentId ?? null,
+          entity: "action-request",
+          entityId: refreshed.id,
+          action: "refreshed",
+          after: { title: refreshed.title, severity: refreshed.severity, kind: refreshed.kind },
+          eventKind: EventKind.ISSUE_UPDATED,
+          subjectType: "action-request",
+          subjectId: refreshed.id,
+          payload: {
+            title: refreshed.title,
+            severity: refreshed.severity,
+            kind: refreshed.kind,
+            sourceType: refreshed.sourceType,
+            sourceId: refreshed.sourceId,
+            issueId: refreshed.issueId,
+            dedupeKey: refreshed.dedupeKey,
+            refreshed: true,
+          } as Prisma.InputJsonValue,
+        });
+        return { id: refreshed.id };
+      }
+      if (match) {
+        // Supersede FIRST: flip the prior row out of OPEN so it leaves the
+        // partial-unique index before the replacement is inserted.
+        // `supersededById` is backfilled once the new row id exists.
+        await tx.actionRequest.update({
+          where: { id: match.id },
+          data: {
+            status: ActionRequestStatus.SUPERSEDED,
+            resolvedAt: new Date(),
+            resolution: "Superseded by a newer request on the same issue.",
+          },
+        });
+        supersededId = match.id;
+      }
+    }
+
+    const row = await tx.actionRequest.create({
+      data: {
         workspaceId: input.workspaceId,
-        actorId: input.actorId,
-        actorAgentId: input.actorAgentId ?? null,
-        entity: "action-request",
-        entityId: row.id,
-        action: "created",
-        after: { title: row.title, severity: row.severity, kind: row.kind },
-        eventKind: EventKind.ISSUE_UPDATED,
-        subjectType: "action-request",
-        subjectId: row.id,
-        payload: {
-          title: row.title,
-          severity: row.severity,
-          kind: row.kind,
-          assignedUserId: row.assignedUserId,
-          assignedAgentId: row.assignedAgentId,
-          sourceType: row.sourceType,
-          sourceId: row.sourceId,
-          dedupeKey: row.dedupeKey,
-          issueId: row.issueId,
-          supersededId,
-        } as Prisma.InputJsonValue,
-      });
-      return { id: row.id };
+        title: input.title.trim(),
+        body: input.body ?? null,
+        severity: input.severity ?? NotificationSeverity.INFO,
+        kind,
+        payload:
+          parsedPayload === null ? Prisma.JsonNull : (parsedPayload as Prisma.InputJsonValue),
+        options:
+          parsedOptions === null
+            ? Prisma.JsonNull
+            : (parsedOptions as unknown as Prisma.InputJsonValue),
+        requestedByUserId: input.actorAgentId ? null : input.actorId,
+        requestedByAgentId: input.actorAgentId ?? null,
+        assignedUserId: input.assignedUserId ?? null,
+        assignedAgentId: input.assignedAgentId ?? null,
+        sourceType: input.sourceType ?? null,
+        sourceId: input.sourceId ?? null,
+        dedupeKey: genericDedupeKey,
+        issueId: input.issueId ?? null,
+        dueAt: input.dueAt ?? null,
+      },
     });
+
+    if (supersededId) {
+      await tx.actionRequest.update({
+        where: { id: supersededId },
+        data: { supersededById: row.id },
+      });
+    }
+
+    await recordChange(tx, {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      actorAgentId: input.actorAgentId ?? null,
+      entity: "action-request",
+      entityId: row.id,
+      action: "created",
+      after: { title: row.title, severity: row.severity, kind: row.kind },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "action-request",
+      subjectId: row.id,
+      payload: {
+        title: row.title,
+        severity: row.severity,
+        kind: row.kind,
+        assignedUserId: row.assignedUserId,
+        assignedAgentId: row.assignedAgentId,
+        sourceType: row.sourceType,
+        sourceId: row.sourceId,
+        dedupeKey: row.dedupeKey,
+        issueId: row.issueId,
+        supersededId,
+      } as Prisma.InputJsonValue,
+    });
+    return { id: row.id };
+  };
+  const createOnce = () =>
+    "$transaction" in db ? db.$transaction(createInTransaction) : createInTransaction(db);
 
   try {
     return await createOnce();
@@ -1218,6 +1292,12 @@ export async function acceptActionRequest(
       message: `Action request is already ${request.status.toLowerCase()}.`,
     });
   }
+  if (request.kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Choose a delivery conflict decision instead of accepting this request generically.",
+    });
+  }
   await assertCanResolveActionRequest(db, {
     workspaceId: params.workspaceId,
     userId: params.actorId,
@@ -1339,6 +1419,357 @@ export async function acceptActionRequest(
   return { id: request.id, dispatched };
 }
 
+export const deliveryConflictDecisionSchema = z.enum([
+  "JOIN_CONTRIBUTOR",
+  "JOIN_REVIEWER",
+  "HANDOFF_PRIMARY",
+  "CANCEL_DISPATCH",
+]);
+export type DeliveryConflictDecision = z.infer<typeof deliveryConflictDecisionSchema>;
+
+/**
+ * Resolve a blocked managed-runtime delivery attempt. The request, lease, and
+ * queued (never-started) run are locked and revalidated in one transaction so
+ * a stale card cannot transfer ownership or cancel a different connection.
+ */
+export async function resolveDeliveryConnectionConflict(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    requestId: string;
+    decision: DeliveryConflictDecision;
+  },
+): Promise<{ id: string; decision: DeliveryConflictDecision; stale: boolean }> {
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "ActionRequest" WHERE "id" = ${params.requestId} AND "workspaceId" = ${params.workspaceId} FOR UPDATE`;
+    const request = await tx.actionRequest.findFirst({
+      where: { id: params.requestId, workspaceId: params.workspaceId },
+      select: {
+        id: true,
+        kind: true,
+        status: true,
+        payload: true,
+        issueId: true,
+        assignedUserId: true,
+        assignedAgentId: true,
+      },
+    });
+    if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
+    if (request.kind !== ActionRequestKind.DELIVERY_CONNECTION_CONFLICT) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "This is not a delivery conflict request.",
+      });
+    }
+    if (request.status !== ActionRequestStatus.OPEN) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "This delivery decision is no longer open.",
+      });
+    }
+    if (!request.issueId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Delivery conflict has no issue target.",
+      });
+    }
+    const p = parseActionRequestPayload(
+      ActionRequestKind.DELIVERY_CONNECTION_CONFLICT,
+      request.payload,
+    );
+
+    await tx.$queryRaw`SELECT "id" FROM "WorkSession" WHERE "id" = ${p.workSessionId} AND "workspaceId" = ${params.workspaceId} FOR UPDATE`;
+    await tx.$queryRaw`SELECT "id" FROM "AgentRun" WHERE "id" = ${p.queuedRunId} AND "workspaceId" = ${params.workspaceId} FOR UPDATE`;
+    const [session, candidate, run, membership] = await Promise.all([
+      tx.workSession.findFirst({
+        where: { id: p.workSessionId, workspaceId: params.workspaceId, issueId: request.issueId },
+        select: {
+          id: true,
+          issueId: true,
+          endedAt: true,
+          ownerAgentId: true,
+          ownerUserId: true,
+          ownerConnectionId: true,
+        },
+      }),
+      tx.agentConnection.findFirst({
+        where: {
+          id: p.candidateConnectionId,
+          workspaceId: params.workspaceId,
+          kind: "MANAGED_RUNTIME",
+          revokedAt: null,
+        },
+        select: { id: true, agentId: true },
+      }),
+      tx.agentRun.findFirst({
+        where: { id: p.queuedRunId, workspaceId: params.workspaceId, issueId: request.issueId },
+        select: {
+          id: true,
+          agentId: true,
+          connectionId: true,
+          status: true,
+          externalRunId: true,
+          triggerEventId: true,
+          engagementMode: true,
+        },
+      }),
+      tx.membership.findUnique({
+        where: {
+          userId_workspaceId: { userId: params.actorId, workspaceId: params.workspaceId },
+        },
+        select: { role: true },
+      }),
+    ]);
+
+    const isAdmin = membership?.role === Role.OWNER || membership?.role === Role.ADMIN;
+    const isSessionOwner = session?.ownerUserId === params.actorId;
+    if (params.decision === "HANDOFF_PRIMARY") {
+      if (!isAdmin) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "Workspace admin authority is required to hand off primary delivery ownership.",
+        });
+      }
+    } else if (!isAdmin && !isSessionOwner) {
+      throw new TRPCError({
+        code: "FORBIDDEN",
+        message:
+          "Only the work-session owner or a workspace admin can resolve this delivery conflict.",
+      });
+    }
+    if (
+      p.attemptedMode === "REVIEW" &&
+      params.decision !== "JOIN_REVIEWER" &&
+      params.decision !== "CANCEL_DISPATCH"
+    ) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "A review dispatch can only join as reviewer or be cancelled.",
+      });
+    }
+
+    const stale =
+      !session ||
+      session.endedAt !== null ||
+      session.ownerConnectionId !== p.expectedOwnerConnectionId ||
+      !candidate ||
+      !run ||
+      run.agentId !== candidate?.agentId ||
+      (request.assignedAgentId !== null && request.assignedAgentId !== candidate?.agentId) ||
+      run.connectionId !== candidate?.id ||
+      run.externalRunId !== null ||
+      run.triggerEventId !== p.triggerEventId ||
+      run.engagementMode !== p.attemptedMode ||
+      run.status !== AgentRunStatus.WAITING;
+    if (stale) {
+      await tx.actionRequest.update({
+        where: { id: request.id },
+        data: {
+          status: ActionRequestStatus.SUPERSEDED,
+          resolvedAt: new Date(),
+          resolvedByUserId: params.actorId,
+          resolution: "Delivery state changed before this decision was applied.",
+        },
+      });
+      await recordChange(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        entity: "action-request",
+        entityId: request.id,
+        action: "delivery-conflict-superseded",
+        before: { status: request.status },
+        after: { status: ActionRequestStatus.SUPERSEDED },
+        eventKind: EventKind.ISSUE_UPDATED,
+        subjectType: "action-request",
+        subjectId: request.id,
+        payload: { decision: params.decision, issueId: request.issueId },
+      });
+      return { id: request.id, decision: params.decision, stale: true };
+    }
+
+    const now = new Date();
+    if (params.decision === "JOIN_CONTRIBUTOR" || params.decision === "JOIN_REVIEWER") {
+      const role = params.decision === "JOIN_REVIEWER" ? "REVIEWER" : "CONTRIBUTOR";
+      const participant = await tx.workSessionParticipant.upsert({
+        where: {
+          workSessionId_connectionId: {
+            workSessionId: session!.id,
+            connectionId: candidate!.id,
+          },
+        },
+        create: {
+          workspaceId: params.workspaceId,
+          workSessionId: session!.id,
+          connectionId: candidate!.id,
+          agentId: candidate!.agentId,
+          role,
+        },
+        update: { agentId: candidate!.agentId, role, leftAt: null },
+      });
+      await recordChange(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        entity: "WorkSessionParticipant",
+        entityId: participant.id,
+        action: "work-session-participant-joined",
+        after: { connectionId: candidate!.id, agentId: candidate!.agentId, role },
+        eventKind: EventKind.ISSUE_UPDATED,
+        subjectType: "issue",
+        subjectId: request.issueId,
+        payload: { workSessionId: session!.id, connectionId: candidate!.id, role },
+      });
+      const requeued = await tx.agentRun.updateMany({
+        where: {
+          id: run!.id,
+          status: AgentRunStatus.WAITING,
+          externalRunId: null,
+          connectionId: candidate!.id,
+          triggerEventId: p.triggerEventId,
+        },
+        data: {
+          status: AgentRunStatus.ACTIVE,
+          currentStep:
+            role === "REVIEWER"
+              ? "queued to review the active delivery"
+              : "queued as delivery contributor",
+          lastWakeAt: now,
+          engagementMode: role === "REVIEWER" ? EngagementMode.REVIEW : EngagementMode.EXECUTE,
+          engagementSource: EngagementSource.EXPLICIT,
+          runtimePolicy: Prisma.DbNull,
+        },
+      });
+      if (requeued.count !== 1) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The queued dispatch changed before it could be resumed.",
+        });
+      }
+    } else if (params.decision === "HANDOFF_PRIMARY") {
+      await tx.workSessionParticipant.updateMany({
+        where: { workSessionId: session!.id, role: "PRIMARY", leftAt: null },
+        data: { leftAt: now },
+      });
+      await tx.workSessionParticipant.upsert({
+        where: {
+          workSessionId_connectionId: {
+            workSessionId: session!.id,
+            connectionId: candidate!.id,
+          },
+        },
+        create: {
+          workspaceId: params.workspaceId,
+          workSessionId: session!.id,
+          connectionId: candidate!.id,
+          agentId: candidate!.agentId,
+          role: "PRIMARY",
+          joinedAt: now,
+        },
+        update: { agentId: candidate!.agentId, role: "PRIMARY", joinedAt: now, leftAt: null },
+      });
+      await tx.workSession.update({
+        where: { id: session!.id },
+        data: {
+          ownerAgentId: candidate!.agentId,
+          ownerConnectionId: candidate!.id,
+          lastHeartbeatAt: now,
+          staleAt: null,
+        },
+      });
+      const requeued = await tx.agentRun.updateMany({
+        where: {
+          id: run!.id,
+          status: AgentRunStatus.WAITING,
+          externalRunId: null,
+          connectionId: candidate!.id,
+          triggerEventId: p.triggerEventId,
+        },
+        data: {
+          status: AgentRunStatus.ACTIVE,
+          currentStep: "queued after delivery ownership handoff",
+          lastWakeAt: now,
+          engagementMode: EngagementMode.EXECUTE,
+          engagementSource: EngagementSource.EXPLICIT,
+          runtimePolicy: Prisma.DbNull,
+        },
+      });
+      if (requeued.count !== 1) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The queued dispatch changed before it could be resumed.",
+        });
+      }
+      await recordChange(tx, {
+        workspaceId: params.workspaceId,
+        actorId: params.actorId,
+        entity: "WorkSession",
+        entityId: session!.id,
+        action: "work-session-handed-off",
+        before: {
+          ownerAgentId: session!.ownerAgentId,
+          ownerConnectionId: session!.ownerConnectionId,
+        },
+        after: { ownerAgentId: candidate!.agentId, ownerConnectionId: candidate!.id },
+        eventKind: EventKind.ISSUE_UPDATED,
+        subjectType: "issue",
+        subjectId: request.issueId,
+        payload: {
+          workSessionId: session!.id,
+          fromConnectionId: session!.ownerConnectionId,
+          toConnectionId: candidate!.id,
+          actionRequestId: request.id,
+        },
+      });
+    } else {
+      const cancelled = await finishRun(tx, {
+        runId: run!.id,
+        workspaceId: params.workspaceId,
+        issueId: request.issueId,
+        agentId: candidate!.agentId,
+        status: "ABANDONED",
+        summary: "Queued managed-runtime dispatch cancelled before it started.",
+        actorId: params.actorId,
+      });
+      if (!cancelled || cancelled.status !== AgentRunStatus.ABANDONED) {
+        throw new TRPCError({
+          code: "CONFLICT",
+          message: "The queued dispatch is no longer cancellable.",
+        });
+      }
+    }
+
+    await tx.actionRequest.update({
+      where: { id: request.id },
+      data: {
+        status: ActionRequestStatus.RESOLVED,
+        resolvedAt: now,
+        resolvedByUserId: params.actorId,
+        resolution: `Delivery conflict resolved: ${params.decision}.`,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "action-request",
+      entityId: request.id,
+      action: "resolve-delivery-conflict",
+      before: { status: request.status },
+      after: { status: ActionRequestStatus.RESOLVED, decision: params.decision },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "action-request",
+      subjectId: request.id,
+      payload: {
+        decision: params.decision,
+        issueId: request.issueId,
+        workSessionId: p.workSessionId,
+        candidateConnectionId: p.candidateConnectionId,
+        queuedRunId: p.queuedRunId,
+      },
+    });
+    return { id: request.id, decision: params.decision, stale: false };
+  });
+}
+
 /**
  * Decline an action request — flips status=REJECTED and records the
  * (optional) reason. Never dispatches the bound action. Permission gate
@@ -1370,6 +1801,12 @@ export async function declineActionRequest(
     throw new TRPCError({
       code: "BAD_REQUEST",
       message: `Action request is already ${request.status.toLowerCase()}.`,
+    });
+  }
+  if (request.kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "Choose a delivery conflict decision instead of declining this request generically.",
     });
   }
   await assertCanResolveActionRequest(db, {
