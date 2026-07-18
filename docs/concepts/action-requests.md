@@ -8,6 +8,12 @@ It has a lifecycle (`OPEN` → `RESOLVED` / `DISMISSED` / `REJECTED` /
 that runs on Accept, and — since migration 0050 — an optional list of
 poll options for multi-vote decisions.
 
+The operator UI derives an attention presentation from the stored request and
+current workspace state. That presentation separates the reason for attention,
+the response protocol, and the actions that are safe _now_. Presentation data
+is advisory: mutations accept allowlisted action identifiers and revalidate
+authorization, tenancy, request freshness, and target state before writing.
+
 ## When to use one
 
 - An agent needs a decision before continuing ("Should I transition
@@ -25,19 +31,59 @@ specific ask," use the notification inbox. ActionRequest is the
 
 `ActionRequest.kind` discriminates what Accept dispatches:
 
-| Kind                  | Accept dispatches                                       |
-|-----------------------|---------------------------------------------------------|
-| `FREE_FORM` (default) | Nothing — pure prose with no executable hook.           |
-| `TRANSITION`          | `issues.transition({ statusId })` on `issueId`.         |
-| `SET_LABELS`          | `issues.setLabels({ add, remove })`.                    |
-| `ASSIGN`              | `issues.assign(userIds)`.                               |
-| `ASSIGN_AGENT`        | `issues.assignAgent(agentId)`.                          |
-| `ARCHIVE`             | Soft-delete the issue.                                  |
-| `CLOSE_AS_DUPLICATE`  | Add a `DUPLICATES` relation + optionally re-status.     |
+| Kind                           | Accept dispatches                                     |
+| ------------------------------ | ----------------------------------------------------- |
+| `FREE_FORM` (default)          | Nothing — pure prose with no executable hook.         |
+| `TRANSITION`                   | `issues.transition({ statusId })` on `issueId`.       |
+| `SET_LABELS`                   | `issues.setLabels({ add, remove })`.                  |
+| `ASSIGN`                       | `issues.assign(userIds)`.                             |
+| `ASSIGN_AGENT`                 | `issues.assignAgent(agentId)`.                        |
+| `ARCHIVE`                      | Soft-delete the issue.                                |
+| `CLOSE_AS_DUPLICATE`           | Add a `DUPLICATES` relation + optionally re-status.   |
+| `RUNTIME_TOOL_GRANT`           | Grant a scoped runtime tool policy and queue the run. |
+| `DELIVERY_CONNECTION_CONFLICT` | Resolve a blocked second delivery connection.         |
 
 Decline never dispatches, regardless of kind. The action-request
 service validates every referenced id against the calling workspace
 before persistence — agents can't sneak in a cross-tenant `statusId`.
+
+### Delivery connection conflicts
+
+`DELIVERY_CONNECTION_CONFLICT` is a typed, versioned decision. It is created
+when a managed runtime attempts `EXECUTE` or `REVIEW` work while another
+concrete connection owns the issue's active delivery session. The candidate
+run remains parked until an authorized operator chooses one of the
+server-derived actions. Execute attempts can:
+
+- join the candidate connection as a contributor and continue the queued run;
+- join it as a reviewer and convert the queued work to `REVIEW`;
+- hand off primary ownership and continue the queued run; or
+- cancel only the blocked candidate dispatch.
+
+Review attempts may only join as a reviewer or be cancelled; they cannot be
+promoted into write-capable execution. Joining or cancelling requires the
+work-session owner or a workspace admin. Transferring primary ownership is
+admin-only. These rules are enforced by the mutation as well as reflected in
+the card, so issue authorship or watching an issue does not grant delivery
+authority.
+
+Resolution is atomic and tenant-scoped, and fails closed if the request,
+expected primary owner, session, connection, attempted mode, or queued run is
+no longer current. A stale request can be dismissed without mutating delivery
+state. Cancel never abandons the existing primary connection's MCP or runtime
+work.
+
+## Response presentation and fallback
+
+Known request kinds expose typed actions with plain-language consequences and
+disabled reasons. A free-form request exposes **Respond** only when Forge has a
+valid reply destination, such as a requesting agent and linked issue. Unknown,
+legacy, or stale requests fall back to **Open issue** plus an optional dismiss
+control; the queue does not invent an Accept, status transition, or undeliverable
+text reply.
+
+Cards stay compact by default. Expanded content preserves paragraphs, lists,
+and links, and separates operator-facing evidence from nested technical ids.
 
 ## Polls (multi-vote)
 
@@ -93,9 +139,9 @@ timeline.
     "title": "Pick an approach",
     "kind": "FREE_FORM",
     "options": [
-      { "key": "retry",    "label": "Add retry-on-failure" },
-      { "key": "isolate",  "label": "Isolate the test in its own worker" },
-      { "key": "rewrite",  "label": "Rewrite against a deterministic fixture" }
+      { "key": "retry", "label": "Add retry-on-failure" },
+      { "key": "isolate", "label": "Isolate the test in its own worker" },
+      { "key": "rewrite", "label": "Rewrite against a deterministic fixture" }
     ]
   }
 }
@@ -109,6 +155,8 @@ timeline.
 - **closeVoting**: only the requester (human or agent).
 - **Accept / Decline**: the assigned user, a watcher on the issue,
   or a workspace `OWNER` / `ADMIN`. Anyone else gets `403`.
+- **Delivery conflict decisions**: the active work-session owner or a workspace
+  `OWNER` / `ADMIN`; primary handoff is restricted to `OWNER` / `ADMIN`.
 
 ## See also
 

@@ -208,6 +208,151 @@ async function agentAtRunsCapacity(agentId: string, maxConcurrent: number): Prom
   return active >= maxConcurrent;
 }
 
+const DELIVERY_ACTIVE_STATUSES = [
+  "CLAIMED",
+  "IN_PROGRESS",
+  "PR_OPEN",
+  "IN_REVIEW",
+  "READY_TO_MERGE",
+  "STALE",
+] as const;
+
+export async function findBlockingDeliverySession(params: {
+  workspaceId: string;
+  issueId: string;
+  candidateConnectionId: string;
+  engagementMode: "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS";
+}) {
+  if (params.engagementMode !== "EXECUTE" && params.engagementMode !== "REVIEW") return null;
+  const session = await db.workSession.findFirst({
+    where: {
+      workspaceId: params.workspaceId,
+      issueId: params.issueId,
+      endedAt: null,
+      status: { in: [...DELIVERY_ACTIVE_STATUSES] },
+      ownerConnectionId: { not: null },
+      NOT: { ownerConnectionId: params.candidateConnectionId },
+    },
+    select: {
+      id: true,
+      ownerConnectionId: true,
+      ownerUserId: true,
+      participants: {
+        where: { connectionId: params.candidateConnectionId, leftAt: null },
+        select: { role: true },
+      },
+    },
+  });
+  if (!session) return null;
+  const role = session.participants[0]?.role ?? null;
+  const authorized =
+    params.engagementMode === "EXECUTE"
+      ? role === "CONTRIBUTOR"
+      : role === "REVIEWER" || role === "CONTRIBUTOR";
+  return authorized ? null : session;
+}
+
+async function parkDeliveryConflict(params: {
+  workspaceId: string;
+  issueId: string;
+  issueKey: string;
+  assignedUserId: string | null;
+  agentId: string;
+  runtimeName: string;
+  candidateConnectionId: string;
+  expectedOwnerConnectionId: string;
+  workSessionId: string;
+  queuedRunId: string;
+  triggerEventId: string;
+  attemptedMode: "EXECUTE" | "REVIEW";
+}): Promise<void> {
+  const parked = await db.$transaction(async (tx) => {
+    const changed = await tx.agentRun.updateMany({
+      where: {
+        id: params.queuedRunId,
+        workspaceId: params.workspaceId,
+        issueId: params.issueId,
+        agentId: params.agentId,
+        externalRunId: null,
+        status: AgentRunStatus.ACTIVE,
+        OR: [{ connectionId: null }, { connectionId: params.candidateConnectionId }],
+      },
+      data: {
+        status: AgentRunStatus.WAITING,
+        connectionId: params.candidateConnectionId,
+        lifecycleConfidence: "CONFIRMED",
+        triggerEventId: params.triggerEventId,
+        currentStep: "blocked by another primary delivery connection",
+      },
+    });
+    if (changed.count === 1) {
+      await appendRunEvent(tx, {
+        runId: params.queuedRunId,
+        workspaceId: params.workspaceId,
+        issueId: params.issueId,
+        agentId: params.agentId,
+        kind: "DELIVERY_CONNECTION_BLOCKED",
+        currentStep: "blocked by another primary delivery connection",
+        payload: {
+          workSessionId: params.workSessionId,
+          expectedOwnerConnectionId: params.expectedOwnerConnectionId,
+          candidateConnectionId: params.candidateConnectionId,
+          triggerEventId: params.triggerEventId,
+        },
+      });
+    }
+    const current = await tx.agentRun.findFirst({
+      where: {
+        id: params.queuedRunId,
+        workspaceId: params.workspaceId,
+        issueId: params.issueId,
+        agentId: params.agentId,
+        connectionId: params.candidateConnectionId,
+        externalRunId: null,
+        status: AgentRunStatus.WAITING,
+      },
+      select: { id: true },
+    });
+    if (!current) return false;
+    await createActionRequest(tx, {
+      workspaceId: params.workspaceId,
+      actorId: null,
+      title: `${params.issueKey} already has a primary delivery connection`,
+      body:
+        `${params.runtimeName} was not started because another connection owns the active delivery session. ` +
+        (params.attemptedMode === "REVIEW"
+          ? "Join the existing delivery as a reviewer or cancel this dispatch."
+          : "Join as a reviewer or contributor, hand off primary ownership, or cancel this dispatch."),
+      severity: NotificationSeverity.WARNING,
+      kind: ActionRequestKind.DELIVERY_CONNECTION_CONFLICT,
+      payload: {
+        version: 1,
+        workSessionId: params.workSessionId,
+        expectedOwnerConnectionId: params.expectedOwnerConnectionId,
+        candidateConnectionId: params.candidateConnectionId,
+        queuedRunId: params.queuedRunId,
+        triggerEventId: params.triggerEventId,
+        attemptedMode: params.attemptedMode,
+      },
+      assignedUserId: params.assignedUserId,
+      assignedAgentId: params.agentId,
+      sourceType: "work-session",
+      sourceId: params.workSessionId,
+      dedupeKey: `work-session-execution-conflict:${params.workSessionId}:${params.candidateConnectionId}`,
+      issueId: params.issueId,
+      systemOwned: true,
+    });
+    return true;
+  });
+  if (!parked) {
+    logger.warn(
+      { runId: params.queuedRunId, candidateConnectionId: params.candidateConnectionId },
+      "delivery conflict did not park the candidate run because its ownership changed",
+    );
+    return;
+  }
+}
+
 async function startNewRuns(): Promise<number> {
   const events = await db.activityEvent.findMany({
     where: {
@@ -244,6 +389,7 @@ async function startNewRuns(): Promise<number> {
         id: true,
         status: true,
         externalRunId: true,
+        engagementMode: true,
         runtimePolicy: true,
         executionStepId: true,
         orchestrationContextSnapshot: true,
@@ -310,6 +456,7 @@ async function startNewRuns(): Promise<number> {
     // mode; inject its instruction block so the agent knows whether to execute,
     // research, review, or just discuss. Default EXECUTE when absent (legacy).
     const engagementMode =
+      already?.engagementMode ??
       (evtPayload.engagementMode as "EXECUTE" | "RESEARCH" | "REVIEW" | "DISCUSS" | undefined) ??
       "EXECUTE";
     const runtimeConnection = agent.runtime
@@ -331,45 +478,32 @@ async function startNewRuns(): Promise<number> {
         })
       : null;
 
-    // One implementation endpoint owns delivery. A managed runtime must not
-    // silently start while an MCP client/other endpoint owns the active lease.
-    if (engagementMode === "EXECUTE" && runtimeConnection) {
-      const competingSession = await db.workSession.findFirst({
-        where: {
-          issueId: issue.id,
-          endedAt: null,
-          status: {
-            in: [
-              "CLAIMED",
-              "IN_PROGRESS",
-              "PR_OPEN",
-              "IN_REVIEW",
-              "READY_TO_MERGE",
-              "STALE",
-            ],
-          },
-          ownerConnectionId: { not: null },
-          NOT: { ownerConnectionId: runtimeConnection.id },
-        },
-        select: { id: true, ownerConnectionId: true },
+    // One implementation endpoint owns delivery. Both assignment and
+    // unbacked/recovery starts pass through the same authorization rule.
+    if (runtimeConnection) {
+      const competingSession = await findBlockingDeliverySession({
+        workspaceId: evt.workspaceId,
+        issueId: issue.id,
+        candidateConnectionId: runtimeConnection.id,
+        engagementMode,
       });
-      if (competingSession) {
-        await createActionRequest(db, {
-          workspaceId: evt.workspaceId,
-          actorId: null,
-          title: `${issue.workspace.key}-${issue.number} already has a primary delivery connection`,
-          body:
-            `${agent.runtime?.name ?? "Managed runtime"} was not started because another connection owns the active delivery session. ` +
-            "Join as a reviewer or contributor, hand off primary ownership, or cancel this dispatch.",
-          severity: NotificationSeverity.WARNING,
-          kind: ActionRequestKind.FREE_FORM,
-          assignedUserId: issue.authorId,
-          assignedAgentId: agent.id,
-          sourceType: "work-session",
-          sourceId: competingSession.id,
-          dedupeKey: `work-session-execution-conflict:${competingSession.id}:${runtimeConnection.id}`,
-          issueId: issue.id,
-        });
+      if (competingSession?.ownerConnectionId) {
+        if (already) {
+          await parkDeliveryConflict({
+            workspaceId: evt.workspaceId,
+            issueId: issue.id,
+            issueKey: `${issue.workspace.key}-${issue.number}`,
+            assignedUserId: competingSession.ownerUserId ?? issue.authorId,
+            agentId: agent.id,
+            runtimeName: agent.runtime?.name ?? "Managed runtime",
+            candidateConnectionId: runtimeConnection.id,
+            expectedOwnerConnectionId: competingSession.ownerConnectionId,
+            workSessionId: competingSession.id,
+            queuedRunId: already.id,
+            triggerEventId: evt.id,
+            attemptedMode: engagementMode as "EXECUTE" | "REVIEW",
+          });
+        }
         logger.warn(
           {
             issueId: issue.id,
@@ -538,6 +672,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
         select: {
           id: true,
           number: true,
+          authorId: true,
           title: true,
           description: true,
           workspace: { select: { key: true, agentProgressUpdateMinutes: true } },
@@ -551,6 +686,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
           runEngine: true,
           runtime: {
             select: {
+              id: true,
               adapterKey: true,
               endpoint: true,
               secret: true,
@@ -578,6 +714,63 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       runtime: agent.runtime,
     });
     if (!connector) continue;
+
+    const runtimeConnection = agent.runtime
+      ? await upsertAgentConnection(db, {
+          workspaceId: run.workspaceId,
+          agentId: agent.id,
+          kind: AgentConnectionKind.MANAGED_RUNTIME,
+          livenessModel: AgentConnectionLiveness.HEARTBEAT,
+          runtimeId: agent.runtime.id,
+          instanceKey: `runtime:${agent.runtime.id}`,
+          displayName: agent.runtime.name,
+          capabilities: [
+            AgentConnectionCapability.HEARTBEAT,
+            AgentConnectionCapability.LIFECYCLE_REPORTING,
+            AgentConnectionCapability.CANCELLATION,
+            AgentConnectionCapability.STREAMING,
+          ],
+          metadata: { signal: "dispatch-recovery" },
+        })
+      : null;
+    if (runtimeConnection) {
+      const competingSession = await findBlockingDeliverySession({
+        workspaceId: run.workspaceId,
+        issueId: issue.id,
+        candidateConnectionId: runtimeConnection.id,
+        engagementMode: run.engagementMode,
+      });
+      if (competingSession?.ownerConnectionId && run.triggerEventId) {
+        await parkDeliveryConflict({
+          workspaceId: run.workspaceId,
+          issueId: issue.id,
+          issueKey: `${issue.workspace.key}-${issue.number}`,
+          assignedUserId: competingSession.ownerUserId ?? issue.authorId,
+          agentId: agent.id,
+          runtimeName: agent.runtime?.name ?? "Managed runtime",
+          candidateConnectionId: runtimeConnection.id,
+          expectedOwnerConnectionId: competingSession.ownerConnectionId,
+          workSessionId: competingSession.id,
+          queuedRunId: run.id,
+          triggerEventId: run.triggerEventId,
+          attemptedMode: run.engagementMode as "EXECUTE" | "REVIEW",
+        });
+        continue;
+      }
+      if (competingSession) {
+        // A missing trigger cannot produce a safe resolvable decision. Park
+        // the run rather than bypassing ownership; the issue is the fallback.
+        await db.agentRun.updateMany({
+          where: { id: run.id, externalRunId: null, status: AgentRunStatus.ACTIVE },
+          data: {
+            status: AgentRunStatus.WAITING,
+            connectionId: runtimeConnection.id,
+            currentStep: "blocked by another primary delivery connection",
+          },
+        });
+        continue;
+      }
+    }
 
     const engagementMode = run.engagementMode;
     const instruction = forgeRunInstruction(
@@ -632,6 +825,9 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
           where: { id: run.id },
           data: {
             externalRunId,
+            ...(runtimeConnection
+              ? { connectionId: runtimeConnection.id, lifecycleConfidence: "CONFIRMED" as const }
+              : {}),
             acknowledgedAt: new Date(),
             currentStep: "starting run",
             runtimePolicy: runtimePolicy as unknown as Prisma.InputJsonValue,

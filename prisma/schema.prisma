@@ -4250,6 +4250,7 @@ enum ActionRequestStatus {
 /// Decline never dispatches, regardless of kind.
 enum ActionRequestKind {
   FREE_FORM
+  DELIVERY_CONNECTION_CONFLICT
   TRANSITION
   SET_LABELS
   ASSIGN
@@ -4297,6 +4298,7 @@ model ActionRequest {
   /// Other kinds carry their args in `payload` and run on Accept.
   kind               ActionRequestKind    @default(FREE_FORM)
   /// Kind-specific args. Shape varies by `kind`:
+  ///   DELIVERY_CONNECTION_CONFLICT → versioned session/connection/queued-run snapshot
   ///   TRANSITION         → { statusId: string }
   ///   SET_LABELS         → { add?: string[]; remove?: string[] }
   ///   ASSIGN             → { userIds: string[] }

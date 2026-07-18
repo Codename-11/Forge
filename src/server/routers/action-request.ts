@@ -7,8 +7,10 @@ import {
   acceptActionRequest,
   closeActionRequestVoting,
   createActionRequest,
+  deliveryConflictDecisionSchema,
   declineActionRequest,
   getActionRequestResults,
+  resolveDeliveryConnectionConflict,
   transitionActionRequest,
   voteOnActionRequest,
 } from "@/server/services/action-request-service";
@@ -341,6 +343,26 @@ export const actionRequestRouter = router({
         actorId: userId,
         requestId: input.id,
         resolution: input.resolution ?? null,
+      });
+    }),
+
+  resolveDeliveryConflict: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        decision: deliveryConflictDecisionSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return resolveDeliveryConnectionConflict(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        requestId: input.id,
+        decision: input.decision,
       });
     }),
 

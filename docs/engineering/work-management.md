@@ -78,9 +78,19 @@ integration, scheduled stabilization, or an upstream convention.
   relation instead of duplicating status cards.
 - Resolve file overlap in the PR. Do not move uncommitted patches between
   worktrees or share one worktree between tasks.
-- If dispatch discovers an existing primary connection, block a second execute
-  attempt and ask the operator to join, hand off, or cancel. Never infer that
-  two connections are the same owner from a shared Agent Profile or API key.
+- If dispatch discovers an existing primary connection, park a second execute
+  or review attempt and ask an authorized operator to join or cancel it.
+  Execute attempts may also be handed off by a workspace admin. Never infer
+  that two connections are the same owner from a shared Agent Profile or API
+  key.
+- Apply the same ownership authorization at every provider-start boundary,
+  including assignment dispatch and unbacked-run recovery. A blocked candidate
+  run remains parked until the typed conflict request is resolved. Contributor
+  and handoff decisions may resume a queued execute run; reviewer preserves or
+  converts it to review; a queued review can never escalate to execution.
+  Session owners or admins may join/cancel, handoff is admin-only, and cancel
+  abandons only that candidate run and never the existing primary connection's
+  work. Stale requests offer safe dismissal instead of permanent queue noise.
 
 ## Delivery lifecycle
 
