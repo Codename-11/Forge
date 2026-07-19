@@ -28,32 +28,6 @@ function decisionAskWhere(workspaceId: string, userId: string) {
   };
 }
 
-/**
- * Collapse rows to one per issue (keeping the first — i.e. the highest-priority
- * by the caller's orderBy), tagging each survivor with `issueOpenCount` so the
- * UI can show "+N more on this issue" instead of stacking near-duplicate cards.
- * Null-issue (workspace-level) rows pass through individually. Applied to action
- * requests only — runs are intentionally NOT grouped (distinct agents' concurrent
- * runs on one issue are real, and same-agent stalled repeats already collapse via
- * AgentRun.supersededByRunId).
- */
-function collapsePerIssue<T extends { issueId: string | null }>(
-  rows: T[],
-): (T & { issueOpenCount: number })[] {
-  const counts = new Map<string, number>();
-  for (const r of rows) if (r.issueId) counts.set(r.issueId, (counts.get(r.issueId) ?? 0) + 1);
-  const seen = new Set<string>();
-  const out: (T & { issueOpenCount: number })[] = [];
-  for (const r of rows) {
-    if (r.issueId) {
-      if (seen.has(r.issueId)) continue;
-      seen.add(r.issueId);
-    }
-    out.push({ ...r, issueOpenCount: r.issueId ? (counts.get(r.issueId) ?? 1) : 1 });
-  }
-  return out;
-}
-
 type AttentionAction = {
   id: string;
   label: string;
@@ -287,11 +261,12 @@ async function actionRequestPresentation(
             enabled: true,
             disabledReason: null,
           },
+          dismiss,
           ...(openIssue ? [openIssue] : []),
         ]
       : openIssue
-        ? [openIssue]
-        : [];
+        ? [dismiss, openIssue]
+        : [dismiss];
     return {
       ...base,
       category: "INFORMATION_REQUIRED",
@@ -377,10 +352,7 @@ export const commandCenterRouter = router({
           ? ctx.db.actionRequest.findMany({
               where: decisionAskWhere(ctx.workspaceId, userId),
               orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
-              // Over-fetch so the per-issue collapse + issueOpenCount below run
-              // over the full open set, not a pre-truncated page; sliced to
-              // input.limit after collapsing.
-              take: 200,
+              take: input.limit,
               include: {
                 requestedByAgent: {
                   select: { id: true, name: true, profileKey: true, avatar: true },
@@ -547,11 +519,8 @@ export const commandCenterRouter = router({
       const runtimeApprovals = activeRuns.filter((run) => run.awaitingApprovalAt != null);
       const visibleActiveRuns = activeRuns.filter((run) => run.awaitingApprovalAt == null);
 
-      // Collapse near-duplicate action-request cards to one per issue, then
-      // slice to the requested limit (collapse runs over the full open set).
-      const groupedActionRequests = collapsePerIssue(actionRequests).slice(0, input.limit);
       const presentedActionRequests = await Promise.all(
-        groupedActionRequests.map(async (request) => ({
+        actionRequests.map(async (request) => ({
           ...request,
           presentation: await actionRequestPresentation(
             ctx.db,

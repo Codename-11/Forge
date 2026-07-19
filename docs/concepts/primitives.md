@@ -365,11 +365,17 @@ MCP `actionRequests.list/create/transition`.
 
 ### Command Center
 
-Read-only aggregator at `/w/{slug}/command-center` that unions
+Operator aggregator at `/w/{slug}/command-center` that unions
 the operator's action requests, pending review gates, active
 and stalled agent runs, recent artifacts, issues due in the
-next 7 days, and the currently-running timer. Every card links
-to the canonical detail page — writes never happen here.
+next 7 days, and the currently-running timer. Action requests
+remain independently visible even when several target one issue;
+each card exposes only server-authorized actions, with safe dismissal
+and canonical issue navigation for legacy requests that have no reply
+target. Recovery sweeps close delivery-conflict requests once their
+blocked candidate run is terminal, while quiet MCP ownership remains
+open until the exact connection resumes or the session is explicitly
+handed off, completed, or abandoned.
 
 Surfaces: tRPC `commandCenter.summary`.
 

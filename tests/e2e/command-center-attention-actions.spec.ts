@@ -23,6 +23,7 @@ const FIXTURE = {
   candidateRunId: "e2e-axi130-candidate-run",
   actionableRequestId: "e2e-axi130-actionable-request",
   fallbackRequestId: "e2e-axi130-fallback-request",
+  secondFallbackRequestId: "e2e-axi131-second-fallback-request",
 } as const;
 
 const ACTIONABLE_TITLE = "Choose how the queued delivery connection should join";
@@ -51,7 +52,15 @@ const prisma = new PrismaClient({
 
 async function clearFixtures() {
   await prisma.actionRequest.deleteMany({
-    where: { id: { in: [FIXTURE.actionableRequestId, FIXTURE.fallbackRequestId] } },
+    where: {
+      id: {
+        in: [
+          FIXTURE.actionableRequestId,
+          FIXTURE.fallbackRequestId,
+          FIXTURE.secondFallbackRequestId,
+        ],
+      },
+    },
   });
   await prisma.agentRun.deleteMany({ where: { id: FIXTURE.candidateRunId } });
   await prisma.workSessionParticipant.deleteMany({
@@ -207,6 +216,19 @@ test.describe("Command Center attention actions", () => {
             sourceType: "e2e-fixture",
             sourceId: FIXTURE.fallbackRequestId,
           },
+          {
+            id: FIXTURE.secondFallbackRequestId,
+            workspaceId: workspace.id,
+            issueId: FIXTURE.fallbackIssueId,
+            title: "A second decision for the same issue",
+            body: "This decision must remain independently visible and dismissible.",
+            status: ActionRequestStatus.OPEN,
+            severity: NotificationSeverity.WARNING,
+            kind: ActionRequestKind.FREE_FORM,
+            assignedUserId: owner.id,
+            sourceType: "e2e-fixture",
+            sourceId: FIXTURE.secondFallbackRequestId,
+          },
         ],
       });
     });
@@ -252,8 +274,15 @@ test.describe("Command Center attention actions", () => {
       .getByRole("link", { name: FALLBACK_TITLE })
       .locator("xpath=ancestor::div[contains(@class, 'bg-card/40')][1]");
     await expect(fallbackCard.getByRole("link", { name: "Open issue" })).toBeVisible();
+    await expect(fallbackCard.getByRole("button", { name: "Dismiss" })).toBeVisible();
     await expect(fallbackCard.getByRole("button", { name: "Respond" })).toHaveCount(0);
     await expect(fallbackCard.getByRole("button", { name: "Accept" })).toHaveCount(0);
     await expect(fallbackCard.getByRole("button", { name: "Decline" })).toHaveCount(0);
+
+    const secondFallbackCard = page
+      .getByRole("link", { name: "A second decision for the same issue" })
+      .locator("xpath=ancestor::div[contains(@class, 'bg-card/40')][1]");
+    await expect(secondFallbackCard).toBeVisible();
+    await expect(secondFallbackCard.getByRole("button", { name: "Dismiss" })).toBeVisible();
   });
 });
