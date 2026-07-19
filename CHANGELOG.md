@@ -9,6 +9,16 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-19] — v0.29.1 · Reliable attention recovery
+
+### Changed
+
+- **Every open decision remains independently actionable.** Command Center no longer hides additional same-issue requests behind a combined count, and legacy requests without a reply target provide safe dismissal and issue navigation.
+
+### Fixed
+
+- **Finished delivery collisions leave the attention queue.** Typed and historical conflict requests reconcile after their blocked candidate becomes terminal or the Delivery session ends, while quiet MCP ownership remains protected until the exact connection resumes or an explicit lifecycle transition releases it.
+
 ## [2026-07-18] — v0.29.0 · Actionable attention decisions
 
 ### Added
