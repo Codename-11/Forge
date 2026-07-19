@@ -2,6 +2,15 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-19 — v0.29.1 release preparation
+
+Prepared the patch release containing AXI-131 and merged PR #74. Release
+metadata describes independently actionable same-issue decisions, safe legacy
+request dismissal, and terminal delivery-conflict reconciliation without
+weakening quiet MCP ownership. The release remains serialized through its own
+AXI-132 Delivery session and release PR; tagging, deployment, and live
+verification are recorded as separate lifecycle facts.
+
 ## 2026-07-19 — AXI-131 actionable grouped decisions and conflict cleanup
 
 Corrected the Command Center failure exposed by AXI-129. Multiple open
