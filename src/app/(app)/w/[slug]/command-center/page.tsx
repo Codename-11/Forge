@@ -550,7 +550,6 @@ type CCActionRequest = {
   /** ActionRequestKind — FREE_FORM asks need an answer, not just Accept. */
   kind: string;
   payload: unknown;
-  issueOpenCount?: number;
   presentation?: AttentionRequestPresentation | null;
   issue: {
     id: string;
@@ -788,11 +787,6 @@ function ActionRequestDecisionCard({
           <span className="break-words">
             {request.issue.workspace.key}-{request.issue.number} · {request.issue.title}
           </span>
-          {(request.issueOpenCount ?? 1) > 1 ? (
-            <span className="rounded bg-subtle px-1.5 py-0.5 font-mono text-[0.625rem]">
-              {request.issueOpenCount} open decisions
-            </span>
-          ) : null}
         </div>
       ) : null}
       {showDecline ? (

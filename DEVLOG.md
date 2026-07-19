@@ -2,6 +2,28 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-19 — AXI-131 actionable grouped decisions and conflict cleanup
+
+Corrected the Command Center failure exposed by AXI-129. Multiple open
+ActionRequests for one issue are no longer collapsed behind an opaque count;
+each decision remains independently readable and actionable. Legacy
+`FREE_FORM` recovery requests without a registered reply target now provide a
+safe Dismiss action alongside canonical issue navigation instead of leaving the
+operator with no way to clear obsolete queue state.
+
+Extended work-session reconciliation across typed and historical delivery
+conflicts. The worker now resolves a conflict after its never-started candidate
+run becomes terminal, and session completion or abandonment clears every
+conflict belonging to that session. Quiet MCP ownership remains deliberately
+fail-safe: it clears only when that exact connection resumes or an explicit
+delivery lifecycle transition releases the lease.
+
+Verification used local Postgres, Redis, MinIO, and the disposable
+`forge_e2e` database. Focused real-database suites passed 38/38; lint and
+typecheck passed (with only pre-existing lint warnings); the production build
+and focused Command Center Playwright scenario passed. The full serial Vitest
+suite passed 1,479 tests with 12 intentional skips.
+
 ## 2026-07-18 — AXI-130 typed Attention Queue responses
 
 Replaced the Command Center's universal text/decline/status response pattern

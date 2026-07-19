@@ -865,4 +865,112 @@ describe("work session coordination", () => {
       }),
     ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Work session resumed." });
   });
+
+  it("resolves legacy delivery conflicts after their candidate is terminal or session ends", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `legacy-conflict-${Date.now()}`,
+        name: "Legacy conflict agent",
+      },
+    });
+    const [ownerConnection, candidateConnection] = await Promise.all([
+      prisma.agentConnection.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          agentId: agent.id,
+          kind: "MCP_CLIENT",
+          livenessModel: "LEASE",
+          instanceKey: `legacy-owner-${Date.now()}`,
+        },
+      }),
+      prisma.agentConnection.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          agentId: agent.id,
+          kind: "MANAGED_RUNTIME",
+          livenessModel: "HEARTBEAT",
+          instanceKey: `legacy-candidate-${Date.now()}`,
+        },
+      }),
+    ]);
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/legacy-conflict",
+      source: WorkSessionSource.FORGE_AGENT,
+      actor: {
+        userId: fixture.user.id,
+        agentId: agent.id,
+        connectionId: ownerConnection.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: candidateConnection.id,
+        status: "WAITING",
+        currentStep: "blocked by another primary delivery connection",
+      },
+    });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        assignedUserId: fixture.user.id,
+        title: "Issue already has a primary delivery connection",
+        status: "OPEN",
+        severity: "WARNING",
+        kind: "FREE_FORM",
+        sourceType: "work-session",
+        sourceId: session.id,
+        dedupeKey: `work-session-execution-conflict:${session.id}:${candidateConnection.id}`,
+      },
+    });
+
+    await sweepStaleWorkSessions(prisma);
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({ status: "OPEN" });
+
+    await prisma.agentRun.update({
+      where: { id: run.id },
+      data: { status: "STALLED", finishedAt: new Date() },
+    });
+    await sweepStaleWorkSessions(prisma);
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({
+      status: "RESOLVED",
+      resolution: "Blocked delivery attempt is no longer active.",
+    });
+
+    const endedSessionRequest = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        assignedUserId: fixture.user.id,
+        title: "A later delivery conflict",
+        status: "OPEN",
+        severity: "WARNING",
+        kind: "FREE_FORM",
+        sourceType: "work-session",
+        sourceId: session.id,
+        dedupeKey: `work-session-execution-conflict:${session.id}:replacement-candidate`,
+      },
+    });
+    await advanceWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      sessionId: session.id,
+      actor: { userId: fixture.user.id },
+      status: "ABANDONED",
+    });
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: endedSessionRequest.id } }),
+    ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Work session abandoned." });
+  });
 });

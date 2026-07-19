@@ -3,6 +3,7 @@ import "server-only";
 import {
   ActionRequestKind,
   ActionRequestStatus,
+  AgentRunStatus,
   CommentKind,
   DeliveryTimelinePolicy,
   EventKind,
@@ -65,9 +66,14 @@ async function resolveRecoveryRequests(
   await db.actionRequest.updateMany({
     where: {
       workspaceId,
-      dedupeKey: {
-        in: [`work-session-stale:${sessionId}`, `work-session-mcp-quiet:${sessionId}`],
-      },
+      OR: [
+        {
+          dedupeKey: {
+            in: [`work-session-stale:${sessionId}`, `work-session-mcp-quiet:${sessionId}`],
+          },
+        },
+        { dedupeKey: { startsWith: `work-session-execution-conflict:${sessionId}:` } },
+      ],
       status: ActionRequestStatus.OPEN,
     },
     data: {
@@ -76,6 +82,88 @@ async function resolveRecoveryRequests(
       resolution,
     },
   });
+}
+
+/**
+ * Repair delivery-conflict requests whose blocked candidate is no longer
+ * waiting. Typed requests carry the run id; legacy FREE_FORM rows encode only
+ * the session and candidate connection in their dedupe key. In either case we
+ * resolve only when there is no still-actionable, never-started candidate run.
+ */
+async function resolveTerminalDeliveryConflictRequests(db: PrismaClient) {
+  const requests = await db.actionRequest.findMany({
+    where: {
+      status: ActionRequestStatus.OPEN,
+      sourceType: "work-session",
+      OR: [
+        { kind: ActionRequestKind.DELIVERY_CONNECTION_CONFLICT },
+        {
+          kind: ActionRequestKind.FREE_FORM,
+          dedupeKey: { startsWith: "work-session-execution-conflict:" },
+        },
+      ],
+    },
+    select: {
+      id: true,
+      workspaceId: true,
+      issueId: true,
+      kind: true,
+      payload: true,
+      sourceId: true,
+      dedupeKey: true,
+    },
+  });
+
+  for (const request of requests) {
+    const raw = record(request.payload);
+    const typed = request.kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT;
+    const queuedRunId = typed && typeof raw.queuedRunId === "string" ? raw.queuedRunId : null;
+    const candidateConnectionId = typed
+      ? typeof raw.candidateConnectionId === "string"
+        ? raw.candidateConnectionId
+        : null
+      : request.sourceId &&
+          request.dedupeKey?.startsWith(`work-session-execution-conflict:${request.sourceId}:`)
+        ? request.dedupeKey.slice(`work-session-execution-conflict:${request.sourceId}:`.length)
+        : null;
+
+    const [session, candidate] = await Promise.all([
+      request.sourceId
+        ? db.workSession.findFirst({
+            where: { id: request.sourceId, workspaceId: request.workspaceId },
+            select: { endedAt: true },
+          })
+        : null,
+      request.issueId && (queuedRunId || candidateConnectionId)
+        ? db.agentRun.findFirst({
+            where: {
+              workspaceId: request.workspaceId,
+              issueId: request.issueId,
+              ...(queuedRunId ? { id: queuedRunId } : { connectionId: candidateConnectionId! }),
+              externalRunId: null,
+              status: { in: [AgentRunStatus.WAITING, AgentRunStatus.ACTIVE] },
+            },
+            select: { id: true },
+          })
+        : null,
+    ]);
+
+    if (session && !session.endedAt && candidate) continue;
+    await db.actionRequest.updateMany({
+      where: {
+        id: request.id,
+        workspaceId: request.workspaceId,
+        status: ActionRequestStatus.OPEN,
+      },
+      data: {
+        status: ActionRequestStatus.RESOLVED,
+        resolvedAt: new Date(),
+        resolution: session?.endedAt
+          ? "Delivery session ended."
+          : "Blocked delivery attempt is no longer active.",
+      },
+    });
+  }
 }
 
 /**
@@ -867,6 +955,7 @@ export async function advanceWorkSession(
 }
 
 export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> {
+  await resolveTerminalDeliveryConflictRequests(db);
   // Repair requests created before merge-time cleanup was introduced. Query
   // from the small open-request set rather than scanning delivery history on
   // every worker tick.
