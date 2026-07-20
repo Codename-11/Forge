@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-20 — v0.29.2 release preparation
+
+Prepared the serialized patch release containing AXI-134 and merged PR #76.
+Release metadata documents atomic normalization of historical AgentConnection
+keys, immutable audit aliases, rolling-deploy-compatible typed decisions, and
+per-candidate dispatch isolation. The release uses a separate AXI-135 Delivery
+session and PR; the immutable tag, production migration, AXI-129 repair, and
+live verification remain distinct recorded facts.
+
+The Windows-native release gate passed Prisma generation, lint, typecheck, the
+production build, and all 1,482 unit tests with 12 intentional skips. The
+repository's `flock` wrapper is Linux-only; its direct Playwright equivalent
+ran 53/57 tests successfully before local disk pressure (`ENOSPC`) prevented
+screenshots/traces and caused two failures, with one skip and one test not run.
+Both authoritative GitHub Playwright shards for the exact implementation commit
+passed; the release PR reruns the complete clean Linux gate.
+
 ## 2026-07-20 — AXI-134 legacy connection-key migration and dispatch repair
 
 Traced AXI-129's mention-triggered Victor runs to a dispatch-time contract
