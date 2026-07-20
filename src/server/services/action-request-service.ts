@@ -26,7 +26,7 @@ import { openOrTouchRun, appendRunEvent, finishRun } from "@/server/services/age
 import { resolveRunEngineWithSource } from "@/server/services/dispatch/registry";
 import { FORGE_RUN_CONTRACT_VERSION } from "@/server/services/engagement-mode";
 import { archiveIssue } from "@/server/services/issue-archive";
-import { agentIdSchema } from "@/server/validators";
+import { agentConnectionIdSchema, agentIdSchema } from "@/server/validators";
 
 /**
  * Per-kind payload schemas. The MCP + tRPC entry points strip any
@@ -93,8 +93,8 @@ const runtimeToolGrantPayload = z.object({
 const deliveryConnectionConflictPayload = z.object({
   version: z.literal(1),
   workSessionId: z.string().cuid(),
-  expectedOwnerConnectionId: z.string().cuid(),
-  candidateConnectionId: z.string().cuid(),
+  expectedOwnerConnectionId: agentConnectionIdSchema,
+  candidateConnectionId: agentConnectionIdSchema,
   queuedRunId: z.string().cuid(),
   triggerEventId: z.string().cuid(),
   attemptedMode: z.enum(["EXECUTE", "REVIEW"]),

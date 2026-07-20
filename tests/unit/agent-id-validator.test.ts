@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { agentIdSchema } from "@/server/validators";
+import { agentConnectionIdSchema, agentIdSchema } from "@/server/validators";
 
 /**
  * Regression guard: agents are NOT always Prisma cuids. Hermes-seeded
@@ -30,5 +30,21 @@ describe("agentIdSchema", () => {
     expect(agentIdSchema.safeParse("a".repeat(41)).success).toBe(false);
     expect(agentIdSchema.safeParse("has spaces").success).toBe(false);
     expect(agentIdSchema.safeParse("drop;table").success).toBe(false);
+  });
+});
+
+describe("agentConnectionIdSchema", () => {
+  it("accepts both historical backfill ids and current cuids", () => {
+    expect(
+      agentConnectionIdSchema.safeParse("ac_269a426f3d6cf83523c051e35f1adf93").success,
+    ).toBe(true);
+    expect(agentConnectionIdSchema.safeParse("cmohnxz9h0001n407mytknqgv").success).toBe(true);
+  });
+
+  it("rejects empty, overlong, and unsafe identifiers", () => {
+    expect(agentConnectionIdSchema.safeParse("").success).toBe(false);
+    expect(agentConnectionIdSchema.safeParse("a".repeat(65)).success).toBe(false);
+    expect(agentConnectionIdSchema.safeParse("connection/id").success).toBe(false);
+    expect(agentConnectionIdSchema.safeParse("connection id").success).toBe(false);
   });
 });

@@ -266,84 +266,146 @@ async function parkDeliveryConflict(params: {
   triggerEventId: string;
   attemptedMode: "EXECUTE" | "REVIEW";
 }): Promise<void> {
-  const parked = await db.$transaction(async (tx) => {
-    const changed = await tx.agentRun.updateMany({
-      where: {
-        id: params.queuedRunId,
+  let parked: boolean;
+  try {
+    parked = await db.$transaction(async (tx) => {
+      const changed = await tx.agentRun.updateMany({
+        where: {
+          id: params.queuedRunId,
+          workspaceId: params.workspaceId,
+          issueId: params.issueId,
+          agentId: params.agentId,
+          externalRunId: null,
+          status: AgentRunStatus.ACTIVE,
+          OR: [{ connectionId: null }, { connectionId: params.candidateConnectionId }],
+        },
+        data: {
+          status: AgentRunStatus.WAITING,
+          connectionId: params.candidateConnectionId,
+          lifecycleConfidence: "CONFIRMED",
+          triggerEventId: params.triggerEventId,
+          currentStep: "blocked by another primary delivery connection",
+        },
+      });
+      if (changed.count === 1) {
+        await appendRunEvent(tx, {
+          runId: params.queuedRunId,
+          workspaceId: params.workspaceId,
+          issueId: params.issueId,
+          agentId: params.agentId,
+          kind: "DELIVERY_CONNECTION_BLOCKED",
+          currentStep: "blocked by another primary delivery connection",
+          payload: {
+            workSessionId: params.workSessionId,
+            expectedOwnerConnectionId: params.expectedOwnerConnectionId,
+            candidateConnectionId: params.candidateConnectionId,
+            triggerEventId: params.triggerEventId,
+          },
+        });
+      }
+      const current = await tx.agentRun.findFirst({
+        where: {
+          id: params.queuedRunId,
+          workspaceId: params.workspaceId,
+          issueId: params.issueId,
+          agentId: params.agentId,
+          connectionId: params.candidateConnectionId,
+          externalRunId: null,
+          status: AgentRunStatus.WAITING,
+        },
+        select: { id: true },
+      });
+      if (!current) return false;
+      await createActionRequest(tx, {
         workspaceId: params.workspaceId,
-        issueId: params.issueId,
-        agentId: params.agentId,
-        externalRunId: null,
-        status: AgentRunStatus.ACTIVE,
-        OR: [{ connectionId: null }, { connectionId: params.candidateConnectionId }],
-      },
-      data: {
-        status: AgentRunStatus.WAITING,
-        connectionId: params.candidateConnectionId,
-        lifecycleConfidence: "CONFIRMED",
-        triggerEventId: params.triggerEventId,
-        currentStep: "blocked by another primary delivery connection",
-      },
-    });
-    if (changed.count === 1) {
-      await appendRunEvent(tx, {
-        runId: params.queuedRunId,
-        workspaceId: params.workspaceId,
-        issueId: params.issueId,
-        agentId: params.agentId,
-        kind: "DELIVERY_CONNECTION_BLOCKED",
-        currentStep: "blocked by another primary delivery connection",
+        actorId: null,
+        title: `${params.issueKey} already has a primary delivery connection`,
+        body:
+          `${params.runtimeName} was not started because another connection owns the active delivery session. ` +
+          (params.attemptedMode === "REVIEW"
+            ? "Join the existing delivery as a reviewer or cancel this dispatch."
+            : "Join as a reviewer or contributor, hand off primary ownership, or cancel this dispatch."),
+        severity: NotificationSeverity.WARNING,
+        kind: ActionRequestKind.DELIVERY_CONNECTION_CONFLICT,
         payload: {
+          version: 1,
           workSessionId: params.workSessionId,
           expectedOwnerConnectionId: params.expectedOwnerConnectionId,
           candidateConnectionId: params.candidateConnectionId,
+          queuedRunId: params.queuedRunId,
           triggerEventId: params.triggerEventId,
+          attemptedMode: params.attemptedMode,
         },
-      });
-    }
-    const current = await tx.agentRun.findFirst({
-      where: {
-        id: params.queuedRunId,
-        workspaceId: params.workspaceId,
+        assignedUserId: params.assignedUserId,
+        assignedAgentId: params.agentId,
+        sourceType: "work-session",
+        sourceId: params.workSessionId,
+        dedupeKey: `work-session-execution-conflict:${params.workSessionId}:${params.candidateConnectionId}`,
         issueId: params.issueId,
-        agentId: params.agentId,
-        connectionId: params.candidateConnectionId,
-        externalRunId: null,
-        status: AgentRunStatus.WAITING,
-      },
-      select: { id: true },
+        systemOwned: true,
+      });
+      return true;
     });
-    if (!current) return false;
-    await createActionRequest(tx, {
-      workspaceId: params.workspaceId,
-      actorId: null,
-      title: `${params.issueKey} already has a primary delivery connection`,
-      body:
-        `${params.runtimeName} was not started because another connection owns the active delivery session. ` +
-        (params.attemptedMode === "REVIEW"
-          ? "Join the existing delivery as a reviewer or cancel this dispatch."
-          : "Join as a reviewer or contributor, hand off primary ownership, or cancel this dispatch."),
-      severity: NotificationSeverity.WARNING,
-      kind: ActionRequestKind.DELIVERY_CONNECTION_CONFLICT,
-      payload: {
-        version: 1,
+  } catch (err) {
+    logger.error(
+      {
+        err,
+        runId: params.queuedRunId,
         workSessionId: params.workSessionId,
-        expectedOwnerConnectionId: params.expectedOwnerConnectionId,
         candidateConnectionId: params.candidateConnectionId,
-        queuedRunId: params.queuedRunId,
-        triggerEventId: params.triggerEventId,
-        attemptedMode: params.attemptedMode,
       },
-      assignedUserId: params.assignedUserId,
-      assignedAgentId: params.agentId,
-      sourceType: "work-session",
-      sourceId: params.workSessionId,
-      dedupeKey: `work-session-execution-conflict:${params.workSessionId}:${params.candidateConnectionId}`,
-      issueId: params.issueId,
-      systemOwned: true,
-    });
-    return true;
-  });
+      "delivery conflict decision failed to materialize",
+    );
+
+    // Ownership remains fail-closed even if presentation/decision creation is
+    // malformed. Isolate the candidate from the rest of the sweep and leave a
+    // durable run event so an operator can diagnose it from the issue.
+    try {
+      await db.$transaction(async (tx) => {
+        const changed = await tx.agentRun.updateMany({
+          where: {
+            id: params.queuedRunId,
+            workspaceId: params.workspaceId,
+            issueId: params.issueId,
+            agentId: params.agentId,
+            externalRunId: null,
+            status: AgentRunStatus.ACTIVE,
+            OR: [{ connectionId: null }, { connectionId: params.candidateConnectionId }],
+          },
+          data: {
+            status: AgentRunStatus.WAITING,
+            connectionId: params.candidateConnectionId,
+            lifecycleConfidence: "CONFIRMED",
+            triggerEventId: params.triggerEventId,
+            currentStep: "blocked by another primary delivery connection; decision unavailable",
+          },
+        });
+        if (changed.count === 1) {
+          await appendRunEvent(tx, {
+            runId: params.queuedRunId,
+            workspaceId: params.workspaceId,
+            issueId: params.issueId,
+            agentId: params.agentId,
+            kind: "DELIVERY_CONNECTION_BLOCKED",
+            currentStep: "blocked by another primary delivery connection; decision unavailable",
+            payload: {
+              workSessionId: params.workSessionId,
+              expectedOwnerConnectionId: params.expectedOwnerConnectionId,
+              candidateConnectionId: params.candidateConnectionId,
+              triggerEventId: params.triggerEventId,
+              decisionMaterialized: false,
+            },
+          });
+        }
+      });
+    } catch (fallbackErr) {
+      logger.error(
+        { err: fallbackErr, runId: params.queuedRunId },
+        "delivery conflict fallback parking failed",
+      );
+    }
+    return;
+  }
   if (!parked) {
     logger.warn(
       { runId: params.queuedRunId, candidateConnectionId: params.candidateConnectionId },

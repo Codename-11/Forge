@@ -4,6 +4,8 @@ import {
   AgentRunStatus,
   EngagementMode,
   EventKind,
+  AgentConnectionKind,
+  AgentConnectionLiveness,
   RuntimeKind,
   RunEngine,
 } from "@prisma/client";
@@ -387,6 +389,139 @@ describe("runs dispatcher", () => {
       });
       expect(after.externalRunId).toMatch(/^mock-/);
       expect(after.events.some((e) => e.kind === "DISPATCH_STARTED")).toBe(true);
+    } finally {
+      if (previousE2E === undefined) {
+        delete process.env.FORGE_E2E;
+      } else {
+        process.env.FORGE_E2E = previousE2E;
+      }
+    }
+  });
+
+  it("parks a conflicting runtime that still has a legacy connection id", async () => {
+    const previousE2E = process.env.FORGE_E2E;
+    process.env.FORGE_E2E = "1";
+
+    try {
+      const fixture = await createWorkspaceFixture({ keyPrefix: "RLC" });
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const runtime = await prisma.runtime.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          ownerId: fixture.user.id,
+          name: "legacy runtime",
+          kind: RuntimeKind.LOCAL_DAEMON,
+          adapterKey: "mock-runs",
+          providersAvailable: [AgentProvider.HERMES],
+        },
+      });
+      const runtimeAgent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "legacy runner",
+          profileKey: "legacy-runner",
+          provider: AgentProvider.HERMES,
+          runEngine: RunEngine.RUNS,
+          runtimeId: runtime.id,
+          status: "ONLINE",
+        },
+      });
+      const ownerAgent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          name: "primary owner",
+          profileKey: "primary-owner",
+          provider: AgentProvider.CODEX,
+        },
+      });
+      const legacyConnection = await prisma.agentConnection.create({
+        data: {
+          id: "ac_269a426f3d6cf83523c051e35f1adf93",
+          workspaceId: fixture.workspace.id,
+          agentId: runtimeAgent.id,
+          kind: AgentConnectionKind.MANAGED_RUNTIME,
+          livenessModel: AgentConnectionLiveness.HEARTBEAT,
+          runtimeId: runtime.id,
+          instanceKey: `runtime:${runtime.id}`,
+        },
+      });
+      const ownerConnection = await prisma.agentConnection.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          agentId: ownerAgent.id,
+          kind: AgentConnectionKind.MCP_CLIENT,
+          livenessModel: AgentConnectionLiveness.LEASE,
+          instanceKey: "test-owner",
+        },
+      });
+      const issue = await createIssue(fixture, { title: "preserve primary delivery" });
+      const session = await prisma.workSession.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          ownerUserId: fixture.user.id,
+          ownerAgentId: ownerAgent.id,
+          ownerConnectionId: ownerConnection.id,
+          source: "MCP",
+          status: "IN_PROGRESS",
+          repoFullName: "Codename-11/Forge",
+          branch: `codex/${issue.id}-primary`,
+          participants: {
+            create: {
+              workspaceId: fixture.workspace.id,
+              connectionId: ownerConnection.id,
+              agentId: ownerAgent.id,
+              role: "PRIMARY",
+            },
+          },
+        },
+      });
+      const trigger = await prisma.activityEvent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          kind: EventKind.COMMENT_CREATED,
+          actorId: fixture.user.id,
+          subjectType: "issue",
+          subjectId: issue.id,
+          payload: { mentions: { agentIds: [runtimeAgent.id] } },
+        },
+      });
+      const run = await prisma.agentRun.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          issueId: issue.id,
+          agentId: runtimeAgent.id,
+          status: AgentRunStatus.ACTIVE,
+          triggerKind: EventKind.COMMENT_CREATED,
+          triggerEventId: trigger.id,
+          engagementMode: EngagementMode.EXECUTE,
+        },
+      });
+
+      await expect(ingestRunsDispatch()).resolves.toBeDefined();
+
+      await expect(
+        prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+      ).resolves.toMatchObject({
+        status: AgentRunStatus.WAITING,
+        connectionId: legacyConnection.id,
+        externalRunId: null,
+        currentStep: "blocked by another primary delivery connection",
+      });
+      const request = await prisma.actionRequest.findFirstOrThrow({
+        where: {
+          issueId: issue.id,
+          kind: "DELIVERY_CONNECTION_CONFLICT",
+          status: "OPEN",
+        },
+      });
+      expect(request.sourceId).toBe(session.id);
+      expect(request.payload).toMatchObject({
+        expectedOwnerConnectionId: ownerConnection.id,
+        candidateConnectionId: legacyConnection.id,
+        queuedRunId: run.id,
+      });
     } finally {
       if (previousE2E === undefined) {
         delete process.env.FORGE_E2E;

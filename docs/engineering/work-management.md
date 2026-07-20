@@ -29,6 +29,12 @@ connection is primary; additional connections must explicitly join as a
 contributor or reviewer, or receive an audited handoff before changing the
 branch or advancing delivery state.
 
+Agent connection ids are opaque stable identifiers. Callers and typed action
+payloads must not assume they are Prisma CUIDs: historical managed-runtime and
+webhook connections used deterministic `ac_*` ids. Data migrations may
+normalize storage keys, but must preserve the immutable `legacyId` alias and update
+relational plus actionable embedded references atomically.
+
 Delivery provenance records separate facts: actor/profile, invocation source,
 connector/transport, and execution runtime. MCP client identity comes from the
 negotiated MCP `clientInfo`; missing identity is displayed as an unidentified

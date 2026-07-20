@@ -2669,6 +2669,9 @@ model ExternalResourceLink {
 /// execution (AgentRun/WorkSession) remain separate concerns.
 model AgentConnection {
   id             String                      @id @default(cuid())
+  /// Historical storage key retained after normalization so append-only audit
+  /// and event payloads can still be correlated without rewriting history.
+  legacyId       String?                     @unique
   workspaceId    String
   agentId        String
   kind           AgentConnectionKind
