@@ -33,6 +33,7 @@ import { useRealtime, useRealtimeConnection } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import type { RuntimePolicySnapshot } from "@/lib/runtime-enforcement";
 import type { RuntimeToolCapability } from "@/lib/runtime-tools";
+import { workstreamRunProvenance } from "@/lib/run-provenance";
 import { trpc } from "@/lib/trpc";
 import { presenceAvailability } from "@/lib/transport-display";
 import { cn, relativeTime } from "@/lib/utils";
@@ -67,6 +68,13 @@ export type WorkstreamLatestRun = {
   summary?: string | null;
   engagementMode?: string | null;
   runtimePolicy?: unknown;
+  externalRunId?: string | null;
+  connection?: {
+    kind: "MCP_CLIENT" | "MANAGED_RUNTIME" | "WEBHOOK" | "ON_DEMAND";
+    displayName?: string | null;
+    clientName?: string | null;
+    runtime?: { name?: string | null } | null;
+  } | null;
   agent: WorkstreamAgent;
 };
 
@@ -263,7 +271,7 @@ export function AgentRunStrip({
 
         <div className="flex min-w-0 flex-wrap items-center gap-1.5 border-t border-border/60 pt-2.5">
           {mode ? <WorkModeBadge mode={mode} /> : null}
-          {displayAgent ? <RuntimeBadge agent={displayAgent} policy={policy} /> : null}
+          {displayAgent ? <ExecutionProvenanceBadge agent={displayAgent} run={displayRun} /> : null}
           <RuntimePolicyBadges compact policy={policy} />
           <RuntimeToolBadges policy={policy} />
           <ProtocolDiagnostics diagnostics={activeRun?.protocolDiagnostics} />
@@ -546,34 +554,31 @@ function WorkModeBadge({ mode }: { mode: EngagementModeValue }) {
   );
 }
 
-function RuntimeBadge({
+function ExecutionProvenanceBadge({
   agent,
-  policy,
+  run,
 }: {
   agent: WorkstreamAgent;
-  policy: RuntimePolicySnapshot | null;
+  run: WorkstreamLatestRun | null;
 }) {
-  const runtimeName =
-    policy?.runtimeName ?? agent.runtime?.name ?? providerLabel(agent.provider) ?? "Unattached";
-  const persistence = agent.runtimeMode === "EPHEMERAL" ? "Session" : "Persistent";
-  const configured = Boolean(
-    agent.runtimeId || agent.webhookUrl || agent.runtime || agent.provider,
-  );
+  const configuredRuntimeName =
+    agent.runtime?.name ?? providerLabel(agent.provider) ?? (agent.runtimeId ? "Runtime" : null);
+  const provenance = workstreamRunProvenance({
+    run,
+    configuredRuntimeName,
+    configuredRuntimeMode: agent.runtimeMode,
+  });
   return (
     <span
       className={cn(
         "inline-flex items-center rounded-md border px-2 py-1 font-mono text-[0.625rem] uppercase tracking-wider",
-        configured
+        provenance.recorded
           ? "border-border bg-background/60 text-muted-foreground"
           : "border-warning/30 bg-warning/10 text-warning",
       )}
-      title={
-        configured
-          ? "Execution substrate and runtime lifetime"
-          : "No runtime or webhook metadata is attached to this agent"
-      }
+      title={provenance.description}
     >
-      Runs on {runtimeName} · {persistence}
+      {provenance.label}
     </span>
   );
 }

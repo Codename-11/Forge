@@ -9,6 +9,18 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-20] — v0.29.3 · Honest delivery provenance
+
+### Changed
+
+- **Workstream cards report recorded execution facts.** Agent Profile configuration, MCP or webhook transport, managed runtime execution, run state, and delivery-session state remain separate instead of inheriting a configured runtime onto direct MCP work.
+- **Connection presence describes reachability, not work in progress.** Delivery badges say MCP connected, runtime reachable, or connection online and explain that presence never substitutes for an active AgentRun.
+
+### Fixed
+
+- **Explicit MCP execution advances issue lifecycle.** Opening an `EXECUTE` run applies the workspace's configured In Progress status, and successful completion applies In Review, with tenant-scoped audit and activity evidence for each server-side transition.
+- **New workspaces receive complete lifecycle targets.** In Progress, In Review, and Done statuses are selected when a workspace is created, while non-execution modes remain status-neutral and Ready to Close continues to ignore transport presence.
+
 ## [2026-07-20] — v0.29.2 · Reliable runtime handoff
 
 ### Changed

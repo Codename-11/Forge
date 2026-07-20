@@ -2,6 +2,28 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-20 — AXI-137 delivery provenance and lifecycle truth
+
+Separated Agent Profile configuration from output-producing run provenance in
+the issue Workstream. Direct Codex Desktop and other MCP activity now reports
+its MCP connection without claiming the profile's configured managed runtime;
+managed runtime execution is shown only when the run records both that
+connection and an external run id. Delivery connection badges now describe
+transport reachability and explicitly avoid presenting connection presence as
+run state.
+
+Opening an explicit MCP `EXECUTE` run now applies the workspace's configured
+In Progress status, and successful completion continues to apply In Review.
+Both server-owned transitions write tenant-scoped issue audit and activity
+evidence. Research, review, and discussion modes remain status-neutral. New
+workspaces select their initial In Progress, In Review, and Done lifecycle
+targets during creation; existing workspaces retain their settings until an
+operator deliberately configures them.
+
+Added focused unit and integration coverage for honest provenance, lifecycle
+auditing, non-execution modes, and the invariant that an active MCP connection
+or Delivery session does not block Ready to Close without an active run.
+
 ## 2026-07-20 — AXI-136 fast local verification and release workflow
 
 Replaced the Unix-only local CI shell chain with a cross-platform TypeScript

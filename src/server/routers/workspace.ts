@@ -323,17 +323,32 @@ export const workspaceRouter = router({
               }),
         },
       });
-      const completionStatus = await ctx.db.status.findFirst({
-        where: { workspaceId: workspace.id, category: "DONE" },
+      const lifecycleStatuses = await ctx.db.status.findMany({
+        where: {
+          workspaceId: workspace.id,
+          category: { in: ["IN_PROGRESS", "IN_REVIEW", "DONE"] },
+        },
         orderBy: [{ position: "asc" }, { id: "asc" }],
-        select: { id: true },
+        select: { id: true, category: true },
       });
-      const configuredWorkspace = completionStatus
-        ? await ctx.db.workspace.update({
-            where: { id: workspace.id },
-            data: { completionStatusId: completionStatus.id },
-          })
-        : workspace;
+      const startedStatusId = lifecycleStatuses.find(
+        (status) => status.category === "IN_PROGRESS",
+      )?.id;
+      const reviewStatusId = lifecycleStatuses.find(
+        (status) => status.category === "IN_REVIEW",
+      )?.id;
+      const completionStatusId = lifecycleStatuses.find((status) => status.category === "DONE")?.id;
+      const configuredWorkspace =
+        startedStatusId || reviewStatusId || completionStatusId
+          ? await ctx.db.workspace.update({
+              where: { id: workspace.id },
+              data: {
+                ...(startedStatusId ? { startedStatusId } : {}),
+                ...(reviewStatusId ? { reviewStatusId } : {}),
+                ...(completionStatusId ? { completionStatusId } : {}),
+              },
+            })
+          : workspace;
 
       // Best-effort bucket create. If MinIO is unavailable we still return
       // the workspace — attachments simply won't work until ops fixes it.

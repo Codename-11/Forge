@@ -43,6 +43,8 @@ type RunWithPolicyInputs = {
   followUps?: Prisma.JsonValue | null;
   completionMeta?: Prisma.JsonValue | null;
   runtimePolicy?: Prisma.JsonValue | null;
+  externalRunId?: string | null;
+  connection?: { kind: string } | null;
   issue?: {
     expectedOutput?: string | null;
     verificationChecklist?: Prisma.JsonValue | null;
@@ -67,15 +69,20 @@ function enrichRun<T extends RunWithPolicyInputs>(run: T) {
     run.runtimePolicy && typeof run.runtimePolicy === "object" && !Array.isArray(run.runtimePolicy)
       ? run.runtimePolicy
       : null;
+  const canInferManagedPolicy =
+    Boolean(run.externalRunId) && (!run.connection || run.connection.kind === "MANAGED_RUNTIME");
   const runtimePolicy =
     existingPolicy ??
-    buildRuntimePolicySnapshot({
-      contractVersion: FORGE_RUN_CONTRACT_VERSION,
-      engagementMode: run.engagementMode,
-      adapterKey: run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
-      runtimeName: run.agent.runtime?.name ?? null,
-      config: run.agent.runtime?.config,
-    });
+    (canInferManagedPolicy
+      ? buildRuntimePolicySnapshot({
+          contractVersion: FORGE_RUN_CONTRACT_VERSION,
+          engagementMode: run.engagementMode,
+          adapterKey:
+            run.agent.runtime?.adapterKey ?? (run.agent.provider === "HERMES" ? "hermes" : null),
+          runtimeName: run.agent.runtime?.name ?? null,
+          config: run.agent.runtime?.config,
+        })
+      : null);
   return {
     ...run,
     runtimePolicy,
@@ -179,6 +186,14 @@ export const agentRunRouter = router({
           },
           statusComment: {
             select: { id: true, body: true, currentStep: true, updatedAt: true, revisions: true },
+          },
+          connection: {
+            select: {
+              kind: true,
+              displayName: true,
+              clientName: true,
+              runtime: { select: { name: true } },
+            },
           },
         },
       });
