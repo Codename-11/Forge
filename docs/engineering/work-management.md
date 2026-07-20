@@ -133,6 +133,10 @@ shared routers, foundational UI, and deployment configuration.
 - Feature PRs do not independently cut competing releases. A designated release
   owner assembles release notes, bumps the version, tags the exact merged SHA,
   and deploys it.
+- A cohesive patch may carry its version and curated changelog in its primary
+  implementation PR only when an operator assigns the release version, release
+  owner, and release authority before implementation. Otherwise, or when
+  batching multiple changes, use a separate release issue and `RELEASES` PR.
 - Never silently resolve a schema or migration conflict by dropping another
   contributor's migration.
 

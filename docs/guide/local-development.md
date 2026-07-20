@@ -170,11 +170,18 @@ pnpm worker
 ## Before you ship
 
 ```bash
-pnpm lint && pnpm typecheck && pnpm test
-pnpm test:e2e        # needs Postgres + Redis
+pnpm ci:local:quality # Prisma generate + lint + typecheck + Vitest
+pnpm ci:local         # the same checks, then Playwright
 ```
 
-Then append a line to `DEVLOG.md` and commit.
+Use `pnpm ci:local:quality` during implementation and run the complete gate once
+before release readiness. `pnpm ci:local:e2e` runs only Playwright when a
+focused E2E repeat is needed. The cross-platform runner verifies or starts the
+guarded local services, supplies the known local endpoints even in an isolated
+worktree, serializes E2E runs with a machine-local lock, selects an available
+port, resets only the dedicated `forge_e2e` database, and starts a fresh server. Pass
+`pnpm ci:local:e2e -- --reuse-e2e-build` only when `.next` was built from the
+current source. Then append a line to `DEVLOG.md` and commit.
 
 ## Measuring issue UI load
 

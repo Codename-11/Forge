@@ -100,8 +100,14 @@ function inspectService(name: keyof typeof LOCAL_DEV.containers): ServiceState {
   const result = spawnSync(
     "docker",
     ["inspect", "--format", "{{json .State}}", LOCAL_DEV.containers[name]],
-    { encoding: "utf8", shell: false },
+    { encoding: "utf8", shell: false, timeout: 15_000 },
   );
+  if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") {
+    throw new Error(
+      `Docker did not respond while inspecting ${LOCAL_DEV.containers[name]}; check Docker Desktop before retrying.`,
+    );
+  }
+  if (result.error) throw result.error;
   if (result.status !== 0) return { exists: false, running: false, healthy: false };
   const state = JSON.parse(result.stdout) as { Running?: boolean; Health?: { Status?: string } };
   return {
