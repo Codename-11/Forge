@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useState } from "react";
+import { Children, useRef, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import {
@@ -49,6 +49,7 @@ import { cn } from "@/lib/utils";
 
 const COMMAND_MODULE_LIMIT = 4;
 const COMMAND_ARTIFACT_LIMIT = 6;
+const ATTENTION_GROUP_PREVIEW_LIMIT = 2;
 
 /**
  * Command Center — the operator's **decisions + live agent operations**
@@ -235,7 +236,6 @@ export default function CommandCenterPage() {
                         title="Asks"
                         count={data.counts.actionRequests}
                         empty="No agent asks."
-                        unbounded
                       >
                         {data.actionRequests.map((row) =>
                           completionIntent(row.payload) && row.issue ? (
@@ -1480,16 +1480,19 @@ function AttentionGroup({
   count,
   empty,
   action,
-  unbounded = false,
   children,
 }: {
   title: string;
   count: number;
   empty: string;
   action?: React.ReactNode;
-  unbounded?: boolean;
   children: React.ReactNode;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const items = Children.toArray(children);
+  const hiddenCount = Math.max(0, items.length - ATTENTION_GROUP_PREVIEW_LIMIT);
+  const visibleItems = expanded ? items : items.slice(0, ATTENTION_GROUP_PREVIEW_LIMIT);
+
   return (
     <section
       className="min-h-0 rounded-md border border-border bg-background/35"
@@ -1504,16 +1507,34 @@ function AttentionGroup({
         </span>
         {action ? <span className="ml-auto flex shrink-0 items-center gap-1">{action}</span> : null}
       </header>
-      <div
-        className={cn("min-h-0 space-y-2 p-2", unbounded ? "" : "max-h-[22rem] overflow-y-auto")}
-      >
+      <div className="min-h-0 space-y-2 p-2" data-attention-group-items>
         {count === 0 ? (
           <div className="text-meta rounded-md border border-dashed border-border bg-card/20 p-3 text-muted-foreground">
             {empty}
           </div>
         ) : (
-          children
+          visibleItems
         )}
+        {hiddenCount > 0 ? (
+          <button
+            type="button"
+            className="focus-ring text-meta flex w-full items-center justify-center gap-1 rounded-md border border-dashed border-border px-2 py-1.5 font-medium text-muted-foreground transition-colors hover:border-ember/40 hover:bg-card/40 hover:text-foreground"
+            aria-expanded={expanded}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? (
+              <>
+                <ChevronUp className="h-3 w-3" aria-hidden />
+                Show fewer
+              </>
+            ) : (
+              <>
+                <ChevronDown className="h-3 w-3" aria-hidden />
+                Show {hiddenCount} more
+              </>
+            )}
+          </button>
+        ) : null}
       </div>
     </section>
   );
