@@ -2,6 +2,7 @@ import "server-only";
 import { createHash, randomBytes } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
+import { agentConnectionIdSchema } from "@/server/validators";
 import {
   AgentProvider,
   AgentRunStatus,
@@ -8453,7 +8454,7 @@ export const mcpTools = {
     scopes: ["WRITE_ISSUES"] as const,
     input: z.object({
       sessionId: z.string().cuid(),
-      targetConnectionId: z.string().cuid(),
+      targetConnectionId: agentConnectionIdSchema,
     }),
     async run(input: { sessionId: string; targetConnectionId: string }, ctx: McpContext) {
       const agentId = ctx.apiKey?.linkedAgentId;

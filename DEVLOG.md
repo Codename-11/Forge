@@ -2,6 +2,35 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-20 — AXI-134 legacy connection-key migration and dispatch repair
+
+Traced AXI-129's mention-triggered Victor runs to a dispatch-time contract
+mismatch: the managed runtime retained its deterministic `ac_*` connection id,
+while the new typed delivery-conflict request required a Prisma CUID. Request
+validation rolled the parking transaction back, so the global dispatch sweep
+retried until the run watchdog eventually marked each attempt stalled.
+
+Added an atomic key-normalization migration for every historical `ac_*`
+AgentConnection. Existing foreign keys cascade the primary-key update across
+runs, run events, Delivery sessions, and participants; typed conflict payloads
+and dedupe keys are rewritten explicitly. Each normalized connection retains
+its old id as an immutable `legacyId`, keeping append-only audit/event
+history correlatable without rewriting it. Connection ids are now validated as
+opaque bounded identifiers across conflict, join, and handoff contracts so a
+rolling deployment remains compatible with pre-migration records.
+
+Delivery-conflict materialization is also isolated per candidate. If decision
+creation fails again, Forge keeps ownership fail-closed, parks only that run,
+records diagnostic evidence, and allows the rest of the dispatch sweep to
+continue.
+
+Verification used only local Postgres, Redis, and synthetic data. A rollbacked
+SQL fixture proved the migration across the immutable alias, runs, run events,
+session ownership, participants, typed payloads, and dedupe keys. Focused
+validation and real-database suites passed 34/34; the full serial Vitest suite passed 1,480
+tests with 12 intentional skips. Prisma validation, lint, and typecheck passed
+with pre-existing warnings only.
+
 ## 2026-07-19 — v0.29.1 release preparation
 
 Prepared the patch release containing AXI-131 and merged PR #74. Release

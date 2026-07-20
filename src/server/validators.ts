@@ -13,3 +13,15 @@ export const agentIdSchema = z
   .min(1)
   .max(40)
   .regex(/^[a-zA-Z0-9_-]+$/);
+
+/**
+ * AgentConnection ids are stable opaque identifiers, not a transport-level
+ * CUID contract. The original connection backfill used deterministic `ac_*`
+ * ids, while newly registered endpoints use Prisma CUIDs. Accept both during
+ * rolling upgrades and validate ownership through tenant-scoped lookups.
+ */
+export const agentConnectionIdSchema = z
+  .string()
+  .min(1)
+  .max(64)
+  .regex(/^[a-zA-Z0-9_-]+$/);

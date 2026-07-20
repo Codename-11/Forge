@@ -10,6 +10,7 @@ import {
   touchWorkSession,
 } from "@/server/services/work-session";
 import { handoffWorkSession, joinWorkSession } from "@/server/services/work-session-participant";
+import { agentConnectionIdSchema } from "@/server/validators";
 
 const repoSchema = z
   .string()
@@ -100,7 +101,7 @@ export const workSessionRouter = router({
     .input(
       z.object({
         sessionId: z.string().cuid(),
-        connectionId: z.string().cuid(),
+        connectionId: agentConnectionIdSchema,
         role: z.enum(["CONTRIBUTOR", "REVIEWER"]),
       }),
     )
@@ -119,7 +120,7 @@ export const workSessionRouter = router({
     .input(
       z.object({
         sessionId: z.string().cuid(),
-        targetConnectionId: z.string().cuid(),
+        targetConnectionId: agentConnectionIdSchema,
         reason: z.string().max(500).nullable().optional(),
       }),
     )
