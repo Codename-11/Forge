@@ -9,6 +9,17 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-20] — v0.29.2 · Reliable runtime handoff
+
+### Changed
+
+- **Connection identity stays compatible across upgrades.** Historical runtime and webhook keys are normalized atomically while retaining immutable aliases, and delivery actions treat connection ids as opaque identifiers instead of assuming one storage format.
+
+### Fixed
+
+- **A blocked runtime cannot stall the global dispatch sweep.** Delivery conflicts park only the competing candidate and remain fail-closed even if their operator decision cannot be materialized, so unrelated agent work continues normally.
+- **Victor mentions can reach an actionable ownership decision.** Legacy managed-runtime keys no longer invalidate typed delivery-conflict requests before the operator can join, hand off, review, or cancel the candidate run.
+
 ## [2026-07-19] — v0.29.1 · Reliable attention recovery
 
 ### Changed
