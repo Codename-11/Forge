@@ -64,6 +64,11 @@ Workspace-scoped statuses, each in a fixed category (`BACKLOG`, `TODO`,
 - Reorder within a category.
 - Set the workspace default (used for fresh issues with no explicit
   status).
+- Configure agent lifecycle targets for **In Progress**, **In Review**, and
+  **Done**. New workspaces select the first status in each matching category.
+  An explicit MCP `EXECUTE` run applies In Progress when it opens and In Review
+  when it completes; research, review, and discussion runs never move issue
+  status automatically.
 
 ### Templates
 
@@ -144,7 +149,7 @@ content between instances as portable JSON.
   sprints, agents, and issues (with assignees, labels, and relations) plus
   comments. Infra rows — API keys, webhooks, the audit log, and attachment
   bytes — are excluded.
-- **Import** loads a snapshot into the current workspace. It is *additive*:
+- **Import** loads a snapshot into the current workspace. It is _additive_:
   config rows are matched by natural key and reused, issues are created
   fresh with new numbers, relations and comments are rewired onto them, and
   unknown authors fall back to you. Nothing is deleted.
@@ -221,7 +226,7 @@ See [Automation → API keys](/automation/api-keys.html).
 
 URL: `/settings/auth`. **Instance-admin only** — gated on the operator
 whose email matches `ADMIN_EMAIL`, since sign-in providers are global to
-the whole self-hosted instance (auth is per *user*, not per workspace).
+the whole self-hosted instance (auth is per _user_, not per workspace).
 
 Configure how people sign in, without a redeploy:
 

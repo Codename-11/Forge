@@ -42,6 +42,12 @@ client rather than guessed as Codex Desktop or CLI. A runtime is shown only
 when an output-producing `AgentRun` carries both a runtime connection and an
 external run id. Direct MCP or UI work does not imply runtime execution.
 
+Connection presence is endpoint reachability, not execution state. “MCP
+connected,” “runtime reachable,” and similar badges can remain current after a
+run has completed because the client is still connected. Ready to Close and
+stale-run recovery use `AgentRun` lifecycle records, never connection presence
+or an `IN_REVIEW` Delivery session, to decide whether work is still active.
+
 ## Project branch contract
 
 Branch topology is project configuration, not an Axiom-wide constant. Every
@@ -108,6 +114,13 @@ Claimed → In progress → PR open → In review → Ready to merge → Merged
 `Verified` is the terminal success state. `Abandoned` explicitly releases the
 ownership lease. A stale session remains a lease and raises a shared action
 request; it must be resumed or abandoned before replacement work starts.
+
+For direct MCP work, clients open an explicit run before implementation.
+Opening an `EXECUTE` run moves a Backlog or Todo issue to the workspace's
+configured In Progress status; successfully completing it moves the issue to
+the configured In Review status. Research, review, and discussion runs do not
+change issue status. These are server-side, audited transitions so clients do
+not need to race a separate status mutation.
 
 Release, deploy, and verification transitions require workspace admin authority.
 Feature work may run in parallel, but merges and production delivery are

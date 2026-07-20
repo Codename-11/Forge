@@ -36,7 +36,11 @@ import { db } from "@/server/db";
 import { decryptSecret } from "@/server/crypto";
 import { getInstallationTokenForApp } from "@/server/services/github-app";
 import { deriveRepoPath } from "@/server/services/repo-path";
-import { recordChange, maybeAutoTransitionOnComplete } from "@/server/audit";
+import {
+  recordChange,
+  maybeAutoTransitionOnComplete,
+  maybeAutoTransitionOnRunStart,
+} from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { maybeApplyAgentTemplate } from "@/server/services/agent-template";
 import { maybeAutoDispatch } from "@/server/services/dispatcher";
@@ -6923,8 +6927,8 @@ export const mcpTools = {
           );
         }
       }
-      const { run, isNew } = await db.$transaction((tx) =>
-        openOrTouchRun(tx, {
+      const { run, isNew } = await db.$transaction(async (tx) => {
+        const opened = await openOrTouchRun(tx, {
           workspaceId: ctx.workspaceId,
           issueId: issue.id,
           agentId: linkedAgentId,
@@ -6935,8 +6939,17 @@ export const mcpTools = {
           engagementMode: (input.mode as EngagementMode | undefined) ?? "EXECUTE",
           currentStep: input.summary ?? "opened by agent",
           resumeWaiting: true,
-        }),
-      );
+        });
+        await maybeAutoTransitionOnRunStart(tx, {
+          workspaceId: ctx.workspaceId,
+          issueId: issue.id,
+          runId: opened.run.id,
+          engagementMode: opened.run.engagementMode,
+          actorId: ctx.userId,
+          actorAgentId: linkedAgentId,
+        });
+        return opened;
+      });
       return { runId: run.id, isNew, status: run.status, issueId: issue.id };
     },
   },
@@ -7317,7 +7330,11 @@ export const mcpTools = {
         // A genuinely successful EXECUTE completion (this path only, not
         // abandons/stops that also emit AGENT_RUN_COMPLETED elsewhere) is a
         // "ready for review" signal when the workspace opted in.
-        await maybeAutoTransitionOnComplete(tx, ctx.workspaceId, run.issueId, run.engagementMode);
+        await maybeAutoTransitionOnComplete(tx, ctx.workspaceId, run.issueId, run.engagementMode, {
+          runId: run.id,
+          actorId: ctx.userId,
+          actorAgentId: linkedAgentId,
+        });
         if (run.executionStepId) {
           await handoffCompletedRunToStep(tx, {
             workspaceId: ctx.workspaceId,

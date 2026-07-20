@@ -399,4 +399,71 @@ describe("completion candidate policy", () => {
       },
     });
   });
+
+  it("does not treat a connected MCP delivery session as an active run", async () => {
+    const { fixture, prisma } = await setup(CompletionAutomation.RECOMMEND);
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    await linkedPullRequest(fixture, issue.id, "merged", "success");
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `mcp-presence-${Date.now()}`,
+        name: "Codex",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "ACTIVE",
+        confidence: "CONFIRMED",
+        instanceKey: `desktop-${Date.now()}`,
+        displayName: "Codex Desktop",
+        clientName: "codex-mcp-client",
+        lastSeenAt: new Date(),
+      },
+    });
+    await prisma.workSession.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        ownerUserId: fixture.user.id,
+        ownerAgentId: agent.id,
+        ownerConnectionId: connection.id,
+        source: "MCP",
+        status: "IN_REVIEW",
+        repoFullName: "acme/forge",
+        branch: `codex/mcp-presence-${Date.now()}`,
+        baseBranch: "main",
+      },
+    });
+
+    const result = await evaluateIssueCompletionCandidate(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      actorId: fixture.user.id,
+      sourceType: "github-pull-request",
+      sourceId: "mcp-presence",
+      sourceLabel: "Merged implementation PR",
+    });
+
+    expect(result.outcome).toBe("RECOMMENDED");
+    const request = await prisma.actionRequest.findFirstOrThrow({
+      where: { issueId: issue.id, status: ActionRequestStatus.OPEN },
+    });
+    expect(request.payload).toMatchObject({
+      assessment: {
+        state: "READY",
+        facts: expect.arrayContaining([
+          expect.objectContaining({
+            key: "agent-runs",
+            summary: "No active runs",
+            status: "PASS",
+          }),
+        ]),
+      },
+    });
+  });
 });

@@ -555,10 +555,14 @@ function deliveryProvenance(session: DeliverySession): {
   const statusLabel =
     connection.status === "ACTIVE"
       ? connection.confidence === "CONFIRMED"
-        ? "confirmed active"
-        : "activity inferred"
+        ? connection.kind === "MCP_CLIENT"
+          ? "MCP connected"
+          : connection.kind === "MANAGED_RUNTIME"
+            ? "runtime reachable"
+            : "connection online"
+        : "connection recently seen"
       : connection.status === "QUIET" && unconfirmedMcp
-        ? "quiet · status unconfirmed"
+        ? "MCP presence unconfirmed"
         : connection.status.toLowerCase();
   const badgeTone =
     connection.status === "DISCONNECTED" || connection.status === "REVOKED"
@@ -570,7 +574,9 @@ function deliveryProvenance(session: DeliverySession): {
           : "border-border bg-subtle/60 text-muted-foreground";
   const statusDescription =
     connection.status === "ACTIVE" && connection.confidence === "CONFIRMED"
-      ? "Forge has direct, current evidence that this delivery connection is active."
+      ? connection.kind === "MCP_CLIENT"
+        ? "Forge has direct, current evidence that this MCP transport is connected. This is connection presence, not evidence that an AgentRun is still working."
+        : "Forge has direct, current evidence that this delivery connection is reachable. This is connection presence, not AgentRun state."
       : connection.status === "ACTIVE"
         ? "Recent activity was observed, but live connection presence is not fully confirmed."
         : connection.status === "QUIET" && unconfirmedMcp

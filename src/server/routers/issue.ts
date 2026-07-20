@@ -697,6 +697,14 @@ export const issueRouter = router({
               followUps: true,
               completionMeta: true,
               runtimePolicy: true,
+              connection: {
+                select: {
+                  kind: true,
+                  displayName: true,
+                  clientName: true,
+                  runtime: { select: { name: true } },
+                },
+              },
               wakeAttempts: true,
               lastWakeDeliveryId: true,
               agent: {

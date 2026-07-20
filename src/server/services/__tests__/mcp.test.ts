@@ -315,6 +315,99 @@ describe("mcp comment lifecycle", () => {
       ]),
     );
   });
+
+  it("runs.open moves an EXECUTE issue to the configured started status with audit evidence", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MCS" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const started = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "IN_PROGRESS" },
+    });
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { startedStatusId: started.id },
+    });
+    const issue = await createIssue(fixture, { statusCategory: "TODO" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `execute-start-${Date.now()}`,
+        name: "Execute starter",
+      },
+    });
+    const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+
+    const opened = (await call(
+      "runs.open",
+      { issueId: issue.id, mode: "EXECUTE", summary: "Starting implementation" },
+      ctx,
+    )) as { runId: string };
+
+    await expect(
+      prisma.issue.findUniqueOrThrow({
+        where: { id: issue.id },
+        select: { statusId: true, startedAt: true },
+      }),
+    ).resolves.toMatchObject({ statusId: started.id, startedAt: expect.any(Date) });
+    await expect(
+      prisma.auditLog.findFirst({
+        where: {
+          workspaceId: fixture.workspace.id,
+          entityId: issue.id,
+          action: "run-start-auto-transition",
+        },
+      }),
+    ).resolves.toBeTruthy();
+    await expect(
+      prisma.activityEvent.findFirst({
+        where: {
+          workspaceId: fixture.workspace.id,
+          subjectType: "issue",
+          subjectId: issue.id,
+          kind: "ISSUE_STATUS_CHANGED",
+          payload: { path: ["runId"], equals: opened.runId },
+        },
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it.each(["RESEARCH", "REVIEW", "DISCUSS"] as const)(
+    "runs.open leaves issue status unchanged for %s work",
+    async (mode) => {
+      const fixture = await createWorkspaceFixture({ keyPrefix: "MCN" });
+      fixtures.push(fixture);
+      const prisma = getPrisma();
+      const started = await prisma.status.findFirstOrThrow({
+        where: { workspaceId: fixture.workspace.id, category: "IN_PROGRESS" },
+      });
+      await prisma.workspace.update({
+        where: { id: fixture.workspace.id },
+        data: { startedStatusId: started.id },
+      });
+      const issue = await createIssue(fixture, { statusCategory: "TODO" });
+      const before = await prisma.issue.findUniqueOrThrow({
+        where: { id: issue.id },
+        select: { statusId: true },
+      });
+      const agent = await prisma.agent.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          profileKey: `${mode.toLowerCase()}-${Date.now()}`,
+          name: `${mode} worker`,
+        },
+      });
+      const { ctx } = buildMcpCtx(fixture, { linkedAgentId: agent.id });
+
+      await call("runs.open", { issueId: issue.id, mode }, ctx);
+
+      await expect(
+        prisma.issue.findUniqueOrThrow({
+          where: { id: issue.id },
+          select: { statusId: true },
+        }),
+      ).resolves.toEqual(before);
+    },
+  );
 });
 
 describe("mcp workspace and access keys", () => {
@@ -4291,6 +4384,25 @@ describe("mcp runs.complete + completion contract", () => {
     });
     expect(after.statusId).toBe(inReview.id);
     expect(after.status?.category).toBe("IN_REVIEW");
+    await expect(
+      prisma.auditLog.findFirst({
+        where: {
+          workspaceId: fixture.workspace.id,
+          entityId: issue.id,
+          action: "run-complete-auto-transition",
+        },
+      }),
+    ).resolves.toBeTruthy();
+    await expect(
+      prisma.activityEvent.findFirst({
+        where: {
+          workspaceId: fixture.workspace.id,
+          subjectType: "issue",
+          subjectId: issue.id,
+          kind: "ISSUE_STATUS_CHANGED",
+        },
+      }),
+    ).resolves.toBeTruthy();
   });
 
   it("runs.complete can recommend the verified issue for completion", async () => {

@@ -322,6 +322,85 @@ async function maybeAutoTransitionOnAssign(
 }
 
 /**
+ * Server-side issue lifecycle for an agent-initiated run. Unlike assignment,
+ * opening an MCP EXECUTE run is itself direct evidence that work began, so it
+ * uses the configured started status and writes a dedicated issue audit/event.
+ * Non-EXECUTE modes never move the issue.
+ */
+export async function maybeAutoTransitionOnRunStart(
+  tx: PrismaClient | Prisma.TransactionClient,
+  params: {
+    workspaceId: string;
+    issueId: string;
+    runId: string;
+    engagementMode: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+  },
+): Promise<string | null> {
+  if (params.engagementMode !== "EXECUTE") return null;
+  const workspace = await tx.workspace.findUnique({
+    where: { id: params.workspaceId },
+    select: { startedStatusId: true },
+  });
+  if (!workspace?.startedStatusId) return null;
+
+  const [target, issue] = await Promise.all([
+    tx.status.findFirst({
+      where: {
+        id: workspace.startedStatusId,
+        workspaceId: params.workspaceId,
+        category: "IN_PROGRESS",
+      },
+      select: { id: true },
+    }),
+    tx.issue.findFirst({
+      where: { id: params.issueId, workspaceId: params.workspaceId, deletedAt: null },
+      select: {
+        id: true,
+        statusId: true,
+        startedAt: true,
+        status: { select: { id: true, name: true, category: true } },
+      },
+    }),
+  ]);
+  if (!target || !issue) return null;
+  if (["IN_PROGRESS", "IN_REVIEW", "DONE", "CANCELED"].includes(issue.status.category)) {
+    return null;
+  }
+
+  const after = await tx.issue.update({
+    where: { id: issue.id },
+    data: { statusId: target.id, startedAt: issue.startedAt ?? new Date() },
+    select: {
+      id: true,
+      statusId: true,
+      startedAt: true,
+      status: { select: { id: true, name: true, category: true } },
+    },
+  });
+  await recordChange(tx, {
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    actorAgentId: params.actorAgentId ?? null,
+    entity: "Issue",
+    entityId: issue.id,
+    action: "run-start-auto-transition",
+    before: issue as unknown as Prisma.InputJsonValue,
+    after: after as unknown as Prisma.InputJsonValue,
+    eventKind: EventKind.ISSUE_STATUS_CHANGED,
+    subjectType: "issue",
+    subjectId: issue.id,
+    payload: {
+      source: "agent-run",
+      runId: params.runId,
+      statusId: target.id,
+    },
+  });
+  return target.id;
+}
+
+/**
  * Server-side auto-transition on a successful EXECUTE completion. When the
  * workspace has `reviewStatusId` set and the issue isn't already IN_REVIEW
  * or terminal, flip it to that status row. Completing EXECUTE work is a
@@ -345,6 +424,11 @@ export async function maybeAutoTransitionOnComplete(
   workspaceId: string,
   issueId: string,
   engagementMode: string,
+  audit?: {
+    runId: string;
+    actorId: string | null;
+    actorAgentId?: string | null;
+  },
 ): Promise<string | null> {
   if (engagementMode !== "EXECUTE") return null;
   const ws = await tx.workspace.findUnique({
@@ -373,10 +457,39 @@ export async function maybeAutoTransitionOnComplete(
   }
   if (issue.statusId === target.id) return null;
 
-  await tx.issue.update({
+  const before = await tx.issue.findUniqueOrThrow({
+    where: { id: issueId },
+    select: {
+      id: true,
+      statusId: true,
+      status: { select: { id: true, name: true, category: true } },
+    },
+  });
+  const after = await tx.issue.update({
     where: { id: issueId },
     data: { statusId: target.id },
+    select: {
+      id: true,
+      statusId: true,
+      status: { select: { id: true, name: true, category: true } },
+    },
   });
+  if (audit) {
+    await recordChange(tx, {
+      workspaceId,
+      actorId: audit.actorId,
+      actorAgentId: audit.actorAgentId ?? null,
+      entity: "Issue",
+      entityId: issueId,
+      action: "run-complete-auto-transition",
+      before: before as unknown as Prisma.InputJsonValue,
+      after: after as unknown as Prisma.InputJsonValue,
+      eventKind: EventKind.ISSUE_STATUS_CHANGED,
+      subjectType: "issue",
+      subjectId: issueId,
+      payload: { source: "agent-run", runId: audit.runId, statusId: target.id },
+    });
+  }
   return target.id;
 }
 
