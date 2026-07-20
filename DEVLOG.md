@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-20 — AXI-136 fast local verification and release workflow
+
+Replaced the Unix-only local CI shell chain with a cross-platform TypeScript
+runner. Local verification now verifies or starts the guarded local service
+containers, supplies safe local endpoints in isolated worktrees, generates
+Prisma explicitly, offers a fast quality-only loop, avoids duplicate quality
+passes, and serializes Playwright with a portable lock while selecting an
+available port after the lock is held. Added focused unit coverage for option
+parsing, plans, port selection, and lock behavior.
+
+Local container inspection now times out with an actionable Docker Desktop
+diagnostic instead of leaving `pnpm dev:services` or the CI gate hanging
+indefinitely when the daemon is unresponsive.
+
+Documented when to use the quality, E2E-only, and complete local gates. Also
+defined a narrow single-PR patch-release path when an operator assigns the
+version, authority, and release owner before implementation; unassigned or
+batched releases retain the separate release issue/PR workflow.
+
 ## 2026-07-20 — v0.29.2 release preparation
 
 Prepared the serialized patch release containing AXI-134 and merged PR #76.

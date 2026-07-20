@@ -32,14 +32,14 @@ fix/<issue>-*       ← bugfix branches from main
 
 Forge's explicit branch contract:
 
-| Setting | Value |
-| --- | --- |
-| Integration branch / normal PR base | `main` |
-| Release branch / tag source | `main` |
-| Staging source | Exact tested `main` SHA |
-| Production source | Immutable `vX.Y.Z` tag contained in `main` |
-| Hotfix base | Current production tag or `main` |
-| Back-merge target | None; `main` is the only long-lived branch |
+| Setting                             | Value                                      |
+| ----------------------------------- | ------------------------------------------ |
+| Integration branch / normal PR base | `main`                                     |
+| Release branch / tag source         | `main`                                     |
+| Staging source                      | Exact tested `main` SHA                    |
+| Production source                   | Immutable `vX.Y.Z` tag contained in `main` |
+| Hotfix base                         | Current production tag or `main`           |
+| Back-merge target                   | None; `main` is the only long-lived branch |
 
 ## Versioning
 
@@ -56,11 +56,38 @@ Forge's explicit branch contract:
 
 ## Release Process
 
-For the same local gate used before direct releases, run:
+Use the fast quality gate while iterating:
+
+```bash
+pnpm ci:local:quality
+```
+
+Before declaring a PR release-ready, run the complete local gate once:
 
 ```bash
 pnpm ci:local
 ```
+
+The TypeScript runner is cross-platform. It starts or verifies the guarded
+local services, supplies only the known local development endpoints, generates
+the Prisma client, and runs lint, typecheck, and Vitest once. It then serializes
+Playwright behind a portable machine-local lock and selects an available port.
+`pnpm ci:local:e2e` runs only the E2E phase; add `-- --reuse-e2e-build` only when
+the existing production build is known to match the current source. These
+local commands complement, but do not replace, CI on the exact PR head.
+
+### Authorized single-PR patch releases
+
+A small, cohesive patch may include its version bump and curated changelog in
+the implementation PR only when the operator authorizes that release and
+assigns its version and release owner before implementation begins. The exact
+PR head must pass CI; after squash-merge, tag the exact resulting `main` SHA and
+follow the normal deploy and verification steps below.
+
+Use a separate release issue/PR when release authority or the version was not
+preassigned, when multiple merged changes are being batched, or when release
+assembly needs independent review. Never add an uncoordinated version bump to
+an ordinary feature PR.
 
 ### 1. Land the work
 
