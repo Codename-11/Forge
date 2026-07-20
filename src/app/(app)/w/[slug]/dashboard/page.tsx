@@ -370,16 +370,18 @@ function TeamDashboard() {
             />
 
             <div className="space-y-6" data-testid="dashboard-layout">
-              {/* Stage 1 — a bounded priority cockpit. The split waits for `xl`
-                  so Focus cards keep useful widths at tablet sizes. Crucially,
-                  this is no longer the page's permanent macro layout: once the
-                  priority band ends, every secondary module returns to a shared
-                  full-width board below. */}
+              {/* The desktop cockpit uses two independently flowing rails. Workspace
+                  flow starts directly beneath personal work instead of waiting for
+                  the taller operations rail to finish. Mobile keeps the intentional
+                  Focus → Operations → Workspace reading order. */}
               <div
                 className="grid grid-cols-1 gap-5 xl:grid-cols-12 xl:items-start"
                 data-testid="dashboard-priority-cockpit"
               >
-                <div className="space-y-5 xl:col-span-8 2xl:col-span-7">
+                <div
+                  className="space-y-5 xl:col-span-7 xl:col-start-1 xl:row-start-1"
+                  data-testid="dashboard-focus-column"
+                >
                   {/* Focus (assigned, priority-first) + Pick-up (recent). Both
                   render rich auto-height cards. If there's no personal work
                   at all, Suggestions takes the slot as the primary handoff. */}
@@ -421,7 +423,10 @@ function TeamDashboard() {
                   )}
                 </div>
 
-                <div className="min-w-0 space-y-5 xl:col-span-4 2xl:col-span-5">
+                <div
+                  className="min-w-0 space-y-5 xl:col-span-5 xl:col-start-8 xl:row-span-2 xl:row-start-1"
+                  data-testid="dashboard-operations-column"
+                >
                   <ZoneDivider label="Live operations" />
                   <DashboardStack
                     widgets={priorityWidgets}
@@ -431,22 +436,21 @@ function TeamDashboard() {
                     columns={priorityColumnCount}
                   />
                 </div>
-              </div>
 
-              {/* Stage 2 — one responsive board for everything that may fold or
-                  move. Two columns begin at tablet width; wide screens gain a
-                  third track. Measured row spans pack unequal content without
-                  changing the DOM or keyboard reading order. */}
-              <section className="min-w-0 space-y-3" data-testid="dashboard-flow-board">
-                <ZoneDivider label="Workspace flow" />
-                <DashboardStack
-                  widgets={flowWidgets}
-                  layout={effLayout}
-                  editing={editing}
-                  onChange={persistLayout}
-                  columns={3}
-                />
-              </section>
+                <section
+                  className="min-w-0 space-y-3 xl:col-span-7 xl:col-start-1 xl:row-start-2"
+                  data-testid="dashboard-flow-board"
+                >
+                  <ZoneDivider label="Workspace flow" />
+                  <DashboardStack
+                    widgets={flowWidgets}
+                    layout={effLayout}
+                    editing={editing}
+                    onChange={persistLayout}
+                    columns={2}
+                  />
+                </section>
+              </div>
             </div>
           </div>
         </div>

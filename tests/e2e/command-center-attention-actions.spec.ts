@@ -270,6 +270,14 @@ test.describe("Command Center attention actions", () => {
     await expect(queuedRunEvidence).toHaveCount(2);
     await expect(queuedRunEvidence.first()).toBeVisible();
 
+    const showMore = page.getByRole("button", { name: /Show \d+ more/ });
+    await expect(showMore).toHaveAttribute("aria-expanded", "false");
+    await showMore.click();
+    await expect(page.getByRole("button", { name: "Show fewer" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
     const fallbackCard = page
       .getByRole("link", { name: FALLBACK_TITLE })
       .locator("xpath=ancestor::div[contains(@class, 'bg-card/40')][1]");

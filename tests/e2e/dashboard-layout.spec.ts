@@ -5,7 +5,7 @@ const STATES = [
     name: "desktop",
     width: 1600,
     height: 2600,
-    columns: 3,
+    columns: 2,
     priorityColumns: 2,
     firstWidgets: ["pipeline", "whats-new", "suggestions", "quick-notes"],
   },
@@ -54,14 +54,7 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
           .locator(":scope > [data-widget-id]")
           .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-widget-id"))),
       )
-      .toEqual([
-        "agent-attention",
-        "delivery-work",
-        "agent-activity",
-        "standup",
-        "pulse",
-        "today",
-      ]);
+      .toEqual(["agent-attention", "delivery-work", "agent-activity", "standup", "pulse", "today"]);
     const priorityColumns = await priorityGrid.evaluate((node) => {
       const tracks = getComputedStyle(node).gridTemplateColumns;
       return tracks === "none" ? 1 : tracks.split(" ").length;
@@ -75,13 +68,15 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
     await expect(flow.locator('[data-widget-id="pulse"]')).toHaveCount(0);
     await expect(flow.locator('[data-widget-id="today"]')).toHaveCount(0);
     await expect(flow.getByTestId("dashboard-whats-new")).toBeVisible();
-    await expect(cockpit.locator('[data-widget-id="whats-new"]')).toHaveCount(0);
+    await expect(
+      page.getByTestId("dashboard-operations-column").locator('[data-widget-id="whats-new"]'),
+    ).toHaveCount(0);
 
     expect(await cockpit.locator("[data-schedule-due-item]").count()).toBeLessThanOrEqual(3);
     expect(await flow.locator("[data-whats-new-item]").count()).toBeLessThanOrEqual(4);
     expect(await flow.locator("[data-whats-new-history]").count()).toBeLessThanOrEqual(3);
 
-    const grid = flow.locator(`[data-dashboard-columns="3"]`);
+    const grid = flow.locator(`[data-dashboard-columns="2"]`);
     await expect(grid).toBeVisible();
     await expect
       .poll(() =>
@@ -101,15 +96,20 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
     expect(renderedColumns).toBe(state.columns);
 
     if (state.name === "desktop") {
-      const [boardBox, suggestionsBox] = await Promise.all([
+      const [boardBox, suggestionsBox, flowBox, operationsBox] = await Promise.all([
         grid.boundingBox(),
         grid.locator('[data-widget-id="suggestions"]').boundingBox(),
+        flow.boundingBox(),
+        page.getByTestId("dashboard-operations-column").boundingBox(),
       ]);
       expect(boardBox).not.toBeNull();
       expect(suggestionsBox).not.toBeNull();
+      expect(flowBox).not.toBeNull();
+      expect(operationsBox).not.toBeNull();
       expect(Math.abs((boardBox?.width ?? 0) - (suggestionsBox?.width ?? 0))).toBeLessThanOrEqual(
         1,
       );
+      expect(flowBox!.y).toBeLessThan(operationsBox!.y + operationsBox!.height);
     }
 
     const overflow = await page.evaluate(() => {

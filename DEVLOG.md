@@ -2,6 +2,20 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-20 — AXI-139 balanced dashboard and attention flow
+
+Recomposed the wide dashboard as two independently flowing rails. Workspace
+flow now begins directly beneath Focus instead of waiting for the taller Live
+operations stack, while narrow layouts preserve the Focus → Operations →
+Workspace reading order. The flow board uses two useful-width tracks inside
+the primary rail and retains the existing customizable masonry behavior.
+
+Standardized Command Center attention groups on a compact two-item preview
+with an explicit, keyboard-accessible Show more / Show fewer affordance. Asks
+no longer expands without limit, and Run recovery no longer hides additional
+cards in a clipped nested scroll area. Responsive Playwright coverage now
+guards both the dashboard rail fill and the attention overflow contract.
+
 ## 2026-07-20 — AXI-137 delivery provenance and lifecycle truth
 
 Separated Agent Profile configuration from output-producing run provenance in
