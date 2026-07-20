@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   LOCAL_DATABASE_CONTAINER,
   LOCAL_DATABASE_URL,
+  LOCAL_TEST_DATABASE_URL,
   formatLocalTarget,
   validateLocalScenarioTarget,
   validateLocalTarget,
+  validateLocalTestTarget,
 } from "../../scripts/lib/local-data-target";
 
 describe("local production-data refresh target guard", () => {
@@ -48,5 +50,18 @@ describe("local production-data refresh target guard", () => {
     expect(() =>
       validateLocalScenarioTarget("postgresql://forge:forge@localhost:55432/forge?schema=private"),
     ).toThrow(/exact Forge local docker/);
+  });
+
+  it("accepts only the disposable local CI database", () => {
+    expect(validateLocalTestTarget(LOCAL_TEST_DATABASE_URL)).toMatchObject({
+      database: "forge_test",
+      container: LOCAL_DATABASE_CONTAINER,
+    });
+    expect(() => validateLocalTestTarget(LOCAL_DATABASE_URL)).toThrow(/forge_test/);
+    expect(() =>
+      validateLocalTestTarget(
+        "postgresql://forge:forge@forge.axiom-labs.dev:5432/forge_test?schema=public",
+      ),
+    ).toThrow(/forge_test/);
   });
 });

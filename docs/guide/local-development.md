@@ -26,8 +26,6 @@ Every command prints what it started, skipped, migrated, generated, seeded,
 or replaced plus the selected local database and endpoints. The TypeScript
 orchestrator works when invoked from Windows PowerShell or Git Bash.
 
-Sign in with the stable bootstrap credentials it prints:
-
 Sign in with the bootstrap credentials it prints:
 
 ```
@@ -35,6 +33,26 @@ owner@forge.local / forge-dev
 ```
 
 (Override via `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars before running.)
+
+The first visit to a route is slower than later refreshes because Next compiles
+that route on demand in development. Forge pins Turbopack to the repository
+root so unrelated lockfiles elsewhere on the workstation do not expand module
+resolution or file watching. The `.next` cache is preserved between normal
+restarts; avoid deleting it unless you are diagnosing a corrupt build cache.
+
+Prisma query text is quiet by default so a production-sized local snapshot
+does not flood the terminal. Enable it for a focused database investigation:
+
+```bash
+FORGE_LOG_PRISMA_QUERIES=1 pnpm dev:app
+```
+
+In PowerShell, use
+`$env:FORGE_LOG_PRISMA_QUERIES = "1"; pnpm dev:app` and remove the variable
+afterward. When iterating on a copied production snapshot, keep background
+workers disabled with `FORGE_DISABLE_IN_PROCESS_WORKER=1`; this preserves
+realtime browser updates while preventing local maintenance jobs from acting
+on cloned production state.
 
 ::: tip
 The base seed (`prisma/seed.ts`) is deliberately simple and idempotent.
@@ -178,10 +196,18 @@ Use `pnpm ci:local:quality` during implementation and run the complete gate once
 before release readiness. `pnpm ci:local:e2e` runs only Playwright when a
 focused E2E repeat is needed. The cross-platform runner verifies or starts the
 guarded local services, supplies the known local endpoints even in an isolated
-worktree, serializes E2E runs with a machine-local lock, selects an available
-port, resets only the dedicated `forge_e2e` database, and starts a fresh server. Pass
-`pnpm ci:local:e2e -- --reuse-e2e-build` only when `.next` was built from the
-current source. Then append a line to `DEVLOG.md` and commit.
+worktree, and resets the disposable `forge_test` database plus Redis database
+13 before unit/integration tests. A machine-local quality lock prevents two
+worktrees from resetting that disposable state concurrently. The gate never
+runs those tests against the shared `forge` development database, so an
+imported production snapshot remains available for UI iteration. Playwright
+separately owns disposable `forge_e2e`.
+On Windows, stop a dev server running from the same worktree before the gate so
+Prisma can replace its generated engine DLL; restart with `pnpm dev:app` after.
+The E2E phase serializes runs with a machine-local lock, selects an available
+port, resets only the dedicated `forge_e2e` database, and starts a fresh server.
+Pass `pnpm ci:local:e2e -- --reuse-e2e-build` only when `.next` was built from
+the current source. Then append a line to `DEVLOG.md` and commit.
 
 ## Measuring issue UI load
 

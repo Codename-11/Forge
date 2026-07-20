@@ -1,4 +1,8 @@
 import type { NextConfig } from "next";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const projectRoot = dirname(fileURLToPath(import.meta.url));
 
 const isolatedBuild = !!process.env.NEXT_DIST_DIR && process.env.NEXT_DIST_DIR !== ".next";
 const devOriginHosts = Array.from(
@@ -20,6 +24,11 @@ const devOriginHosts = Array.from(
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Multiple lockfiles may exist above a Codex worktree on developer
+  // machines. Keep Turbopack resolution and file watching scoped to Forge.
+  turbopack: {
+    root: projectRoot,
+  },
   allowedDevOrigins: devOriginHosts.length > 0 ? devOriginHosts : undefined,
   // `standalone` is for the prod Docker image. The E2E build (NEXT_DIST_DIR=
   // .next-e2e) is served with plain `next start`, which doesn't support

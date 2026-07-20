@@ -12,6 +12,7 @@ import {
   type LocalCiStep,
 } from "./lib/ci-local-workflow";
 import { LOCAL_DEV, assertSafeLocalEnvironment, parseWindowsPnpmEntry } from "./lib/dev-workflow";
+import { LOCAL_TEST_DATABASE_URL } from "./lib/local-data-target";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -33,8 +34,8 @@ function formatStep(step: LocalCiStep): string {
 }
 
 const localCiEnv: Record<string, string> = {
-  DATABASE_URL: LOCAL_DEV.databaseUrl,
-  REDIS_URL: LOCAL_DEV.redisUrl,
+  DATABASE_URL: LOCAL_TEST_DATABASE_URL,
+  REDIS_URL: "redis://localhost:56379/13",
   S3_ENDPOINT: LOCAL_DEV.s3Endpoint,
   S3_PUBLIC_ENDPOINT: LOCAL_DEV.s3Endpoint,
   S3_REGION: process.env.S3_REGION ?? "us-east-1",
@@ -89,8 +90,20 @@ async function main(): Promise<void> {
   const quality = buildLocalCiPlan(options).filter(
     (candidate) => candidate.label !== "Playwright E2E",
   );
-  for (const step of quality) {
-    runStep(step, pnpm);
+  if (quality.length > 0) {
+    const qualityLockPath = join(tmpdir(), "forge-quality.lock");
+    const releaseQualityLock = await acquireDirectoryLock(qualityLockPath, {
+      onWait: (owner) => {
+        const detail = owner ? ` (PID ${owner.pid} on ${owner.host})` : "";
+        console.log(`[ci:local] Waiting for another Forge quality run${detail}…`);
+      },
+    });
+    try {
+      console.log("[ci:local] Acquired quality lock for disposable test state.");
+      for (const step of quality) runStep(step, pnpm);
+    } finally {
+      await releaseQualityLock();
+    }
   }
   if (!needsE2e) return;
 
