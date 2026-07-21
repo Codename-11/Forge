@@ -9,6 +9,17 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-20] — v0.29.4 · Balanced operator workspace
+
+### Changed
+
+- **Wide dashboards keep useful work in both rails.** Workspace flow begins directly beneath Focus instead of waiting for a taller Live operations stack, while narrow layouts retain their intentional reading order.
+- **Attention queues stay compact without hiding decisions.** Every populated Command Center group previews two items and offers an accessible Show more / Show fewer control instead of mixing unbounded content with clipped nested scrolling.
+
+### Fixed
+
+- **Run recovery remains visibly actionable beside large ask queues.** Independent overflow controls prevent Asks from stretching the shared row or leaving neighboring recovery cards cut off.
+
 ## [2026-07-20] — v0.29.3 · Honest delivery provenance
 
 ### Changed
