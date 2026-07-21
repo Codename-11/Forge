@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-20 — v0.29.4 release preparation
+
+Prepared the serialized patch release for AXI-139 and merged PR #81. Release
+metadata describes the independently flowing dashboard rails and consistent
+Command Center attention overflow controls. The immutable tag, production
+deployment, and live verification remain separate delivery facts until their
+respective release steps complete.
+
 ## 2026-07-20 — AXI-139 balanced dashboard and attention flow
 
 Recomposed the wide dashboard as two independently flowing rails. Workspace
