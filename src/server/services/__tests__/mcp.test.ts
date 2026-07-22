@@ -1,6 +1,8 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
 import {
   AgentRunStatus,
+  AgentConnectionKind,
+  AgentConnectionLiveness,
   AgentProvider,
   ChatContextMode,
   CompletionAutomation,
@@ -11,6 +13,10 @@ import {
 } from "@prisma/client";
 import { mcpTools, type McpContext } from "@/server/services/mcp";
 import { EXPLICIT_MCP_TOOL_POLICIES, mcpToolPolicy } from "@/server/services/mcp-policy";
+import {
+  hashRunExecutionCapability,
+  issueRunExecutionCapability,
+} from "@/server/services/run-execution-capability";
 import type { ApiKeyContext } from "@/server/services/api-key-auth";
 import {
   createOrchestrationContextSnapshot,
@@ -3989,6 +3995,78 @@ describe("mcp artifacts.*", () => {
 });
 
 describe("mcp runs.complete + completion contract", () => {
+  it("accepts a managed run's one-run capability from its MCP transport", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCR" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `ccr-${Date.now()}`,
+        name: "Runtime reporter",
+      },
+    });
+    const runtimeConnection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: AgentConnectionKind.MANAGED_RUNTIME,
+        livenessModel: AgentConnectionLiveness.HEARTBEAT,
+        instanceKey: `runtime-${Date.now()}`,
+      },
+    });
+    const mcpConnection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: AgentConnectionKind.MCP_CLIENT,
+        livenessModel: AgentConnectionLiveness.LEASE,
+        instanceKey: `mcp-${Date.now()}`,
+      },
+    });
+    const issue = await createIssue(fixture);
+    const capability = issueRunExecutionCapability();
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: runtimeConnection.id,
+        executionCapabilityHash: capability.hash,
+        externalRunId: "provider-run-1",
+        status: AgentRunStatus.ACTIVE,
+        engagementMode: EngagementMode.DISCUSS,
+      },
+    });
+    const scopedCtx = {
+      ...ctx,
+      connectionId: mcpConnection.id,
+      apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id },
+    };
+
+    await expect(
+      call("runs.complete", { runId: run.id, summary: "The merge is healthy." }, scopedCtx),
+    ).rejects.toThrow(/different execution connection/);
+    await call(
+      "runs.complete",
+      {
+        runId: run.id,
+        summary: "The merge is healthy.",
+        executionCapability: capability.raw,
+      },
+      scopedCtx,
+    );
+
+    const completed = await prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } });
+    expect(completed.status).toBe(AgentRunStatus.COMPLETED);
+    expect(completed.executionCapabilityHash).toBeNull();
+    expect(hashRunExecutionCapability(capability.raw)).toBe(capability.hash);
+    await expect(
+      prisma.comment.count({ where: { issueId: issue.id, authoringAgentId: agent.id } }),
+    ).resolves.toBe(1);
+  });
+
   it("blocks issue-state mutations from non-EXECUTE active runs but allows comments", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CC0" });
     fixtures.push(fixture);
@@ -4776,6 +4854,27 @@ describe("mcp runs.setWaiting + runs.resumeWork", () => {
         },
       }),
     ).toBe(0);
+    const request = await prisma.actionRequest.findFirstOrThrow({
+      where: { dedupeKey: `agent-run-waiting:${run.id}`, status: "OPEN" },
+    });
+    expect(request.issueId).toBe(issue.id);
+    expect(request.assignedUserId).toBe(fixture.user.id);
+
+    await call(
+      "runs.setWaiting",
+      { runId: run.id, reason: "review needed", blocking: true },
+      scopedCtx,
+    );
+    await expect(
+      prisma.actionRequest.count({
+        where: { dedupeKey: `agent-run-waiting:${run.id}`, status: "OPEN" },
+      }),
+    ).resolves.toBe(1);
+
+    await call("runs.resumeWork", { runId: run.id, currentStep: "review received" }, scopedCtx);
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Run resumed." });
   });
 
   it("setWaiting without linkedAgentId is rejected", async () => {

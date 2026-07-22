@@ -829,9 +829,12 @@ export async function linkExternalResourceToIssue(
   // Derived PR mentions must not erase the link used by future import de-dupe
   // and source-only title/status synchronization.
   if (existingLink?.kind === "SOURCE" && args.kind !== "SOURCE") return existingLink;
-  // Generic GitHub URL attachment and recovery paths use RELATES_TO. Replaying
-  // those paths must not erase a previously established native semantic link.
-  if (args.preserveExistingRelation && args.kind === "RELATES_TO" && existingLink) {
+  // RELATES_TO is an inferred/generic fallback and must never erase a stronger
+  // explicit semantic relation. This applies to webhook replays too: a PR body
+  // that no longer contains a recognizable keyword is not evidence that an
+  // operator/agent's prior IMPLEMENTS, FIXES, RELEASES, or REVIEWS link became
+  // generic. Explicit callers can still reclassify between semantic kinds.
+  if (args.kind === "RELATES_TO" && existingLink && existingLink.kind !== "RELATES_TO") {
     return existingLink;
   }
 

@@ -37,8 +37,10 @@ test.describe("Issue lifecycle operator journey", () => {
     await expect(page.getByText("Asks", { exact: true })).toBeVisible();
     await expect(page.getByText("Runtime approvals", { exact: true })).toBeVisible();
     await expect(page.getByText("Review gates", { exact: true })).toBeVisible();
-    await expect(page.getByText("Stalled runs", { exact: true })).toBeVisible();
-    await expect(page.getByText("FRG-9003", { exact: true })).toBeVisible();
+    await expect(page.getByText("Run recovery", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("link", { name: "@e2ebot FRG-9003 Running lifecycle regression tests" }),
+    ).toBeVisible();
     await expect(page.getByText("Running lifecycle regression tests").first()).toBeVisible();
     await capture(page, "01-command-center-desktop");
     await recordAccessibility(page, "01-command-center-desktop");
@@ -56,6 +58,18 @@ test.describe("Issue lifecycle operator journey", () => {
       page.getByRole("heading", { name: "Lifecycle Lab · Waiting for user reply" }),
     ).toBeVisible();
     await expect(page.getByLabel("Agent workstream")).toContainText(/Waiting on you/i);
+    await page.getByLabel("Agent workstream").getByRole("button").first().click();
+    await expect(page.getByText("Live trace", { exact: true })).toBeVisible();
+    const progressDetail = page.locator("details").filter({
+      hasText: "Forge confirmed the implementation evidence",
+    });
+    await expect(progressDetail).toBeVisible();
+    await expect(progressDetail).not.toHaveAttribute("open", "");
+    await progressDetail.locator("summary").click();
+    await expect(progressDetail).toHaveAttribute("open", "");
+    await expect(progressDetail).toContainText(
+      "Full progress detail reached its verified end marker.",
+    );
     await page.reload();
     await expect(page.getByLabel("Agent workstream")).toContainText(/Waiting on you/i);
     await capture(page, "02-waiting-issue-desktop");

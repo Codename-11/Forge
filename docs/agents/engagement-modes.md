@@ -122,12 +122,23 @@ output started when real work begins, use rolling status comments only for
 meaningful operator-facing checkpoints, call `runs.setWaiting` when blocked,
 and finish with `runs.complete`. MCP comments and status metadata do not create
 an execution record implicitly; `comments.upsertStatus` requires an active run.
+For managed runtimes, the dispatch also supplies a one-run completion
+capability; pass it only to `runs.complete` so Forge can correlate the runtime's
+MCP reporting transport without treating it as a separate execution owner.
+
+`runs.setWaiting({ blocking: true })` means a human can take a concrete action
+that unblocks the run. Forge creates one deduplicated Action Request for that
+run and resolves it automatically when work resumes or terminates. Do not park
+infrastructure, connector, or bookkeeping failures as operator decisions;
+retry or surface those as recovery failures instead.
 
 The run trace and the rolling status serve different audiences:
 
 - **Mechanical trace** — runtime lifecycle, tool starts/completions, tests, and
   other adapter events are appended automatically as `AgentRunEvent` rows.
-  Agents should not duplicate this telemetry in comments.
+  Agents should not duplicate this telemetry in comments. Bounded,
+  provider-supplied progress summaries can be expanded in Live Trace; raw
+  private reasoning is neither requested nor displayed.
 - **Semantic status** — `comments.upsertStatus` is a compact operator update at
   a phase change (for example Inspecting → Implementing → Verifying), after a
   material finding changes the plan, or before continuing a long phase. It

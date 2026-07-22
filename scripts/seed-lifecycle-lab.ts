@@ -305,6 +305,18 @@ async function main() {
     data: {
       workspaceId: workspace.id,
       runId: waitingRun.id,
+      kind: "STEP",
+      payload: {
+        thinking:
+          "Forge confirmed the implementation evidence and completed checks. The remaining decision is about presentation: optimize the summary for quick Command Center scanning, preserve the full issue-history context, or show both through progressive disclosure. Full progress detail reached its verified end marker.",
+      },
+      createdAt: ago(9),
+    },
+  });
+  await prisma.agentRunEvent.create({
+    data: {
+      workspaceId: workspace.id,
+      runId: waitingRun.id,
       kind: "BLOCKED",
       payload: { reason: "Operator decision required" },
       createdAt: ago(8),

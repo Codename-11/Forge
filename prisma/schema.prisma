@@ -3093,6 +3093,11 @@ model AgentRun {
   /// approve / stop the live run and correlate streamed `/events`.
   /// Null for webhook/completions-driven runs.
   externalRunId                String?
+  /// SHA-256 digest of the one-run capability issued to a managed runtime.
+  /// The raw capability is injected only into that dispatched turn and lets
+  /// its MCP transport report completion without being mistaken for an
+  /// unrelated client that happens to use the same Agent profile/key.
+  executionCapabilityHash      String?
   /// Effective runtime/tool policy snapshot captured at dispatch. Stored
   /// on the run so old cards remain truthful after Runtime.config changes.
   runtimePolicy                Json?

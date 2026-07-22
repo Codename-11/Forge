@@ -5,6 +5,7 @@ import { z } from "zod";
 import { agentConnectionIdSchema } from "@/server/validators";
 import {
   AgentProvider,
+  AgentConnectionKind,
   AgentRunStatus,
   AgentStatus,
   ApiKeyKind,
@@ -18,6 +19,9 @@ import {
   ConnectorDeliveryStatus,
   CycleStatus,
   EventKind,
+  ActionRequestKind,
+  ActionRequestStatus,
+  NotificationSeverity,
   ExecutionPlanStatus,
   InitiativeStatus,
   NoteStatus,
@@ -73,6 +77,7 @@ import {
 } from "@/server/services/run-budget";
 import { logger } from "@/server/logger";
 import { handoffCompletedRunToStep, maybeAutoJudge } from "@/server/services/orchestration-service";
+import { verifyRunExecutionCapability } from "@/server/services/run-execution-capability";
 import { evaluateIssueCompletionCandidate } from "@/server/services/completion-candidate";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { buildChatContextBundle } from "@/server/services/chat-context";
@@ -7139,6 +7144,14 @@ export const mcpTools = {
         .describe(
           "Optional BODY comment already posted as this run's final response. When omitted, Forge creates an agent-authored final comment from summary so every completed run closes visibly in the issue thread.",
         ),
+      executionCapability: z
+        .string()
+        .min(20)
+        .max(120)
+        .optional()
+        .describe(
+          "One-run capability supplied only in a managed-runtime dispatch. Required when that runtime reports completion through its MCP transport connection.",
+        ),
       producedArtifactIds: z.array(z.string().cuid()).max(50).optional(),
       verificationResult: z
         .array(
@@ -7176,6 +7189,7 @@ export const mcpTools = {
         runId: string;
         summary?: string;
         completionCommentId?: string;
+        executionCapability?: string;
         producedArtifactIds?: string[];
         verificationResult?: Array<{
           id?: string;
@@ -7205,6 +7219,8 @@ export const mcpTools = {
           startedAt: true,
           engagementMode: true,
           connectionId: true,
+          executionCapabilityHash: true,
+          connection: { select: { kind: true } },
           executionStepId: true,
           agent: { select: { profileKey: true, name: true } },
           issue: {
@@ -7220,7 +7236,13 @@ export const mcpTools = {
       if (run.agentId !== linkedAgentId) {
         throw new Error("AgentRun belongs to a different agent than the calling key.");
       }
-      if (ctx.connectionId && run.connectionId && ctx.connectionId !== run.connectionId) {
+      const sameConnection =
+        !ctx.connectionId || !run.connectionId || ctx.connectionId === run.connectionId;
+      const authorizedRuntimeTransport =
+        !sameConnection &&
+        run.connection?.kind === AgentConnectionKind.MANAGED_RUNTIME &&
+        verifyRunExecutionCapability(input.executionCapability, run.executionCapabilityHash);
+      if (!sameConnection && !authorizedRuntimeTransport) {
         throw new Error("AgentRun belongs to a different execution connection.");
       }
       if (run.status !== AgentRunStatus.ACTIVE && run.status !== AgentRunStatus.WAITING) {
@@ -7300,6 +7322,7 @@ export const mcpTools = {
       }
       data.completionMeta = completionMeta as Prisma.InputJsonValue;
       data.lifecycleConfidence = "CONFIRMED";
+      data.executionCapabilityHash = null;
       const completed = await db.$transaction(async (tx) => {
         const updated = await tx.agentRun.updateMany({
           where: {
@@ -7450,7 +7473,7 @@ export const mcpTools = {
         .boolean()
         .default(false)
         .describe(
-          "When true, emit AGENT_RUN_BLOCKED for operator activity and notifications. It does not wake the parked agent.",
+          "Use only when a human decision or input can unblock the run. Creates one deduplicated operator ActionRequest and emits AGENT_RUN_BLOCKED; infrastructure/lifecycle errors should remain active for retry instead.",
         ),
     }),
     async run(input: { runId: string; reason?: string; blocking: boolean }, ctx: McpContext) {
@@ -7460,7 +7483,19 @@ export const mcpTools = {
       }
       const run = await db.agentRun.findFirst({
         where: { id: input.runId, workspaceId: ctx.workspaceId },
-        select: { id: true, agentId: true, issueId: true, status: true },
+        select: {
+          id: true,
+          agentId: true,
+          issueId: true,
+          status: true,
+          issue: {
+            select: {
+              authorId: true,
+              number: true,
+              workspace: { select: { key: true } },
+            },
+          },
+        },
       });
       if (!run) throw new Error("AgentRun not found in this workspace.");
       if (run.agentId !== linkedAgentId) {
@@ -7519,6 +7554,34 @@ export const mcpTools = {
               reason: reasonLabel,
             },
           });
+          const { createActionRequest } = await import("@/server/services/action-request-service");
+          await createActionRequest(tx, {
+            workspaceId: ctx.workspaceId,
+            actorId: ctx.userId,
+            actorAgentId: linkedAgentId,
+            title: `${run.issue.workspace.key}-${run.issue.number} needs your input`,
+            body: reasonLabel,
+            severity: NotificationSeverity.WARNING,
+            kind: ActionRequestKind.FREE_FORM,
+            assignedUserId: run.issue.authorId,
+            sourceType: "agent-run",
+            sourceId: run.id,
+            dedupeKey: `agent-run-waiting:${run.id}`,
+            issueId: run.issueId,
+          });
+        } else {
+          await tx.actionRequest.updateMany({
+            where: {
+              workspaceId: ctx.workspaceId,
+              status: ActionRequestStatus.OPEN,
+              dedupeKey: `agent-run-waiting:${run.id}`,
+            },
+            data: {
+              status: ActionRequestStatus.RESOLVED,
+              resolvedAt: new Date(),
+              resolution: "The run is no longer waiting on operator input.",
+            },
+          });
         }
         return next;
       });
@@ -7561,22 +7624,37 @@ export const mcpTools = {
       // Re-arm run-budget enforcement: clear any breach marker so a
       // budget-paused run can't resume uncapped (no-op for normal waits).
       const rearmedMeta = clearBudgetMarkers(run.completionMeta);
-      return db.agentRun.update({
-        where: { id: run.id },
-        data: {
-          status: AgentRunStatus.ACTIVE,
-          lastEventAt: new Date(),
-          controlState: "NONE",
-          controlRequestedAt: null,
-          ...(rearmedMeta !== undefined ? { completionMeta: rearmedMeta } : {}),
-          ...(input.currentStep !== undefined ? { currentStep: input.currentStep } : {}),
-        },
-        select: {
-          id: true,
-          status: true,
-          currentStep: true,
-          lastEventAt: true,
-        },
+      return db.$transaction(async (tx) => {
+        const updated = await tx.agentRun.update({
+          where: { id: run.id },
+          data: {
+            status: AgentRunStatus.ACTIVE,
+            lastEventAt: new Date(),
+            controlState: "NONE",
+            controlRequestedAt: null,
+            ...(rearmedMeta !== undefined ? { completionMeta: rearmedMeta } : {}),
+            ...(input.currentStep !== undefined ? { currentStep: input.currentStep } : {}),
+          },
+          select: {
+            id: true,
+            status: true,
+            currentStep: true,
+            lastEventAt: true,
+          },
+        });
+        await tx.actionRequest.updateMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            status: ActionRequestStatus.OPEN,
+            dedupeKey: `agent-run-waiting:${run.id}`,
+          },
+          data: {
+            status: ActionRequestStatus.RESOLVED,
+            resolvedAt: new Date(),
+            resolution: "Run resumed.",
+          },
+        });
+        return updated;
       });
     },
   },

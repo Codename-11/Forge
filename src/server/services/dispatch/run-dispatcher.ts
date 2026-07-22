@@ -30,6 +30,7 @@ import {
 import { markExecutionStepRunning } from "@/server/services/execution-step-runtime";
 import { upsertAgentConnection } from "@/server/services/agent-connection";
 import { createActionRequest } from "@/server/services/action-request-service";
+import { issueRunExecutionCapability } from "@/server/services/run-execution-capability";
 import {
   captureRunApproval,
   resolveRunApproval,
@@ -101,6 +102,7 @@ function issueMessage(
   },
   engagementInstruction?: string | null,
   runId?: string | null,
+  executionCapability?: string | null,
 ): string {
   const body = issue.description?.trim();
   // Per-project repo hint: the runtime materializes each project's repo into
@@ -115,10 +117,23 @@ function issueMessage(
     `Issue id: ${issue.id}.\n` +
     repoLine +
     (runId ? `Current AgentRun id: ${runId}.\n` : "") +
+    (executionCapability
+      ? `Run execution capability: ${executionCapability}. Pass it only as ` +
+        `executionCapability to runs.complete; never publish it in a comment or log.\n`
+      : "") +
     "\n" +
     (body ? `${body}\n\n` : "") +
     `Handle the issue according to the engagement mode and Forge run protocol above.`
   );
+}
+
+async function prepareRunExecutionCapability(runId: string): Promise<string> {
+  const capability = issueRunExecutionCapability();
+  await db.agentRun.update({
+    where: { id: runId },
+    data: { executionCapabilityHash: capability.hash },
+  });
+  return capability.raw;
 }
 
 /** Additional event-specific instructions that are not part of the issue row. */
@@ -596,6 +611,7 @@ async function startNewRuns(): Promise<number> {
       });
 
     try {
+      const executionCapability = already ? await prepareRunExecutionCapability(already.id) : null;
       const orchestrationContext = await loadRunOrchestrationContext(db, {
         workspaceId: evt.workspaceId,
         issueId: issue.id,
@@ -616,6 +632,7 @@ async function startNewRuns(): Promise<number> {
             },
             instruction,
             already?.id ?? null,
+            executionCapability,
           ) +
           formatOrchestrationContextForPrompt(orchestrationContext) +
           runtimePolicyGrantContext(runtimePolicy),
@@ -854,6 +871,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
       });
 
     try {
+      const executionCapability = await prepareRunExecutionCapability(run.id);
       const triggerPayload = triggerEvent?.payload as Record<string, unknown> | null;
       const orchestrationContext = await loadRunOrchestrationContext(db, {
         workspaceId: run.workspaceId,
@@ -873,6 +891,7 @@ async function startUnbackedAgentRuns(limit: number): Promise<number> {
             },
             instruction,
             run.id,
+            executionCapability,
           ) +
           formatOrchestrationContextForPrompt(orchestrationContext) +
           operatorContext +
@@ -1117,6 +1136,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
       executionStepId: run.executionStepId,
       snapshot: run.orchestrationContextSnapshot,
     });
+    const executionCapability = await prepareRunExecutionCapability(run.id);
     const message =
       issueMessage(
         {
@@ -1127,6 +1147,7 @@ async function resumeWaitingRuns(limit: number): Promise<number> {
         },
         instruction,
         run.id,
+        executionCapability,
       ) +
       formatOrchestrationContextForPrompt(orchestrationContext) +
       `\n\nYou paused this run earlier` +
@@ -1575,7 +1596,9 @@ async function subscribeRun(run: {
                   ...base,
                   kind: "STEP",
                   currentStep: "thinking",
-                  payload: { thinking: e.text.slice(0, 280) },
+                  // Provider-supplied progress summaries are useful evidence,
+                  // but remain bounded and are never copied into comments.
+                  payload: { thinking: e.text.slice(0, 4_000) },
                 }),
               ),
               run.id,

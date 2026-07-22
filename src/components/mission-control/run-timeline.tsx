@@ -10,6 +10,7 @@ import {
   X as XIcon,
   Hourglass,
   Activity,
+  ChevronDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -155,7 +156,7 @@ function eventTitle(evt: RunTimelineEvent): string {
     }
     return "tool started";
   }
-  if (evt.kind === "STEP" && typeof payload?.thinking === "string") return "thinking";
+  if (evt.kind === "STEP" && typeof payload?.thinking === "string") return "progress detail";
   if (evt.kind === "STEP" && typeof payload?.currentStep === "string") {
     return humanizeEventName(payload.currentStep);
   }
@@ -213,7 +214,21 @@ export function RunTimeline({
                   {relativeTime(evt.createdAt)}
                 </span>
               </div>
-              {preview && <div className="text-meta truncate text-foreground/70">{preview}</div>}
+              {preview && preview.length > 120 ? (
+                <details className="group mt-0.5">
+                  <summary className="focus-ring flex cursor-pointer list-none items-start gap-1 rounded-sm text-foreground/70 marker:hidden">
+                    <span className="text-meta line-clamp-2 min-w-0 flex-1 break-words">
+                      {preview}
+                    </span>
+                    <ChevronDown className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" />
+                  </summary>
+                  <div className="text-meta mt-1 whitespace-pre-wrap break-words rounded-md border border-border/60 bg-background/50 px-2 py-1.5 text-foreground/80">
+                    {preview}
+                  </div>
+                </details>
+              ) : preview ? (
+                <div className="text-meta break-words text-foreground/70">{preview}</div>
+              ) : null}
             </div>
           </li>
         );
