@@ -169,7 +169,7 @@ describe("native GitHub relation persistence", () => {
           },
         },
       }),
-    ).resolves.toMatchObject({ kind: "RELATES_TO" });
+    ).resolves.toMatchObject({ kind: "FIXES" });
   });
 
   it("preserves imported SOURCE identity when derived relations are replayed", async () => {

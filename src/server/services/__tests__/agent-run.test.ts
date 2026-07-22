@@ -407,6 +407,42 @@ describe("agent-run lifecycle", () => {
     expect(await prisma.agentRunEvent.count({ where: { runId: run.id } })).toBe(eventCount);
   });
 
+  it("keeps the operator-facing waiting reason when buffered progress arrives", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "ARP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await createAgent(fixture.workspace.id, "arp-a1");
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        currentStep: "Waiting for the operator to choose a release window",
+      },
+    });
+
+    await prisma.$transaction((tx) =>
+      appendRunEvent(tx, {
+        runId: run.id,
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        kind: "STEP",
+        currentStep: "thinking",
+        payload: { thinking: "Buffered progress detail after the run parked." },
+      }),
+    );
+
+    await expect(
+      prisma.agentRun.findUniqueOrThrow({ where: { id: run.id } }),
+    ).resolves.toMatchObject({
+      currentStep: "Waiting for the operator to choose a release window",
+    });
+    await expect(prisma.agentRunEvent.count({ where: { runId: run.id } })).resolves.toBe(1);
+  });
+
   it("records one actionable approval lifecycle across competing producers", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "ARA" });
     fixtures.push(fixture);

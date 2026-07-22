@@ -6,7 +6,7 @@ import type {
   RunEngine,
   LivenessConfidence,
 } from "@prisma/client";
-import { AgentRunStatus, EventKind, Prisma } from "@prisma/client";
+import { ActionRequestStatus, AgentRunStatus, EventKind, Prisma } from "@prisma/client";
 import { recordChange } from "@/server/audit";
 import { publish } from "@/server/realtime";
 import { engagementSourceToEnum, type EngagementSource } from "@/server/services/engagement-mode";
@@ -455,10 +455,20 @@ export async function appendRunEvent(
     },
     data: {
       lastEventAt: now,
-      ...(params.currentStep !== undefined ? { currentStep: params.currentStep } : {}),
     },
   });
   if (live.count === 0 && !params.allowTerminal) return;
+
+  // Once a run is deliberately parked, its reason is the operator-facing
+  // truth. Buffered provider progress may still arrive and belongs in the
+  // trace, but it must not replace that reason with a generic "thinking" or
+  // tool label.
+  if (live.count > 0 && params.currentStep !== undefined) {
+    await tx.agentRun.updateMany({
+      where: { id: params.runId, status: AgentRunStatus.ACTIVE },
+      data: { currentStep: params.currentStep },
+    });
+  }
 
   if (live.count === 0) {
     const terminal = await tx.agentRun.findFirst({
@@ -567,6 +577,7 @@ export async function finishRun(
       controlState: "NONE",
       controlRequestedAt: null,
       controlRequestedById: null,
+      executionCapabilityHash: null,
     },
   });
   if (claimed.count !== 1) {
@@ -618,6 +629,24 @@ export async function finishRun(
   const finished = await tx.agentRun.update({
     where: { id: params.runId },
     data: { completionMeta: completionMeta as Prisma.InputJsonValue },
+  });
+
+  await tx.actionRequest.updateMany({
+    where: {
+      workspaceId: params.workspaceId,
+      status: ActionRequestStatus.OPEN,
+      dedupeKey: `agent-run-waiting:${params.runId}`,
+    },
+    data: {
+      status: ActionRequestStatus.RESOLVED,
+      resolvedAt: now,
+      resolution:
+        params.status === "COMPLETED"
+          ? "Run completed."
+          : params.status === "ABANDONED"
+            ? "Run abandoned."
+            : "Run stalled and moved to recovery.",
+    },
   });
 
   await tx.agentRunEvent.create({

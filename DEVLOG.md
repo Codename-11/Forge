@@ -14234,3 +14234,31 @@ named-scenario skip. On Windows, `pnpm ci:local` completed through Vitest but
 could not invoke Unix `flock` through `cmd.exe`; its exact locked payload was
 therefore run directly through Git-for-Windows Bash after the repository's port
 ownership guard, matching the documented Windows validation path.
+
+## 2026-07-22 — Truthful runtime replies, waits, and Delivery evidence (AXI-141)
+
+Reproduced AXI-129's contradictory state against production data: the Hermes
+Relay implementation issue was Done and PR #238 was merged, but an inferred
+GitHub webhook replay had downgraded Victor's explicit `IMPLEMENTS` relation to
+`RELATES_TO`. The detached Delivery session then remained in progress. A new
+managed-runtime discussion turn produced an answer through Forge MCP, but
+`runs.complete` rejected the MCP transport as a different execution connection;
+the fallback wait created activity without an Action Request or durable reply,
+and a buffered progress event overwrote the useful waiting reason.
+
+Managed runtime dispatch now mints a random one-run completion capability,
+stores only its SHA-256 digest, and includes the raw capability only in the
+dispatched turn. `runs.complete` accepts a different MCP transport connection
+only when that capability verifies against the owning managed-runtime run, then
+clears it. Generic GitHub inference can no longer downgrade an established
+semantic relation. Blocking waits now create one deduplicated issue-scoped
+Action Request and automatically resolve it on resume or terminal completion.
+Buffered trace events remain visible without replacing a parked run's reason.
+
+Live Trace keeps its compact default but stores bounded provider progress
+summaries up to 4,000 characters and makes long entries individually
+expandable. The UI labels these as progress detail rather than encouraging raw
+reasoning output. Added integration coverage for delegated runtime completion,
+durable final comments, wait-request deduplication/resolution, waiting-reason
+preservation, and webhook relation precedence, plus lifecycle Playwright
+coverage for collapsed/expanded progress detail.

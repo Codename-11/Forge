@@ -29,6 +29,14 @@ connection is primary; additional connections must explicitly join as a
 contributor or reviewer, or receive an audited handoff before changing the
 branch or advancing delivery state.
 
+A managed runtime can use MCP as its reporting transport without becoming a
+second delivery owner. Forge issues a random, run-scoped execution capability
+to the dispatched turn and stores only its SHA-256 digest. The runtime passes
+that capability to `runs.complete`; Forge accepts it only for the matching
+managed-runtime run and clears it at terminal completion. A shared Agent profile
+or API key is not sufficient proof, and the capability must never be copied to
+comments, logs, or another run.
+
 Agent connection ids are opaque stable identifiers. Callers and typed action
 payloads must not assume they are Prisma CUIDs: historical managed-runtime and
 webhook connections used deterministic `ac_*` ids. Data migrations may
@@ -80,6 +88,10 @@ integration, scheduled stabilization, or an upstream convention.
   for delivered behavior or `FIXES` for closing/fixing semantics. Bare issue
   references are `RELATES_TO`; release assembly PRs use `RELEASES` to mean the
   release contains the implementation. Never use a generic link attachment.
+- Provider inference may establish a generic `RELATES_TO` link, but it never
+  downgrades an explicit `IMPLEMENTS`, `FIXES`, `RELEASES`, `REVIEWS`, or
+  `SOURCE` relation. Reclassifying between semantic kinds remains an explicit
+  operator/agent action.
 - GitHub owns PR state, reviews, checks, mergeability, and merge state. Forge
   mirrors those facts into the delivery lifecycle.
 - Check aggregation counts suites that contain executable check runs. GitHub
