@@ -9,6 +9,18 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-22] — v0.29.5 · Truthful agent handoff
+
+### Changed
+
+- **Waiting work creates a real operator decision.** A blocking run opens one deduplicated Action Request, keeps its human-readable waiting reason stable, and resolves the request automatically when work resumes or terminates.
+- **Long live progress remains compact and inspectable.** Workstream traces show bounded progress summaries collapsed by default with an explicit control to reveal the full recorded detail.
+
+### Fixed
+
+- **Managed runtimes can complete through their MCP transport without changing execution identity.** A one-run capability correlates the dispatched runtime with its completion report while shared agent credentials remain insufficient proof.
+- **GitHub webhooks preserve explicit delivery meaning.** Generic relation inference can no longer downgrade native `IMPLEMENTS`, `FIXES`, `RELEASES`, `REVIEWS`, or `SOURCE` links.
+
 ## [2026-07-20] — v0.29.4 · Balanced operator workspace
 
 ### Changed

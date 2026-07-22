@@ -2,6 +2,15 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-22 — v0.29.5 release preparation
+
+Prepared the serialized patch release for AXI-141 and merged PR #83. Release
+metadata covers managed-runtime completion over MCP without identity drift,
+actionable blocking waits, stable native GitHub relation precedence, and
+expandable Live Trace progress. The immutable tag, production deployment, and
+live verification remain separate delivery facts until their respective
+release steps complete.
+
 ## 2026-07-20 — v0.29.4 release preparation
 
 Prepared the serialized patch release for AXI-139 and merged PR #81. Release
