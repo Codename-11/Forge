@@ -1,6 +1,6 @@
 {
   "name": "forge",
-  "version": "0.29.5",
+  "version": "0.29.6",
   "private": true,
   "description": "Forge — a fast, minimalist, keyboard-driven project management platform with pluggable agents.",
   "license": "MIT",
