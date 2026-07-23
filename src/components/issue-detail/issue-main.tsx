@@ -3,7 +3,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { ArrowDown, ChevronUp, MessageCircleReply, Sparkles, Target, Workflow } from "lucide-react";
+import {
+  ArrowDown,
+  ChevronUp,
+  Loader2,
+  MessageCircleReply,
+  Send,
+  Sparkles,
+  Target,
+  Workflow,
+} from "lucide-react";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { Avatar } from "@/components/ui/avatar";
 import { AgentAvatar, type AgentAvatarIdentity } from "@/components/agents/agent-avatar";
@@ -366,9 +375,19 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
         Needs your decision · {requests.length}
       </div>
       {requests.map((request) =>
-        request.kind === "FREE_FORM" || request.kind === "DELIVERY_CONNECTION_CONFLICT" ? (
+        request.kind === "FREE_FORM" ? (
+          <IssueFreeFormRequest
+            key={request.id}
+            request={request}
+            issueId={issueId}
+            canResolve={canResolve}
+          />
+        ) : request.kind === "DELIVERY_CONNECTION_CONFLICT" ? (
           <div key={request.id} className="rounded-md border border-warning/30 bg-card/50 p-2">
-            <div className="text-sm font-medium">{request.title}</div>
+            <div className="text-meta uppercase tracking-wide text-warning">
+              Delivery decision required
+            </div>
+            <div className="mt-1 text-sm font-medium">{request.title}</div>
             {request.body ? (
               <p className="text-meta mt-1 whitespace-pre-wrap text-muted-foreground">
                 {request.body}
@@ -378,9 +397,7 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
               href={`/w/${ws.slug}/command-center`}
               className="text-meta mt-2 inline-flex text-ember hover:underline"
             >
-              {request.kind === "DELIVERY_CONNECTION_CONFLICT"
-                ? "Choose a delivery action in Command Center"
-                : "Answer in Command Center"}
+              Review delivery options in Command Center
             </Link>
           </div>
         ) : (
@@ -393,6 +410,127 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
         ),
       )}
     </section>
+  );
+}
+
+function IssueFreeFormRequest({
+  request,
+  issueId,
+  canResolve,
+}: {
+  request: { id: string; title: string; body: string | null };
+  issueId: string;
+  canResolve: boolean;
+}) {
+  const ws = useWorkspace();
+  const utils = trpc.useUtils();
+  const [replying, setReplying] = useState(false);
+  const [answer, setAnswer] = useState("");
+  const visibleCanResolve = canResolve || ws.role === "OWNER" || ws.role === "ADMIN";
+  const settle = () => {
+    void utils.actionRequest.list.invalidate();
+    void utils.issue.byId.invalidate({ id: issueId });
+    void utils.issue.activity.invalidate({ issueId });
+    void utils.comment.listForIssue.invalidate({ issueId });
+    void utils.commandCenter.summary.invalidate();
+    void utils.commandCenter.decisionsCount.invalidate();
+  };
+  const respond = trpc.actionRequest.accept.useMutation({
+    onSuccess: () => {
+      settle();
+      toast.success("Response sent on this issue.");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const decline = trpc.actionRequest.decline.useMutation({
+    onSuccess: () => {
+      settle();
+      toast.success("Request declined.");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const pending = respond.isPending || decline.isPending;
+
+  return (
+    <div className="rounded-md border border-warning/30 bg-card/50 p-2.5">
+      <div className="text-meta uppercase tracking-wide text-warning">Response requested</div>
+      <div className="mt-1 text-sm font-medium">{request.title}</div>
+      {request.body ? (
+        <p className="text-meta mt-1 whitespace-pre-wrap text-muted-foreground">{request.body}</p>
+      ) : null}
+      {visibleCanResolve ? (
+        replying ? (
+          <form
+            className="mt-2 space-y-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const resolution = answer.trim();
+              if (!resolution) {
+                toast.error("Write a response first.");
+                return;
+              }
+              respond.mutate({ id: request.id, resolution });
+            }}
+          >
+            <label className="sr-only" htmlFor={`action-request-reply-${request.id}`}>
+              Response
+            </label>
+            <textarea
+              id={`action-request-reply-${request.id}`}
+              value={answer}
+              onChange={(event) => setAnswer(event.target.value)}
+              rows={3}
+              autoFocus
+              disabled={pending}
+              placeholder="Answer with the context the agent needs…"
+              className="focus-ring w-full resize-y rounded-md border border-border bg-background px-2.5 py-2 text-sm placeholder:text-muted-foreground"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button type="submit" size="sm" variant="ember" disabled={pending || !answer.trim()}>
+                {respond.isPending ? (
+                  <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="mr-1.5 h-3.5 w-3.5" />
+                )}
+                Send response
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                disabled={pending}
+                onClick={() => {
+                  setReplying(false);
+                  setAnswer("");
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <Button type="button" size="sm" variant="ember" onClick={() => setReplying(true)}>
+              Respond
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={pending}
+              onClick={() => decline.mutate({ id: request.id })}
+            >
+              {decline.isPending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              Decline
+            </Button>
+          </div>
+        )
+      ) : (
+        <p className="text-meta mt-2 text-muted-foreground">
+          An issue assignee, watcher, or workspace admin can respond.
+        </p>
+      )}
+    </div>
   );
 }
 

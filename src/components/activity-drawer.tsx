@@ -1756,12 +1756,14 @@ function MinePanel({
                     {issue ? `${issue.workspace.key}-${issue.number}` : "Ask"}
                   </span>
                 }
-                title={request.title}
-                meta={
-                  request.requestedByAgent
-                    ? `@${request.requestedByAgent.profileKey} · ${relativeTime(request.createdAt)}`
-                    : relativeTime(request.createdAt)
-                }
+                title={issue?.title ?? request.title}
+                meta={[
+                  issue ? request.title : null,
+                  request.requestedByAgent ? `@${request.requestedByAgent.profileKey}` : null,
+                  relativeTime(request.createdAt),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
               />
             );
           })}

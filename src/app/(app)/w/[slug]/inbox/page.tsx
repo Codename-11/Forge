@@ -30,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Badge, Card, EmptyState, Kbd, MOTION, Section, SkeletonList } from "@/components/ui";
 import { Picker } from "@/components/ui/modal";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
+import { IssueReference } from "@/components/issue-reference";
 import { presenceAvailability } from "@/lib/transport-display";
 import { BulkBar, type BulkBarAction } from "@/components/bulk-bar";
 import { BulkProjectPicker, BulkCyclePicker } from "@/components/bulk-move-pickers";
@@ -1263,16 +1264,18 @@ function NeedsInputSection({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                  <Link href={href} className="text-id shrink-0 hover:underline">
-                    {issue ? formatIssueId(issue.workspace.key, issue.number) : "Workspace ask"}
-                  </Link>
-                  <span className="min-w-0 flex-1 basis-full truncate font-medium sm:basis-auto">
-                    {request.title}
-                  </span>
+                  {issue ? (
+                    <IssueReference issue={issue} href={href} className="max-w-full" />
+                  ) : (
+                    <Link href={href} className="text-meta shrink-0 hover:underline">
+                      Workspace ask
+                    </Link>
+                  )}
                   {request.issueOpenCount > 1 && (
                     <Badge>+{request.issueOpenCount - 1} more</Badge>
                   )}
                 </div>
+                <div className="mt-0.5 truncate font-medium">{request.title}</div>
                 {request.body && (
                   <div className="mt-0.5 line-clamp-2 text-muted-foreground">{request.body}</div>
                 )}
@@ -1297,15 +1300,11 @@ function NeedsInputSection({
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-                <Link
+                <IssueReference
+                  issue={row.issue}
                   href={`/w/${slug}/issues/${row.issue.id}`}
-                  className="text-id shrink-0 hover:underline"
-                >
-                  {formatIssueId(row.issue.workspace.key, row.issue.number)}
-                </Link>
-                <span className="min-w-0 flex-1 basis-full truncate sm:basis-auto">
-                  {row.issue.title}
-                </span>
+                  className="max-w-full flex-1"
+                />
                 <span
                   className="text-id font-mono text-muted-foreground"
                   title={row.lastComment.author.name}
