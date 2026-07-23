@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-22 — v0.29.6 release preparation
+
+Prepared the serialized patch release for AXI-143 after implementation PR #85
+passed exact-head GitHub CI and merged to `main`. Release metadata covers
+issue-local action responses, human-readable issue context across operational
+queues, and the exact-head CI release policy. Tagging, production deployment,
+and live verification remain distinct delivery steps.
+
 ## 2026-07-22 — v0.29.5 release preparation
 
 Prepared the serialized patch release for AXI-141 and merged PR #83. Release

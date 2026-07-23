@@ -9,6 +9,14 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-22] — v0.29.6 · Actionable issue context
+
+### Changed
+
+- **Issue attention is actionable where work is discussed.** Free-form agent requests can be answered directly on the issue, while complex delivery conflicts retain an explicit path to their richer Command Center workflow.
+- **Operational queues identify work in human terms.** Dashboard, Inbox, Activity, active-run, recovery, and timer surfaces pair stable issue identifiers with titles instead of requiring operators to remember numbers.
+- **Release validation uses the exact code being shipped.** GitHub CI on the current PR head is the normal release authority; the complete local Docker and Playwright matrix is reserved for CI outages, diagnosis, or environment-sensitive evidence.
+
 ## [2026-07-22] — v0.29.5 · Truthful agent handoff
 
 ### Changed
