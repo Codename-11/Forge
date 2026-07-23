@@ -3,6 +3,7 @@ import Link from "next/link";
 import { ArrowRight, AtSign, Inbox, Shield } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { IssueReference } from "@/components/issue-reference";
 import { trpc } from "@/lib/trpc";
 
 /**
@@ -48,7 +49,12 @@ export function NeedsYouTile({ slug }: { slug: string }) {
         title: string;
         handle: string | null;
         avatar: string | null;
-        issueLabel: string | null;
+        issue: {
+          id: string;
+          number: number;
+          title: string;
+          workspace: { key: string; slug: string };
+        } | null;
         completionIntent: "COMPLETE" | "RECOVER" | null;
       }
     | {
@@ -67,7 +73,7 @@ export function NeedsYouTile({ slug }: { slug: string }) {
       title: r.title,
       handle: r.requestedByAgent?.profileKey ?? null,
       avatar: r.requestedByAgent?.avatar ?? null,
-      issueLabel: r.issue ? `${r.issue.workspace.key}-${r.issue.number}` : null,
+      issue: r.issue,
       completionIntent: readCompletionIntent(r.payload),
     });
   }
@@ -130,10 +136,17 @@ export function NeedsYouTile({ slug }: { slug: string }) {
                   {!card.completionIntent && "asks: "}
                   <span className="text-muted-foreground">&ldquo;{card.title}&rdquo;</span>
                 </div>
-                <div className="text-meta mt-0.5 text-muted-foreground">
-                  {card.issueLabel ? <span className="text-id">{card.issueLabel}</span> : null}
-                  {card.issueLabel ? " · " : ""}action request
-                </div>
+                {card.issue ? (
+                  <IssueReference
+                    issue={card.issue}
+                    href={`/w/${card.issue.workspace.slug}/i/${card.issue.workspace.key}-${card.issue.number}`}
+                    className="text-meta mt-1 max-w-full"
+                  />
+                ) : (
+                  <div className="text-meta mt-0.5 text-muted-foreground">
+                    Workspace action request
+                  </div>
+                )}
               </div>
               <Link href={commandCenterHref} className="ml-auto shrink-0 sm:ml-0">
                 <Button variant="ember" size="sm">

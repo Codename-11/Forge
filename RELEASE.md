@@ -56,13 +56,21 @@ Forge's explicit branch contract:
 
 ## Release Process
 
-Use the fast quality gate while iterating:
+Use the fast quality gate while iterating and before pushing a release candidate:
 
 ```bash
 pnpm ci:local:quality
 ```
 
-Before declaring a PR release-ready, run the complete local gate once:
+The required release gate is GitHub CI on the exact PR head. Its lint,
+typecheck, unit/integration, build, and Playwright jobs must finish successfully
+before merge. After any new commit, wait for CI to rerun against that new SHA;
+results from an earlier head do not qualify the release.
+
+Do not routinely duplicate the complete CI matrix locally. Run the complete
+local gate when GitHub Actions is unavailable, when diagnosing a CI failure, or
+when a database, migration, browser, concurrency, or environment-sensitive
+change warrants local integration evidence:
 
 ```bash
 pnpm ci:local
@@ -74,7 +82,8 @@ the Prisma client, and runs lint, typecheck, and Vitest once. It then serializes
 Playwright behind a portable machine-local lock and selects an available port.
 `pnpm ci:local:e2e` runs only the E2E phase; add `-- --reuse-e2e-build` only when
 the existing production build is known to match the current source. These
-local commands complement, but do not replace, CI on the exact PR head.
+local commands provide fast feedback or supplemental evidence; they never
+replace exact-head CI when GitHub Actions is available.
 
 ### Authorized single-PR patch releases
 
@@ -101,10 +110,10 @@ an ordinary feature PR.
   notes, and merges the release commit. Feature PRs must not race independent
   version bumps or tags.
 
-> CI note: GitHub-hosted Actions require billing to be enabled. If Actions are
-> unavailable, gate the release on the equivalent local run
-> (`pnpm lint && pnpm typecheck && pnpm test` + `pnpm test:e2e` against the
-> `docker/docker-compose.yml` stack) and record that in the release notes.
+> CI outage fallback: if GitHub Actions is unavailable, gate the release on
+> `pnpm ci:local` against the guarded local service stack and record the exact
+> command, commit SHA, result, and reason for using the fallback in the release
+> notes. A local result is not a substitute merely because CI is slow or queued.
 
 ### 2. Tag the release
 

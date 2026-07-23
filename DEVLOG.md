@@ -11,6 +11,25 @@ expandable Live Trace progress. The immutable tag, production deployment, and
 live verification remain separate delivery facts until their respective
 release steps complete.
 
+## 2026-07-22 — AXI-143 issue-local attention and human-readable references
+
+Made issue-bound free-form action requests directly answerable from the issue
+detail instead of forcing an operator through Command Center. Delivery
+connection conflicts retain their richer Command Center workflow and now use
+an explicit fallback label on the issue.
+
+Added a shared issue-reference treatment that pairs the stable identifier with
+the issue title. Applied it across dashboard attention, Inbox asks and waiting
+items, Activity drawer asks, active runs, failed-run recovery, and running
+timers so operational queues provide meaning without requiring operators to
+memorize issue numbers.
+
+Updated the release gate policy to use exact-head GitHub CI as the normal
+release authority. Fast local checks remain the pre-push feedback loop; the
+complete Docker and Playwright gate is now supplemental evidence for CI
+outages, failure diagnosis, or environment-sensitive changes instead of a
+routine duplicate of the hosted matrix.
+
 ## 2026-07-20 — v0.29.4 release preparation
 
 Prepared the serialized patch release for AXI-139 and merged PR #81. Release

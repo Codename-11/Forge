@@ -42,6 +42,7 @@ import {
 } from "@/components/action-requests/attention-request-model";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
+import { IssueReference } from "@/components/issue-reference";
 import { trpc } from "@/lib/trpc";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -429,9 +430,10 @@ export default function CommandCenterPage() {
                         <Bot className="h-3 w-3 text-ember" />
                         <span className="text-sm font-medium">@{row.agent.profileKey}</span>
                         <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                        <span className="min-w-0 truncate text-sm text-muted-foreground">
-                          {row.issue.workspace.key}-{row.issue.number}
-                        </span>
+                        <IssueReference
+                          issue={row.issue}
+                          className="min-w-0 flex-1 text-sm text-muted-foreground"
+                        />
                       </div>
                       {row.currentStep ? (
                         <span className="text-meta text-muted-foreground">{row.currentStep}</span>
@@ -477,9 +479,10 @@ export default function CommandCenterPage() {
                       href={`/w/${ws.slug}/i/${data.runningTimer.issue.workspace.key}-${data.runningTimer.issue.number}`}
                       className="flex flex-col gap-1 rounded-md border border-ember/40 bg-ember/5 p-2 hover:border-ember"
                     >
-                      <span className="text-sm font-medium">
-                        {data.runningTimer.issue.workspace.key}-{data.runningTimer.issue.number}
-                      </span>
+                      <IssueReference
+                        issue={data.runningTimer.issue}
+                        className="max-w-full text-sm font-medium"
+                      />
                       <span className="text-meta text-muted-foreground">
                         Started {new Date(data.runningTimer.startedAt).toLocaleTimeString()}
                       </span>
@@ -1679,12 +1682,11 @@ function RunFailureCard({
       <div className="flex gap-2 rounded-md border border-warning/40 bg-warning/5 p-2 hover:border-warning">
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-            <Link
+            <IssueReference
+              issue={run.issue}
               href={`/w/${slug}/issues/${run.issue.id}`}
-              className="text-sm font-medium hover:underline"
-            >
-              {run.issue.workspace.key}-{run.issue.number}
-            </Link>
+              className="max-w-full text-sm font-medium"
+            />
             <span className={cn("rounded px-1 py-0.5 text-[10px] uppercase", presentation.tone)}>
               {presentation.badge}
             </span>
