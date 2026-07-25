@@ -156,6 +156,80 @@ describe("completion candidate policy", () => {
     ).toBe(2);
   });
 
+  it("supersedes MCP-quiet recovery with ready evidence without ignoring real decisions", async () => {
+    const { fixture, prisma } = await setup();
+    const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const quiet = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        title: "MCP status is unconfirmed",
+        status: ActionRequestStatus.OPEN,
+        kind: "FREE_FORM",
+        sourceType: "work-session",
+        sourceId: "session-1",
+        dedupeKey: "work-session-mcp-quiet:session-1",
+      },
+    });
+
+    const ready = await evaluateIssueCompletionCandidate(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      actorId: fixture.user.id,
+      sourceType: "agent-run",
+      sourceId: "run-1",
+      sourceLabel: "@codex",
+    });
+
+    expect(ready.outcome).toBe("RECOMMENDED");
+    const readyRequest = await prisma.actionRequest.findUniqueOrThrow({
+      where: { id: "requestId" in ready ? ready.requestId : "" },
+    });
+    expect(readyRequest.payload).toMatchObject({
+      assessment: {
+        state: "READY",
+        facts: expect.arrayContaining([
+          expect.objectContaining({ key: "decisions", status: "PASS" }),
+        ]),
+      },
+    });
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: quiet.id } }),
+    ).resolves.toMatchObject({
+      status: "DISMISSED",
+      resolution: "Completion evidence confirms there is no active work to recover.",
+    });
+
+    await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        title: "Operator decision required",
+        status: ActionRequestStatus.OPEN,
+        kind: "FREE_FORM",
+      },
+    });
+    await evaluateIssueCompletionCandidate(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      actorId: fixture.user.id,
+      sourceType: "agent-run",
+      sourceId: "run-2",
+      sourceLabel: "@codex",
+    });
+    const blocked = await prisma.actionRequest.findUniqueOrThrow({
+      where: { id: readyRequest.id },
+    });
+    expect(blocked.payload).toMatchObject({
+      assessment: {
+        state: "BLOCKED",
+        facts: expect.arrayContaining([
+          expect.objectContaining({ key: "decisions", status: "FAIL" }),
+        ]),
+      },
+    });
+  });
+
   it("automatically completes only when the shared safety gate is clear", async () => {
     const { fixture, prisma, done } = await setup(CompletionAutomation.AUTO_WHEN_SAFE);
     const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });

@@ -108,7 +108,9 @@ async function dismissOpenRequests(
   params: {
     workspaceId: string;
     actorId: string | null;
+    issueId?: string;
     dedupeKey?: string;
+    dedupeKeyPrefix?: string;
     sourceType?: string;
     sourceId?: string;
     resolution: string;
@@ -118,7 +120,9 @@ async function dismissOpenRequests(
     where: {
       workspaceId: params.workspaceId,
       status: ActionRequestStatus.OPEN,
+      ...(params.issueId ? { issueId: params.issueId } : {}),
       ...(params.dedupeKey ? { dedupeKey: params.dedupeKey } : {}),
+      ...(params.dedupeKeyPrefix ? { dedupeKey: { startsWith: params.dedupeKeyPrefix } } : {}),
       ...(params.sourceType ? { sourceType: params.sourceType } : {}),
       ...(params.sourceId ? { sourceId: params.sourceId } : {}),
     },
@@ -201,27 +205,40 @@ async function completionContext(db: PrismaClient, workspaceId: string, issueId:
     ...issue.executionPlans.map(({ id: targetId }) => ({ targetType: "execution-plan", targetId })),
     ...issue.executionSteps.map(({ id: targetId }) => ({ targetType: "execution-step", targetId })),
   ];
-  const [pendingGates, otherRequests, blockingRelations] = await Promise.all([
-    db.reviewGate.count({
-      where: {
-        workspaceId,
-        status: "PENDING",
-        OR: gateTargets,
-      },
-    }),
-    db.actionRequest.count({
-      where: {
-        workspaceId,
-        issueId,
-        status: ActionRequestStatus.OPEN,
-        OR: [{ sourceType: null }, { sourceType: { notIn: [COMPLETION_SOURCE, RECOVERY_SOURCE] } }],
-      },
-    }),
-    db.issueRelation.findMany({
-      where: { workspaceId, fromIssueId: issueId, kind: "BLOCKED_BY" },
-      select: { toIssue: { select: { status: { select: { category: true } } } } },
-    }),
-  ]);
+  const [pendingGates, openDecisionRequests, mcpQuietRequests, blockingRelations] =
+    await Promise.all([
+      db.reviewGate.count({
+        where: {
+          workspaceId,
+          status: "PENDING",
+          OR: gateTargets,
+        },
+      }),
+      db.actionRequest.count({
+        where: {
+          workspaceId,
+          issueId,
+          status: ActionRequestStatus.OPEN,
+          OR: [
+            { sourceType: null },
+            { sourceType: { notIn: [COMPLETION_SOURCE, RECOVERY_SOURCE] } },
+          ],
+        },
+      }),
+      db.actionRequest.count({
+        where: {
+          workspaceId,
+          issueId,
+          status: ActionRequestStatus.OPEN,
+          sourceType: "work-session",
+          dedupeKey: { startsWith: "work-session-mcp-quiet:" },
+        },
+      }),
+      db.issueRelation.findMany({
+        where: { workspaceId, fromIssueId: issueId, kind: "BLOCKED_BY" },
+        select: { toIssue: { select: { status: { select: { category: true } } } } },
+      }),
+    ]);
 
   const completionStatus = issue.workspace.completionStatusId
     ? await db.status.findFirst({
@@ -246,7 +263,7 @@ async function completionContext(db: PrismaClient, workspaceId: string, issueId:
     pullRequests,
     liveRuns: liveRunIds.length,
     pendingGates,
-    otherRequests,
+    otherRequests: Math.max(0, openDecisionRequests - mcpQuietRequests),
     unresolvedBlockers,
   };
 }
@@ -556,6 +573,16 @@ export async function evaluateIssueCompletionCandidate(
     })),
   ].slice(0, 12);
   const held = autoHeldReasons(context, assessment);
+  if (assessment.state === "READY") {
+    await dismissOpenRequests(db, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      issueId: params.issueId,
+      sourceType: "work-session",
+      dedupeKeyPrefix: "work-session-mcp-quiet:",
+      resolution: "Completion evidence confirms there is no active work to recover.",
+    });
+  }
 
   if (
     context.automation === CompletionAutomation.AUTO_WHEN_SAFE &&

@@ -978,21 +978,32 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
     ),
   ];
   if (recoverySessionIds.length > 0) {
-    const deliveredSessions = await db.workSession.findMany({
+    const reconciledSessions = await db.workSession.findMany({
       where: {
         id: { in: recoverySessionIds },
-        status: { in: ["MERGED", "RELEASED", "DEPLOYED", "VERIFIED", "ABANDONED"] },
+        OR: [
+          { status: { in: ["MERGED", "RELEASED", "DEPLOYED", "VERIFIED", "ABANDONED"] } },
+          { issue: { status: { category: { in: ["DONE", "CANCELED"] } } } },
+        ],
       },
-      select: { id: true, workspaceId: true, status: true },
+      select: {
+        id: true,
+        workspaceId: true,
+        status: true,
+        issue: { select: { status: { select: { category: true } } } },
+      },
     });
-    for (const session of deliveredSessions) {
+    for (const session of reconciledSessions) {
+      const issueIsTerminal = ["DONE", "CANCELED"].includes(session.issue.status.category);
       await resolveRecoveryRequests(
         db,
         session.workspaceId,
         session.id,
-        session.status === WorkSessionStatus.ABANDONED
-          ? "Work session abandoned."
-          : "Implementation pull request merged.",
+        issueIsTerminal
+          ? "Issue is already in a terminal state."
+          : session.status === WorkSessionStatus.ABANDONED
+            ? "Work session abandoned."
+            : "Implementation pull request merged.",
       );
     }
   }
@@ -1010,10 +1021,34 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
         status: { in: [...STALEABLE_WORK_SESSION_STATUSES] },
         lastHeartbeatAt: { lt: cutoff },
       },
-      include: { ownerConnection: { select: { id: true, kind: true, status: true } } },
+      include: {
+        ownerConnection: { select: { id: true, kind: true, status: true } },
+        issue: {
+          select: {
+            authorId: true,
+            number: true,
+            status: { select: { category: true } },
+            workspace: { select: { key: true } },
+            agentRuns: {
+              where: { status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] } },
+              select: { id: true },
+              take: 1,
+            },
+          },
+        },
+      },
     });
     for (const session of sessions) {
       if (session.ownerConnection?.kind === "MCP_CLIENT") {
+        if (["DONE", "CANCELED"].includes(session.issue.status.category)) {
+          await resolveRecoveryRequests(
+            db,
+            workspace.id,
+            session.id,
+            "Issue is already in a terminal state.",
+          );
+          continue;
+        }
         // MCP silence is an expired observation lease, not proof that the
         // client process failed. Keep delivery ownership intact so the
         // dispatcher cannot start a competing branch while status is unknown.
@@ -1023,20 +1058,23 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
           where: { id: session.ownerConnection.id, status: "ACTIVE" },
           data: { status: "QUIET", confidence: "UNCONFIRMED" },
         });
-        const issue = await db.issue.findUnique({
-          where: { id: session.issueId },
-          select: { authorId: true, workspace: { select: { key: true } }, number: true },
-        });
+        const issue = session.issue;
+        const issueKey = `${issue.workspace.key}-${issue.number}`;
+        const hasLiveRun = issue.agentRuns.length > 0;
         await createActionRequest(db, {
           workspaceId: workspace.id,
           actorId: null,
-          title: `MCP status for ${issue ? `${issue.workspace.key}-${issue.number}` : "an issue"} is unconfirmed`,
-          body:
-            `${session.repoFullName}:${session.branch} has not sent a lifecycle signal for ` +
-            `${workspace.workSessionStaleMinutes} minutes. Delivery remains owned; request status, hand off, or abandon it explicitly.`,
+          title: hasLiveRun
+            ? `MCP status for ${issueKey} is unconfirmed`
+            : `Delivery for ${issueKey} needs a disposition`,
+          body: hasLiveRun
+            ? `${session.repoFullName}:${session.branch} has not sent a lifecycle signal for ` +
+              `${workspace.workSessionStaleMinutes} minutes. Delivery remains owned; request status, hand off, or abandon it explicitly.`
+            : `${session.repoFullName}:${session.branch} has no active run and its owning MCP connection has not sent a lifecycle signal for ` +
+              `${workspace.workSessionStaleMinutes} minutes. Silence does not mean work is still running. Resume the session, attach or advance delivery evidence, hand it off, or abandon it explicitly.`,
           severity: NotificationSeverity.WARNING,
           kind: ActionRequestKind.FREE_FORM,
-          assignedUserId: session.ownerUserId ?? issue?.authorId ?? null,
+          assignedUserId: session.ownerUserId ?? issue.authorId ?? null,
           assignedAgentId: session.ownerAgentId,
           sourceType: "work-session",
           sourceId: session.id,
