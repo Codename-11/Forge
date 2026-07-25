@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { hostname } from "node:os";
+import { LOCAL_DATABASE_URL } from "./local-data-target";
 
 export type LocalCiMode = "quality" | "full" | "e2e-only";
 
@@ -51,7 +52,22 @@ export function parseLocalCiOptions(argv: string[]): LocalCiOptions {
 
 export function buildLocalCiPlan(options: LocalCiOptions, e2ePort = 3200): LocalCiStep[] {
   const quality: LocalCiStep[] = [
-    { label: "Ensure local services", args: ["dev:services"] },
+    {
+      label: "Ensure local services",
+      args: ["dev:services"],
+      env: {
+        DATABASE_URL: LOCAL_DATABASE_URL,
+        REDIS_URL: "redis://localhost:56379",
+      },
+    },
+    {
+      label: "Reset disposable test database",
+      args: ["exec", "tsx", "scripts/reset-test-db.ts"],
+    },
+    {
+      label: "Apply test database migrations",
+      args: ["exec", "prisma", "migrate", "deploy"],
+    },
     { label: "Generate Prisma client", args: ["prisma:generate"] },
     { label: "Lint", args: ["lint"] },
     { label: "Typecheck", args: ["typecheck"] },

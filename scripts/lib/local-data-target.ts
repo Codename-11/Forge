@@ -1,6 +1,8 @@
 import { fileURLToPath } from "node:url";
 
 export const LOCAL_DATABASE_URL = "postgresql://forge:forge@localhost:55432/forge?schema=public";
+export const LOCAL_TEST_DATABASE_URL =
+  "postgresql://forge:forge@localhost:55432/forge_test?schema=public";
 export const LOCAL_DATABASE_CONTAINER = "forge-dev-postgres";
 
 export type LocalTarget = {
@@ -70,6 +72,30 @@ export function validateLocalScenarioTarget(databaseUrl: string): void {
       "Named scenarios require the exact Forge local docker host, port, database, credentials, and public schema",
     );
   }
+}
+
+export function validateLocalTestTarget(databaseUrl: string): LocalTarget {
+  const url = new URL(databaseUrl);
+  const target = {
+    host: url.hostname,
+    port: url.port,
+    database: url.pathname.replace(/^\//, ""),
+    user: decodeURIComponent(url.username),
+    schema: url.searchParams.get("schema") ?? "",
+    container: LOCAL_DATABASE_CONTAINER,
+  };
+  const valid =
+    url.protocol === "postgresql:" &&
+    target.host === "localhost" &&
+    target.port === "55432" &&
+    target.database === "forge_test" &&
+    target.user === "forge" &&
+    decodeURIComponent(url.password) === "forge" &&
+    target.schema === "public";
+  if (!valid) {
+    throw new Error("Local CI requires the exact disposable forge_test database target");
+  }
+  return target;
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

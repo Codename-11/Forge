@@ -31,10 +31,12 @@ describe("local CI workflow", () => {
     expect(() => parseLocalCiOptions(["--quick"])).toThrow(/Unknown/);
   });
 
-  it("generates Prisma before one quality pass and adds E2E only for full mode", () => {
+  it("resets a dedicated test database before one quality pass and adds E2E only for full mode", () => {
     const quality = buildLocalCiPlan(parseLocalCiOptions(["--quality"]));
     expect(quality.map((step) => step.label)).toEqual([
       "Ensure local services",
+      "Reset disposable test database",
+      "Apply test database migrations",
       "Generate Prisma client",
       "Lint",
       "Typecheck",
@@ -43,8 +45,8 @@ describe("local CI workflow", () => {
     expect(quality.filter((step) => step.label === "Unit and integration tests")).toHaveLength(1);
 
     const full = buildLocalCiPlan(parseLocalCiOptions([]), 3277);
-    expect(full).toHaveLength(6);
-    expect(full[5]).toMatchObject({
+    expect(full).toHaveLength(8);
+    expect(full[7]).toMatchObject({
       label: "Playwright E2E",
       env: {
         E2E_PORT: "3277",

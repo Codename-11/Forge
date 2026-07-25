@@ -109,6 +109,30 @@ with an explicit, keyboard-accessible Show more / Show fewer affordance. Asks
 no longer expands without limit, and Run recovery no longer hides additional
 cards in a clipped nested scroll area. Responsive Playwright coverage now
 guards both the dashboard rail fill and the attention overflow contract.
+## 2026-07-20 — AXI-138 faster and safer local iteration
+
+Scoped Turbopack to the Forge repository root so unrelated parent lockfiles no
+longer expand module resolution or file watching in workstation and Codex
+worktrees. Prisma query output is now quiet by default and opt-in through
+`FORGE_LOG_PRISMA_QUERIES=1`, preserving warnings and errors without flooding
+the terminal on production-sized local snapshots. Restoring the frozen pnpm
+dependency tree repaired the reported `nodemailer` resolution failure.
+
+Local CI now owns a disposable `forge_test` database and Redis database 13,
+guarded by exact local-target validation and a machine-local quality lock. Each
+quality run resets and migrates only that test state; it never executes the
+unit/integration suite against the shared `forge` development database. This
+was verified against a copied production snapshot whose legitimate legacy pin
+previously collided with a static test fixture.
+
+Focused workflow, target-guard, and logging tests passed 17/17. Typecheck and
+lint passed with existing warnings. The complete guarded quality gate passed
+all 1,512 Vitest tests with one intentional skip against `forge_test`. Cold
+route compilation remains expected in Next development mode; warm sign-in
+requests measured 0.28–0.35 seconds with no Prisma query-log lines or
+Turbopack workspace-root warning. The isolated production build passed and the
+split E2E-only gate passed 56 Playwright tests with one intentional scenario
+skip, without repeating the quality phase.
 
 ## 2026-07-20 — AXI-137 delivery provenance and lifecycle truth
 
