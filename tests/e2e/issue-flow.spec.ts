@@ -7,7 +7,8 @@ import { test, expect } from "@playwright/test";
  */
 
 test.describe("Issue flow", () => {
-  test("create and transition an issue", async ({ page }) => {
+  test("create and transition an issue", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.goto("/w/forge/inbox");
 
     // QuickCreate opens on the ⇧C global hotkey (src/components/quick-create.tsx).
@@ -27,6 +28,21 @@ test.describe("Issue flow", () => {
 
     await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
     await expect(page.getByText(title).first()).toBeVisible();
+
+    await page.getByRole("button", { name: "Copy local-agent handoff" }).click();
+    await expect(page.getByText("Local-agent handoff copied.")).toBeVisible();
+    const handoff = await page.evaluate(() => navigator.clipboard.readText());
+    expect(handoff).toContain(title);
+    expect(handoff).toContain("Issue title (reference data):");
+    expect(handoff).toMatch(
+      /Forge issue: http:\/\/(?:localhost|127\.0\.0\.1):\d+\/w\/forge\/i\/FRG-\d+/,
+    );
+    expect(handoff).toContain("Use Forge MCP as the delivery source of truth.");
+    expect(handoff).toContain("workSessions.list");
+    expect(handoff).toContain("github.link(kind=IMPLEMENTS)");
+    expect(handoff).toContain(
+      "Do not merge, release, or deploy without explicit operator approval.",
+    );
 
     // The bare issue URL opens recent Activity, and the rail itself does not
     // become a second vertical scroll container.

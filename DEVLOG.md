@@ -12,6 +12,16 @@
   see the packaged application version too.
 - Added unit and instance-admin integration coverage for the standalone-runtime
   case where npm lifecycle metadata is absent.
+## 2026-07-25 — Copyable local-agent issue handoffs
+
+- Added a compact issue-header action that copies the issue key, title, and
+  canonical human-readable URL for use in a local agent task.
+- Included a concise Forge MCP workflow contract in the copied reference:
+  reconcile Delivery ownership before acting, use one isolated code-delivery
+  path, attach one native implementation PR, report meaningful lifecycle
+  updates, and preserve explicit merge/release/deploy authority.
+- Added unit coverage for the generated contract and Playwright coverage for
+  the browser clipboard interaction.
 
 ## 2026-07-25 — v0.29.7 release preparation
 
