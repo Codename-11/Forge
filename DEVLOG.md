@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-25 — v0.29.7 release preparation
+
+Prepared the serialized patch release for AXI-151 after implementation PR #87
+passed exact-head GitHub CI and merged to `main`. Release metadata covers
+honest MCP liveness versus completed Delivery disposition, terminal-issue
+recovery cleanup, and deduplicated Ready to Close evidence. Tagging,
+production deployment, and live verification remain distinct delivery steps.
+
 ## 2026-07-25 — MCP Delivery silence reconciliation
 
 - Audited the production Attention Queue and traced five MCP-unconfirmed asks
