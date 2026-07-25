@@ -9,6 +9,20 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-25] — v0.30.0 · Faster local agent delivery
+
+### Added
+
+- **Issues provide a copyable local-agent handoff.** The issue header can copy a canonical reference with the issue identity, URL, and concise Forge Delivery workflow contract for use in a local agent task.
+
+### Changed
+
+- **Local development and CI use focused, isolated state.** Turbopack stays scoped to the Forge repository, Prisma query logging is opt-in, and the local quality gate serializes work against a disposable `forge_test` database and Redis database 13.
+
+### Fixed
+
+- **Forge reports one canonical build version.** The application shell, MCP metadata, Admin System surface, and sign-in footer derive version and build identity from the same packaged runtime source.
+
 ## [2026-07-25] — v0.29.7 · Honest MCP delivery recovery
 
 ### Changed
