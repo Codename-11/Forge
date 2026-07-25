@@ -2,6 +2,14 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-25 — v0.30.0 release preparation
+
+Prepared the serialized minor release after implementation PRs #80, #89, and
+#90 passed exact-head GitHub CI and merged to `main`. Release metadata covers
+isolated local development and CI state, canonical build-version reporting,
+and copyable Forge-aware issue handoffs for local agents. Tagging, production
+deployment, and live verification remain distinct delivery steps.
+
 ## 2026-07-25 — Canonical build version across system surfaces
 
 - Replaced the Admin System router's independent `npm_package_version` /
@@ -12,6 +20,7 @@
   see the packaged application version too.
 - Added unit and instance-admin integration coverage for the standalone-runtime
   case where npm lifecycle metadata is absent.
+
 ## 2026-07-25 — Copyable local-agent issue handoffs
 
 - Added a compact issue-header action that copies the issue key, title, and
