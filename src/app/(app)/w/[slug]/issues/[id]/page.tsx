@@ -8,6 +8,7 @@ import {
   ArchiveRestore,
   Bot,
   Clock3,
+  Copy,
   LogOut,
   Paperclip,
   Plus,
@@ -64,6 +65,7 @@ import { DispatchReasonChip, type DispatchReason } from "@/components/dispatch-r
 import { IssueSiblingNav } from "@/components/issue-sibling-nav";
 import { useHotkey } from "@/lib/keyboard";
 import { useRealtimeConnection } from "@/hooks/use-realtime";
+import { buildIssueAgentHandoff } from "@/lib/issue-agent-handoff";
 
 const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
 
@@ -267,6 +269,25 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
     );
 
   const issueKey = formatIssueId(workspace.key, issue.number);
+  const issueTitle = issue.title;
+
+  async function copyAgentHandoff() {
+    const issueUrl =
+      `${window.location.origin}/w/${encodeURIComponent(slug)}` +
+      `/i/${encodeURIComponent(issueKey)}`;
+    const handoff = buildIssueAgentHandoff({
+      issueKey,
+      title: issueTitle,
+      url: issueUrl,
+    });
+
+    try {
+      await navigator.clipboard.writeText(handoff);
+      toast.success("Local-agent handoff copied.");
+    } catch {
+      toast.error("Couldn't copy the handoff. Check clipboard permissions.");
+    }
+  }
 
   // Phase 1B: replace the title-only header with a real path. Project →
   // issue when the issue is grouped; otherwise fall back to the issues
@@ -361,6 +382,16 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
         subtitle={<span className="font-mono">{issue.status.name}</span>}
         actions={
           <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => void copyAgentHandoff()}
+              title="Copy a Forge-aware handoff for a local agent"
+              aria-label="Copy local-agent handoff"
+            >
+              <Copy className="h-3.5 w-3.5" aria-hidden />
+              <span className="hidden lg:inline">Copy handoff</span>
+            </Button>
             <Button
               variant="outline"
               size="sm"

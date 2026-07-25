@@ -70,6 +70,24 @@ external-resource bodies. Forge currently uses ordinary indexed relational
 filters and deterministic cursor sorting; the current data scale does not
 justify a full-text or trigram extension.
 
+## Local-agent handoff
+
+Use **Copy handoff** in the issue header when you want to continue an issue in a
+local agent task. Forge copies the issue key and title, its canonical
+human-readable link, and a short workflow contract for the receiving agent.
+
+The contract tells the agent to use Forge MCP as delivery truth, inspect the
+current Delivery session before acting, continue or explicitly
+claim/join/handoff ownership, work from one isolated issue branch and worktree,
+link one primary PR through the native `IMPLEMENTS` relation, report meaningful
+lifecycle updates, and finish the run visibly. It also preserves the operator
+boundary around merge, release, and deployment. The title is explicitly marked
+as reference data so issue content does not become operational instruction.
+
+This clipboard reference does not change assignment, start a run, or transfer
+Delivery ownership. The receiving agent must reconcile those facts through
+Forge rather than treating the pasted prompt as authority.
+
 ## The two assignment slots
 
 Forge keeps human and agent assignment **independent**. An issue can have:
