@@ -6,8 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Kbd } from "@/components/ui/kbd";
 import { LiveStatusPanel, LiveLoopCard } from "./live-status-panel";
 import { listEnabledSsoProviders, type PublicSsoProvider } from "@/server/sso";
-
-const APP_VERSION = "1.0.0";
+import { readPackageVersion } from "@/server/build-info";
 
 /** Short mono badge shown in the provider button. */
 function providerBadge(p: PublicSsoProvider): string {
@@ -65,6 +64,7 @@ export default async function SignInPage({
   const providers = await listEnabledSsoProviders();
   const hasProviders = providers.length > 0;
   const host = instanceHost();
+  const appVersion = await readPackageVersion();
 
   async function credentialsAction(formData: FormData) {
     "use server";
@@ -126,7 +126,7 @@ export default async function SignInPage({
         </div>
 
         <div className="flex items-center justify-between pt-6 font-mono text-[0.6875rem] text-muted-foreground">
-          <span>forge v{APP_VERSION} · self-hosted</span>
+          <span>forge v{appVersion} · self-hosted</span>
           <span>{host}</span>
         </div>
       </section>

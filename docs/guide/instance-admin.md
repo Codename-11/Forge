@@ -33,9 +33,11 @@ The admin shell has a fixed set of pages, each backed by an
 ### Overview / System (`/admin/system`)
 
 Build identity and instance-wide rollups. Reports the running
-`version`, `buildSha`, and `buildTime` (baked into the Docker image as
-`FORGE_GIT_SHA` / `FORGE_BUILD_TIME` — the same source as
-`system.buildInfo` and the Settings → About line), plus counts:
+`version`, `buildSha`, and `buildTime`. The packaged `package.json` version is
+canonical when npm lifecycle metadata is unavailable; the Docker image bakes
+`FORGE_GIT_SHA` / `FORGE_BUILD_TIME`. These are the same sources used by the
+sign-in footer, `system.buildInfo`, MCP metadata, and the Settings → About line.
+The page also reports counts for:
 tenants, users, admins, runtimes, profiles, connections, and runs in
 the last 24h.
 

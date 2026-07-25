@@ -3,7 +3,9 @@ import {
   _resetBuildInfoCacheForTests,
   forgeBuildIdentity,
   mcpServerInfo,
+  readPackageVersion,
 } from "@/server/build-info";
+import packageJson from "../../package.json";
 
 describe("build identity", () => {
   afterEach(() => {
@@ -21,6 +23,12 @@ describe("build identity", () => {
       gitSha: "abc1234",
       buildTime: "2026-06-09T06:00:00Z",
     });
+  });
+
+  it("reads the packaged application version when npm lifecycle metadata is absent", async () => {
+    vi.stubEnv("npm_package_version", "");
+
+    await expect(readPackageVersion()).resolves.toBe(packageJson.version);
   });
 
   it("includes build identity in MCP serverInfo", async () => {
