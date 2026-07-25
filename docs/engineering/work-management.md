@@ -56,6 +56,21 @@ run has completed because the client is still connected. Ready to Close and
 stale-run recovery use `AgentRun` lifecycle records, never connection presence
 or an `IN_REVIEW` Delivery session, to decide whether work is still active.
 
+An expired MCP observation lease remains scoped to the exact negotiated client
+session. Activity from a newer Desktop task, CLI process, or reconnect does not
+prove that the older endpoint is alive, even when both use the same Agent
+Profile or API key. When that older Delivery session has no active run, Forge
+asks for a Delivery disposition instead of implying that work is still
+executing. Resume it, attach or advance its delivery evidence, hand it off, or
+abandon it explicitly.
+
+MCP-quiet recovery is coordination evidence, not an independent product
+decision. It does not by itself block a completion recommendation, and a safe
+Ready to Close assessment supersedes the redundant recovery ask. Terminal
+issues resolve any remaining MCP-quiet asks during reconciliation without
+rewriting the historical Delivery state or falsely marking an unverified
+session as deployed.
+
 ## Project branch contract
 
 Branch topology is project configuration, not an Axiom-wide constant. Every

@@ -772,7 +772,7 @@ describe("work session coordination", () => {
     );
   });
 
-  it("keeps a quiet MCP-owned lease intact and requests explicit recovery", async () => {
+  it("keeps a quiet MCP-owned lease intact and distinguishes disposition from active work", async () => {
     const { fixture, prisma, issue } = await setup();
     await prisma.workspace.update({
       where: { id: fixture.workspace.id },
@@ -828,18 +828,39 @@ describe("work session coordination", () => {
         },
       }),
     ).toBe(1);
+    await expect(
+      prisma.actionRequest.findFirstOrThrow({
+        where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+      }),
+    ).resolves.toMatchObject({
+      title: expect.stringContaining("needs a disposition"),
+      body: expect.stringContaining("has no active run"),
+    });
 
     // The run watchdog may mark the shared connection quiet before the
     // delivery sweep runs. Recovery must still be materialized in that order.
     await prisma.actionRequest.deleteMany({
       where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
     });
+    await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+        status: "ACTIVE",
+        engagementMode: "EXECUTE",
+      },
+    });
     expect(await sweepStaleWorkSessions(prisma)).toBe(0);
-    expect(
-      await prisma.actionRequest.count({
+    await expect(
+      prisma.actionRequest.findFirstOrThrow({
         where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
       }),
-    ).toBe(1);
+    ).resolves.toMatchObject({
+      title: expect.stringContaining("MCP status"),
+      body: expect.stringContaining("Delivery remains owned"),
+    });
 
     expect(
       await resolveMcpQuietRequestsForConnection(prisma, fixture.workspace.id, connection.id),
@@ -864,6 +885,72 @@ describe("work session coordination", () => {
         where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
       }),
     ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Work session resumed." });
+  });
+
+  it("resolves MCP recovery requests when the issue is already terminal", async () => {
+    const { fixture, prisma, issue } = await setup();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { workSessionStaleMinutes: 1 },
+    });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `terminal-mcp-${Date.now()}`,
+        name: "Terminal MCP agent",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "ACTIVE",
+        confidence: "CONFIRMED",
+        instanceKey: `terminal-${Date.now()}`,
+      },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/terminal-mcp",
+      source: WorkSessionSource.MCP,
+      actor: {
+        userId: fixture.user.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+      },
+    });
+    await prisma.workSession.update({
+      where: { id: session.id },
+      data: { lastHeartbeatAt: new Date(Date.now() - 5 * 60_000) },
+    });
+
+    await sweepStaleWorkSessions(prisma);
+    const request = await prisma.actionRequest.findFirstOrThrow({
+      where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
+    });
+    const done = await prisma.status.findFirstOrThrow({
+      where: { workspaceId: fixture.workspace.id, category: "DONE" },
+    });
+    await prisma.issue.update({
+      where: { id: issue.id },
+      data: { statusId: done.id, completedAt: new Date() },
+    });
+
+    await sweepStaleWorkSessions(prisma);
+
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({
+      status: "RESOLVED",
+      resolution: "Issue is already in a terminal state.",
+    });
+    await expect(
+      prisma.workSession.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({ status: "CLAIMED", endedAt: null });
   });
 
   it("resolves legacy delivery conflicts after their candidate is terminal or session ends", async () => {

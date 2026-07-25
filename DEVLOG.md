@@ -2,6 +2,27 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-25 — MCP Delivery silence reconciliation
+
+- Audited the production Attention Queue and traced five MCP-unconfirmed asks
+  to older session-specific Codex Desktop connections whose runs had completed
+  while their Delivery sessions remained non-terminal.
+- Kept endpoint liveness honest: a newer Desktop task or MCP reconnect does not
+  confirm the older client process merely because it uses the same Agent
+  Profile or API key.
+- Changed quiet-session recovery copy to distinguish an actually active run
+  from a completed run whose Delivery session simply needs an explicit
+  disposition.
+- Excluded MCP-quiet recovery notices from generic completion-decision counts.
+  Safe Ready to Close evidence now dismisses the redundant recovery ask, while
+  genuine operator decisions continue to block completion.
+- Reconciled open MCP-quiet asks for issues already in Done/Canceled without
+  fabricating a Delivered, Released, or Verified state for the historical
+  session.
+- Added integration coverage for terminal-issue cleanup, request
+  deduplication, active-run wording, completed-run disposition wording, and the
+  boundary between quiet recovery and real operator decisions.
+
 ## 2026-07-22 — v0.29.6 release preparation
 
 Prepared the serialized patch release for AXI-143 after implementation PR #85
