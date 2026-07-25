@@ -9,6 +9,17 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-25] — v0.29.7 · Honest MCP delivery recovery
+
+### Changed
+
+- **Quiet MCP delivery distinguishes execution from coordination.** A silent connection with an active run remains explicitly unconfirmed, while completed work asks for a Delivery disposition without implying that execution is still active.
+
+### Fixed
+
+- **Obsolete recovery asks no longer outlive terminal work.** Done and canceled issues resolve stale MCP coordination requests without fabricating merge, release, deployment, or live-verification evidence.
+- **Ready to Close has one authoritative decision path.** MCP recovery coordination no longer becomes a duplicate completion blocker, while genuine operator decisions continue to block closure.
+
 ## [2026-07-22] — v0.29.6 · Actionable issue context
 
 ### Changed
