@@ -2,6 +2,17 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-25 — Canonical build version across system surfaces
+
+- Replaced the Admin System router's independent `npm_package_version` /
+  `1.0.0` fallback with Forge's shared build-identity reader, so its version,
+  SHA, and build time now use the same runtime source as the application shell
+  and MCP server metadata.
+- Removed the sign-in footer's hardcoded `1.0.0`; unauthenticated operators now
+  see the packaged application version too.
+- Added unit and instance-admin integration coverage for the standalone-runtime
+  case where npm lifecycle metadata is absent.
+
 ## 2026-07-25 — v0.29.7 release preparation
 
 Prepared the serialized patch release for AXI-151 after implementation PR #87

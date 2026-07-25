@@ -11,6 +11,7 @@ import {
   resolveSubjectLabels,
   subjectKey,
 } from "@/server/services/subject-labels";
+import { forgeBuildIdentity } from "@/server/build-info";
 
 const slugSchema = z
   .string()
@@ -185,20 +186,23 @@ export const instanceAdminRouter = router({
 
   /** System / build info + instance-wide counts for the admin overview. */
   system: instanceAdminProcedure.query(async ({ ctx }) => {
-    const [tenants, users, admins, runtimes, profiles, connections, runs24] = await Promise.all([
-      ctx.db.workspace.count({ where: { deletedAt: null } }),
-      ctx.db.user.count(),
-      ctx.db.user.count({ where: { instanceRole: "INSTANCE_ADMIN" } }),
-      ctx.db.runtime.count({ where: { archivedAt: null } }),
-      ctx.db.agentProfile.count({ where: { archivedAt: null } }),
-      ctx.db.connection.count(),
-      ctx.db.agentRun.count({ where: { startedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } } }),
-    ]);
+    const [build, tenants, users, admins, runtimes, profiles, connections, runs24] =
+      await Promise.all([
+        forgeBuildIdentity(),
+        ctx.db.workspace.count({ where: { deletedAt: null } }),
+        ctx.db.user.count(),
+        ctx.db.user.count({ where: { instanceRole: "INSTANCE_ADMIN" } }),
+        ctx.db.runtime.count({ where: { archivedAt: null } }),
+        ctx.db.agentProfile.count({ where: { archivedAt: null } }),
+        ctx.db.connection.count(),
+        ctx.db.agentRun.count({
+          where: { startedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+        }),
+      ]);
     return {
-      // Match system.buildInfo: the Dockerfile bakes FORGE_GIT_SHA / FORGE_BUILD_TIME.
-      version: process.env.npm_package_version ?? "1.0.0",
-      buildSha: process.env.FORGE_GIT_SHA || null,
-      buildTime: process.env.FORGE_BUILD_TIME || null,
+      version: build.version,
+      buildSha: build.gitSha,
+      buildTime: build.buildTime,
       counts: { tenants, users, admins, runtimes, profiles, connections, runs24 },
     };
   }),
