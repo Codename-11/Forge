@@ -2,6 +2,15 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-28 — v0.31.0 release preparation
+
+Prepared the serialized minor release for AXI-164 after implementation PR #92
+passed exact-head GitHub CI and merged to `main`. Release metadata covers
+actionable quiet/stale Delivery recovery, issue-local operator controls, safe
+generic issue responses, and operator confirmation that does not fabricate MCP
+or runtime lifecycle evidence. Tagging, production deployment, and live
+verification remain distinct delivery steps.
+
 ## 2026-07-27 — Actionable Delivery recovery requests
 
 - Replaced the dead-end Dismiss/Open Issue treatment for quiet or stale
