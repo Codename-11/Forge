@@ -9,6 +9,17 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-28] — v0.31.0 · Actionable delivery recovery
+
+### Added
+
+- **Delivery recovery cards provide real operator actions.** Quiet or stale work sessions can be explicitly kept active, resumed, or abandoned from Command Center and issue detail, while generic asks open an editable issue response.
+
+### Changed
+
+- **Operator intent stays separate from client evidence.** Confirming that work should remain reserved suppresses immediate repeat prompts without fabricating a fresh MCP or runtime heartbeat.
+- **Attention dismissal states its actual scope.** “Dismiss card” removes only the current presentation and warns that unresolved Delivery conditions can return.
+
 ## [2026-07-25] — v0.30.0 · Faster local agent delivery
 
 ### Added
