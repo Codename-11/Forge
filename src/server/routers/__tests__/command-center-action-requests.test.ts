@@ -1,6 +1,8 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { ActionRequestKind, ActionRequestStatus, NotificationSeverity } from "@prisma/client";
 import { commandCenterRouter } from "@/server/routers/command-center";
+import { actionRequestRouter } from "@/server/routers/action-request";
+import { sweepStaleWorkSessions } from "@/server/services/work-session";
 import {
   buildContext,
   createIssue,
@@ -21,17 +23,36 @@ afterAll(async () => {
 });
 
 describe("commandCenterRouter — action requests", () => {
-  it("returns every decision for an issue and gives reply-less legacy asks a safe dismissal", async () => {
+  it("returns work-session recovery actions instead of a navigation-only fallback", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CA" });
     fixtures.push(fixture);
     const prisma = getPrisma();
-    const issue = await createIssue(fixture, { title: "Multiple recovery decisions" });
+    const issues = await Promise.all([
+      createIssue(fixture, { title: "Quiet delivery" }),
+      createIssue(fixture, { title: "Stale delivery" }),
+    ]);
+    const sessions = await Promise.all(
+      ["quiet", "stale"].map((suffix, index) =>
+        prisma.workSession.create({
+          data: {
+            workspaceId: fixture.workspace.id,
+            issueId: issues[index].id,
+            ownerUserId: fixture.user.id,
+            source: "MCP",
+            status: index === 0 ? "IN_PROGRESS" : "STALE",
+            repoFullName: "Codename-11/Forge",
+            branch: `codex/test-${suffix}-${issues[index].id}`,
+            baseBranch: "main",
+          },
+        }),
+      ),
+    );
     const rows = await Promise.all(
-      ["Legacy delivery conflict", "MCP status is unconfirmed"].map((title, index) =>
+      ["MCP status is unconfirmed", "Work session went quiet"].map((title, index) =>
         prisma.actionRequest.create({
           data: {
             workspaceId: fixture.workspace.id,
-            issueId: issue.id,
+            issueId: issues[index].id,
             assignedUserId: fixture.user.id,
             title,
             body: `${title} requires an explicit operator decision.`,
@@ -39,8 +60,11 @@ describe("commandCenterRouter — action requests", () => {
             severity: index === 0 ? NotificationSeverity.WARNING : NotificationSeverity.INFO,
             kind: ActionRequestKind.FREE_FORM,
             sourceType: "work-session",
-            sourceId: `session-${issue.id}`,
-            dedupeKey: `fixture-${issue.id}-${index}`,
+            sourceId: sessions[index].id,
+            dedupeKey:
+              index === 0
+                ? `work-session-mcp-quiet:${sessions[index].id}`
+                : `work-session-stale:${sessions[index].id}`,
           },
         }),
       ),
@@ -48,16 +72,90 @@ describe("commandCenterRouter — action requests", () => {
     const caller = commandCenterRouter.createCaller(await buildContext(fixture));
 
     const summary = await caller.summary({ dueWindowDays: 7, limit: 20 });
-    const returned = summary.actionRequests.filter((request) => request.issueId === issue.id);
+    const returned = summary.actionRequests.filter((request) =>
+      rows.some((row) => row.id === request.id),
+    );
 
     expect(returned.map((request) => request.id).sort()).toEqual(rows.map((row) => row.id).sort());
     expect(summary.counts.actionRequests).toBe(2);
     for (const request of returned) {
-      expect(request.presentation.protocol).toBe("GENERIC_FALLBACK");
+      expect(request.presentation.protocol).toBe("WORK_SESSION_RECOVERY");
       expect(request.presentation.actions.map((action) => action.id)).toEqual([
+        request.dedupeKey?.startsWith("work-session-stale:") ? "RESUME_SESSION" : "CONFIRM_ACTIVE",
+        "ABANDON_SESSION",
+        "RESPOND_IN_ISSUE",
         "DISMISS",
         "OPEN_ISSUE",
       ]);
     }
+  });
+
+  it("records operator confirmation without changing MCP lifecycle evidence", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CB" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const issue = await createIssue(fixture, { title: "Quiet delivery" });
+    const session = await prisma.workSession.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        ownerUserId: fixture.user.id,
+        source: "MCP",
+        status: "IN_PROGRESS",
+        repoFullName: "Codename-11/Forge",
+        branch: `codex/quiet-${issue.id}`,
+        baseBranch: "main",
+        lastHeartbeatAt: new Date(Date.now() - 3 * 60 * 60_000),
+      },
+    });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        assignedUserId: fixture.user.id,
+        title: "MCP status is unconfirmed",
+        status: ActionRequestStatus.OPEN,
+        severity: NotificationSeverity.WARNING,
+        kind: ActionRequestKind.FREE_FORM,
+        sourceType: "work-session",
+        sourceId: session.id,
+        dedupeKey: `work-session-mcp-quiet:${session.id}`,
+      },
+    });
+    const beforeHeartbeat = session.lastHeartbeatAt;
+    const caller = actionRequestRouter.createCaller(await buildContext(fixture));
+
+    await caller.resolveWorkSessionAttention({
+      id: request.id,
+      decision: "CONFIRM_ACTIVE",
+    });
+
+    await expect(
+      prisma.workSession.findUniqueOrThrow({ where: { id: session.id } }),
+    ).resolves.toMatchObject({
+      status: "IN_PROGRESS",
+      lastHeartbeatAt: beforeHeartbeat,
+      operatorConfirmedAt: expect.any(Date),
+    });
+    await expect(
+      prisma.actionRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).resolves.toMatchObject({
+      status: ActionRequestStatus.RESOLVED,
+      resolvedByUserId: fixture.user.id,
+    });
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { workSessionStaleMinutes: 1 },
+    });
+    await sweepStaleWorkSessions(prisma);
+    await expect(
+      prisma.actionRequest.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          status: ActionRequestStatus.OPEN,
+          sourceId: session.id,
+        },
+      }),
+    ).resolves.toBe(0);
   });
 });

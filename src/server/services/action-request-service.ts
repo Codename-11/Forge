@@ -1427,6 +1427,164 @@ export const deliveryConflictDecisionSchema = z.enum([
 ]);
 export type DeliveryConflictDecision = z.infer<typeof deliveryConflictDecisionSchema>;
 
+export const workSessionAttentionDecisionSchema = z.enum([
+  "CONFIRM_ACTIVE",
+  "RESUME_SESSION",
+  "ABANDON_SESSION",
+]);
+export type WorkSessionAttentionDecision = z.infer<typeof workSessionAttentionDecisionSchema>;
+
+/**
+ * Resolve stale/MCP-quiet Delivery attention with an actual session operation.
+ * Operator confirmation is intentionally distinct from lifecycle heartbeat
+ * evidence, so confirming intent never makes a quiet MCP client look healthy.
+ */
+export async function resolveWorkSessionAttention(
+  db: PrismaClient,
+  params: {
+    workspaceId: string;
+    actorId: string;
+    requestId: string;
+    decision: WorkSessionAttentionDecision;
+  },
+): Promise<{ id: string; decision: WorkSessionAttentionDecision }> {
+  const request = await db.actionRequest.findFirst({
+    where: { id: params.requestId, workspaceId: params.workspaceId },
+    select: {
+      id: true,
+      status: true,
+      kind: true,
+      assignedUserId: true,
+      issueId: true,
+      sourceType: true,
+      sourceId: true,
+      dedupeKey: true,
+    },
+  });
+  if (!request) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
+  }
+  if (request.status !== ActionRequestStatus.OPEN) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Action request is already ${request.status.toLowerCase()}.`,
+    });
+  }
+  const isMcpQuiet = request.dedupeKey?.startsWith("work-session-mcp-quiet:") === true;
+  const isStale = request.dedupeKey?.startsWith("work-session-stale:") === true;
+  if (
+    request.kind !== ActionRequestKind.FREE_FORM ||
+    request.sourceType !== "work-session" ||
+    !request.sourceId ||
+    (!isMcpQuiet && !isStale)
+  ) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "This request is not a supported work-session recovery decision.",
+    });
+  }
+  await assertCanResolveActionRequest(db, {
+    workspaceId: params.workspaceId,
+    userId: params.actorId,
+    request,
+  });
+  const [session, membership] = await Promise.all([
+    db.workSession.findFirst({
+      where: { id: request.sourceId, workspaceId: params.workspaceId },
+      select: { id: true, status: true, endedAt: true, ownerUserId: true },
+    }),
+    db.membership.findUnique({
+      where: {
+        userId_workspaceId: {
+          userId: params.actorId,
+          workspaceId: params.workspaceId,
+        },
+      },
+      select: { role: true },
+    }),
+  ]);
+  if (!session) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Work session not found." });
+  }
+  if (session.endedAt) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Work session has already ended." });
+  }
+  const isAdmin = membership?.role === Role.OWNER || membership?.role === Role.ADMIN;
+  if (!isAdmin && session.ownerUserId !== params.actorId) {
+    throw new TRPCError({
+      code: "FORBIDDEN",
+      message: "Only the work-session owner or a workspace admin can resolve this request.",
+    });
+  }
+
+  if (params.decision === "ABANDON_SESSION") {
+    const { advanceWorkSession } = await import("@/server/services/work-session");
+    await advanceWorkSession(db, {
+      workspaceId: params.workspaceId,
+      sessionId: session.id,
+      actor: { userId: params.actorId },
+      status: "ABANDONED",
+    });
+    await db.actionRequest.update({
+      where: { id: request.id },
+      data: {
+        resolvedByUserId: params.actorId,
+        resolution: "Operator abandoned the delivery session.",
+      },
+    });
+    return { id: request.id, decision: params.decision };
+  }
+
+  const now = new Date();
+  const resolution =
+    params.decision === "RESUME_SESSION"
+      ? "Operator resumed the existing delivery session."
+      : "Operator confirmed the delivery session is still active.";
+  await db.$transaction(async (tx) => {
+    const updated = await tx.workSession.update({
+      where: { id: session.id },
+      data: {
+        operatorConfirmedAt: now,
+        staleAt: null,
+        ...(params.decision === "RESUME_SESSION" && session.status === "STALE"
+          ? { status: "IN_PROGRESS" }
+          : {}),
+      },
+    });
+    await tx.actionRequest.update({
+      where: { id: request.id },
+      data: {
+        status: ActionRequestStatus.RESOLVED,
+        resolvedAt: now,
+        resolvedByUserId: params.actorId,
+        resolution,
+      },
+    });
+    await recordChange(tx, {
+      workspaceId: params.workspaceId,
+      actorId: params.actorId,
+      entity: "WorkSession",
+      entityId: session.id,
+      action: params.decision === "RESUME_SESSION" ? "operator-resume" : "operator-confirm-active",
+      before: { status: session.status, operatorConfirmedAt: null },
+      after: {
+        status: updated.status,
+        operatorConfirmedAt: updated.operatorConfirmedAt?.toISOString() ?? null,
+      },
+      eventKind: EventKind.ISSUE_UPDATED,
+      subjectType: "work-session",
+      subjectId: session.id,
+      payload: {
+        issueId: request.issueId,
+        actionRequestId: request.id,
+        decision: params.decision,
+        lifecycleConfidenceChanged: false,
+      },
+    });
+  });
+  return { id: request.id, decision: params.decision };
+}
+
 /**
  * Resolve a blocked managed-runtime delivery attempt. The request, lease, and
  * queued (never-started) run are locked and revalidated in one transaction so

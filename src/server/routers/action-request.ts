@@ -11,11 +11,14 @@ import {
   declineActionRequest,
   getActionRequestResults,
   resolveDeliveryConnectionConflict,
+  resolveWorkSessionAttention,
   transitionActionRequest,
   voteOnActionRequest,
+  workSessionAttentionDecisionSchema,
 } from "@/server/services/action-request-service";
 import { enqueueGitHubResourceReconciliation } from "@/server/services/github/reconciliation-queue";
 import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
+import { actionRequestPresentation } from "@/server/routers/command-center";
 
 /**
  * Zod-side mirror of `ActionRequestKind` so the router can accept the
@@ -61,8 +64,26 @@ export const actionRequestRouter = router({
         },
         orderBy: { createdAt: "desc" },
         take: input.limit,
+        include: {
+          requestedByAgent: {
+            select: { id: true, name: true, profileKey: true, avatar: true },
+          },
+        },
       });
-      return { items: rows };
+      const userId = ctx.session?.user?.id ?? null;
+      return {
+        items: await Promise.all(
+          rows.map(async (request) => ({
+            ...request,
+            presentation: await actionRequestPresentation(
+              ctx.db,
+              ctx.workspaceId,
+              { userId, role: ctx.membership.role },
+              request,
+            ),
+          })),
+        ),
+      };
     }),
 
   /** Open requests assigned to the calling user. Powers the inbox surface. */
@@ -359,6 +380,26 @@ export const actionRequestRouter = router({
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
       return resolveDeliveryConnectionConflict(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        actorId: userId,
+        requestId: input.id,
+        decision: input.decision,
+      });
+    }),
+
+  resolveWorkSessionAttention: workspaceProcedure
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        decision: workSessionAttentionDecisionSchema,
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const userId = ctx.session?.user?.id;
+      if (!userId) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
+      }
+      return resolveWorkSessionAttention(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
         requestId: input.id,

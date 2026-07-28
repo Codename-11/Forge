@@ -1020,6 +1020,7 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
         workspaceId: workspace.id,
         status: { in: [...STALEABLE_WORK_SESSION_STATUSES] },
         lastHeartbeatAt: { lt: cutoff },
+        OR: [{ operatorConfirmedAt: null }, { operatorConfirmedAt: { lt: cutoff } }],
       },
       include: {
         ownerConnection: { select: { id: true, kind: true, status: true } },
@@ -1089,6 +1090,7 @@ export async function sweepStaleWorkSessions(db: PrismaClient): Promise<number> 
             id: session.id,
             status: { in: [...STALEABLE_WORK_SESSION_STATUSES] },
             lastHeartbeatAt: { lt: cutoff },
+            OR: [{ operatorConfirmedAt: null }, { operatorConfirmedAt: { lt: cutoff } }],
           },
           data: { status: WorkSessionStatus.STALE, staleAt: new Date() },
         });

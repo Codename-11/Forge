@@ -22,12 +22,14 @@ const FIXTURE = {
   workSessionId: "e2e-axi130-work-session",
   candidateRunId: "e2e-axi130-candidate-run",
   actionableRequestId: "e2e-axi130-actionable-request",
+  recoveryRequestId: "e2e-axi164-recovery-request",
   fallbackRequestId: "e2e-axi130-fallback-request",
   secondFallbackRequestId: "e2e-axi131-second-fallback-request",
 } as const;
 
 const ACTIONABLE_TITLE = "Choose how the queued delivery connection should join";
 const FALLBACK_TITLE = "Review an ask without a registered reply target";
+const RECOVERY_TITLE = "MCP status for AXI-130001 is unconfirmed";
 
 function e2eDatabaseUrl() {
   if (process.env.E2E_MANAGE_STACK === "0") {
@@ -56,6 +58,7 @@ async function clearFixtures() {
       id: {
         in: [
           FIXTURE.actionableRequestId,
+          FIXTURE.recoveryRequestId,
           FIXTURE.fallbackRequestId,
           FIXTURE.secondFallbackRequestId,
         ],
@@ -229,6 +232,20 @@ test.describe("Command Center attention actions", () => {
             sourceType: "e2e-fixture",
             sourceId: FIXTURE.secondFallbackRequestId,
           },
+          {
+            id: FIXTURE.recoveryRequestId,
+            workspaceId: workspace.id,
+            issueId: FIXTURE.actionableIssueId,
+            title: RECOVERY_TITLE,
+            body: "The owning MCP connection has not sent a lifecycle signal. Delivery remains reserved until the operator confirms or abandons it.",
+            status: ActionRequestStatus.OPEN,
+            severity: NotificationSeverity.WARNING,
+            kind: ActionRequestKind.FREE_FORM,
+            assignedUserId: owner.id,
+            sourceType: "work-session",
+            sourceId: FIXTURE.workSessionId,
+            dedupeKey: `work-session-mcp-quiet:${FIXTURE.workSessionId}`,
+          },
         ],
       });
     });
@@ -281,16 +298,30 @@ test.describe("Command Center attention actions", () => {
     const fallbackCard = page
       .getByRole("link", { name: FALLBACK_TITLE })
       .locator("xpath=ancestor::div[contains(@class, 'bg-card/40')][1]");
-    await expect(fallbackCard.getByRole("link", { name: "Open issue" })).toBeVisible();
-    await expect(fallbackCard.getByRole("button", { name: "Dismiss" })).toBeVisible();
-    await expect(fallbackCard.getByRole("button", { name: "Respond" })).toHaveCount(0);
+    await expect(fallbackCard.getByRole("link", { name: "Open issue" })).toHaveCount(0);
+    await expect(fallbackCard.getByRole("button", { name: "Respond in issue" })).toBeVisible();
+    await expect(fallbackCard.getByRole("button", { name: "Dismiss card" })).toBeVisible();
+    await expect(fallbackCard.getByRole("button", { name: "Respond", exact: true })).toHaveCount(0);
     await expect(fallbackCard.getByRole("button", { name: "Accept" })).toHaveCount(0);
     await expect(fallbackCard.getByRole("button", { name: "Decline" })).toHaveCount(0);
+    await fallbackCard.getByRole("button", { name: "More responses" }).click();
+    await expect(page.getByRole("menuitem", { name: /Open issue/ })).toBeVisible();
+    await page.keyboard.press("Escape");
 
     const secondFallbackCard = page
       .getByRole("link", { name: "A second decision for the same issue" })
       .locator("xpath=ancestor::div[contains(@class, 'bg-card/40')][1]");
     await expect(secondFallbackCard).toBeVisible();
-    await expect(secondFallbackCard.getByRole("button", { name: "Dismiss" })).toBeVisible();
+    await expect(secondFallbackCard.getByRole("button", { name: "Dismiss card" })).toBeVisible();
+
+    const recoveryCard = page
+      .getByRole("link", { name: RECOVERY_TITLE })
+      .locator("xpath=ancestor::div[contains(@class, 'bg-card/40')][1]");
+    await expect(recoveryCard.getByText("delivery status required", { exact: true })).toBeVisible();
+    await expect(recoveryCard.getByRole("button", { name: "Still working" })).toBeVisible();
+    await expect(recoveryCard.getByRole("button", { name: "Abandon session" })).toBeVisible();
+    await expect(recoveryCard.getByRole("button", { name: "Dismiss card" })).toHaveCount(0);
+    await recoveryCard.getByRole("button", { name: "More responses" }).click();
+    await expect(page.getByRole("menuitem", { name: /Dismiss card/ })).toBeVisible();
   });
 });

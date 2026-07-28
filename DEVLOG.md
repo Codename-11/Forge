@@ -2,6 +2,25 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-27 — Actionable Delivery recovery requests
+
+- Replaced the dead-end Dismiss/Open Issue treatment for quiet or stale
+  Delivery sessions with server-derived **Still working**, **Resume session**,
+  and **Abandon session** actions in both Command Center and issue detail.
+- Added **Respond in issue** as the safe fallback for generic asks that have no
+  registered reply transport. The issue opens with a prepared comment while
+  preserving the operator's ability to edit before sending.
+- Renamed the destructive-looking generic dismissal to **Dismiss card** and
+  made its scope explicit: it clears the card only and does not resolve the
+  underlying Delivery condition.
+- Stored operator confirmation independently from lifecycle heartbeats. A
+  confirmation prevents immediate alert recreation without fabricating fresh
+  MCP or runtime evidence.
+- Added schema, service, router, presentation, issue-local UI, unit/integration,
+  and focused Playwright coverage. The full local quality gate passed with
+  1,523 tests passed and one skipped; the focused Chromium scenario also
+  passed against the isolated local service stack.
+
 ## 2026-07-25 — v0.30.0 release preparation
 
 Prepared the serialized minor release after implementation PRs #80, #89, and
@@ -118,6 +137,7 @@ with an explicit, keyboard-accessible Show more / Show fewer affordance. Asks
 no longer expands without limit, and Run recovery no longer hides additional
 cards in a clipped nested scroll area. Responsive Playwright coverage now
 guards both the dashboard rail fill and the attention overflow contract.
+
 ## 2026-07-20 — AXI-138 faster and safer local iteration
 
 Scoped Turbopack to the Forge repository root so unrelated parent lockfiles no

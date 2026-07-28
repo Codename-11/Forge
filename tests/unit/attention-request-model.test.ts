@@ -63,6 +63,25 @@ describe("safeAttentionActions", () => {
     expect(result.map((item) => item.id)).toEqual(["ACCEPT", "DECLINE", "DISMISS", "RESPOND"]);
   });
 
+  it("allows only registered work-session recovery decisions and safe fallbacks", () => {
+    const result = safeAttentionActions(
+      presentation("WORK_SESSION_RECOVERY", [
+        action("CONFIRM_ACTIVE"),
+        action("ABANDON_SESSION"),
+        action("RESPOND_IN_ISSUE"),
+        action("DISMISS"),
+        action("DELETE_REPOSITORY"),
+      ]),
+    );
+
+    expect(result.map((item) => item.id)).toEqual([
+      "CONFIRM_ACTIVE",
+      "ABANDON_SESSION",
+      "RESPOND_IN_ISSUE",
+      "DISMISS",
+    ]);
+  });
+
   it("falls back safely when no presentation is registered", () => {
     expect(safeAttentionActions(null)).toEqual([]);
     expect(safeAttentionActions(undefined)).toEqual([]);
