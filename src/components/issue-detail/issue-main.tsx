@@ -30,6 +30,11 @@ import {
 import { SubIssuesPanel, ParentIssueBacklink } from "@/components/issue-detail/sub-issues-panel";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import {
+  isWorkSessionAttentionDecision,
+  safeAttentionActions,
+  type AttentionRequestPresentation,
+} from "@/components/action-requests/attention-request-model";
+import {
   CommentToolCallCard,
   splitToolDirectives,
 } from "@/components/issue-detail/comment-tool-call-card";
@@ -51,6 +56,7 @@ import { MentionInput } from "@/components/inputs/mention-input";
 import { Kbd } from "@/components/ui/kbd";
 import { Combobox } from "@/components/ui/combobox";
 import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
+import { useConfirm } from "@/components/ui/modal";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
 
@@ -375,7 +381,14 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
         Needs your decision · {requests.length}
       </div>
       {requests.map((request) =>
-        request.kind === "FREE_FORM" ? (
+        request.presentation?.protocol === "WORK_SESSION_RECOVERY" ? (
+          <IssueWorkSessionRequest
+            key={request.id}
+            request={request}
+            issueId={issueId}
+            canResolve={canResolve}
+          />
+        ) : request.kind === "FREE_FORM" ? (
           <IssueFreeFormRequest
             key={request.id}
             request={request}
@@ -410,6 +423,133 @@ function IssueActionRequests({ issueId, canResolve }: { issueId: string; canReso
         ),
       )}
     </section>
+  );
+}
+
+function IssueWorkSessionRequest({
+  request,
+  issueId,
+  canResolve,
+}: {
+  request: {
+    id: string;
+    title: string;
+    body: string | null;
+    presentation: AttentionRequestPresentation;
+  };
+  issueId: string;
+  canResolve: boolean;
+}) {
+  const ws = useWorkspace();
+  const utils = trpc.useUtils();
+  const { confirm, confirmElement } = useConfirm();
+  const visibleCanResolve = canResolve || ws.role === "OWNER" || ws.role === "ADMIN";
+  const settle = () => {
+    void utils.actionRequest.list.invalidate();
+    void utils.workSession.listForIssue.invalidate({ issueId });
+    void utils.issue.activity.invalidate({ issueId });
+    void utils.commandCenter.summary.invalidate();
+    void utils.commandCenter.decisionsCount.invalidate();
+  };
+  const resolve = trpc.actionRequest.resolveWorkSessionAttention.useMutation({
+    onSuccess: (result) => {
+      settle();
+      toast.success(
+        result.decision === "ABANDON_SESSION"
+          ? "Delivery session abandoned."
+          : result.decision === "RESUME_SESSION"
+            ? "Delivery session resumed."
+            : "Operator confirmation recorded. MCP evidence remains unchanged.",
+      );
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const dismiss = trpc.actionRequest.dismiss.useMutation({
+    onSuccess: () => {
+      settle();
+      toast.success("Card dismissed; Delivery state was not changed.");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+  const actions = safeAttentionActions(request.presentation).filter(
+    (action) => action.id !== "OPEN_ISSUE",
+  );
+  const runAction = async (action: (typeof actions)[number]) => {
+    if (!action.enabled) return;
+    if (action.id === "RESPOND_IN_ISSUE") {
+      dispatchQuickReply(issueId, `Regarding "${request.title}":`);
+      return;
+    }
+    if (action.id === "DISMISS") {
+      dismiss.mutate({ id: request.id });
+      return;
+    }
+    if (!isWorkSessionAttentionDecision(action.id)) return;
+    if (action.requiresConfirmation || action.tone === "DANGER") {
+      const approved = await confirm({
+        title: action.label,
+        description: action.description,
+        primaryLabel: action.label,
+        secondaryLabel: "Keep reviewing",
+        variant: action.tone === "DANGER" ? "destructive" : "default",
+      });
+      if (!approved) return;
+    }
+    resolve.mutate({ id: request.id, decision: action.id });
+  };
+  return (
+    <div className="rounded-md border border-warning/30 bg-card/50 p-2.5">
+      <div className="text-meta uppercase tracking-wide text-warning">
+        {request.presentation.category.replace(/_/g, " ").toLowerCase()}
+      </div>
+      <div className="mt-1 text-sm font-medium">{request.title}</div>
+      {request.body ? (
+        <p className="text-meta mt-1 whitespace-pre-wrap text-muted-foreground">{request.body}</p>
+      ) : null}
+      {request.presentation.details.length > 0 ? (
+        <dl className="text-meta mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+          {request.presentation.details.map((detail) => (
+            <div key={detail.label} className="contents">
+              <dt className="text-muted-foreground">{detail.label}</dt>
+              <dd className="min-w-0 break-words text-foreground/90">{detail.value}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : null}
+      {visibleCanResolve ? (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          {actions.map((action) => (
+            <Button
+              key={action.id}
+              type="button"
+              size="sm"
+              variant={
+                action.tone === "PRIMARY"
+                  ? "ember"
+                  : action.tone === "DANGER"
+                    ? "danger"
+                    : "outline"
+              }
+              disabled={resolve.isPending || dismiss.isPending || !action.enabled}
+              title={
+                action.enabled ? action.description : (action.disabledReason ?? action.description)
+              }
+              onClick={() => void runAction(action)}
+            >
+              {(resolve.isPending || dismiss.isPending) && action.id !== "RESPOND_IN_ISSUE" ? (
+                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+              ) : null}
+              {action.label}
+            </Button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-meta mt-2 text-muted-foreground">
+          The Delivery owner or a workspace admin can resolve this request.
+        </p>
+      )}
+      {confirmElement}
+    </div>
   );
 }
 

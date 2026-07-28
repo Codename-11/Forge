@@ -142,6 +142,24 @@ Claimed → In progress → PR open → In review → Ready to merge → Merged
 ownership lease. A stale session remains a lease and raises a shared action
 request; it must be resumed or abandoned before replacement work starts.
 
+Delivery recovery requests expose lifecycle-aware operator actions wherever
+the request appears:
+
+- **Still working** confirms that a quiet MCP-owned lease should remain
+  reserved.
+- **Resume session** returns a stale lease to in progress.
+- **Abandon session** explicitly releases ownership.
+- **Respond in issue** opens the issue with a prepared comment when the request
+  needs human context instead of a structured transition.
+- **Dismiss card** removes only the current Attention Queue card. It does not
+  change Delivery ownership or claim that the underlying condition was fixed.
+
+Operator confirmation is stored separately from the connection heartbeat. It
+suppresses repeated recovery prompts for the normal stale interval without
+claiming that MCP, a runtime, or any other client emitted fresh lifecycle
+evidence. The owning connection must still heartbeat, complete, hand off, or
+abandon the session explicitly.
+
 For direct MCP work, clients open an explicit run before implementation.
 Opening an `EXECUTE` run moves a Backlog or Todo issue to the workspace's
 configured In Progress status; successfully completing it moves the issue to

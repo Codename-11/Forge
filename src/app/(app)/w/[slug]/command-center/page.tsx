@@ -36,10 +36,12 @@ import { RunApprovalCard } from "@/components/agents/run-approval-card";
 import { ActionRequestCard } from "@/components/action-requests/action-request-card";
 import {
   isDeliveryConflictDecision,
+  isWorkSessionAttentionDecision,
   safeAttentionActions,
   type AttentionAction,
   type AttentionRequestPresentation,
 } from "@/components/action-requests/attention-request-model";
+import { readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { MarkdownWithAttachments } from "@/components/markdown/attachment-renderer";
 import { WorkspaceActivityTimeline } from "@/components/workspace-activity-timeline";
 import { IssueReference } from "@/components/issue-reference";
@@ -649,6 +651,7 @@ function ActionRequestDecisionCard({
   const presentation = request.presentation ?? null;
   const replyTarget = presentation?.replyTarget ?? null;
   const isDeliveryConflict = presentation?.protocol === "DELIVERY_CONNECTION_CONFLICT";
+  const isWorkSessionRecovery = presentation?.protocol === "WORK_SESSION_RECOVERY";
   const issueHref = request.issue
     ? `/w/${request.issue.workspace.slug || slug}/i/${request.issue.workspace.key}-${request.issue.number}`
     : null;
@@ -698,9 +701,29 @@ function ActionRequestDecisionCard({
     onSuccess: () => toast.success("Delivery decision applied."),
     onSettled: settle,
   });
+  const resolveWorkSessionAttention = trpc.actionRequest.resolveWorkSessionAttention.useMutation({
+    onMutate: () => onResolved(),
+    onError: (e) => {
+      toast.error(e.message);
+      void utils.commandCenter.summary.invalidate();
+    },
+    onSuccess: (result) =>
+      toast.success(
+        result.decision === "ABANDON_SESSION"
+          ? "Delivery session abandoned."
+          : result.decision === "RESUME_SESSION"
+            ? "Delivery session resumed."
+            : "Operator confirmation recorded. MCP evidence remains unchanged.",
+      ),
+    onSettled: settle,
+  });
 
   const pending =
-    accept.isPending || decline.isPending || dismiss.isPending || resolveDeliveryConflict.isPending;
+    accept.isPending ||
+    decline.isPending ||
+    dismiss.isPending ||
+    resolveDeliveryConflict.isPending ||
+    resolveWorkSessionAttention.isPending;
 
   const runAction = async (action: AttentionAction) => {
     if (!action.enabled) return;
@@ -717,6 +740,25 @@ function ActionRequestDecisionCard({
 
     if (action.id === "DISMISS") {
       dismiss.mutate({ id: request.id });
+      return;
+    }
+
+    if (action.id === "RESPOND_IN_ISSUE") {
+      if (!issueHref || !request.issue) return;
+      const draftKey = `comment:${request.issue.id}`;
+      const existing = readDraft<string>(draftKey);
+      const context = `Regarding "${request.title}":\n\n`;
+      if (!existing?.trim()) saveDraft(draftKey, context);
+      window.location.assign(`${issueHref}#issue-comments-heading`);
+      return;
+    }
+
+    if (isWorkSessionRecovery) {
+      if (!isWorkSessionAttentionDecision(action.id)) {
+        toast.error("This Delivery action is not supported. Open the issue to continue safely.");
+        return;
+      }
+      resolveWorkSessionAttention.mutate({ id: request.id, decision: action.id });
       return;
     }
 

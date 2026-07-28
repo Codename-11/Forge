@@ -2719,34 +2719,38 @@ model AgentConnection {
 /// branch for the same issue. Terminal rows remain as the issue's delivery
 /// history; a partial unique index in the migration permits one active row.
 model WorkSession {
-  id                String            @id @default(cuid())
-  workspaceId       String
-  issueId           String
-  ownerUserId       String?
-  ownerAgentId      String?
+  id                  String            @id @default(cuid())
+  workspaceId         String
+  issueId             String
+  ownerUserId         String?
+  ownerAgentId        String?
   /// Concrete endpoint that owns execution/heartbeat authority. The logical
   /// owner remains ownerAgentId; nullable preserves legacy/manual sessions.
-  ownerConnectionId String?
-  source            WorkSessionSource
-  status            WorkSessionStatus @default(CLAIMED)
-  repoFullName      String
-  branch            String
-  baseBranch        String            @default("main")
+  ownerConnectionId   String?
+  source              WorkSessionSource
+  status              WorkSessionStatus @default(CLAIMED)
+  repoFullName        String
+  branch              String
+  baseBranch          String            @default("main")
   /// Local path is diagnostic only; it is never used as an execution target.
-  worktreePath      String?
-  headSha           String?
-  pullRequestId     String?
-  releasedVersion   String?
-  deployedSha       String?
-  lastHeartbeatAt   DateTime          @default(now())
-  staleAt           DateTime?
-  mergedAt          DateTime?
-  releasedAt        DateTime?
-  deployedAt        DateTime?
-  verifiedAt        DateTime?
-  endedAt           DateTime?
-  createdAt         DateTime          @default(now())
-  updatedAt         DateTime          @updatedAt
+  worktreePath        String?
+  headSha             String?
+  pullRequestId       String?
+  releasedVersion     String?
+  deployedSha         String?
+  lastHeartbeatAt     DateTime          @default(now())
+  /// Human confirmation that the delivery lease should remain reserved.
+  /// Kept separate from lifecycle heartbeats so operator intent never
+  /// fabricates MCP or runtime evidence.
+  operatorConfirmedAt DateTime?
+  staleAt             DateTime?
+  mergedAt            DateTime?
+  releasedAt          DateTime?
+  deployedAt          DateTime?
+  verifiedAt          DateTime?
+  endedAt             DateTime?
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
 
   workspace       Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   issue           Issue                    @relation(fields: [issueId], references: [id], onDelete: Cascade)

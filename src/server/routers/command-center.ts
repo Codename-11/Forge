@@ -38,7 +38,7 @@ type AttentionAction = {
   disabledReason: string | null;
 };
 
-async function actionRequestPresentation(
+export async function actionRequestPresentation(
   db: PrismaClient,
   workspaceId: string,
   viewer: { userId: string | null; role: string },
@@ -51,6 +51,7 @@ async function actionRequestPresentation(
     issueId: string | null;
     sourceType: string | null;
     sourceId: string | null;
+    dedupeKey: string | null;
     requestedByAgent: {
       id: string;
       name: string;
@@ -82,13 +83,134 @@ async function actionRequestPresentation(
   };
   const dismiss: AttentionAction = {
     id: "DISMISS",
-    label: "Dismiss",
-    description: "Remove this stale request from the attention queue.",
+    label: "Dismiss card",
+    description:
+      "Remove this card without resolving the underlying issue or Delivery state. It may return if the condition persists.",
     tone: "NEUTRAL",
     requiresConfirmation: false,
     enabled: true,
     disabledReason: null,
   };
+
+  const isMcpQuiet =
+    request.sourceType === "work-session" &&
+    request.dedupeKey?.startsWith("work-session-mcp-quiet:") === true;
+  const isStaleSession =
+    request.sourceType === "work-session" &&
+    request.dedupeKey?.startsWith("work-session-stale:") === true;
+  if (request.kind === ActionRequestKind.FREE_FORM && (isMcpQuiet || isStaleSession)) {
+    const session = request.sourceId
+      ? await db.workSession.findFirst({
+          where: { id: request.sourceId, workspaceId },
+          select: {
+            id: true,
+            status: true,
+            endedAt: true,
+            repoFullName: true,
+            branch: true,
+            ownerUserId: true,
+            operatorConfirmedAt: true,
+            ownerConnection: {
+              select: { status: true, confidence: true, displayName: true, lastSeenAt: true },
+            },
+          },
+        })
+      : null;
+    const isAdmin = viewer.role === "OWNER" || viewer.role === "ADMIN";
+    const canManage =
+      Boolean(session && !session.endedAt) &&
+      (isAdmin || (viewer.userId !== null && session?.ownerUserId === viewer.userId));
+    const unavailableReason = !session
+      ? "The delivery session no longer exists."
+      : session.endedAt
+        ? "The delivery session has already ended."
+        : canManage
+          ? null
+          : "Only the work-session owner or a workspace admin can manage this session.";
+    const primary: AttentionAction = {
+      id: isStaleSession ? "RESUME_SESSION" : "CONFIRM_ACTIVE",
+      label: isStaleSession ? "Resume session" : "Still working",
+      description: isStaleSession
+        ? "Resume this existing Delivery session and keep its ownership reserved."
+        : "Record an audited operator confirmation and keep Delivery reserved without claiming the MCP client checked in.",
+      tone: "PRIMARY",
+      requiresConfirmation: false,
+      enabled: unavailableReason === null,
+      disabledReason: unavailableReason,
+    };
+    const abandon: AttentionAction = {
+      id: "ABANDON_SESSION",
+      label: "Abandon session",
+      description:
+        "End this Delivery session and release its ownership so replacement work can start.",
+      tone: "DANGER",
+      requiresConfirmation: true,
+      enabled: unavailableReason === null,
+      disabledReason: unavailableReason,
+    };
+    const respondInIssue: AttentionAction | null = request.issueId
+      ? {
+          id: "RESPOND_IN_ISSUE",
+          label: "Respond in issue",
+          description:
+            "Open the issue composer with this request’s context so you can explain the intended next step.",
+          tone: "NEUTRAL",
+          requiresConfirmation: false,
+          enabled: true,
+          disabledReason: null,
+        }
+      : null;
+    return {
+      ...base,
+      category: isMcpQuiet ? "DELIVERY_STATUS_REQUIRED" : "DELIVERY_RECOVERY",
+      protocol: "WORK_SESSION_RECOVERY",
+      replyTarget: null,
+      actions: [
+        primary,
+        abandon,
+        ...(respondInIssue ? [respondInIssue] : []),
+        dismiss,
+        ...(openIssue ? [openIssue] : []),
+      ],
+      details: [
+        { label: "Delivery state", value: session?.status ?? "Unavailable" },
+        ...(session
+          ? [{ label: "Branch", value: `${session.repoFullName}:${session.branch}` }]
+          : []),
+        ...(session?.ownerConnection?.displayName
+          ? [{ label: "Owning connection", value: session.ownerConnection.displayName }]
+          : []),
+        ...(session?.ownerConnection
+          ? [
+              {
+                label: "Connection evidence",
+                value: `${session.ownerConnection.status.toLowerCase()} · ${session.ownerConnection.confidence.toLowerCase()}`,
+              },
+            ]
+          : []),
+        ...(session?.operatorConfirmedAt
+          ? [
+              {
+                label: "Last operator confirmation",
+                value: session.operatorConfirmedAt.toISOString(),
+              },
+            ]
+          : []),
+      ],
+      technicalDetails: [
+        ...base.technicalDetails,
+        ...(session ? [{ label: "Work session", value: session.id }] : []),
+        ...(session?.ownerConnection?.lastSeenAt
+          ? [
+              {
+                label: "Connection last seen",
+                value: session.ownerConnection.lastSeenAt.toISOString(),
+              },
+            ]
+          : []),
+      ],
+    };
+  }
 
   if (request.kind === ActionRequestKind.DELIVERY_CONNECTION_CONFLICT) {
     const raw =
@@ -265,7 +387,20 @@ async function actionRequestPresentation(
           ...(openIssue ? [openIssue] : []),
         ]
       : openIssue
-        ? [dismiss, openIssue]
+        ? [
+            {
+              id: "RESPOND_IN_ISSUE",
+              label: "Respond in issue",
+              description:
+                "Open the issue composer with this request’s context when no structured operation is available.",
+              tone: "PRIMARY",
+              requiresConfirmation: false,
+              enabled: true,
+              disabledReason: null,
+            },
+            dismiss,
+            openIssue,
+          ]
         : [dismiss];
     return {
       ...base,
