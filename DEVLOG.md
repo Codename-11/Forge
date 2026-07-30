@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-30 — v0.32.0 release preparation
+
+- Squash-merged AXI-168 implementation PR #94 to `main` at
+  `6e4f15af75e41efe4df7e284811c27fd185738d0` after exact-head GitHub CI passed.
+- Opened AXI-169 as the dedicated release owner and prepared the `0.32.0`
+  package bump plus curated changelog for session-scoped MCP Delivery lifecycle
+  behavior.
+- Release, deployment, and live verification remain separate serialized phases
+  after the release PR is reviewed and merged.
+
 ## 2026-07-29 — Session-scoped MCP Delivery lifecycle
 
 - Separated generic MCP connection presence from WorkSession lifecycle
