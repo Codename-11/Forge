@@ -9,6 +9,22 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-07-30] — v0.32.0 · Session-scoped MCP delivery
+
+### Added
+
+- **Direct MCP work can end without inventing delivery evidence.** The owner-scoped `workSessions.abandon` action explicitly releases no-output code sessions while preserving the distinction between abandoned, merged, released, deployed, and verified work.
+
+### Changed
+
+- **MCP connection presence no longer renews unrelated Delivery sessions.** Generic traffic confirms only the client endpoint; each WorkSession must heartbeat, attach its implementation pull request, hand off, or end explicitly.
+- **MCP lifecycle responses identify the required next action.** Run and Delivery tools guide clients to heartbeat the exact session and attach or abandon it before completion.
+
+### Fixed
+
+- **Quiet-session recovery no longer churns after unrelated MCP calls.** Recovery requests clear only when their own Delivery session produces recent lifecycle evidence.
+- **Direct MCP Execute runs cannot leave ambiguous active delivery behind.** Completion fails closed while the owning session remains claimed, in progress, or stale without an implementation pull request or explicit abandonment.
+
 ## [2026-07-28] — v0.31.0 · Actionable delivery recovery
 
 ### Added
