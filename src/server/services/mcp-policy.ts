@@ -228,6 +228,13 @@ export const EXPLICIT_MCP_TOOL_POLICIES = {
     allowedModes: EXECUTE_ONLY,
     actor: "linked-agent-required",
   },
+  "workSessions.abandon": {
+    access: "write",
+    targetType: "issue",
+    mutationKind: "issue-state",
+    allowedModes: EXECUTE_ONLY,
+    actor: "linked-agent-required",
+  },
   "workSessions.attachPullRequest": {
     access: "write",
     targetType: "issue",

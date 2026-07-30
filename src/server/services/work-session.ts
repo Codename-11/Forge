@@ -167,23 +167,34 @@ async function resolveTerminalDeliveryConflictRequests(db: PrismaClient) {
 }
 
 /**
- * Any authenticated signal from an MCP connection renews its observation
- * lease. Clear delivery recovery asks for sessions that connection still owns,
- * even when the signal was a generic MCP ping/tool call rather than an explicit
- * workSessions heartbeat.
+ * Repair quiet requests only when their own Delivery session has recent
+ * lifecycle evidence. Connection-level activity must not clear every request
+ * owned by that endpoint: one MCP client may own several independent sessions,
+ * and a generic tool call proves only that the transport is present.
+ *
+ * Session-scoped mutations already resolve their request directly. This
+ * reconciliation is a safety net for the narrow case where the heartbeat was
+ * persisted but request cleanup did not complete.
  */
-export async function resolveMcpQuietRequestsForConnection(
+export async function reconcileFreshMcpQuietRequestsForConnection(
   db: PrismaClient,
   workspaceId: string,
   connectionId: string,
-  resolution = "MCP connection resumed.",
+  resolution = "Delivery session produced a recent lifecycle signal.",
 ) {
+  const workspace = await db.workspace.findFirst({
+    where: { id: workspaceId, deletedAt: null },
+    select: { workSessionStaleMinutes: true },
+  });
+  if (!workspace || workspace.workSessionStaleMinutes <= 0) return 0;
+  const cutoff = new Date(Date.now() - workspace.workSessionStaleMinutes * 60_000);
   const sessions = await db.workSession.findMany({
     where: {
       workspaceId,
       ownerConnectionId: connectionId,
       endedAt: null,
       status: { in: [...ACTIVE_WORK_SESSION_STATUSES] },
+      lastHeartbeatAt: { gte: cutoff },
     },
     select: { id: true },
   });

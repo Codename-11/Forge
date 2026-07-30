@@ -7,9 +7,9 @@ available, and how chat is served — and why a Codex CLI session must **not**
 
 There are two independent axes:
 
-- **Tier** — *how reachable and how rich* the connection is (presence +
+- **Tier** — _how reachable and how rich_ the connection is (presence +
   transport). First-class managed runtime → session CLI → basic webhook.
-- **Engine** — *who owns the agent loop* for a chat turn: **Runs** (the
+- **Engine** — _who owns the agent loop_ for a chat turn: **Runs** (the
   runtime) or **Streaming/Completions** (Forge). Orthogonal to tier; see
   [Chat & Dispatch Engines](./engines.md).
 
@@ -35,23 +35,30 @@ agent's work to the credential owner.
 Availability is interpreted from the connection's declared liveness model,
 not from its provider name:
 
-| Connection | Positive signals | Silence means |
-|---|---|---|
-| Managed runtime | Runtime heartbeat, run events, provider state | A confirmed stall is possible after the workspace threshold |
-| MCP client | MCP initialize/session, tool calls, explicit lease heartbeat | Quiet / status unconfirmed; never a confirmed stall from silence alone |
-| Webhook | Durable delivery plus acknowledgement | Delivery failed or acknowledgement missing |
-| On-demand | Successful probe when invoked | Not currently running; global online/offline is not meaningful |
+| Connection      | Positive signals                                                                                                           | Silence means                                                          |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Managed runtime | Runtime heartbeat, run events, provider state                                                                              | A confirmed stall is possible after the workspace threshold            |
+| MCP client      | MCP initialize/session and tool calls confirm the connection; explicit session heartbeat confirms only that Delivery lease | Quiet / status unconfirmed; never a confirmed stall from silence alone |
+| Webhook         | Durable delivery plus acknowledgement                                                                                      | Delivery failed or acknowledgement missing                             |
+| On-demand       | Successful probe when invoked                                                                                              | Not currently running; global online/offline is not meaningful         |
 
 Git commits, pull-request changes, checks, and reviews count as work evidence,
 but do not claim that a client process is alive. Operator surfaces show both
 the latest lifecycle signal and the latest external work evidence, along with
 the confidence of the resulting state.
 
+Connection presence is not inherited by the WorkSessions that connection owns.
+A generic MCP call can confirm that the endpoint is reachable, but it neither
+renews nor clears recovery for any code-delivery session. Agents heartbeat the
+exact session at meaningful phases, attach its PR, or explicitly hand off or
+abandon it. Direct Execute runs with an unbound active code session must settle
+that session before `runs.complete`.
+
 ## Tier 1 — First-class agents (managed runtimes)
 
 The agent is a **full workspace member**: always-on presence, realtime chat,
 orchestration, issues, and dispatched work. Forge holds **no model API key** —
-the runtime runs the model; the agent answers *as itself*.
+the runtime runs the model; the agent answers _as itself_.
 
 - **Hermes** — persistent daemon hosting multiple profiles (Victor, Mizu)
   behind one gateway (`/v1/runs`). Owns the loop, streams, approvals,
@@ -74,14 +81,14 @@ the runtime runs the model; the agent answers *as itself*.
 
 **Engine choice (per agent):**
 
-| | **Runs** (recommended) | **Streaming** (Completions) |
-|---|---|---|
-| Loop owner | The runtime | Forge |
-| Agent memory / persona / commands | **Preserved** — runs as itself | None (stateless) |
-| Tools | The agent's own | Forge's chat allowlist + approvals |
-| Same engine as dispatched work | Yes | No |
-| Latency | Slightly higher | Lowest |
-| Model | Provider-native | Any OpenAI-compatible |
+|                                   | **Runs** (recommended)         | **Streaming** (Completions)        |
+| --------------------------------- | ------------------------------ | ---------------------------------- |
+| Loop owner                        | The runtime                    | Forge                              |
+| Agent memory / persona / commands | **Preserved** — runs as itself | None (stateless)                   |
+| Tools                             | The agent's own                | Forge's chat allowlist + approvals |
+| Same engine as dispatched work    | Yes                            | No                                 |
+| Latency                           | Slightly higher                | Lowest                             |
+| Model                             | Provider-native                | Any OpenAI-compatible              |
 
 We default first-class agents to **Runs** so Hermes/Codex keep their memory,
 session, and native commands. Flip to **Streaming** only for a stateless
@@ -96,7 +103,7 @@ functionality while the session is active**, but **ephemeral presence** — not
 always online. Best for in-session, active work rather than always-on duty.
 
 - **ACP** — Agent Client Protocol: a portable, bidirectional agent session.
-  The CLI chats *as itself* while live, with no per-vendor wiring.
+  The CLI chats _as itself_ while live, with no per-vendor wiring.
   `transport: "acp"`, `chatMode: "acp"`. **Daemon-mediated** (ACP is stdio
   JSON-RPC): on the daemon host set `FORGE_ACP_CMD="<agent> acp"` (e.g.
   `claude-code-acp`, `codex acp`, `opencode acp`) and run `forge daemon start`
@@ -105,8 +112,8 @@ always online. Best for in-session, active work rather than always-on duty.
 - **MCP (pull/act, today)** — the CLI connects over MCP with a Bearer key to
   **read context and take actions**. It does **not** serve an interactive chat
   turn (`chatMode: "none"`) — it has no model key and isn't a chat backend.
-  Chatting with such an agent shows a "no chat model configured" notice *by
-  design*; to chat with it as itself, give it an ACP session or promote it to
+  Chatting with such an agent shows a "no chat model configured" notice _by
+  design_; to chat with it as itself, give it an ACP session or promote it to
   a first-class app-server runtime.
 
 The `forge` **local daemon** is a managed bridge in this tier: `forge daemon
@@ -122,11 +129,11 @@ runtimes.
 
 ## At a glance
 
-| Tier | Examples | Transport | Presence | Chat | Best for |
-|------|----------|-----------|----------|------|----------|
-| 1 — First-class | Hermes, Codex app server | `runs-api`, `app-server` | Always-on | Runs (or Streaming) | Full members: chat + dispatch + orchestration |
-| 2 — Session CLI | Claude Code, Codex CLI, OpenCode | `acp`, `mcp`, `local-daemon` | Session/ephemeral | ACP (as itself) or pull/act | In-session active work |
-| 3 — Basic | Custom bot | `webhook`, `http` | Delivery-derived | None | BYO integrations |
+| Tier            | Examples                         | Transport                    | Presence          | Chat                        | Best for                                      |
+| --------------- | -------------------------------- | ---------------------------- | ----------------- | --------------------------- | --------------------------------------------- |
+| 1 — First-class | Hermes, Codex app server         | `runs-api`, `app-server`     | Always-on         | Runs (or Streaming)         | Full members: chat + dispatch + orchestration |
+| 2 — Session CLI | Claude Code, Codex CLI, OpenCode | `acp`, `mcp`, `local-daemon` | Session/ephemeral | ACP (as itself) or pull/act | In-session active work                        |
+| 3 — Basic       | Custom bot                       | `webhook`, `http`            | Delivery-derived  | None                        | BYO integrations                              |
 
 ## Codex sandboxing & approvals
 
@@ -134,7 +141,7 @@ A Codex app-server runtime touches a real filesystem, so its blast radius is
 controlled on **two layers**:
 
 1. **The bridge container is the hard boundary.** The reference bridge
-   (`~/docker/codex-bridge/`) mounts only the operator's Codex *auth*
+   (`~/docker/codex-bridge/`) mounts only the operator's Codex _auth_
    (read-only) and a single scoped workspace (`/work`). The host filesystem is
    unreachable from inside, so even a full-access Codex turn can't read host
    secrets. This is fixed by the deployment, not a per-runtime setting. The
@@ -145,11 +152,11 @@ controlled on **two layers**:
    `sandboxPolicy` / `approvalPolicy` / `cwd` overrides). Edit it in
    **Settings → Runtimes → (the Codex runtime) → Codex sandbox**:
 
-   | Field | Values | Effect |
-   |-------|--------|--------|
-   | **Sandbox mode** | `Full access` · `Workspace-write` · `Read-only` | OS-level file/network scope. Workspace-write limits writes to the workspace root. |
-   | **Approval policy** | `Never` · `On request` · `On failure` · `Untrusted` | Anything but `Never` makes Codex raise an approval before risky commands/edits — Forge renders these as **accept/deny cards in chat**. |
-   | **Workspace root** | a path, e.g. `/work/agent-forge` | The turn's working dir; in workspace-write it's the only writable root. Setting it also makes Forge declare the Codex runtime as having repo tools for preflight and runtime cards. |
+   | Field               | Values                                              | Effect                                                                                                                                                                              |
+   | ------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+   | **Sandbox mode**    | `Full access` · `Workspace-write` · `Read-only`     | OS-level file/network scope. Workspace-write limits writes to the workspace root.                                                                                                   |
+   | **Approval policy** | `Never` · `On request` · `On failure` · `Untrusted` | Anything but `Never` makes Codex raise an approval before risky commands/edits — Forge renders these as **accept/deny cards in chat**.                                              |
+   | **Workspace root**  | a path, e.g. `/work/agent-forge`                    | The turn's working dir; in workspace-write it's the only writable root. Setting it also makes Forge declare the Codex runtime as having repo tools for preflight and runtime cards. |
 
    Defaults (no config) = **full access, no prompts** — the original behavior.
    Forge tightens this per run: non-Execute dispatches (Research, Review, and

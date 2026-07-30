@@ -204,6 +204,7 @@ async function resolveExplicitPolicyTarget(
     case "workSessions.claim":
       return { kind: "issues", issueIds: [input.issueId as string] };
     case "workSessions.heartbeat":
+    case "workSessions.abandon":
     case "workSessions.attachPullRequest": {
       const sessionId = input.sessionId as string | undefined;
       if (!sessionId) return { kind: "none" };

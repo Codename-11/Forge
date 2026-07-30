@@ -2,6 +2,23 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-07-29 — Session-scoped MCP Delivery lifecycle
+
+- Separated generic MCP connection presence from WorkSession lifecycle
+  reconciliation. A tool call can confirm the endpoint without clearing stale
+  recovery requests for every Delivery session that endpoint owns.
+- Added owner-scoped `workSessions.abandon` so direct MCP clients can
+  explicitly release a no-output code session without inventing merged,
+  released, or deployed evidence.
+- Made direct MCP Execute completion fail closed when its active code session
+  has neither an attached implementation PR nor explicit abandonment.
+- Added lifecycle next-action guidance to MCP claim/run responses and expanded
+  operator documentation for shared connections, heartbeats, PR attachment,
+  abandonment, and completion ordering.
+- Added integration coverage for quiet-request churn, multiple Delivery
+  sessions sharing one MCP connection, explicit abandonment, and guarded run
+  completion.
+
 ## 2026-07-28 — v0.31.0 release preparation
 
 Prepared the serialized minor release for AXI-164 after implementation PR #92

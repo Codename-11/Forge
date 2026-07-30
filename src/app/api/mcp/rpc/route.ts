@@ -19,7 +19,7 @@ import { mcpServerInfo } from "@/server/build-info";
 import { FORGE_MCP_INSTRUCTIONS } from "@/server/services/mcp-instructions";
 import { db } from "@/server/db";
 import { touchAgentConnection, upsertAgentConnection } from "@/server/services/agent-connection";
-import { resolveMcpQuietRequestsForConnection } from "@/server/services/work-session";
+import { reconcileFreshMcpQuietRequestsForConnection } from "@/server/services/work-session";
 
 /**
  * Standard MCP (Model Context Protocol) endpoint — Streamable HTTP transport
@@ -250,7 +250,7 @@ async function resolveMcpConnection(
       },
     });
   }
-  await resolveMcpQuietRequestsForConnection(db, auth.workspaceId, connection.id);
+  await reconcileFreshMcpQuietRequestsForConnection(db, auth.workspaceId, connection.id);
   return connection;
 }
 

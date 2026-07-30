@@ -64,6 +64,13 @@ asks for a Delivery disposition instead of implying that work is still
 executing. Resume it, attach or advance its delivery evidence, hand it off, or
 abandon it explicitly.
 
+Generic traffic from the same MCP connection is also connection evidence only.
+One Desktop task or CLI process can own more than one Delivery session, so an
+unrelated tool call must not refresh or clear every session's recovery request.
+Only the exact session's heartbeat, PR attachment or advancement, handoff,
+abandonment, terminal reconciliation, or audited operator confirmation changes
+that session's recovery state.
+
 MCP-quiet recovery is coordination evidence, not an independent product
 decision. It does not by itself block a completion recommendation, and a safe
 Ready to Close assessment supersedes the redundant recovery ask. Terminal
@@ -166,6 +173,13 @@ configured In Progress status; successfully completing it moves the issue to
 the configured In Review status. Research, review, and discussion runs do not
 change issue status. These are server-side, audited transitions so clients do
 not need to race a separate status mutation.
+
+An MCP-owned Execute run cannot complete while its code-delivery session is
+still Claimed, In Progress, or Stale without an implementation PR. Attach the native PR
+with `workSessions.attachPullRequest`, or explicitly release a no-output session
+with `workSessions.abandon`, before calling `runs.complete`. This prevents a
+client ending its turn while Forge still reports an ambiguous active delivery
+lease.
 
 Release, deploy, and verification transitions require workspace admin authority.
 Feature work may run in parallel, but merges and production delivery are
