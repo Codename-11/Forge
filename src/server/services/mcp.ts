@@ -31,6 +31,7 @@ import {
   RelationKind,
   RuntimeKind,
   StatusCategory,
+  WorkSessionStatus,
   WorkSessionSource,
   type CanvasStyleKind,
   type EngagementMode,
@@ -155,6 +156,7 @@ import {
   type GitHubResourceType,
 } from "@/server/services/github/types";
 import {
+  advanceWorkSession,
   attachPullRequest,
   claimWorkSession,
   listIssueWorkSessions,
@@ -6955,7 +6957,17 @@ export const mcpTools = {
         });
         return opened;
       });
-      return { runId: run.id, isNew, status: run.status, issueId: issue.id };
+      return {
+        runId: run.id,
+        isNew,
+        status: run.status,
+        issueId: issue.id,
+        lifecycle: {
+          completeWith: "runs.complete",
+          delivery:
+            "For code work, keep the exact WorkSession alive with workSessions.heartbeat, then attach its implementation PR or abandon it before completing this run.",
+        },
+      };
     },
   },
 
@@ -7249,6 +7261,36 @@ export const mcpTools = {
         throw new Error(`Run is ${run.status}; only ACTIVE / WAITING runs can be completed.`);
       }
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: run.issueId });
+      if (
+        run.engagementMode === "EXECUTE" &&
+        run.connectionId &&
+        run.connection?.kind === AgentConnectionKind.MCP_CLIENT
+      ) {
+        const unresolvedDelivery = await db.workSession.findFirst({
+          where: {
+            workspaceId: ctx.workspaceId,
+            issueId: run.issueId,
+            ownerConnectionId: run.connectionId,
+            endedAt: null,
+            pullRequestId: null,
+            status: {
+              in: [
+                WorkSessionStatus.CLAIMED,
+                WorkSessionStatus.IN_PROGRESS,
+                WorkSessionStatus.STALE,
+              ],
+            },
+          },
+          select: { id: true },
+        });
+        if (unresolvedDelivery) {
+          throw new Error(
+            `Active Delivery session ${unresolvedDelivery.id} has no implementation PR. ` +
+              "Call workSessions.attachPullRequest after linking the PR, or call " +
+              "workSessions.abandon when no implementation will be delivered, before runs.complete.",
+          );
+        }
+      }
 
       if (input.completionCommentId) {
         const completionComment = await db.comment.findFirst({
@@ -7427,7 +7469,29 @@ export const mcpTools = {
               ],
             })
           : null;
-      return { ...completed, completionRecommendation };
+      const deliverySession = run.connectionId
+        ? await db.workSession.findFirst({
+            where: {
+              workspaceId: ctx.workspaceId,
+              issueId: run.issueId,
+              ownerConnectionId: run.connectionId,
+            },
+            orderBy: { createdAt: "desc" },
+            select: { id: true, status: true, pullRequestId: true, endedAt: true },
+          })
+        : null;
+      return {
+        ...completed,
+        completionRecommendation,
+        delivery: deliverySession
+          ? {
+              sessionId: deliverySession.id,
+              status: deliverySession.status,
+              hasPullRequest: Boolean(deliverySession.pullRequestId),
+              terminal: Boolean(deliverySession.endedAt),
+            }
+          : null,
+      };
     },
   },
 
@@ -8473,12 +8537,22 @@ export const mcpTools = {
       const agentId = ctx.apiKey?.linkedAgentId;
       if (!agentId) throw new Error("workSessions.claim requires a linked agent key.");
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
-      return claimWorkSession(db, {
+      const session = await claimWorkSession(db, {
         workspaceId: ctx.workspaceId,
         ...input,
         source: WorkSessionSource.MCP,
         actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
       });
+      return {
+        ...session,
+        lifecycle: {
+          heartbeatWith: "workSessions.heartbeat",
+          attachPullRequestWith: "workSessions.attachPullRequest",
+          abandonWith: "workSessions.abandon",
+          requiredBeforeRunCompletion:
+            "Attach the native implementation PR or explicitly abandon this session before runs.complete.",
+        },
+      };
     },
   },
 
@@ -8515,6 +8589,36 @@ export const mcpTools = {
       return touchWorkSession(db, {
         workspaceId: ctx.workspaceId,
         ...input,
+        actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
+      });
+    },
+  },
+
+  "workSessions.abandon": {
+    description:
+      "Explicitly release an owned code-delivery session when no implementation will be delivered. This is terminal, audited, and resolves its recovery requests; it never claims that work was merged, released, or deployed.",
+    scopes: ["WRITE_ISSUES"] as const,
+    input: z.object({ sessionId: z.string().cuid() }),
+    async run(input: { sessionId: string }, ctx: McpContext) {
+      const agentId = ctx.apiKey?.linkedAgentId;
+      if (!agentId) throw new Error("workSessions.abandon requires a linked agent key.");
+      const owned = await db.workSession.findFirst({
+        where: {
+          id: input.sessionId,
+          workspaceId: ctx.workspaceId,
+          endedAt: null,
+          ...(ctx.connectionId
+            ? { ownerConnectionId: ctx.connectionId }
+            : { ownerAgentId: agentId, ownerConnectionId: null }),
+        },
+        select: { id: true, issueId: true },
+      });
+      if (!owned) throw new Error("Active work session is not owned by this agent connection.");
+      await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: owned.issueId });
+      return advanceWorkSession(db, {
+        workspaceId: ctx.workspaceId,
+        sessionId: owned.id,
+        status: WorkSessionStatus.ABANDONED,
         actor: { userId: ctx.userId, agentId, connectionId: ctx.connectionId ?? null },
       });
     },
@@ -15257,7 +15361,15 @@ export const MCP_TOOL_PROFILES: Record<string, readonly string[]> = {
     "chat.appendDraftChunk",
     "chat.finalizeDraft",
     "runs",
-    "workSessions",
+    // Keep the everyday Delivery lifecycle directly advertised. Explicit
+    // ownership handoff remains available through catalog.call so the compact
+    // default stays below the provider headroom budget.
+    "workSessions.list",
+    "workSessions.claim",
+    "workSessions.heartbeat",
+    "workSessions.abandon",
+    "workSessions.join",
+    "workSessions.attachPullRequest",
     "actionRequests.list",
     "actionRequests.create",
     "workspace",

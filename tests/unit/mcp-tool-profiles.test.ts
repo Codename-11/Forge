@@ -75,6 +75,8 @@ describe("mcp tool profiles (AXI-82)", () => {
     expect(runtime).toContain("runs.complete");
     expect(runtime).toContain("actionRequests.list");
     expect(runtime).toContain("workSessions.claim");
+    expect(runtime).toContain("workSessions.abandon");
+    expect(runtime).not.toContain("workSessions.handoff");
     expect(runtime).toContain("chat.appendMessage");
     expect(runtime).toContain("chat.finalizeDraft");
     expect(runtime).not.toContain("chat.connector.negotiate");

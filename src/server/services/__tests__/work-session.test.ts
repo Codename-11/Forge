@@ -7,12 +7,13 @@ import {
   attachPullRequest,
   claimWorkSession,
   listIssueWorkSessions,
-  resolveMcpQuietRequestsForConnection,
+  reconcileFreshMcpQuietRequestsForConnection,
   syncWorkSessionsFromPullRequest,
   sweepStaleWorkSessions,
   touchWorkSession,
 } from "@/server/services/work-session";
 import { handoffWorkSession, joinWorkSession } from "@/server/services/work-session-participant";
+import { touchAgentConnection } from "@/server/services/agent-connection";
 import {
   createIssue,
   createWorkspaceFixture,
@@ -655,6 +656,8 @@ describe("work session coordination", () => {
     expect(FORGE_MCP_INSTRUCTIONS).toContain("comments.upsertStatus");
     expect(FORGE_MCP_INSTRUCTIONS).toContain("comments.create");
     expect(FORGE_MCP_INSTRUCTIONS).toContain("workSessions.attachPullRequest");
+    expect(FORGE_MCP_INSTRUCTIONS).toContain("workSessions.abandon");
+    expect(FORGE_MCP_INSTRUCTIONS).toContain("before runs.complete");
     const attachTool = mcpTools["workSessions.attachPullRequest"];
     expect(attachTool.description).toContain("human-readable issue handoff");
     expect(
@@ -664,6 +667,107 @@ describe("work session coordination", () => {
         timelineUpdate: { body: "Implemented and verified the change." },
       }).success,
     ).toBe(true);
+  });
+
+  it("requires direct MCP Execute runs to disposition an unbound delivery session", async () => {
+    const { fixture, prisma, issue } = await setup();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `disposition-${Date.now()}`,
+        name: "Disposition agent",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "ACTIVE",
+        confidence: "CONFIRMED",
+        instanceKey: `disposition-${Date.now()}`,
+      },
+    });
+    const session = await claimWorkSession(prisma, {
+      workspaceId: fixture.workspace.id,
+      issueId: issue.id,
+      repoFullName: "acme/forge",
+      branch: "codex/disposition-required",
+      source: WorkSessionSource.MCP,
+      actor: {
+        userId: fixture.user.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        connectionId: connection.id,
+        status: "ACTIVE",
+        engagementMode: "EXECUTE",
+      },
+    });
+    const ctx = {
+      workspaceId: fixture.workspace.id,
+      userId: fixture.user.id,
+      pluginId: null,
+      connectionId: connection.id,
+      apiKey: {
+        keyId: "disposition-key",
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        pluginId: null,
+        scopes: ["READ_ISSUES", "WRITE_ISSUES", "WRITE_COMMENTS"],
+        projectIds: [],
+        labelIds: [],
+        initiativeIds: [],
+        linkedAgentId: agent.id,
+      },
+    } as unknown as McpContext;
+
+    await expect(
+      mcpTools["runs.complete"].run(
+        {
+          runId: run.id,
+          summary: "No implementation was required.",
+          recommendIssueCompletion: false,
+        } as never,
+        ctx,
+      ),
+    ).rejects.toThrow(/workSessions\.attachPullRequest.*workSessions\.abandon/);
+
+    await prisma.workSession.update({
+      where: { id: session.id },
+      data: { status: "STALE", staleAt: new Date() },
+    });
+    await expect(
+      mcpTools["runs.complete"].run(
+        {
+          runId: run.id,
+          summary: "No implementation was required.",
+          recommendIssueCompletion: false,
+        } as never,
+        ctx,
+      ),
+    ).rejects.toThrow(/workSessions\.attachPullRequest.*workSessions\.abandon/);
+
+    await expect(
+      mcpTools["workSessions.abandon"].run({ sessionId: session.id } as never, ctx),
+    ).resolves.toMatchObject({ id: session.id, status: "ABANDONED", endedAt: expect.any(Date) });
+    await expect(
+      mcpTools["runs.complete"].run(
+        {
+          runId: run.id,
+          summary: "No implementation was required.",
+          recommendIssueCompletion: false,
+        } as never,
+        ctx,
+      ),
+    ).resolves.toMatchObject({ id: run.id, status: "COMPLETED" });
   });
 
   it("marks quiet leases stale and creates one shared action request", async () => {
@@ -863,18 +967,17 @@ describe("work session coordination", () => {
     });
 
     expect(
-      await resolveMcpQuietRequestsForConnection(prisma, fixture.workspace.id, connection.id),
-    ).toBe(1);
+      await reconcileFreshMcpQuietRequestsForConnection(
+        prisma,
+        fixture.workspace.id,
+        connection.id,
+      ),
+    ).toBe(0);
     await expect(
       prisma.actionRequest.findFirstOrThrow({
         where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
       }),
-    ).resolves.toMatchObject({ status: "RESOLVED", resolution: "MCP connection resumed." });
-
-    await prisma.actionRequest.updateMany({
-      where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
-      data: { status: "OPEN", resolvedAt: null, resolution: null },
-    });
+    ).resolves.toMatchObject({ status: "OPEN", resolvedAt: null });
     await touchWorkSession(prisma, {
       workspaceId: fixture.workspace.id,
       sessionId: session.id,
@@ -885,6 +988,80 @@ describe("work session coordination", () => {
         where: { dedupeKey: `work-session-mcp-quiet:${session.id}` },
       }),
     ).resolves.toMatchObject({ status: "RESOLVED", resolution: "Work session resumed." });
+  });
+
+  it("does not treat generic activity on a shared MCP connection as session lifecycle evidence", async () => {
+    const { fixture, prisma, issue } = await setup();
+    await prisma.workspace.update({
+      where: { id: fixture.workspace.id },
+      data: { workSessionStaleMinutes: 1 },
+    });
+    const secondIssue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `shared-mcp-${Date.now()}`,
+        name: "Shared MCP client",
+      },
+    });
+    const connection = await prisma.agentConnection.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        agentId: agent.id,
+        kind: "MCP_CLIENT",
+        livenessModel: "LEASE",
+        status: "QUIET",
+        confidence: "UNCONFIRMED",
+        instanceKey: `shared-${Date.now()}`,
+      },
+    });
+    const sessions = await Promise.all(
+      [
+        { issueId: issue.id, branch: "codex/shared-one" },
+        { issueId: secondIssue.id, branch: "codex/shared-two" },
+      ].map(({ issueId, branch }) =>
+        claimWorkSession(prisma, {
+          workspaceId: fixture.workspace.id,
+          issueId,
+          repoFullName: "acme/forge",
+          branch,
+          source: WorkSessionSource.MCP,
+          actor: {
+            userId: fixture.user.id,
+            agentId: agent.id,
+            connectionId: connection.id,
+          },
+        }),
+      ),
+    );
+    await prisma.workSession.updateMany({
+      where: { id: { in: sessions.map((session) => session.id) } },
+      data: { lastHeartbeatAt: new Date(Date.now() - 5 * 60_000) },
+    });
+    await sweepStaleWorkSessions(prisma);
+
+    await touchAgentConnection(prisma, connection.id);
+    expect(
+      await reconcileFreshMcpQuietRequestsForConnection(
+        prisma,
+        fixture.workspace.id,
+        connection.id,
+      ),
+    ).toBe(0);
+    expect(
+      await prisma.actionRequest.count({
+        where: {
+          workspaceId: fixture.workspace.id,
+          status: "OPEN",
+          dedupeKey: {
+            in: sessions.map((session) => `work-session-mcp-quiet:${session.id}`),
+          },
+        },
+      }),
+    ).toBe(2);
+    await expect(
+      prisma.agentConnection.findUniqueOrThrow({ where: { id: connection.id } }),
+    ).resolves.toMatchObject({ status: "ACTIVE", confidence: "CONFIRMED" });
   });
 
   it("resolves MCP recovery requests when the issue is already terminal", async () => {
