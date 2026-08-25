@@ -36,7 +36,7 @@ const PROVIDER_OPTIONS: { value: string; label: string; needsIssuer?: boolean }[
 
 function WsChipDense({ ws }: { ws: Workspace }) {
   return (
-    <span className="inline-flex items-center gap-1 text-meta">
+    <span className="text-meta inline-flex items-center gap-1">
       <span
         aria-hidden
         className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-[3px] text-[8px] font-bold text-white"
@@ -116,8 +116,8 @@ export default function ConnectionsPage() {
   return (
     <>
       <Topbar
-        title="Connections"
-        subtitle="OAuth identities you've authorized. These belong to you, not a workspace — workspaces map channels, repos, and webhooks onto them."
+        title="Integration accounts"
+        subtitle="Operational OAuth access for repos, channels, and webhooks. These credentials are separate from the methods you use to sign in."
         actions={
           <div className="flex items-center gap-2">
             <a
@@ -142,7 +142,7 @@ export default function ConnectionsPage() {
         onSubmit={handleAdd}
         loading={createM.isPending}
       >
-        <label className="block text-meta text-muted-foreground">
+        <label className="text-meta block text-muted-foreground">
           Provider
           <select
             value={provider}
@@ -156,25 +156,30 @@ export default function ConnectionsPage() {
             ))}
           </select>
         </label>
-        <label className="block text-meta text-muted-foreground">
+        <label className="text-meta block text-muted-foreground">
           Label
           <Input name="label" placeholder="github.com/bailey" className="mt-1" autoFocus />
         </label>
         {needsIssuer && (
-          <label className="block text-meta text-muted-foreground">
+          <label className="text-meta block text-muted-foreground">
             Issuer URL (OIDC discovery)
             <Input name="issuer" placeholder="https://auth.example.com" className="mt-1" />
           </label>
         )}
-        <label className="block text-meta text-muted-foreground">
+        <label className="text-meta block text-muted-foreground">
           Client ID
           <Input name="clientId" placeholder="client id" className="mt-1 font-mono" />
         </label>
-        <label className="block text-meta text-muted-foreground">
+        <label className="text-meta block text-muted-foreground">
           Client secret <span className="opacity-60">(optional for public/PKCE clients)</span>
-          <Input name="clientSecret" type="password" placeholder="••••••••" className="mt-1 font-mono" />
+          <Input
+            name="clientSecret"
+            type="password"
+            placeholder="••••••••"
+            className="mt-1 font-mono"
+          />
         </label>
-        <label className="block text-meta text-muted-foreground">
+        <label className="text-meta block text-muted-foreground">
           Scopes <span className="opacity-60">(space or comma separated)</span>
           <Input name="scopes" placeholder="openid email profile" className="mt-1 font-mono" />
         </label>
@@ -198,7 +203,10 @@ export default function ConnectionsPage() {
               const meta = PROVIDER_META[cn.provider] ?? PROVIDER_META.CUSTOM;
               const st = statusStyle(cn.status);
               return (
-                <div key={cn.id} className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-4">
+                <div
+                  key={cn.id}
+                  className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-4"
+                >
                   <header className="flex items-start gap-3">
                     <span
                       aria-hidden
@@ -211,19 +219,27 @@ export default function ConnectionsPage() {
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold">{meta.label}</span>
                         {cn.account && (
-                          <span className="font-mono text-[11px] text-muted-foreground">{cn.account}</span>
+                          <span className="font-mono text-[11px] text-muted-foreground">
+                            {cn.account}
+                          </span>
                         )}
                         <span
-                          className={`inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-meta ${st.cls}`}
+                          className={`text-meta inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 ${st.cls}`}
                         >
                           <span
                             aria-hidden
-                            style={{ width: 6, height: 6, borderRadius: 9999, background: st.dot, display: "inline-block" }}
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: 9999,
+                              background: st.dot,
+                              display: "inline-block",
+                            }}
                           />
                           {cn.status.toLowerCase()}
                         </span>
                       </div>
-                      <div className="mt-0.5 text-meta text-muted-foreground">
+                      <div className="text-meta mt-0.5 text-muted-foreground">
                         {cn.label} · added {relativeTime(cn.createdAt)}
                         {cn.error && <span className="ml-2 text-warning">· {cn.error}</span>}
                       </div>
@@ -262,7 +278,7 @@ export default function ConnectionsPage() {
                       {cn.mappings.map((m) => (
                         <span
                           key={m.id}
-                          className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background/70 px-2 py-0.5 text-meta"
+                          className="text-meta inline-flex items-center gap-1.5 rounded-md border border-border bg-background/70 px-2 py-0.5"
                         >
                           <WsChipDense ws={m.workspace} />
                           <span className="text-muted-foreground">
@@ -273,9 +289,9 @@ export default function ConnectionsPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="flex items-center gap-2 border-t border-border/60 pt-3 text-meta italic text-muted-foreground">
-                      Not used by any workspace yet — workspace admins can map this connection from their
-                      settings.
+                    <div className="text-meta flex items-center gap-2 border-t border-border/60 pt-3 italic text-muted-foreground">
+                      Not used by any workspace yet — workspace admins can map this connection from
+                      their settings.
                     </div>
                   )}
                 </div>

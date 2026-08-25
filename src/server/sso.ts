@@ -32,7 +32,7 @@ export async function getEnabledSsoRows(): Promise<SsoProvider[]> {
   const now = Date.now();
   if (cache && now - cache.at < TTL_MS) return cache.rows;
   const rows = await db.ssoProvider.findMany({
-    where: { enabled: true },
+    where: { enabled: true, archivedAt: null },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
   cache = { rows, at: now };

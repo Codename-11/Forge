@@ -1,9 +1,20 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { SsoType } from "@prisma/client";
+import {
+  AuthenticationMode,
+  RegistrationMode,
+  SsoType,
+  type InstanceAuthPolicy,
+  type PrismaClient,
+} from "@prisma/client";
 import { router, instanceAdminProcedure } from "@/server/trpc";
 import { encryptSecret } from "@/server/crypto";
 import { bustSsoCache, providerIdFor } from "@/server/sso";
+import {
+  deriveAuthPresentation,
+  getInstanceAuthPolicy,
+  validateAuthPolicyTransition,
+} from "@/server/services/auth-policy";
 
 const typeEnum = z.nativeEnum(SsoType);
 
@@ -19,13 +30,110 @@ function normalizeIssuer(raw: string): string {
   return trimmed;
 }
 
+async function assertAdminRecoveryPath(
+  database: Pick<PrismaClient, "user">,
+  policy: Pick<InstanceAuthPolicy, "mode" | "breakGlassCredentialsEnabled">,
+  providers: Array<{ id: string; type: SsoType; enabled: boolean; archivedAt: Date | null }>,
+): Promise<void> {
+  if (
+    policy.breakGlassCredentialsEnabled &&
+    process.env.ADMIN_EMAIL &&
+    process.env.ADMIN_PASSWORD
+  ) {
+    return;
+  }
+  const providerKeys = providers
+    .filter((provider) => provider.enabled && !provider.archivedAt)
+    .map((provider) => providerIdFor(provider));
+  const methodClauses = [
+    ...(policy.mode !== "EXTERNAL_ONLY" ? [{ localCredential: { isNot: null } }] : []),
+    ...(policy.mode !== "LOCAL_ONLY" && providerKeys.length
+      ? [{ accounts: { some: { provider: { in: providerKeys } } } }]
+      : []),
+  ];
+  if (
+    methodClauses.length === 0 ||
+    (await database.user.count({
+      where: {
+        instanceRole: "INSTANCE_ADMIN",
+        status: "ACTIVE",
+        disabledAt: null,
+        deletedAt: null,
+        OR: methodClauses,
+      },
+    })) === 0
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message:
+        "Keep at least one active instance administrator with a usable sign-in method or configured break-glass credentials.",
+    });
+  }
+}
+
 export const ssoRouter = router({
+  policy: instanceAdminProcedure.query(async ({ ctx }) => {
+    const [policy, providers] = await Promise.all([
+      getInstanceAuthPolicy(ctx.db),
+      ctx.db.ssoProvider.findMany({
+        where: { archivedAt: null },
+        select: { id: true, type: true, enabled: true, archivedAt: true },
+      }),
+    ]);
+    return {
+      policy,
+      presentation: deriveAuthPresentation(policy, providers),
+      breakGlassConfigured: Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD),
+    };
+  }),
+
+  updatePolicy: instanceAdminProcedure
+    .input(
+      z.object({
+        mode: z.nativeEnum(AuthenticationMode),
+        registrationMode: z.nativeEnum(RegistrationMode),
+        breakGlassCredentialsEnabled: z.boolean(),
+        autoRedirectProviderId: z.string().cuid().nullable(),
+        passwordMinLength: z.number().int().min(8).max(128),
+        passwordResetTtlMinutes: z.number().int().min(5).max(1440),
+        lockoutThreshold: z.number().int().min(3).max(100),
+        lockoutMinutes: z.number().int().min(1).max(1440),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const providers = await ctx.db.ssoProvider.findMany({
+        where: { archivedAt: null },
+        select: { id: true, type: true, enabled: true, archivedAt: true },
+      });
+      validateAuthPolicyTransition({ id: "default", ...input }, providers, {
+        breakGlassConfigured: Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD),
+      });
+      await assertAdminRecoveryPath(ctx.db, input, providers);
+      const policy = await ctx.db.instanceAuthPolicy.upsert({
+        where: { id: "default" },
+        update: input,
+        create: { id: "default", ...input },
+      });
+      await ctx.db.instanceAuditLog.create({
+        data: {
+          actorId: ctx.session.user.id,
+          action: "AUTH_POLICY_UPDATED",
+          metadata: input,
+          ipAddress: ctx.ip,
+          userAgent: ctx.userAgent,
+        },
+      });
+      bustSsoCache();
+      return policy;
+    }),
+
   /**
    * Full provider inventory for the admin UI. Secrets are never returned —
    * only a `hasSecret` flag so the form can show "configured" / "replace".
    */
   list: instanceAdminProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.ssoProvider.findMany({
+      where: { archivedAt: null },
       orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
     });
     return rows.map((r) => ({
@@ -60,7 +168,10 @@ export const ssoRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.type === "OIDC" && !input.issuer) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "OIDC providers require an issuer URL." });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "OIDC providers require an issuer URL.",
+        });
       }
       // GitHub/Google map onto fixed NextAuth provider ids, so only one of
       // each can exist (two would collide on the same callback URL).
@@ -118,9 +229,7 @@ export const ssoRouter = router({
           ...(existing.type === "OIDC" && input.issuer !== undefined
             ? { issuer: normalizeIssuer(input.issuer) }
             : {}),
-          ...(input.clientSecret
-            ? { clientSecret: encryptSecret(input.clientSecret) }
-            : {}),
+          ...(input.clientSecret ? { clientSecret: encryptSecret(input.clientSecret) } : {}),
         },
       });
       bustSsoCache();
@@ -130,9 +239,44 @@ export const ssoRouter = router({
   setEnabled: instanceAdminProcedure
     .input(z.object({ id: z.string(), enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.ssoProvider.update({
-        where: { id: input.id },
-        data: { enabled: input.enabled },
+      const [policy, providers] = await Promise.all([
+        getInstanceAuthPolicy(ctx.db),
+        ctx.db.ssoProvider.findMany({
+          where: { archivedAt: null },
+          select: { id: true, type: true, enabled: true, archivedAt: true },
+        }),
+      ]);
+      const nextProviders = providers.map((provider) =>
+        provider.id === input.id ? { ...provider, enabled: input.enabled } : provider,
+      );
+      const nextPolicy = {
+        ...policy,
+        autoRedirectProviderId:
+          !input.enabled && policy.autoRedirectProviderId === input.id
+            ? null
+            : policy.autoRedirectProviderId,
+      };
+      validateAuthPolicyTransition(nextPolicy, nextProviders, {
+        breakGlassConfigured: Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD),
+      });
+      await assertAdminRecoveryPath(ctx.db, nextPolicy, nextProviders);
+      await ctx.db.$transaction(async (tx) => {
+        await tx.ssoProvider.update({ where: { id: input.id }, data: { enabled: input.enabled } });
+        if (nextPolicy.autoRedirectProviderId !== policy.autoRedirectProviderId) {
+          await tx.instanceAuthPolicy.update({
+            where: { id: policy.id },
+            data: { autoRedirectProviderId: null },
+          });
+        }
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: ctx.session.user.id,
+            action: input.enabled ? "SSO_PROVIDER_ENABLED" : "SSO_PROVIDER_DISABLED",
+            metadata: { providerId: input.id },
+            ipAddress: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+        });
       });
       bustSsoCache();
       return { ok: true };
@@ -141,7 +285,46 @@ export const ssoRouter = router({
   remove: instanceAdminProcedure
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
-      await ctx.db.ssoProvider.delete({ where: { id: input.id } });
+      const [policy, providers] = await Promise.all([
+        getInstanceAuthPolicy(ctx.db),
+        ctx.db.ssoProvider.findMany({
+          where: { archivedAt: null },
+          select: { id: true, type: true, enabled: true, archivedAt: true },
+        }),
+      ]);
+      const nextProviders = providers
+        .filter((provider) => provider.id !== input.id)
+        .map((provider) => ({ ...provider }));
+      const nextPolicy = {
+        ...policy,
+        autoRedirectProviderId:
+          policy.autoRedirectProviderId === input.id ? null : policy.autoRedirectProviderId,
+      };
+      validateAuthPolicyTransition(nextPolicy, nextProviders, {
+        breakGlassConfigured: Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD),
+      });
+      await assertAdminRecoveryPath(ctx.db, nextPolicy, nextProviders);
+      await ctx.db.$transaction(async (tx) => {
+        await tx.ssoProvider.update({
+          where: { id: input.id },
+          data: { enabled: false, archivedAt: new Date() },
+        });
+        if (nextPolicy.autoRedirectProviderId !== policy.autoRedirectProviderId) {
+          await tx.instanceAuthPolicy.update({
+            where: { id: policy.id },
+            data: { autoRedirectProviderId: null },
+          });
+        }
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: ctx.session.user.id,
+            action: "SSO_PROVIDER_ARCHIVED",
+            metadata: { providerId: input.id },
+            ipAddress: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+        });
+      });
       bustSsoCache();
       return { ok: true };
     }),
@@ -162,7 +345,8 @@ export const ssoRouter = router({
           return { ok: false as const, error: `Discovery returned HTTP ${res.status}.` };
         }
         const doc = (await res.json()) as Record<string, unknown>;
-        const authz = typeof doc.authorization_endpoint === "string" ? doc.authorization_endpoint : null;
+        const authz =
+          typeof doc.authorization_endpoint === "string" ? doc.authorization_endpoint : null;
         const token = typeof doc.token_endpoint === "string" ? doc.token_endpoint : null;
         if (!authz || !token) {
           return { ok: false as const, error: "Discovery doc is missing required endpoints." };
@@ -176,7 +360,8 @@ export const ssoRouter = router({
       } catch (err) {
         return {
           ok: false as const,
-          error: err instanceof Error ? `Could not reach issuer: ${err.message}` : "Discovery failed.",
+          error:
+            err instanceof Error ? `Could not reach issuer: ${err.message}` : "Discovery failed.",
         };
       }
     }),

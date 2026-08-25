@@ -2,6 +2,10 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { router, protectedProcedure, workspaceProcedure } from "@/server/trpc";
 import { refreshTodayZone } from "@/server/services/today-zone";
+import { getInstanceAuthPolicy } from "@/server/services/auth-policy";
+import { hashPassword, verifyPassword } from "@/server/services/local-credentials";
+import { sendPasswordChangedEmail } from "@/server/services/email";
+import { providerIdFor } from "@/server/sso";
 
 /**
  * Account-level user router.
@@ -20,7 +24,10 @@ const ME_SELECT = {
   id: true,
   name: true,
   email: true,
+  emailVerified: true,
   image: true,
+  status: true,
+  lastLoginAt: true,
   theme: true,
   timezone: true,
   locale: true,
@@ -65,6 +72,12 @@ const DASHBOARD_PREFS = z.object({
 // accept arbitrary step ids from the wire.
 const SKIPPABLE_STEP = z.enum(["member"]);
 
+function usableProviderKeys(
+  providers: Array<{ id: string; type: "OIDC" | "GITHUB" | "GOOGLE" }>,
+): Set<string> {
+  return new Set(providers.map((provider) => providerIdFor(provider)));
+}
+
 export const userRouter = router({
   me: protectedProcedure.query(async ({ ctx }) => {
     return ctx.db.user.findUniqueOrThrow({
@@ -93,6 +106,229 @@ export const userRouter = router({
         select: ME_SELECT,
       });
     }),
+
+  security: protectedProcedure.query(async ({ ctx }) => {
+    const [user, policy, providers] = await Promise.all([
+      ctx.db.user.findUniqueOrThrow({
+        where: { id: ctx.session.user.id },
+        select: {
+          id: true,
+          email: true,
+          emailVerified: true,
+          status: true,
+          authVersion: true,
+          lastLoginAt: true,
+          localCredential: {
+            select: {
+              passwordChangedAt: true,
+              mustChangePassword: true,
+              lastUsedAt: true,
+              lockedUntil: true,
+            },
+          },
+          accounts: {
+            select: { id: true, provider: true, providerAccountId: true, type: true },
+            orderBy: { provider: "asc" },
+          },
+        },
+      }),
+      getInstanceAuthPolicy(ctx.db),
+      ctx.db.ssoProvider.findMany({
+        where: { enabled: true, archivedAt: null },
+        select: { id: true, type: true, name: true },
+        orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+      }),
+    ]);
+    return { user, policy, providers };
+  }),
+
+  setPassword: protectedProcedure
+    .input(
+      z.object({
+        currentPassword: z.string().max(4096).optional(),
+        newPassword: z.string().min(8).max(4096),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const [policy, user] = await Promise.all([
+        getInstanceAuthPolicy(ctx.db),
+        ctx.db.user.findUniqueOrThrow({
+          where: { id: ctx.session.user.id },
+          include: { localCredential: true },
+        }),
+      ]);
+      if (input.newPassword.length < policy.passwordMinLength) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: `Password must be at least ${policy.passwordMinLength} characters.`,
+        });
+      }
+      if (user.localCredential) {
+        if (!input.currentPassword) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Current password is required." });
+        }
+        if (!(await verifyPassword(input.currentPassword, user.localCredential.passwordHash))) {
+          throw new TRPCError({ code: "UNAUTHORIZED", message: "Current password is incorrect." });
+        }
+      }
+      const passwordHash = await hashPassword(input.newPassword);
+      const changedAt = new Date();
+      await ctx.db.$transaction(async (tx) => {
+        await tx.localCredential.upsert({
+          where: { userId: user.id },
+          update: {
+            passwordHash,
+            passwordChangedAt: changedAt,
+            mustChangePassword: false,
+            failedAttempts: 0,
+            lastFailedAt: null,
+            lockedUntil: null,
+          },
+          create: { userId: user.id, passwordHash, passwordChangedAt: changedAt },
+        });
+        await tx.user.update({
+          where: { id: user.id },
+          data: { authVersion: { increment: 1 }, status: "ACTIVE", disabledAt: null },
+        });
+        await tx.session.deleteMany({ where: { userId: user.id } });
+        await tx.userActionToken.updateMany({
+          where: { userId: user.id, usedAt: null },
+          data: { usedAt: changedAt },
+        });
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: user.id,
+            targetUserId: user.id,
+            action: user.localCredential ? "PASSWORD_CHANGED" : "PASSWORD_ADDED",
+            ipAddress: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+        });
+      });
+      void sendPasswordChangedEmail({
+        to: user.email,
+        name: user.name,
+        changedAt,
+      }).catch(() => undefined);
+      return { ok: true, sessionsRevoked: true };
+    }),
+
+  removePassword: protectedProcedure
+    .input(z.object({ currentPassword: z.string().min(1).max(4096) }))
+    .mutation(async ({ ctx, input }) => {
+      const [policy, user, providers] = await Promise.all([
+        getInstanceAuthPolicy(ctx.db),
+        ctx.db.user.findUniqueOrThrow({
+          where: { id: ctx.session.user.id },
+          include: {
+            localCredential: true,
+            accounts: { select: { id: true, provider: true } },
+          },
+        }),
+        ctx.db.ssoProvider.findMany({
+          where: { enabled: true, archivedAt: null },
+          select: { id: true, type: true },
+        }),
+      ]);
+      if (policy.mode === "LOCAL_ONLY") {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "A password is required while this instance uses local-only authentication.",
+        });
+      }
+      if (!user.localCredential) return { ok: true };
+      const enabledProviders = usableProviderKeys(providers);
+      if (!user.accounts.some((account) => enabledProviders.has(account.provider))) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Link an enabled external sign-in method before removing your password.",
+        });
+      }
+      if (!(await verifyPassword(input.currentPassword, user.localCredential.passwordHash))) {
+        throw new TRPCError({ code: "UNAUTHORIZED", message: "Current password is incorrect." });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.localCredential.delete({ where: { userId: user.id } });
+        await tx.user.update({ where: { id: user.id }, data: { authVersion: { increment: 1 } } });
+        await tx.session.deleteMany({ where: { userId: user.id } });
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: user.id,
+            targetUserId: user.id,
+            action: "PASSWORD_REMOVED",
+            ipAddress: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+        });
+      });
+      return { ok: true, sessionsRevoked: true };
+    }),
+
+  unlinkIdentity: protectedProcedure
+    .input(z.object({ accountId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const [policy, user, providers] = await Promise.all([
+        getInstanceAuthPolicy(ctx.db),
+        ctx.db.user.findUniqueOrThrow({
+          where: { id: ctx.session.user.id },
+          include: { localCredential: { select: { userId: true } }, accounts: true },
+        }),
+        ctx.db.ssoProvider.findMany({
+          where: { enabled: true, archivedAt: null },
+          select: { id: true, type: true },
+        }),
+      ]);
+      const account = user.accounts.find((candidate) => candidate.id === input.accountId);
+      if (!account) throw new TRPCError({ code: "NOT_FOUND" });
+      const enabledProviders = usableProviderKeys(providers);
+      const remainingExternal = user.accounts.filter(
+        (candidate) => candidate.id !== account.id && enabledProviders.has(candidate.provider),
+      ).length;
+      const remainingMethods =
+        (user.localCredential && policy.mode !== "EXTERNAL_ONLY" ? 1 : 0) +
+        (policy.mode !== "LOCAL_ONLY" ? remainingExternal : 0);
+      if (remainingMethods < 1) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "You cannot remove your final sign-in method.",
+        });
+      }
+      await ctx.db.$transaction(async (tx) => {
+        await tx.account.delete({ where: { id: account.id } });
+        await tx.user.update({ where: { id: user.id }, data: { authVersion: { increment: 1 } } });
+        await tx.session.deleteMany({ where: { userId: user.id } });
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: user.id,
+            targetUserId: user.id,
+            action: "LOGIN_IDENTITY_UNLINKED",
+            metadata: { provider: account.provider },
+            ipAddress: ctx.ip,
+            userAgent: ctx.userAgent,
+          },
+        });
+      });
+      return { ok: true, sessionsRevoked: true };
+    }),
+
+  revokeSessions: protectedProcedure.mutation(async ({ ctx }) => {
+    const user = await ctx.db.user.update({
+      where: { id: ctx.session.user.id },
+      data: { authVersion: { increment: 1 } },
+      select: { id: true, authVersion: true },
+    });
+    await ctx.db.session.deleteMany({ where: { userId: user.id } });
+    await ctx.db.instanceAuditLog.create({
+      data: {
+        actorId: user.id,
+        targetUserId: user.id,
+        action: "SESSIONS_REVOKED",
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      },
+    });
+    return { ok: true, authVersion: user.authVersion };
+  }),
 
   setDashboardView: protectedProcedure
     .input(z.object({ view: z.enum(["list", "canvas"]).nullable() }))

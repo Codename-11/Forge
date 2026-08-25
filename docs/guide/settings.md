@@ -97,8 +97,10 @@ interact with the dispatch mode.
 Invite, remove, and manage members.
 
 - Invite — send an expiring, single-use email link for `ADMIN`, `MEMBER`, or
-  `GUEST`. The recipient must authenticate as the invited email before Forge
-  creates membership; `OWNER` remains transfer-only.
+  `GUEST`. Existing users authenticate as the invited email. When local
+  registration is enabled, a new recipient can instead create the canonical
+  user, verified email, password, and membership atomically from that exact
+  invitation. `OWNER` remains transfer-only.
 - Invitations — pending invites appear before accepted, expired, and revoked
   history. Resend rotates the bearer token only after the replacement email is
   accepted by the configured provider; revoke disables the pending token.
@@ -189,13 +191,43 @@ URL: `/settings`. These follow the user across all workspaces.
 
 ### Account
 
-- **Email** — the address NextAuth knows you by. Editable; verification
-  required.
+- **Profile picture** — upload one PNG, JPEG, GIF, or WebP image up to 5 MiB.
+  It is global to your Forge account, not copied into each workspace. Removing
+  it restores the last linked-provider picture when available.
+- **Email** — the case-insensitive canonical address shared by every login
+  method attached to this account.
 - **Handle** — your `@handle`, used in mentions and the activity feed.
 - **Name** — display name.
-- **Password** — change password (if password auth is enabled in this
-  deployment).
-- **Sessions** — list of active sessions; revoke individually.
+
+### Security & sign-in
+
+URL: `/settings/security`. A Forge account is one canonical `User`; local and
+external login methods can be added to or removed from that same account.
+
+- **Local password** — add or change a durable password. Changing it revokes
+  existing sessions. Removing it requires another linked login method and is
+  forbidden while the instance is in local-only mode.
+- **Linked login methods** — attach enabled OIDC, GitHub, or Google identities,
+  or unlink one after another login method exists. Linking proves control of
+  the provider account; unlinking revokes existing Forge sessions.
+- **Sessions** — sign out all devices. Password, login-method, lifecycle, and
+  role changes also increment the account authorization version so existing
+  JWT sessions stop authorizing.
+
+The sign-in screen exposes **Forgot password** when local credentials are
+available. Reset requests are enumeration-safe, rate-limited, expire according
+to instance policy, and consume a single-use emailed token. Administrators can
+also send a reset for a non-deleted account with a local password from
+`/admin/users`; suspension still prevents sign-in until an administrator
+reactivates the account.
+
+::: info Login identity is not an integration connection
+An Auth.js `Account` row proves who you are when signing into Forge. An
+**Integration account** under `/settings/connections` authorizes operations
+against GitHub or another external system and may be mapped into workspaces.
+Linking or unlinking a GitHub login never creates, changes, or deletes a GitHub
+integration connection.
+:::
 
 ### Appearance
 
@@ -224,14 +256,34 @@ See [Automation → API keys](/automation/api-keys.html).
 
 ### Authentication
 
-URL: `/settings/auth`. **Instance-admin only** — gated on the operator
-whose email matches `ADMIN_EMAIL`, since sign-in providers are global to
-the whole self-hosted instance (auth is per _user_, not per workspace).
+URL: `/settings/auth`. **Instance-admin only** — gated by
+`User.instanceRole === INSTANCE_ADMIN` (with `ADMIN_EMAIL` as the bootstrap
+fallback), because sign-in policy and providers apply to the whole instance.
 
 Configure how people sign in, without a redeploy:
 
-- **Email + password** is always available (the bootstrap admin
-  credential). It can't be removed here.
+- **Local only** — present and accept durable Forge passwords. External
+  providers are not loaded.
+- **External only** — present enabled OIDC/OAuth providers. Forge refuses this
+  mode until at least one external provider is usable. The protected
+  environment-backed operator may still use `/signin/local` when break glass
+  is enabled.
+- **Hybrid** — present local passwords and any enabled external providers.
+- **Automatic redirect** — select one enabled provider to redirect normal
+  sign-in visits automatically, or leave it unset for the provider chooser.
+  Manual and error-return visits bypass automatic redirect to avoid loops.
+- **Registration** — `DISABLED` requires an administrator-created principal;
+  `INVITE_ONLY` accepts first-time external sign-in or atomic local account
+  creation only from an exact invitation; `OPEN` additionally exposes local
+  email verification/setup and permits eligible external identities to create
+  their canonical account. Administrator-created local users also activate
+  through a one-time setup link.
+- **Password policy** — configure minimum length, reset-link expiry, failed
+  attempt threshold, and lockout duration. Passwords are stored as versioned
+  scrypt hashes; raw passwords and raw reset/setup tokens are never persisted.
+- **Break glass** — keeps only the `ADMIN_EMAIL` / `ADMIN_PASSWORD` operator
+  credential available at `/signin/local`. It does not turn every local user
+  into a break-glass administrator.
 - **Add a provider** — pick a type:
   - **OpenID Connect (OIDC)** — the generic, discovery-based type. Covers
     any OIDC IdP: self-hosted **Authelia**, Authentik, Keycloak, or hosted
@@ -248,6 +300,11 @@ Configure how people sign in, without a redeploy:
 - **Link accounts by email** — opt-in per provider; only enable when you
   trust the IdP to assert verified emails.
 - **Enable / disable** toggles take effect within ~30s, no restart.
+
+Forge prevents policy/provider changes that would select a missing automatic
+redirect target or leave external-only mode without an enabled provider.
+Disabling, archiving, or deleting an automatic redirect provider clears that
+selection.
 
 Existing `AUTH_GITHUB_*` / `AUTH_GOOGLE_*` env vars (if set) are seeded into
 this table once on first boot, then managed here — see

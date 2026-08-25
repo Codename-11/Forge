@@ -25,6 +25,7 @@ import { ssoRouter } from "./sso";
 import { accessRouter } from "./access";
 import { adminRouter } from "./admin";
 import { attachmentRouter } from "./attachment";
+import { avatarRouter } from "./avatar";
 import { labelRouter } from "./label";
 import { issueTemplateRouter } from "./issue-template";
 import { projectTemplateRouter } from "./project-template";
@@ -79,6 +80,7 @@ export const appRouter = router({
   chat: chatRouter,
   analytics: analyticsRouter,
   attachment: attachmentRouter,
+  avatar: avatarRouter,
   comment: commentRouter,
   commandCenter: commandCenterRouter,
   contextSet: contextSetRouter,

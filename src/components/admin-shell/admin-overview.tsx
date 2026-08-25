@@ -353,11 +353,11 @@ export function InviteUserDialog({
   const [name, setName] = useState("");
   const [makeAdmin, setMakeAdmin] = useState(false);
 
-  const invite = trpc.instanceAdmin.inviteUser.useMutation({
-    onSuccess: async (u) => {
+  const invite = trpc.instanceAdmin.createUser.useMutation({
+    onSuccess: async (result) => {
       await utils.instanceAdmin.users.invalidate();
       await utils.instanceAdmin.system.invalidate();
-      toast.success(u.created ? `Invited ${u.email}.` : `${u.email} already existed — updated.`);
+      toast.success(`Setup email sent to ${result.user.email}.`);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -377,7 +377,7 @@ export function InviteUserDialog({
         onOpenChange(v);
       }}
       title="Invite user"
-      description="Pre-creates the account by email. They bind on first sign-in (Authelia owns identity). No workspace membership is added — owners add members per-workspace."
+      description="Creates one canonical Forge user and emails a single-use local account setup link. External login methods can be linked to the same user when instance policy allows. No workspace membership is added."
       primaryLabel="Invite"
       loading={invite.isPending}
       onSubmit={async () => {
@@ -387,7 +387,7 @@ export function InviteUserDialog({
           await invite.mutateAsync({
             email: trimmed,
             name: name.trim() || undefined,
-            instanceAdmin: makeAdmin,
+            instanceRole: makeAdmin ? "INSTANCE_ADMIN" : "MEMBER",
           });
           reset();
           return undefined;
