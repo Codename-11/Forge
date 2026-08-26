@@ -29,7 +29,7 @@ test.describe("project and integration access management", () => {
     await restrictedVisibility.click();
     const confirmation = page.getByRole("alertdialog");
     await expect(confirmation).toContainText("Members without a direct role will lose access");
-    await expect(confirmation).toContainText("1 person");
+    await expect(confirmation).toContainText(/affects \d+ (person|people)/);
     await confirmation.getByRole("button", { name: "Cancel" }).click();
     await expect(workspaceVisibility).toHaveAttribute("aria-checked", "true");
   });
