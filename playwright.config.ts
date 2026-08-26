@@ -12,6 +12,7 @@ const BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${PORT}`;
 const OIDC_PORT = Number(process.env.E2E_OIDC_PORT ?? 3211);
 const OIDC_URL = `http://127.0.0.1:${OIDC_PORT}`;
 process.env.E2E_OIDC_ISSUER ??= OIDC_URL;
+process.env.E2E_OIDC_EMAIL ??= "oidc-link-user@forge.local";
 const windowsGitBash = process.env.FORGE_GIT_BASH_PATH ?? "C:\\Program Files\\Git\\bin\\bash.exe";
 if (process.platform === "win32" && !existsSync(windowsGitBash)) {
   throw new Error(

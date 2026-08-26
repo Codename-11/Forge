@@ -26,7 +26,7 @@ function idToken({ nonce }) {
       iss: issuer,
       aud: clientId,
       sub: "strict-user",
-      email: process.env.E2E_OWNER_EMAIL ?? "owner@forge.local",
+      email: process.env.E2E_OIDC_EMAIL ?? "oidc-link-user@forge.local",
       email_verified: true,
       name: "Forge Owner",
       nonce,
@@ -121,7 +121,7 @@ createServer(async (req, res) => {
   if (url.pathname === "/userinfo") {
     return json(res, 200, {
       sub: "strict-user",
-      email: process.env.E2E_OWNER_EMAIL ?? "owner@forge.local",
+      email: process.env.E2E_OIDC_EMAIL ?? "oidc-link-user@forge.local",
       email_verified: true,
       name: "Forge Owner",
     });
