@@ -9,6 +9,7 @@ import {
   hydrateTimelineReferences,
   mapTimelineRow,
 } from "@/server/routers/event";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -19,13 +20,11 @@ import {
  * (see docs/plans/multiws-restructure.md, Phase 2).
  */
 
-/** Workspace ids the caller is a member of (non-deleted). */
-async function memberWorkspaceIds(db: PrismaClient, userId: string): Promise<string[]> {
-  const rows = await db.membership.findMany({
+async function memberWorkspaceAccess(db: PrismaClient, userId: string) {
+  return db.membership.findMany({
     where: { userId, workspace: { deletedAt: null } },
-    select: { workspaceId: true },
+    select: { id: true, role: true, workspaceId: true },
   });
-  return rows.map((r) => r.workspaceId);
 }
 
 export const globalRouter = router({
@@ -38,6 +37,7 @@ export const globalRouter = router({
     const memberships = await ctx.db.membership.findMany({
       where: { userId: ctx.session.user.id, workspace: { deletedAt: null } },
       select: {
+        id: true,
         role: true,
         workspace: { select: { id: true, slug: true, name: true, key: true, avatarUrl: true } },
       },
@@ -47,21 +47,25 @@ export const globalRouter = router({
     return Promise.all(
       memberships.map(async (m) => {
         const ws = m.workspace;
+        const issueAccess = issueWhereForViewer({ workspaceId: ws.id, membership: m });
         const [members, openIssues, agents, activeRuns, lastEvent] = await Promise.all([
           ctx.db.membership.count({ where: { workspaceId: ws.id } }),
           ctx.db.issue.count({
             where: {
+              AND: [issueAccess],
               workspaceId: ws.id,
               deletedAt: null,
               status: { category: { notIn: ["DONE", "CANCELED"] } },
             },
           }),
           ctx.db.agent.count({ where: { workspaceId: ws.id, archivedAt: null } }),
-          ctx.db.agentRun.count({ where: { workspaceId: ws.id, status: "ACTIVE" } }),
-          ctx.db.activityEvent.findFirst({
-            where: { workspaceId: ws.id },
-            orderBy: { createdAt: "desc" },
-            select: { createdAt: true },
+          ctx.db.agentRun.count({
+            where: { workspaceId: ws.id, status: "ACTIVE", issue: issueAccess },
+          }),
+          ctx.db.issue.findFirst({
+            where: issueAccess,
+            orderBy: { updatedAt: "desc" },
+            select: { updatedAt: true },
           }),
         ]);
         return {
@@ -75,7 +79,7 @@ export const globalRouter = router({
           openIssues,
           agents,
           activeRuns,
-          lastActiveAt: lastEvent?.createdAt ?? null,
+          lastActiveAt: lastEvent?.updatedAt ?? null,
         };
       }),
     );
@@ -83,16 +87,23 @@ export const globalRouter = router({
 
   /** Metric tiles for the Mission Control header. */
   summary: globalProcedure.query(async ({ ctx }) => {
-    const wsIds = await memberWorkspaceIds(ctx.db, ctx.session.user.id);
+    const memberships = await memberWorkspaceAccess(ctx.db, ctx.session.user.id);
+    const wsIds = memberships.map((membership) => membership.workspaceId);
+    const issueAccess = memberships.map((membership) =>
+      issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+    );
     const [openIssues, activeRuns, onlineAgents, runtimes] = await Promise.all([
       ctx.db.issue.count({
         where: {
+          AND: [{ OR: issueAccess }],
           workspaceId: { in: wsIds },
           deletedAt: null,
           status: { category: { notIn: ["DONE", "CANCELED"] } },
         },
       }),
-      ctx.db.agentRun.count({ where: { workspaceId: { in: wsIds }, status: "ACTIVE" } }),
+      ctx.db.agentRun.count({
+        where: { workspaceId: { in: wsIds }, status: "ACTIVE", issue: { OR: issueAccess } },
+      }),
       ctx.db.agent.findMany({
         where: {
           workspaceId: { in: wsIds },
@@ -296,11 +307,16 @@ export const globalRouter = router({
 
   /** Cross-workspace "my work": issues assigned to the caller, newest first. */
   work: globalProcedure.query(async ({ ctx }) => {
-    const wsIds = await memberWorkspaceIds(ctx.db, ctx.session.user.id);
+    const memberships = await memberWorkspaceAccess(ctx.db, ctx.session.user.id);
+    const wsIds = memberships.map((membership) => membership.workspaceId);
+    const issueAccess = memberships.map((membership) =>
+      issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+    );
     const assignments = await ctx.db.issueAssignee.findMany({
       where: {
         userId: ctx.session.user.id,
         issue: {
+          AND: [{ OR: issueAccess }],
           workspaceId: { in: wsIds },
           deletedAt: null,
           status: { category: { notIn: ["DONE", "CANCELED"] } },
@@ -364,7 +380,8 @@ export const globalRouter = router({
 
   /** Recent activity across all the caller's workspaces, read-only. */
   activity: globalProcedure.query(async ({ ctx }) => {
-    const wsIds = await memberWorkspaceIds(ctx.db, ctx.session.user.id);
+    const memberships = await memberWorkspaceAccess(ctx.db, ctx.session.user.id);
+    const wsIds = memberships.map((membership) => membership.workspaceId);
     const events = await ctx.db.activityEvent.findMany({
       where: { workspaceId: { in: wsIds } },
       take: 100,
@@ -375,8 +392,61 @@ export const globalRouter = router({
         workspace: { select: { id: true, slug: true, name: true, key: true } },
       },
     });
-    const grouped = new Map<string, typeof events>();
+    const payloadIssueId = (payload: unknown): string | null => {
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+      const value = (payload as Record<string, unknown>).issueId;
+      return typeof value === "string" ? value : null;
+    };
+    const runIds = events
+      .filter((event) => event.subjectType === "agent-run")
+      .map((event) => event.subjectId);
+    const requestIds = events
+      .filter((event) => event.subjectType === "action-request")
+      .map((event) => event.subjectId);
+    const [runs, requests] = await Promise.all([
+      ctx.db.agentRun.findMany({
+        where: { id: { in: runIds }, workspaceId: { in: wsIds } },
+        select: { id: true, issueId: true },
+      }),
+      ctx.db.actionRequest.findMany({
+        where: { id: { in: requestIds }, workspaceId: { in: wsIds } },
+        select: { id: true, issueId: true },
+      }),
+    ]);
+    const runIssue = new Map(runs.map((run) => [run.id, run.issueId]));
+    const requestIssue = new Map(requests.map((request) => [request.id, request.issueId]));
+    const eventIssue = new Map<string, string>();
     for (const event of events) {
+      const issueId =
+        (event.subjectType === "issue" ? event.subjectId : null) ??
+        payloadIssueId(event.payload) ??
+        (event.subjectType === "agent-run" ? runIssue.get(event.subjectId) : null) ??
+        (event.subjectType === "action-request" ? requestIssue.get(event.subjectId) : null);
+      if (issueId) eventIssue.set(event.id, issueId);
+    }
+    const candidateIssueIds = [...new Set(eventIssue.values())];
+    const accessByWorkspace = new Map(
+      memberships.map((membership) => [
+        membership.workspaceId,
+        issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+      ]),
+    );
+    const visibleIssues = candidateIssueIds.length
+      ? await ctx.db.issue.findMany({
+          where: {
+            id: { in: candidateIssueIds },
+            OR: [...accessByWorkspace.values()],
+          },
+          select: { id: true },
+        })
+      : [];
+    const visibleIssueIds = new Set(visibleIssues.map((issue) => issue.id));
+    const visibleEvents = events.filter((event) => {
+      const issueId = eventIssue.get(event.id);
+      return !issueId || visibleIssueIds.has(issueId);
+    });
+    const grouped = new Map<string, typeof events>();
+    for (const event of visibleEvents) {
       const rows = grouped.get(event.workspaceId) ?? [];
       rows.push(event);
       grouped.set(event.workspaceId, rows);
@@ -389,7 +459,7 @@ export const globalRouter = router({
         ),
       ),
     );
-    const mapped = events.map((event) =>
+    const mapped = visibleEvents.map((event) =>
       mapTimelineRow(event, refs.get(event.workspaceId)!, event.workspace),
     );
     return collapseRecurringTimelineRows(mapped).slice(0, 40);

@@ -10,11 +10,13 @@ import { agentCrewRouter, reviewGateRouter } from "./agent-crew";
 import { artifactRouter } from "./artifact";
 import { canvasRouter } from "./canvas";
 import { integrationRouter } from "./integration";
+import { integrationGrantRouter } from "./integration-grant";
 import { agentRunRouter } from "./agent-run";
 import { chatRouter } from "./chat";
 import { aiRouter } from "./ai";
 import { workspaceRouter } from "./workspace";
 import { projectRouter } from "./project";
+import { projectAccessRouter } from "./project-access";
 import { issueRouter } from "./issue";
 import { commentRouter } from "./comment";
 import { contextSetRouter } from "./context-set";
@@ -97,6 +99,7 @@ export const appRouter = router({
   inbox: inboxRouter,
   initiative: initiativeRouter,
   integration: integrationRouter,
+  integrationGrant: integrationGrantRouter,
   notification: notificationRouter,
   note: noteRouter,
   issue: issueRouter,
@@ -106,6 +109,7 @@ export const appRouter = router({
   commandPalette: commandPaletteRouter,
   plugin: pluginRouter,
   project: projectRouter,
+  projectAccess: projectAccessRouter,
   projectTemplate: projectTemplateRouter,
   recurring: recurringRouter,
   scheduledTask: scheduledTaskRouter,

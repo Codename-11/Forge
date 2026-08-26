@@ -1006,7 +1006,7 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
     expect(res).toEqual({ updated: 0 });
   });
 
-  it("bulk mutations silently ignore issues from other workspaces", async () => {
+  it("bulk mutations fail atomically when an issue belongs to another workspace", async () => {
     const { caller, fixture } = await setup();
     const otherFixture = await createWorkspaceFixture({ keyPrefix: "OT3" });
     fixtures.push(otherFixture);
@@ -1017,17 +1017,17 @@ describe("issueRouter — bulkSetLabels / bulkAssign / bulkAssignAgent", () => {
     const ours = await createIssue(fixture);
     const theirs = await createIssue(otherFixture);
 
-    const res = await caller.bulkSetLabels({
-      issueIds: [ours.id, theirs.id],
-      add: [label.id],
-      remove: [],
-    });
-    // Only our workspace's issue counts.
-    expect(res.updated).toBe(1);
+    await expect(
+      caller.bulkSetLabels({
+        issueIds: [ours.id, theirs.id],
+        add: [label.id],
+        remove: [],
+      }),
+    ).rejects.toBeTruthy();
     const rows = await prisma.issueLabel.findMany({
       where: { labelId: label.id },
     });
-    expect(rows.map((r) => r.issueId)).toEqual([ours.id]);
+    expect(rows).toHaveLength(0);
   });
 });
 
