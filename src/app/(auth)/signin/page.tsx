@@ -34,6 +34,9 @@ function signInErrorMessage(error?: string): string | null {
   if (!error) return null;
   if (error === "CredentialsSignin") return "Invalid email or password.";
   if (error === "AccessDenied") return "This account cannot sign in to this Forge instance.";
+  if (error === "OAuthAccountNotLinked") {
+    return "That external identity is already linked elsewhere or cannot be linked automatically. Sign in with its existing Forge account, or ask an instance administrator to resolve the conflict.";
+  }
   return "Sign-in failed. Choose a method and try again.";
 }
 
@@ -274,15 +277,14 @@ export default async function SignInPage({
                       administrator.
                     </AuthMessage>
                   )}
-                {!presentation.localCredentialsEnabled &&
-                  presentation.breakGlassCredentialsEnabled && (
-                    <Link
-                      href={`/signin/local?callbackUrl=${encodeURIComponent(target)}&manual=1`}
-                      className="focus-ring inline-flex rounded text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
-                    >
-                      Instance administrator recovery
-                    </Link>
-                  )}
+                {presentation.breakGlassCredentialsEnabled && (
+                  <Link
+                    href={`/signin/local?callbackUrl=${encodeURIComponent(target)}&manual=1&breakGlass=1`}
+                    className="focus-ring inline-flex rounded text-xs text-muted-foreground underline decoration-border underline-offset-4 hover:text-foreground"
+                  >
+                    Instance administrator recovery
+                  </Link>
+                )}
               </div>
             )}
           </div>

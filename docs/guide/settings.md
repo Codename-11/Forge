@@ -282,8 +282,11 @@ Configure how people sign in, without a redeploy:
   attempt threshold, and lockout duration. Passwords are stored as versioned
   scrypt hashes; raw passwords and raw reset/setup tokens are never persisted.
 - **Break glass** — keeps only the `ADMIN_EMAIL` / `ADMIN_PASSWORD` operator
-  credential available at `/signin/local`. It does not turn every local user
-  into a break-glass administrator.
+  credential available through the explicit `/signin/local?breakGlass=1`
+  recovery flow. Select one active instance administrator whose email matches
+  `ADMIN_EMAIL`; Forge audits recovery sign-ins and protects that account from
+  lifecycle changes until recovery is reassigned or disabled. Use a dedicated
+  local administrator rather than a person's normal OIDC identity.
 - **Add a provider** — pick a type:
   - **OpenID Connect (OIDC)** — the generic, discovery-based type. Covers
     any OIDC IdP: self-hosted **Authelia**, Authentik, Keycloak, or hosted

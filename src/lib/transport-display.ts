@@ -8,6 +8,45 @@
  */
 export type TransportMode = "sessions" | "runs" | "completions" | "dispatch" | "none";
 
+export type RuntimeDisplayIdentity = {
+  runtimeLabel: string;
+  transportLabel: string;
+};
+
+/**
+ * Client-safe runtime identity. `RuntimeKind.REMOTE_HTTP` is a storage and
+ * network shape, not operator-facing product identity: a Hermes Runs host is
+ * not a webhook. Prefer the adapter/transport and fall back to the old kind
+ * only for legacy rows whose adapter has not been reconciled.
+ */
+export function runtimeDisplayIdentity(input: {
+  adapterKey?: string | null;
+  kind?: string | null;
+}): RuntimeDisplayIdentity {
+  switch (input.adapterKey) {
+    case "hermes":
+      return { runtimeLabel: "Hermes managed runtime", transportLabel: "Runs API" };
+    case "codex-app-server":
+      return { runtimeLabel: "Codex managed runtime", transportLabel: "App server" };
+    case "local-daemon":
+      return { runtimeLabel: "Forge local daemon", transportLabel: "Local daemon" };
+    case "custom-http":
+      return { runtimeLabel: "Custom webhook runtime", transportLabel: "Webhook" };
+    case "acp":
+      return { runtimeLabel: "ACP session", transportLabel: "ACP" };
+  }
+  switch (input.kind) {
+    case "LOCAL_DAEMON":
+      return { runtimeLabel: "Local runtime", transportLabel: "Local daemon" };
+    case "CLOUD":
+      return { runtimeLabel: "Cloud runtime", transportLabel: "Cloud" };
+    case "REMOTE_HTTP":
+      return { runtimeLabel: "Remote runtime", transportLabel: "HTTP" };
+    default:
+      return { runtimeLabel: "Runtime", transportLabel: "Unknown transport" };
+  }
+}
+
 /** Tailwind classes for the chip, by mode. Uses warm-earthy / semantic tokens. */
 export function transportTone(mode: TransportMode): string {
   switch (mode) {

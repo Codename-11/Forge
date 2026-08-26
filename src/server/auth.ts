@@ -13,6 +13,7 @@ import { db } from "@/server/db";
 import { decryptSecret } from "@/server/crypto";
 import { getEnabledSsoRows, providerIdFor } from "@/server/sso";
 import { getInstanceAuthPolicy } from "@/server/services/auth-policy";
+import { genericOidcProviderConfig } from "@/server/services/sso-provider-config";
 import {
   hashPassword,
   needsPasswordRehash,
@@ -86,6 +87,11 @@ async function ensureBootstrapOperator(email: string): Promise<AdapterUser | nul
       },
     },
   });
+  await db.instanceAuthPolicy.upsert({
+    where: { id: "default" },
+    update: { breakGlassUserId: user.id },
+    create: { id: "default", breakGlassUserId: user.id },
+  });
   return user as AdapterUser;
 }
 
@@ -128,10 +134,35 @@ const credentialsProvider = Credentials({
       parsed.data.password,
       user?.localCredential?.passwordHash,
     );
-    const bootstrapMatch =
-      policy.breakGlassCredentialsEnabled &&
-      (breakGlassAllowed || localAllowed) &&
-      (await verifyBootstrapCredential(email, parsed.data.password));
+    let bootstrapMatch =
+      breakGlassAllowed && (await verifyBootstrapCredential(email, parsed.data.password));
+
+    if (bootstrapMatch) {
+      const designated = policy.breakGlassUserId
+        ? await db.user.findUnique({
+            where: { id: policy.breakGlassUserId },
+            include: { localCredential: true },
+          })
+        : user;
+      if (designated) user = designated;
+      else {
+        const bootstrapped = await ensureBootstrapOperator(email);
+        user = bootstrapped
+          ? await db.user.findUnique({
+              where: { id: bootstrapped.id },
+              include: { localCredential: true },
+            })
+          : null;
+      }
+      bootstrapMatch = Boolean(
+        user &&
+        normalizeAuthEmail(user.email) === email &&
+        user.instanceRole === "INSTANCE_ADMIN" &&
+        user.status === UserStatus.ACTIVE &&
+        !user.disabledAt &&
+        !user.deletedAt,
+      );
+    }
 
     if ((!localAllowed || !localMatch) && !bootstrapMatch) {
       if (user?.localCredential) {
@@ -152,14 +183,6 @@ const credentialsProvider = Credentials({
       return null;
     }
 
-    if (!user && bootstrapMatch) {
-      const bootstrapped = await ensureBootstrapOperator(email);
-      if (!bootstrapped) return null;
-      user = await db.user.findUnique({
-        where: { id: bootstrapped.id },
-        include: { localCredential: true },
-      });
-    }
     if (!user || user.status !== UserStatus.ACTIVE || user.deletedAt || user.disabledAt)
       return null;
     if (user.localCredential?.lockedUntil && user.localCredential.lockedUntil > new Date())
@@ -186,6 +209,18 @@ const credentialsProvider = Credentials({
       where: { id: user.id },
       data: { lastLoginAt: new Date(), normalizedEmail: email },
     });
+    if (bootstrapMatch) {
+      await db.instanceAuditLog.create({
+        data: {
+          actorId: user.id,
+          targetUserId: user.id,
+          action: "BREAK_GLASS_SIGN_IN",
+          metadata: { designated: Boolean(policy.breakGlassUserId) },
+          ipAddress: requestIp(request),
+          userAgent: request.headers.get("user-agent"),
+        },
+      });
+    }
     return { id: user.id, email: user.email, name: user.name, image: user.image };
   },
 });
@@ -204,22 +239,29 @@ async function ssoProvidersFromDb(): Promise<Provider[]> {
       console.error(`[sso] skipping provider ${row.id} (${row.type}): bad secret`, error);
       continue;
     }
-    const common = { allowDangerousEmailAccountLinking: row.allowLinking };
     if (row.type === "OIDC" && row.issuer) {
-      providers.push({
-        id: providerIdFor(row),
-        name: row.name,
-        type: "oidc",
-        issuer: row.issuer,
-        clientId: row.clientId,
-        clientSecret,
-        ...common,
-        ...(row.scopes ? { authorization: { params: { scope: row.scopes } } } : {}),
-      });
+      providers.push(
+        genericOidcProviderConfig(
+          { ...row, id: providerIdFor(row), issuer: row.issuer },
+          clientSecret,
+        ),
+      );
     } else if (row.type === "GITHUB") {
-      providers.push(GitHub({ clientId: row.clientId, clientSecret, ...common }));
+      providers.push(
+        GitHub({
+          clientId: row.clientId,
+          clientSecret,
+          allowDangerousEmailAccountLinking: row.allowLinking,
+        }),
+      );
     } else if (row.type === "GOOGLE") {
-      providers.push(Google({ clientId: row.clientId, clientSecret, ...common }));
+      providers.push(
+        Google({
+          clientId: row.clientId,
+          clientSecret,
+          allowDangerousEmailAccountLinking: row.allowLinking,
+        }),
+      );
     }
   }
   return providers;

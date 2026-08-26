@@ -135,7 +135,7 @@ export const userRouter = router({
       getInstanceAuthPolicy(ctx.db),
       ctx.db.ssoProvider.findMany({
         where: { enabled: true, archivedAt: null },
-        select: { id: true, type: true, name: true },
+        select: { id: true, type: true, name: true, allowLinking: true },
         orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
       }),
     ]);

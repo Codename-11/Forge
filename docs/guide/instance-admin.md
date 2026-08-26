@@ -90,6 +90,37 @@ minimum length, reset expiry, and lockout behavior. Provider/client secrets
 remain encrypted with `AUTH_SECRET`; the environment operator remains a
 separate recovery credential when break glass is enabled.
 
+Break-glass recovery is mapped to one designated, active instance
+administrator whose email matches `ADMIN_EMAIL`. Create and activate a
+dedicated local administrator under `/admin/users`, select it under **Identity
+& sign-in**, and keep it separate from a person's normal OIDC identity. The
+recovery form is `/signin/local?breakGlass=1`; successful uses are recorded in
+the instance security audit. Forge prevents demotion, suspension, or deletion
+of the designated account until recovery is reassigned or disabled.
+
+### Reverse proxy requirements for OIDC
+
+An outer forward-auth layer must not intercept Forge's exact Auth.js callback
+paths (`/api/auth/callback/<provider-id>`). The identity provider redirects the
+browser directly to Forge so Auth.js can validate the sealed state, PKCE, and
+nonce cookies. Keep the rest of the application behind the normal access
+policy, but configure the callback path as an explicit bypass in Authelia,
+Authentik, nginx `auth_request`, Traefik ForwardAuth, or an equivalent proxy.
+
+The proxy must also:
+
+- preserve the public host and scheme in `X-Forwarded-Host` and
+  `X-Forwarded-Proto`, with `AUTH_URL` set to that same public origin;
+- allow request and response header buffers large enough for Auth.js's sealed
+  PKCE, state, nonce, and session cookies—do not truncate or silently drop
+  multiple `Set-Cookie` headers;
+- avoid logging cookie values, authorization codes, or callback query strings.
+
+A provider redirect that repeatedly returns to sign-in, reports missing state,
+or succeeds only when outer authentication is disabled usually indicates a
+callback bypass or header-buffer problem rather than an IdP client-secret
+failure.
+
 All identity-policy and account-lifecycle mutations write the instance-wide
 security audit ledger with actor, target, request metadata, and timestamp.
 

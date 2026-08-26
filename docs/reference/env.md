@@ -49,6 +49,13 @@ instance administrator can use `/signin/local` when external identity is
 unavailable. Keep them unique, protected, and available to the operator; do not
 reuse a person's normal password.
 
+After configuring these variables, create and activate a dedicated instance
+administrator with the same email and designate it under **Identity & sign
+in**. Recovery uses `/signin/local?breakGlass=1`; the ordinary local form never
+accepts the environment credential implicitly. See [Instance Admin → Reverse
+proxy requirements for OIDC](/guide/instance-admin.html#reverse-proxy-requirements-for-oidc)
+for callback bypass and header-buffer requirements.
+
 Authentication mode, registration, automatic provider redirect, password
 minimum length, reset expiry, and lockout thresholds are runtime database
 settings under **Identity & sign-in**. They are intentionally not environment
@@ -286,6 +293,17 @@ pnpm worker
 The instrumentation hook is a no-op when it detects an external worker is
 already serving the queue — workers coordinate via Redis, so it is safe to
 leave the in-process boot enabled even with a sidecar.
+
+### Worker outbound networking
+
+Managed runtime handshake checks, self-tests, periodic health sweeps, and
+`/v1/runs` dispatch execute in the worker. The reference production topology is
+`docker/docker-compose.production.example.yml`: the worker joins the internal
+data network and a dedicated non-internal egress bridge, publishes no ports,
+and does not join the public reverse-proxy network. A manual runtime diagnostic
+is queued to that worker rather than executed from the web container, so its
+result reflects the same DNS, routing, and firewall plane that dispatches real
+work.
 
 ## Cross-references
 

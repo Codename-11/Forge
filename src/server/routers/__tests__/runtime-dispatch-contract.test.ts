@@ -4,8 +4,9 @@ import type { AddressInfo } from "node:net";
 import { WebSocketServer } from "ws";
 import { runtimeRouter } from "@/server/routers/runtime";
 import { getRunsConnectorForAgent } from "@/server/services/dispatch/registry";
+import { executeRuntimeDiagnostic } from "@/server/services/runtime-diagnostics";
 import type { RunEvent } from "@/server/services/dispatch/types";
-import { createWorkspaceFixture, buildContext, type TestFixture } from "./helpers";
+import { createWorkspaceFixture, buildContext, getPrisma, type TestFixture } from "./helpers";
 
 /**
  * API/MCP contract for the runtime + dispatch surface agents drive:
@@ -34,6 +35,26 @@ describe("runtime dispatch contract", () => {
     endpoint: "ws://127.0.0.1:4505",
   };
 
+  async function throughDiagnosticWorker<T>(request: () => Promise<T>): Promise<T> {
+    const response = request();
+    const prisma = getPrisma();
+    let attempt = null;
+    for (let index = 0; index < 100 && !attempt; index += 1) {
+      attempt = await prisma.runtimeDiagnosticAttempt.findFirst({
+        where: { workspaceId: fixture.workspace.id, completedAt: null },
+        orderBy: { createdAt: "desc" },
+      });
+      if (!attempt) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    if (!attempt) throw new Error("Runtime diagnostic was not queued by the router.");
+    await executeRuntimeDiagnostic({
+      requestId: attempt.requestId,
+      workspaceId: attempt.workspaceId,
+      runtimeId: attempt.runtimeId,
+    });
+    return response;
+  }
+
   async function startCodexSelfTestServer(
     complete: "pass" | "revoked-token",
   ): Promise<{ endpoint: string; close: () => Promise<void> }> {
@@ -49,7 +70,9 @@ describe("runtime dispatch contract", () => {
           return;
         }
         if (msg.method === "thread/start" && msg.id !== undefined) {
-          socket.send(JSON.stringify({ id: msg.id, result: { thread: { id: "thread-self-test" } } }));
+          socket.send(
+            JSON.stringify({ id: msg.id, result: { thread: { id: "thread-self-test" } } }),
+          );
           return;
         }
         if (msg.method === "turn/start" && msg.id !== undefined) {
@@ -96,7 +119,11 @@ describe("runtime dispatch contract", () => {
   it("validates + persists codex config and rejects unknown enum values", async () => {
     const rt = await caller.create({
       ...codexInput,
-      config: { sandboxMode: "workspace-write", approvalPolicy: "on-request", workspaceRoot: "/work" },
+      config: {
+        sandboxMode: "workspace-write",
+        approvalPolicy: "on-request",
+        workspaceRoot: "/work",
+      },
     });
     expect(rt.config).toMatchObject({
       sandboxMode: "workspace-write",
@@ -152,7 +179,7 @@ describe("runtime dispatch contract", () => {
   it("verifyConnection runs a handshake-only probe and persists sanitized diagnostics", async () => {
     const rt = await caller.create({ ...codexInput, endpoint: "ws://127.0.0.1:1" });
 
-    const verified = await caller.verifyConnection({ id: rt.id });
+    const verified = await throughDiagnosticWorker(() => caller.verifyConnection({ id: rt.id }));
 
     expect(verified.probe.attempted).toBe(true);
     expect(verified.probe.reachable).toBe(false);
@@ -175,7 +202,7 @@ describe("runtime dispatch contract", () => {
       providersAvailable: ["CODEX"],
     });
 
-    const res = await caller.runSelfTest({ id: rt.id });
+    const res = await throughDiagnosticWorker(() => caller.runSelfTest({ id: rt.id }));
 
     expect(res.result.attempted).toBe(false);
     expect(res.result.status).toBe("UNSUPPORTED");
@@ -191,7 +218,7 @@ describe("runtime dispatch contract", () => {
     try {
       const rt = await caller.create({ ...codexInput, endpoint: server.endpoint });
 
-      const res = await caller.runSelfTest({ id: rt.id });
+      const res = await throughDiagnosticWorker(() => caller.runSelfTest({ id: rt.id }));
 
       expect(res.result.attempted).toBe(true);
       expect(res.result.status).toBe("PASSED");
@@ -217,7 +244,7 @@ describe("runtime dispatch contract", () => {
         secret: "super-secret-token",
       });
 
-      const res = await caller.runSelfTest({ id: rt.id });
+      const res = await throughDiagnosticWorker(() => caller.runSelfTest({ id: rt.id }));
 
       expect(res.result.attempted).toBe(true);
       expect(res.result.status).toBe("FAILED");
@@ -260,7 +287,14 @@ describe("runtime dispatch contract", () => {
     expect(enabled.disabledAt).toBeNull();
     const live = getRunsConnectorForAgent({
       provider: "CODEX",
-      runtime: { adapterKey: "codex-app-server", endpoint: rt.endpoint, secret: null, config: rt.config, disabledAt: null, name: rt.name },
+      runtime: {
+        adapterKey: "codex-app-server",
+        endpoint: rt.endpoint,
+        secret: null,
+        config: rt.config,
+        disabledAt: null,
+        name: rt.name,
+      },
     });
     expect(live?.kind).toBe("codex-app-server");
   });
@@ -269,7 +303,14 @@ describe("runtime dispatch contract", () => {
     process.env.FORGE_E2E = "1";
     const connector = getRunsConnectorForAgent({
       provider: "CUSTOM",
-      runtime: { adapterKey: "mock-runs", endpoint: "mock://e2e", secret: null, config: null, disabledAt: null, name: "Mock" },
+      runtime: {
+        adapterKey: "mock-runs",
+        endpoint: "mock://e2e",
+        secret: null,
+        config: null,
+        disabledAt: null,
+        name: "Mock",
+      },
     });
     expect(connector?.kind).toBe("mock-runs");
 
@@ -285,7 +326,14 @@ describe("runtime dispatch contract", () => {
     process.env.FORGE_E2E = "1";
     const connector = getRunsConnectorForAgent({
       provider: "CUSTOM",
-      runtime: { adapterKey: "mock-runs", endpoint: "mock://e2e", secret: null, config: null, disabledAt: null, name: "Mock" },
+      runtime: {
+        adapterKey: "mock-runs",
+        endpoint: "mock://e2e",
+        secret: null,
+        config: null,
+        disabledAt: null,
+        name: "Mock",
+      },
     });
     const { externalRunId } = await connector!.startRun({ message: "please approve this" });
     const events: RunEvent[] = [];

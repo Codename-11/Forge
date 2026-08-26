@@ -15,6 +15,7 @@ export type AuthPolicyConfig = Pick<
   | "mode"
   | "registrationMode"
   | "breakGlassCredentialsEnabled"
+  | "breakGlassUserId"
   | "autoRedirectProviderId"
   | "passwordMinLength"
   | "passwordResetTtlMinutes"
@@ -27,6 +28,7 @@ export const DEFAULT_AUTH_POLICY: AuthPolicyConfig = {
   mode: "HYBRID",
   registrationMode: "INVITE_ONLY",
   breakGlassCredentialsEnabled: true,
+  breakGlassUserId: null,
   autoRedirectProviderId: null,
   passwordMinLength: 12,
   passwordResetTtlMinutes: 30,

@@ -124,6 +124,41 @@ describe("mcp execution wrapper", () => {
     }
   });
 
+  it("allows an agent-linked key with no broad scopes to heartbeat only itself", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "MEX" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `presence-${Date.now()}`,
+        name: "Least privilege presence",
+        status: "OFFLINE",
+      },
+    });
+
+    const exec = await executeMcpTool({
+      name: "agents.heartbeat",
+      input: {},
+      ctx: buildMcpCtx(fixture, { scopes: [], linkedAgentId: agent.id }).ctx,
+      source: "test",
+    });
+
+    expect(exec.ok).toBe(true);
+    await expect(
+      prisma.agent.findUniqueOrThrow({ where: { id: agent.id } }),
+    ).resolves.toMatchObject({ status: "ONLINE" });
+
+    const unlinked = await executeMcpTool({
+      name: "agents.heartbeat",
+      input: {},
+      ctx: buildMcpCtx(fixture, { scopes: [], linkedAgentId: null }).ctx,
+      source: "test",
+    });
+    expect(unlinked.ok).toBe(false);
+    if (!unlinked.ok) expect(unlinked.error.message).toMatch(/linkedAgentId/);
+  });
+
   it("classifies explicit mode-policy denials before the raw tool run", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "MEX" });
     fixtures.push(fixture);

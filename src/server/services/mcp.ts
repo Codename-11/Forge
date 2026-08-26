@@ -5220,7 +5220,10 @@ export const mcpTools = {
   },
 
   "agents.heartbeat": {
-    scopes: ["READ_USERS"] as const,
+    // Self-presence is authorized by the authenticated key's linkedAgentId
+    // below. It must not require broad workspace-member read access merely to
+    // update that one agent binding.
+    scopes: [] as const,
     input: z.object({
       status: z
         .nativeEnum(AgentStatus)

@@ -2,6 +2,43 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-25 — Generic OIDC and recovery identity hardening
+
+- Required PKCE, state, and nonce checks explicitly for every generic OIDC
+  provider and added a strict local provider fixture that rejects weak state,
+  requires S256 PKCE, and binds the returned ID token to the request nonce.
+- Made external identity linking an explicit, confirmed account-security flow,
+  clarified that login identities do not grant integration access, surfaced
+  provider-link collisions, and covered link, unlink, and relink behavior.
+- Added a designated break-glass administrator to instance policy. Recovery
+  now uses an explicit route, records an instance audit event, exposes readiness
+  in admin settings, and protects the designated principal from demotion,
+  suspension, or deletion until recovery is reassigned or disabled.
+- Documented reverse-proxy callback bypass, forwarded-origin, sealed-cookie
+  header-buffer, and sensitive callback logging requirements for OIDC.
+
+## 2026-08-25 — Managed runtime execution-plane and Hermes hardening
+
+- Moved operator-requested runtime probes and no-tool self-tests onto a
+  dedicated BullMQ worker queue so their DNS, routing, and firewall plane is
+  the same one that dispatches managed `/v1/runs` work. Added bounded,
+  tenant-scoped diagnostic history with worker executor and manual/scheduled
+  trigger provenance.
+- Added a reviewable production Compose topology where the worker has outbound
+  egress without published ports or reverse-proxy membership, plus regression
+  coverage for the network contract and contradictory probe history.
+- Replaced `REMOTE_HTTP`-derived “remote webhook” copy with adapter-aware
+  managed-runtime and transport identity, and collapsed duplicate chat
+  readiness warnings when runtime health already reports the same probe fault.
+- Added a stable versioned User-Agent and sanitized HTTP/error classification
+  to the distributable Hermes Forge platform adapter.
+- Shipped versioned, deterministic `forge-presence` and `forge-provision`
+  helper sources, release packaging/checksums, and operator docs. Presence is a
+  script-only recurring heartbeat and remains silent on success.
+- Explicitly documented and tested that `runs.complete.completionCommentId`
+  accepts only a live BODY comment, and added one managed-runtime acceptance
+  path spanning assignment, external dispatch, inbox acknowledgement, output
+  start, final BODY comment, and terminal completion.
 ## 2026-08-25 — Restricted projects and explicit integration grants
 
 - Added workspace-visible and restricted projects with explicit Viewer,
@@ -31,7 +68,6 @@
   integration ceiling after defaults are resolved, and now revokes derived
   grants when credential source, exact app binding, or capability ceilings
   change.
-
 ## 2026-08-25 — Canonical local and external user identity foundation
 
 - Added a provider-neutral instance authentication policy for local-only,
@@ -14498,3 +14534,21 @@ reasoning output. Added integration coverage for delegated runtime completion,
 durable final comments, wait-request deduplication/resolution, waiting-reason
 preservation, and webhook relation precedence, plus lifecycle Playwright
 coverage for collapsed/expanded progress detail.
+
+## 2026-08-25 — AXI-182 final hardening review
+
+Closed the final managed-runtime and helper-distribution review gaps before
+release. Unexpected diagnostic worker failures now finalize their provenance
+row with a sanitized terminal result instead of leaving an indefinite pending
+state. A separate-process regression proves that runtime verification reports
+worker-plane failure even when the web/test process can reach the endpoint.
+
+Hermes presence heartbeats now authorize strictly through the authenticated
+key's linked agent identity without requiring broad workspace-member read
+access. Release automation builds and checksum-validates the versioned Hermes
+helper archives before any version or tag push, including during dry runs, and
+publishes those prevalidated assets after tagging.
+
+Verification: focused runtime-diagnostic, MCP-execution, and helper-distribution
+tests passed (11/11); TypeScript passed; lint completed with only the existing
+repository warnings; helper tarballs and `SHA256SUMS` verified successfully.

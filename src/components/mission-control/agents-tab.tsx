@@ -16,7 +16,7 @@ import { trpc } from "@/lib/trpc";
 import type { AppRouter } from "@/server/routers/_app";
 import { cn } from "@/lib/utils";
 import { TransportChip } from "@/components/agents/transport-chip";
-import { presenceAvailability } from "@/lib/transport-display";
+import { presenceAvailability, runtimeDisplayIdentity } from "@/lib/transport-display";
 
 /**
  * Agents tab. Roster of workspace agents with status pill, runtime mode
@@ -75,9 +75,7 @@ export function AgentsTab({ slug }: { slug: string }) {
     loadByAgent.set(run.agentId, (loadByAgent.get(run.agentId) ?? 0) + 1);
   }
   const costByAgent = new Map((costStats?.byAgent ?? []).map((c) => [c.agentId, c]));
-  const complianceByAgent = new Map(
-    (compliance?.agents ?? []).map((row) => [row.agentId, row]),
-  );
+  const complianceByAgent = new Map((compliance?.agents ?? []).map((row) => [row.agentId, row]));
 
   // Sort: PERSISTENT+ONLINE first, PERSISTENT+BUSY, EPHEMERAL (by lastHeartbeatAt desc), then OFFLINE
   const sorted = [...(agents ?? [])].sort((a, b) => {
@@ -193,6 +191,7 @@ export function AgentsTab({ slug }: { slug: string }) {
                     runtimeId={a.runtime.id}
                     name={a.runtime.name}
                     kind={a.runtime.kind}
+                    adapterKey={a.runtime.adapterKey}
                     heartbeatAt={a.runtime.heartbeatAt}
                   />
                 )}
@@ -278,8 +277,14 @@ function ComplianceChips({ card }: { card: AgentCompliance }) {
         )}
         title={title}
       >
-        {risk === "ok" ? <ShieldCheck className="h-2.5 w-2.5" /> : <AlertTriangle className="h-2.5 w-2.5" />}
-        {risk === "ok" ? "compliant" : `${card.signals.length} signal${card.signals.length === 1 ? "" : "s"}`}
+        {risk === "ok" ? (
+          <ShieldCheck className="h-2.5 w-2.5" />
+        ) : (
+          <AlertTriangle className="h-2.5 w-2.5" />
+        )}
+        {risk === "ok"
+          ? "compliant"
+          : `${card.signals.length} signal${card.signals.length === 1 ? "" : "s"}`}
       </span>
       <span
         className={cn(
@@ -358,12 +363,14 @@ function RuntimeChip({
   runtimeId,
   name,
   kind,
+  adapterKey,
   heartbeatAt,
 }: {
   slug: string;
   runtimeId: string;
   name: string;
   kind: RuntimeKind;
+  adapterKey?: string | null;
   heartbeatAt?: Date | string | null;
 }) {
   const Icon =
@@ -385,11 +392,12 @@ function RuntimeChip({
       : presence === "idle"
         ? "bg-warning"
         : "bg-muted-foreground/40";
+  const identity = runtimeDisplayIdentity({ adapterKey, kind });
   return (
     <Link
       href={`/w/${slug}/settings/runtimes/${runtimeId}`}
       onClick={(e) => e.stopPropagation()}
-      title={`Runtime · ${kindLabel(kind)} · ${name} · ${presence}`}
+      title={`${identity.runtimeLabel} · ${identity.transportLabel} · ${name} · ${presence}`}
       className="inline-flex max-w-[10rem] items-center gap-1 rounded border border-border bg-subtle/40 px-1 py-0 text-[0.5625rem] text-muted-foreground hover:border-ember/40 hover:text-foreground"
     >
       <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dot)} />
@@ -397,19 +405,6 @@ function RuntimeChip({
       <span className="truncate font-mono">{name}</span>
     </Link>
   );
-}
-
-function kindLabel(kind: RuntimeKind): string {
-  switch (kind) {
-    case "LOCAL_DAEMON":
-      return "local daemon";
-    case "REMOTE_HTTP":
-      return "remote webhook";
-    case "CLOUD":
-      return "cloud";
-    default:
-      return String(kind);
-  }
 }
 
 function PresenceDot({ status, availability }: { status: string; availability?: string }) {

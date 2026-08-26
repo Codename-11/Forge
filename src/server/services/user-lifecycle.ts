@@ -121,6 +121,23 @@ function assertPasswordLength(password: string, minLength: number): void {
   }
 }
 
+async function assertNotDesignatedBreakGlass(
+  tx: DatabaseClient,
+  userId: string,
+  action: string,
+): Promise<void> {
+  const policy = await tx.instanceAuthPolicy.findUnique({
+    where: { id: "default" },
+    select: { breakGlassCredentialsEnabled: true, breakGlassUserId: true },
+  });
+  if (policy?.breakGlassCredentialsEnabled && policy.breakGlassUserId === userId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: `Reassign or disable break-glass recovery before ${action} its designated administrator.`,
+    });
+  }
+}
+
 export async function createInvitedUser(
   db: PrismaClient,
   input: LifecycleActor & { email: string; name?: string | null; instanceRole?: InstanceRole },
@@ -175,6 +192,9 @@ export async function setUserInstanceRole(
   input: LifecycleActor & { userId: string; role: InstanceRole },
 ) {
   return serializable(db, async (tx) => {
+    if (input.role !== InstanceRole.INSTANCE_ADMIN) {
+      await assertNotDesignatedBreakGlass(tx, input.userId, "demoting");
+    }
     const target = await tx.user.findUnique({
       where: { id: input.userId },
       select: { id: true, instanceRole: true, status: true },
@@ -425,6 +445,7 @@ export function completeAccountSetup(
 }
 
 async function assertLifecycleQuorum(tx: Prisma.TransactionClient, userId: string): Promise<void> {
+  await assertNotDesignatedBreakGlass(tx, userId, "disabling or deleting");
   const user = await tx.user.findUnique({
     where: { id: userId },
     select: { instanceRole: true, status: true },

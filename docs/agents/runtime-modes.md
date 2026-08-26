@@ -70,13 +70,20 @@ agent offline.
 
 ## The forge-presence Hermes skill
 
+Forge releases publish a versioned `forge-presence-vX.Y.Z.tar.gz` artifact and
+`SHA256SUMS`. Verify the checksum, unpack it below
+`~/.hermes/skills/forge-presence/`, then use its setup script. The source ships
+at `integrations/hermes/forge-presence/` for source-based installations.
+
 `~/.hermes/skills/forge-presence/` is a small cron-driven script that calls
 `agents.heartbeat` on behalf of a Hermes profile. It requires only:
 - `FORGE_URL` — the Forge instance base URL.
 - `FORGE_API_KEY` — an AGENT-kind API key with `linkedAgentId` set.
 
 The agent id is inferred from the key's `linkedAgentId`; no agent id needs to be
-hardcoded.
+hardcoded. Self-heartbeat does not require `READ_USERS` or another broad
+workspace scope: the linked agent identity is the complete authorization
+boundary for this endpoint.
 
 ### Setup for the default agent (Victor)
 
@@ -101,7 +108,8 @@ The `setup.sh` script registers a system cron entry that calls the heartbeat end
 every minute. Without the skill, a Hermes agent is still considered reachable whenever
 the worker successfully delivers a webhook (implicit heartbeat) — but chat shows
 "offline · queued" until the first delivery lands. With the skill, presence is honest
-from the moment Hermes starts.
+from the moment Hermes starts. The heartbeat is script-only, repeats indefinitely,
+and is silent on success; it never opens a Hermes session or wakes an LLM.
 
 ## Cross-references
 

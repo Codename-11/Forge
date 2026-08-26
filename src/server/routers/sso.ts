@@ -32,15 +32,30 @@ function normalizeIssuer(raw: string): string {
 
 async function assertAdminRecoveryPath(
   database: Pick<PrismaClient, "user">,
-  policy: Pick<InstanceAuthPolicy, "mode" | "breakGlassCredentialsEnabled">,
+  policy: Pick<InstanceAuthPolicy, "mode" | "breakGlassCredentialsEnabled" | "breakGlassUserId">,
   providers: Array<{ id: string; type: SsoType; enabled: boolean; archivedAt: Date | null }>,
 ): Promise<void> {
   if (
     policy.breakGlassCredentialsEnabled &&
     process.env.ADMIN_EMAIL &&
-    process.env.ADMIN_PASSWORD
+    process.env.ADMIN_PASSWORD &&
+    policy.breakGlassUserId
   ) {
-    return;
+    const designated = await database.user.findFirst({
+      where: {
+        id: policy.breakGlassUserId,
+        instanceRole: "INSTANCE_ADMIN",
+        status: "ACTIVE",
+        disabledAt: null,
+        deletedAt: null,
+        OR: [
+          { normalizedEmail: process.env.ADMIN_EMAIL.trim().toLowerCase() },
+          { email: { equals: process.env.ADMIN_EMAIL, mode: "insensitive" } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (designated) return;
   }
   const providerKeys = providers
     .filter((provider) => provider.enabled && !provider.archivedAt)
@@ -73,17 +88,41 @@ async function assertAdminRecoveryPath(
 
 export const ssoRouter = router({
   policy: instanceAdminProcedure.query(async ({ ctx }) => {
-    const [policy, providers] = await Promise.all([
+    const [policy, providers, breakGlassCandidates] = await Promise.all([
       getInstanceAuthPolicy(ctx.db),
       ctx.db.ssoProvider.findMany({
         where: { archivedAt: null },
         select: { id: true, type: true, enabled: true, archivedAt: true },
       }),
+      ctx.db.user.findMany({
+        where: {
+          instanceRole: "INSTANCE_ADMIN",
+          status: "ACTIVE",
+          disabledAt: null,
+          deletedAt: null,
+        },
+        orderBy: [{ name: "asc" }, { email: "asc" }],
+        select: { id: true, name: true, email: true },
+      }),
     ]);
+    const configuredEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase() ?? null;
+    const designated = breakGlassCandidates.find(
+      (candidate) => candidate.id === policy.breakGlassUserId,
+    );
+    const breakGlassConfigured = Boolean(configuredEmail && process.env.ADMIN_PASSWORD);
+    const breakGlassReady = Boolean(
+      policy.breakGlassCredentialsEnabled &&
+      breakGlassConfigured &&
+      designated &&
+      designated.email.trim().toLowerCase() === configuredEmail,
+    );
     return {
       policy,
       presentation: deriveAuthPresentation(policy, providers),
-      breakGlassConfigured: Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD),
+      breakGlassConfigured,
+      breakGlassReady,
+      breakGlassPrincipal: designated ?? null,
+      breakGlassCandidates,
     };
   }),
 
@@ -93,6 +132,7 @@ export const ssoRouter = router({
         mode: z.nativeEnum(AuthenticationMode),
         registrationMode: z.nativeEnum(RegistrationMode),
         breakGlassCredentialsEnabled: z.boolean(),
+        breakGlassUserId: z.string().cuid().nullable(),
         autoRedirectProviderId: z.string().cuid().nullable(),
         passwordMinLength: z.number().int().min(8).max(128),
         passwordResetTtlMinutes: z.number().int().min(5).max(1440),
@@ -108,6 +148,43 @@ export const ssoRouter = router({
       validateAuthPolicyTransition({ id: "default", ...input }, providers, {
         breakGlassConfigured: Boolean(process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD),
       });
+      if (!input.breakGlassCredentialsEnabled && input.breakGlassUserId) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Disable break-glass recovery without retaining a designated principal.",
+        });
+      }
+      if (input.breakGlassCredentialsEnabled) {
+        const configuredEmail = process.env.ADMIN_EMAIL?.trim().toLowerCase();
+        if (!configuredEmail || !process.env.ADMIN_PASSWORD || !input.breakGlassUserId) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "Break-glass recovery requires configured environment credentials and a designated active instance administrator.",
+          });
+        }
+        const designated = await ctx.db.user.findFirst({
+          where: {
+            id: input.breakGlassUserId,
+            instanceRole: "INSTANCE_ADMIN",
+            status: "ACTIVE",
+            disabledAt: null,
+            deletedAt: null,
+            OR: [
+              { normalizedEmail: configuredEmail },
+              { email: { equals: configuredEmail, mode: "insensitive" } },
+            ],
+          },
+          select: { id: true },
+        });
+        if (!designated) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message:
+              "The designated break-glass principal must be an active instance administrator whose email matches ADMIN_EMAIL.",
+          });
+        }
+      }
       await assertAdminRecoveryPath(ctx.db, input, providers);
       const policy = await ctx.db.instanceAuthPolicy.upsert({
         where: { id: "default" },

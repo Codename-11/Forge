@@ -563,6 +563,21 @@ enum RuntimeSelfTestStatus {
   UNSUPPORTED
 }
 
+enum RuntimeDiagnosticKind {
+  PROBE
+  SELF_TEST
+}
+
+enum RuntimeDiagnosticExecutor {
+  WORKER
+}
+
+enum RuntimeDiagnosticTrigger {
+  MANUAL_RUNTIME
+  MANUAL_AGENT
+  SCHEDULED_SWEEP
+}
+
 enum ChatSessionClass {
   INTERACTIVE
   BACKGROUND
@@ -940,6 +955,7 @@ model User {
   avatar                 UserAvatar?
   instanceAuditActions   InstanceAuditLog[]     @relation("InstanceAuditActor")
   instanceAuditTargets   InstanceAuditLog[]     @relation("InstanceAuditTarget")
+  breakGlassPolicies     InstanceAuthPolicy[]   @relation("InstanceBreakGlassUser")
   memberships            Membership[]
   invitationsSent        WorkspaceInvitation[]  @relation("InvitationSender")
   invitationsAccepted    WorkspaceInvitation[]  @relation("InvitationAcceptor")
@@ -1054,6 +1070,10 @@ model InstanceAuthPolicy {
   mode                         AuthenticationMode @default(HYBRID)
   registrationMode             RegistrationMode   @default(INVITE_ONLY)
   breakGlassCredentialsEnabled Boolean            @default(true)
+  /// Active instance administrator designated to receive the environment-
+  /// backed recovery credential. Keeping this separate from the human's OIDC
+  /// identity makes emergency access explicit and lifecycle-safe.
+  breakGlassUserId             String?
   autoRedirectProviderId       String?
   passwordMinLength            Int                @default(12)
   passwordResetTtlMinutes      Int                @default(30)
@@ -1063,6 +1083,7 @@ model InstanceAuthPolicy {
   updatedAt                    DateTime           @updatedAt
 
   autoRedirectProvider SsoProvider? @relation(fields: [autoRedirectProviderId], references: [id], onDelete: SetNull)
+  breakGlassUser       User?        @relation("InstanceBreakGlassUser", fields: [breakGlassUserId], references: [id], onDelete: Restrict)
 }
 
 /// Optional local sign-in method attached to the same canonical User used by
@@ -2591,10 +2612,38 @@ model Runtime {
   githubApp         GithubApp?         @relation(fields: [githubAppId], references: [id], onDelete: SetNull)
   connectorSessions ConnectorSession[]
   agentConnections  AgentConnection[]
+  diagnosticAttempts RuntimeDiagnosticAttempt[]
 
   @@index([workspaceId, archivedAt])
   @@index([ownerId])
   @@index([githubAppId])
+}
+
+/// Bounded diagnostic history for managed runtimes. Diagnostics execute in
+/// the worker, which is also the execution plane that dispatches /v1/runs.
+/// Keeping the request trigger and executor makes an operator-requested check
+/// distinguishable from the periodic sweep that may follow it.
+model RuntimeDiagnosticAttempt {
+  id            String                    @id @default(cuid())
+  requestId     String                    @unique
+  workspaceId   String
+  runtimeId     String
+  kind          RuntimeDiagnosticKind
+  executor      RuntimeDiagnosticExecutor @default(WORKER)
+  trigger       RuntimeDiagnosticTrigger
+  requestedById String?
+  attempted     Boolean                   @default(false)
+  reachable     Boolean?
+  selfTestStatus RuntimeSelfTestStatus?
+  detail        String?
+  durationMs    Int?
+  createdAt     DateTime                  @default(now())
+  completedAt   DateTime?
+
+  runtime Runtime @relation(fields: [runtimeId], references: [id], onDelete: Cascade)
+
+  @@index([workspaceId, runtimeId, createdAt(sort: Desc)])
+  @@index([runtimeId, kind, createdAt(sort: Desc)])
 }
 
 /// A named secret injected into a runtime's environment at provision time

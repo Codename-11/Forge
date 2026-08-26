@@ -107,6 +107,15 @@ jobs:
           echo "Next version: ${{ steps.version.outputs.next }}"
           echo "Tag: ${{ steps.version.outputs.tag }}"
 
+      # Build release assets before the first irreversible push. This also runs
+      # during dry-run so packaging failures are discovered without publishing
+      # a version commit or immutable tag.
+      - name: Package and validate Hermes runtime helpers
+        run: |
+          bash scripts/package-hermes-helpers.sh "${{ steps.version.outputs.tag }}"
+          test -s dist/hermes-helpers/SHA256SUMS
+          (cd dist/hermes-helpers && sha256sum --check SHA256SUMS)
+
       - name: Update version
         if: ${{ !inputs.dry_run }}
         run: |
@@ -151,4 +160,5 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             $PRERELEASE \
+            dist/hermes-helpers/* \
             --notes-start-tag "$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo '')"

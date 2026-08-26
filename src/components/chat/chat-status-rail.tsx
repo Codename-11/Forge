@@ -27,7 +27,7 @@ import { TransportChip } from "@/components/agents/transport-chip";
 import { AgentPresenceDot } from "@/components/agent-presence-dot";
 import { StatusDot } from "@/components/ui/status-dot";
 import { ProjectChip } from "@/components/project-chip";
-import { presenceAvailability } from "@/lib/transport-display";
+import { presenceAvailability, runtimeDisplayIdentity } from "@/lib/transport-display";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { buildChatDiagnosticReport } from "@/lib/chat-diagnostic-report";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -74,19 +74,6 @@ function runtimeHealthTextClass(tone: string | null | undefined) {
   if (tone === "danger") return "text-danger";
   if (tone === "warning") return "text-amber-600 dark:text-amber-400";
   return "text-muted-foreground";
-}
-
-function runtimeKindLabel(kind: string | null | undefined): string {
-  switch (kind) {
-    case "LOCAL_DAEMON":
-      return "local daemon";
-    case "REMOTE_HTTP":
-      return "remote http";
-    case "CLOUD":
-      return "cloud";
-    default:
-      return (kind ?? "runtime").toLowerCase();
-  }
 }
 
 function toneClass(tone: string | null | undefined): string {
@@ -301,7 +288,13 @@ export function ChatStatusRail({
   const engine = readiness?.mode ?? null;
   const effectiveProvider = readiness?.provider ?? agent?.provider ?? null;
   const runtime = agent?.runtime ?? null;
+  const runtimeIdentity = runtimeDisplayIdentity({
+    adapterKey: runtime?.adapterKey,
+    kind: runtime?.kind,
+  });
   const runtimeHealth = runtime?.health ?? null;
+  const readinessRepeatsProbeFailure =
+    readiness?.reason === "runtime-probe-failed" && Boolean(runtimeHealth);
   const connectionOk = readiness
     ? readiness.ready &&
       (!runtimeHealth || runtimeHealth.tone === "success" || runtimeHealth.tone === "muted")
@@ -318,7 +311,7 @@ export function ChatStatusRail({
   const deliveryBad = hasOpenTurn && diagnostics?.lastDelivery?.status === "FAILED";
   const connectorBad = Boolean(
     diagnostics?.connectorSession &&
-      ["ERROR", "DISCONNECTED"].includes(diagnostics.connectorSession.lifecycle),
+    ["ERROR", "DISCONNECTED"].includes(diagnostics.connectorSession.lifecycle),
   );
   const streamBad = Boolean(
     diagnostics?.lastAgentStreamError ||
@@ -577,7 +570,7 @@ export function ChatStatusRail({
                 >
                   {runtime.name}
                 </Link>{" "}
-                · {runtimeKindLabel(runtime.kind)}
+                · {runtimeIdentity.runtimeLabel} · {runtimeIdentity.transportLabel}
               </span>
             ) : (
               <span className="italic text-muted-foreground/80">no managed runtime attached</span>
@@ -600,7 +593,7 @@ export function ChatStatusRail({
               </span>
             </div>
           )}
-          {readiness && !readiness.ready && (
+          {readiness && !readiness.ready && !readinessRepeatsProbeFailure && (
             <div className="flex items-start gap-1.5 text-[0.625rem] text-amber-600 dark:text-amber-400">
               <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
               <span className="line-clamp-3">{readiness.hint}</span>
@@ -672,8 +665,8 @@ export function ChatStatusRail({
               mapping · {diagnostics.connectorSession.id}
             </button>
             <div>
-              protocol · {diagnostics.connectorSession.protocolVersion ?? "not negotiated"} · class ·{" "}
-              {diagnostics.connectorSession.sessionClass.toLowerCase()}
+              protocol · {diagnostics.connectorSession.protocolVersion ?? "not negotiated"} · class
+              · {diagnostics.connectorSession.sessionClass.toLowerCase()}
             </div>
             <div>
               ownership · {diagnostics.connectorSession.ownership.toLowerCase()} · retries ·{" "}
@@ -694,7 +687,10 @@ export function ChatStatusRail({
                   .filter(([, enabled]) => enabled === true)
                   .slice(0, 8)
                   .map(([capability]) => (
-                    <span key={capability} className="rounded bg-card/40 px-1.5 py-0.5 text-[0.625rem]">
+                    <span
+                      key={capability}
+                      className="rounded bg-card/40 px-1.5 py-0.5 text-[0.625rem]"
+                    >
                       {capability}
                     </span>
                   ))}

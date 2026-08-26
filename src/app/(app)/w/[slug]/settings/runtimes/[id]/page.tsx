@@ -3,14 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { notFound, useParams } from "next/navigation";
 import { toast } from "sonner";
-import {
-  Bot,
-  ChevronLeft,
-  Cloud,
-  Globe,
-  HardDrive,
-  Server,
-} from "lucide-react";
+import { Bot, ChevronLeft, Cloud, Globe, HardDrive, Server } from "lucide-react";
 import type { RuntimeKind } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
@@ -31,12 +24,7 @@ import {
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
-
-const KIND_LABEL: Record<RuntimeKind, string> = {
-  LOCAL_DAEMON: "local daemon",
-  REMOTE_HTTP: "remote webhook",
-  CLOUD: "cloud",
-};
+import { runtimeDisplayIdentity } from "@/lib/transport-display";
 
 const KIND_ICON: Record<RuntimeKind, typeof Server> = {
   LOCAL_DAEMON: HardDrive,
@@ -45,9 +33,7 @@ const KIND_ICON: Record<RuntimeKind, typeof Server> = {
 };
 
 function agentPresenceText(input: Date | string | null | undefined): string {
-  return input
-    ? `presence heartbeat ${relativeTime(input)} ago`
-    : "no presence heartbeat yet";
+  return input ? `presence heartbeat ${relativeTime(input)} ago` : "no presence heartbeat yet";
 }
 
 /**
@@ -64,10 +50,7 @@ export default function RuntimeDetailPage() {
   const id = params?.id ?? "";
   const utils = trpc.useUtils();
 
-  const { data: runtime, isLoading } = trpc.runtime.byId.useQuery(
-    { id },
-    { enabled: !!id },
-  );
+  const { data: runtime, isLoading } = trpc.runtime.byId.useQuery({ id }, { enabled: !!id });
 
   const [editOpen, setEditOpen] = useState(false);
   const [editName, setEditName] = useState("");
@@ -150,8 +133,7 @@ export default function RuntimeDetailPage() {
   if (!isLoading && !runtime) notFound();
 
   const KindIcon = runtime ? KIND_ICON[runtime.kind] : Server;
-  const showConnectPane =
-    runtime?.kind === "LOCAL_DAEMON" && runtime.agents.length === 0;
+  const showConnectPane = runtime?.kind === "LOCAL_DAEMON" && runtime.agents.length === 0;
 
   return (
     <>
@@ -169,7 +151,11 @@ export default function RuntimeDetailPage() {
             <span>{runtime?.name ?? "Runtime"}</span>
           </span>
         }
-        subtitle={runtime ? KIND_LABEL[runtime.kind] : undefined}
+        subtitle={
+          runtime
+            ? `${runtimeDisplayIdentity({ adapterKey: runtime.adapterKey, kind: runtime.kind }).runtimeLabel} · ${runtimeDisplayIdentity({ adapterKey: runtime.adapterKey, kind: runtime.kind }).transportLabel}`
+            : undefined
+        }
         actions={
           runtime && (
             <>
@@ -190,11 +176,7 @@ export default function RuntimeDetailPage() {
               >
                 {runSelfTest.isPending ? "Self-testing…" : "Run self-test"}
               </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setEditOpen(true)}
-              >
+              <Button size="sm" variant="ghost" onClick={() => setEditOpen(true)}>
                 Edit
               </Button>
               {!runtime.archivedAt && (
@@ -217,11 +199,7 @@ export default function RuntimeDetailPage() {
                   Unarchive
                 </Button>
               ) : (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setArchiveOpen(true)}
-                >
+                <Button size="sm" variant="ghost" onClick={() => setArchiveOpen(true)}>
                   Archive
                 </Button>
               )}
@@ -236,17 +214,12 @@ export default function RuntimeDetailPage() {
           ) : (
             <>
               {runtime.archivedAt && (
-                <div className="rounded-lg border border-warning/30 bg-warning/5 px-4 py-3 text-meta">
-                  <div className="font-medium text-foreground">
-                    This runtime is archived.
-                  </div>
+                <div className="text-meta rounded-lg border border-warning/30 bg-warning/5 px-4 py-3">
+                  <div className="font-medium text-foreground">This runtime is archived.</div>
                   <div className="mt-0.5 text-muted-foreground">
-                    It is hidden from the active list and rejects
-                    heartbeats. Use{" "}
-                    <span className="font-medium text-foreground">
-                      Unarchive
-                    </span>{" "}
-                    in the toolbar to restore it.
+                    It is hidden from the active list and rejects heartbeats. Use{" "}
+                    <span className="font-medium text-foreground">Unarchive</span> in the toolbar to
+                    restore it.
                   </div>
                 </div>
               )}
@@ -258,7 +231,7 @@ export default function RuntimeDetailPage() {
                   <div className="min-w-0 flex-1 space-y-2">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-sm font-semibold">{runtime.name}</h2>
-                      <KindBadge kind={runtime.kind} />
+                      <KindBadge kind={runtime.kind} adapterKey={runtime.adapterKey} />
                       <RuntimeHealthBadge health={runtime.health} />
                       <RuntimeSelfTestBadge selfTest={runtime.selfTest} />
                       {runtime.providersAvailable.map((p) => (
@@ -270,7 +243,7 @@ export default function RuntimeDetailPage() {
                         </span>
                       ))}
                     </div>
-                    <div className="flex flex-wrap items-center gap-3 text-meta text-muted-foreground">
+                    <div className="text-meta flex flex-wrap items-center gap-3 text-muted-foreground">
                       <span className="font-mono">
                         id <span className="text-id">{runtime.id}</span>
                       </span>
@@ -279,9 +252,7 @@ export default function RuntimeDetailPage() {
                       {runtime.connectedAt && (
                         <>
                           <span>·</span>
-                          <span>
-                            connected {relativeTime(runtime.connectedAt)} ago
-                          </span>
+                          <span>connected {relativeTime(runtime.connectedAt)} ago</span>
                         </>
                       )}
                       {runtime.owner && (
@@ -298,7 +269,7 @@ export default function RuntimeDetailPage() {
                         </>
                       )}
                     </div>
-                    <div className="grid gap-2 rounded-md border border-border/60 bg-background/40 p-3 text-meta text-muted-foreground sm:grid-cols-2">
+                    <div className="text-meta grid gap-2 rounded-md border border-border/60 bg-background/40 p-3 text-muted-foreground sm:grid-cols-2">
                       <div>
                         <div className="font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground/70">
                           Reason
@@ -351,9 +322,7 @@ export default function RuntimeDetailPage() {
                     {runtime.endpoint && (
                       <div className="text-meta text-muted-foreground">
                         endpoint{" "}
-                        <span className="font-mono text-foreground/80">
-                          {runtime.endpoint}
-                        </span>
+                        <span className="font-mono text-foreground/80">{runtime.endpoint}</span>
                       </div>
                     )}
                     <RuntimeToolSurfacePanel
@@ -371,25 +340,81 @@ export default function RuntimeDetailPage() {
               />
 
               <Section
+                title="Diagnostic history"
+                hint="Worker-plane checks; manual requests and scheduled sweeps remain distinguishable."
+              >
+                <Card as="div" className="divide-y divide-border p-0">
+                  {runtime.diagnosticAttempts.length ? (
+                    runtime.diagnosticAttempts.map((attempt) => {
+                      const passed =
+                        attempt.reachable === true || attempt.selfTestStatus === "PASSED";
+                      const failed =
+                        attempt.reachable === false || attempt.selfTestStatus === "FAILED";
+                      return (
+                        <div
+                          key={attempt.id}
+                          className="text-meta flex items-start gap-3 px-4 py-2.5"
+                        >
+                          <span
+                            className={cn(
+                              "mt-1 h-2 w-2 shrink-0 rounded-full",
+                              passed
+                                ? "bg-success"
+                                : failed
+                                  ? "bg-danger"
+                                  : "bg-muted-foreground/40",
+                            )}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-center gap-2 text-foreground/90">
+                              <span className="font-medium">
+                                {attempt.kind === "SELF_TEST"
+                                  ? "Runtime self-test"
+                                  : "Handshake probe"}
+                              </span>
+                              <span className="rounded border border-border bg-subtle/40 px-1 font-mono text-[0.5625rem] uppercase tracking-wider text-muted-foreground">
+                                {attempt.executor.toLowerCase()} ·{" "}
+                                {attempt.trigger.toLowerCase().replaceAll("_", " ")}
+                              </span>
+                              <span className="ml-auto text-muted-foreground">
+                                {relativeTime(attempt.completedAt ?? attempt.createdAt)}
+                              </span>
+                            </div>
+                            <div className="mt-0.5 line-clamp-2 text-muted-foreground">
+                              {attempt.detail ?? "Waiting for the worker."}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-meta px-4 py-5 text-muted-foreground">
+                      No worker diagnostic has been recorded yet.
+                    </div>
+                  )}
+                </Card>
+              </Section>
+
+              <Section
                 title={
                   <span className="flex items-center gap-2">
                     <Bot className="h-3.5 w-3.5 text-muted-foreground" />
                     Agents on this runtime
-                    <span className="font-mono text-meta text-muted-foreground">
+                    <span className="text-meta font-mono text-muted-foreground">
                       {runtime.agents.length}
                     </span>
                   </span>
                 }
               >
                 {runtime.agents.length === 0 ? (
-                  <Card as="div" className="px-4 py-6 text-meta text-muted-foreground">
+                  <Card as="div" className="text-meta px-4 py-6 text-muted-foreground">
                     No agents are pointing at this runtime yet.
                     {runtime.kind === "LOCAL_DAEMON" && (
                       <>
                         {" "}
-                        Once the daemon connects, attach an agent by setting
-                        its <span className="font-mono">runtimeId</span> to{" "}
-                        <code className="rounded bg-subtle px-1 font-mono text-id">
+                        Once the daemon connects, attach an agent by setting its{" "}
+                        <span className="font-mono">runtimeId</span> to{" "}
+                        <code className="text-id rounded bg-subtle px-1 font-mono">
                           {runtime.id}
                         </code>
                         .
@@ -400,10 +425,7 @@ export default function RuntimeDetailPage() {
                   <Card as="div" className="divide-y-0 p-0">
                     <ul className="divide-y divide-border">
                       {runtime.agents.map((a) => (
-                        <li
-                          key={a.id}
-                          className="flex items-center gap-3 px-4 py-2.5"
-                        >
+                        <li key={a.id} className="flex items-center gap-3 px-4 py-2.5">
                           <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-subtle text-sm">
                             {a.avatar ? (
                               <span aria-hidden>{a.avatar}</span>
@@ -421,16 +443,12 @@ export default function RuntimeDetailPage() {
                               >
                                 {a.name}
                               </Link>
-                              <span className="text-id text-muted-foreground">
-                                @{a.profileKey}
-                              </span>
+                              <span className="text-id text-muted-foreground">@{a.profileKey}</span>
                               <span className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
                                 {a.provider}
                               </span>
                               <span className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground">
-                                {a.runtimeMode === "PERSISTENT"
-                                  ? "persistent"
-                                  : "session"}
+                                {a.runtimeMode === "PERSISTENT" ? "persistent" : "session"}
                               </span>
                               <span
                                 className={cn(
@@ -445,7 +463,7 @@ export default function RuntimeDetailPage() {
                                 {a.status.toLowerCase()}
                               </span>
                             </div>
-                            <div className="mt-0.5 text-meta text-muted-foreground">
+                            <div className="text-meta mt-0.5 text-muted-foreground">
                               {agentPresenceText(a.lastHeartbeatAt)}
                             </div>
                           </div>
@@ -480,8 +498,8 @@ export default function RuntimeDetailPage() {
                   hint={
                     <>
                       The Forge CLI registers this runtime on{" "}
-                      <code className="font-mono">forge daemon start</code>,
-                      then opens an SSE subscription scoped to it.
+                      <code className="font-mono">forge daemon start</code>, then opens an SSE
+                      subscription scoped to it.
                     </>
                   }
                 >
@@ -491,10 +509,9 @@ export default function RuntimeDetailPage() {
                       code={`forge login --workspace ${ws.slug}\nforge daemon start`}
                     />
                     <div className="text-meta text-muted-foreground">
-                      Once connected, the daemon heartbeats every 60s and
-                      this card is replaced by the agent list above. The SSE
-                      channel id is{" "}
-                      <code className="rounded bg-subtle px-1 font-mono text-id">
+                      Once connected, the daemon heartbeats every 60s and this card is replaced by
+                      the agent list above. The SSE channel id is{" "}
+                      <code className="text-id rounded bg-subtle px-1 font-mono">
                         runtime:{runtime.id}
                       </code>
                       .
@@ -671,7 +688,8 @@ function runtimeSelfTestFixDraft(runtime: RuntimeDetailForFix): string {
   ].join("\n");
 }
 
-function KindBadge({ kind }: { kind: RuntimeKind }) {
+function KindBadge({ kind, adapterKey }: { kind: RuntimeKind; adapterKey?: string | null }) {
+  const identity = runtimeDisplayIdentity({ adapterKey, kind });
   return (
     <span
       className={cn(
@@ -680,9 +698,9 @@ function KindBadge({ kind }: { kind: RuntimeKind }) {
           ? "border-ember/30 bg-ember/5 text-foreground/80"
           : "border-border bg-subtle/40 text-muted-foreground",
       )}
-      title={KIND_LABEL[kind]}
+      title={`${identity.runtimeLabel} via ${identity.transportLabel}`}
     >
-      {KIND_LABEL[kind]}
+      {identity.runtimeLabel} · {identity.transportLabel}
     </span>
   );
 }
@@ -737,7 +755,7 @@ function RuntimeEnvironmentSection({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="text-sm font-medium text-foreground">{summary.label}</div>
-            <div className="mt-0.5 text-meta text-muted-foreground">
+            <div className="text-meta mt-0.5 text-muted-foreground">
               {summary.detail} {reported}.
             </div>
           </div>
@@ -777,7 +795,7 @@ function RuntimeEnvironmentSection({
             ))}
           </div>
         ) : (
-          <div className="rounded-md border border-dashed border-border bg-background/30 px-3 py-2 text-meta text-muted-foreground">
+          <div className="text-meta rounded-md border border-dashed border-border bg-background/30 px-3 py-2 text-muted-foreground">
             Run Test connection or restart the runtime with a bridge/daemon that calls{" "}
             <span className="font-mono">runtimes.reportInfo</span>
             {adapterKey === "codex-app-server"
@@ -801,7 +819,7 @@ docker compose logs -f`;
     >
       <Card as="div" className="space-y-3 divide-y-0 p-4">
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-          <div className="space-y-2 text-meta text-muted-foreground">
+          <div className="text-meta space-y-2 text-muted-foreground">
             <div>
               Bridge directory{" "}
               <span className="font-mono text-foreground/80">~/docker/codex-bridge</span>
@@ -813,8 +831,8 @@ docker compose logs -f`;
               </span>
             </div>
             <div>
-              Mounts Codex auth read-only, writes token refreshes to a named volume, and
-              exposes only the scoped <span className="font-mono">/work</span> workspace.
+              Mounts Codex auth read-only, writes token refreshes to a named volume, and exposes
+              only the scoped <span className="font-mono">/work</span> workspace.
             </div>
             <a
               href="/docs/agents/codex-app-server-docker.html"

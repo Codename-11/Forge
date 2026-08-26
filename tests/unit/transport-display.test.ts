@@ -5,12 +5,34 @@ import {
   transportModeWord,
   agentAvailabilityModel,
   presenceAvailability,
+  runtimeDisplayIdentity,
   type TransportMode,
 } from "@/lib/transport-display";
 
 const MODES: TransportMode[] = ["sessions", "runs", "completions", "dispatch", "none"];
 
 describe("transport-display", () => {
+  it("labels managed runtimes from adapter transport instead of REMOTE_HTTP storage kind", () => {
+    expect(runtimeDisplayIdentity({ adapterKey: "hermes", kind: "REMOTE_HTTP" })).toEqual({
+      runtimeLabel: "Hermes managed runtime",
+      transportLabel: "Runs API",
+    });
+    expect(runtimeDisplayIdentity({ adapterKey: "codex-app-server", kind: "REMOTE_HTTP" })).toEqual(
+      {
+        runtimeLabel: "Codex managed runtime",
+        transportLabel: "App server",
+      },
+    );
+  });
+
+  it("reserves webhook copy for the actual custom webhook adapter", () => {
+    expect(runtimeDisplayIdentity({ adapterKey: "custom-http", kind: "REMOTE_HTTP" })).toEqual({
+      runtimeLabel: "Custom webhook runtime",
+      transportLabel: "Webhook",
+    });
+    expect(runtimeDisplayIdentity({ kind: "REMOTE_HTTP" }).runtimeLabel).toBe("Remote runtime");
+  });
+
   it("returns a tone for every mode", () => {
     for (const m of MODES) {
       expect(transportTone(m).length).toBeGreaterThan(0);
@@ -77,22 +99,38 @@ describe("agentAvailabilityModel", () => {
 
   it("dispatch + completions agents with no heartbeat are on-demand", () => {
     expect(
-      agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "dispatch" }),
+      agentAvailabilityModel({
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: null,
+        transportMode: "dispatch",
+      }),
     ).toBe("on-demand");
     expect(
-      agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "completions" }),
+      agentAvailabilityModel({
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: null,
+        transportMode: "completions",
+      }),
     ).toBe("on-demand");
   });
 
   it("ephemeral agents are session", () => {
     expect(
-      agentAvailabilityModel({ runtimeMode: "EPHEMERAL", lastHeartbeatAt: null, transportMode: "runs" }),
+      agentAvailabilityModel({
+        runtimeMode: "EPHEMERAL",
+        lastHeartbeatAt: null,
+        transportMode: "runs",
+      }),
     ).toBe("session");
   });
 
   it("no chat path + no heartbeat falls back to heartbeat display", () => {
     expect(
-      agentAvailabilityModel({ runtimeMode: "PERSISTENT", lastHeartbeatAt: null, transportMode: "none" }),
+      agentAvailabilityModel({
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: null,
+        transportMode: "none",
+      }),
     ).toBe("heartbeat");
   });
 });
@@ -106,7 +144,11 @@ describe("presenceAvailability (base-column derivation)", () => {
 
   it("a CUSTOM agent with a webhook, no heartbeat → on-demand", () => {
     expect(
-      presenceAvailability({ provider: "CUSTOM", runtimeMode: "PERSISTENT", webhookUrl: "https://x" }),
+      presenceAvailability({
+        provider: "CUSTOM",
+        runtimeMode: "PERSISTENT",
+        webhookUrl: "https://x",
+      }),
     ).toBe("on-demand");
   });
 
@@ -118,12 +160,19 @@ describe("presenceAvailability (base-column derivation)", () => {
 
   it("an agent that has heartbeat uses the heartbeat model", () => {
     expect(
-      presenceAvailability({ provider: "CODEX", runtimeMode: "PERSISTENT", lastHeartbeatAt: new Date(), runtimeId: "rt" }),
+      presenceAvailability({
+        provider: "CODEX",
+        runtimeMode: "PERSISTENT",
+        lastHeartbeatAt: new Date(),
+        runtimeId: "rt",
+      }),
     ).toBe("heartbeat");
   });
 
   it("an unconfigured agent (no runtime/webhook/heartbeat) stays heartbeat (shows status)", () => {
-    expect(presenceAvailability({ provider: "CODEX", runtimeMode: "PERSISTENT" })).toBe("heartbeat");
+    expect(presenceAvailability({ provider: "CODEX", runtimeMode: "PERSISTENT" })).toBe(
+      "heartbeat",
+    );
   });
 
   it("ephemeral → session; missing fields are null-safe", () => {

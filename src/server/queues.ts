@@ -16,7 +16,7 @@ import { Queue } from "bullmq";
  * call shape while opening Redis only when queue methods are actually used.
  */
 
-type QueueName = "webhooks" | "maintenance";
+type QueueName = "webhooks" | "maintenance" | "runtime-diagnostics";
 type QueueCache = Partial<Record<QueueName, Queue>>;
 
 const connection = {
@@ -49,3 +49,5 @@ function lazyQueue(name: QueueName): Queue {
 export const webhookQueue = lazyQueue("webhooks");
 
 export const maintenanceQueue = lazyQueue("maintenance");
+
+export const runtimeDiagnosticQueue = lazyQueue("runtime-diagnostics");

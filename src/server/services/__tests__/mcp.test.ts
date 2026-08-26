@@ -4361,6 +4361,52 @@ describe("mcp runs.complete + completion contract", () => {
     ).toBe(1);
   });
 
+  it("runs.complete rejects a rolling STATUS comment as completionCommentId", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCB" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const { ctx } = buildMcpCtx(fixture);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `ccb-${Date.now()}`,
+        name: "Body contract closer",
+      },
+    });
+    const issue = await createIssue(fixture);
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        engagementMode: EngagementMode.DISCUSS,
+      },
+    });
+    const status = await prisma.comment.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        authoringAgentId: agent.id,
+        runId: run.id,
+        kind: "STATUS",
+        body: "Verifying the final response.",
+      },
+    });
+    const scopedCtx = { ...ctx, apiKey: { ...ctx.apiKey!, linkedAgentId: agent.id } };
+
+    await expect(
+      call(
+        "runs.complete",
+        {
+          runId: run.id,
+          summary: "Done.",
+          completionCommentId: status.id,
+        },
+        scopedCtx,
+      ),
+    ).rejects.toThrow("completionCommentId must be a live BODY comment posted by this run's agent");
+  });
+
   it("runs.complete atomically advances its execution step to review", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CCS" });
     fixtures.push(fixture);

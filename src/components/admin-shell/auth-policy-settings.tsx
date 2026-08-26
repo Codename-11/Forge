@@ -25,6 +25,7 @@ export function AuthPolicySettings() {
   const [mode, setMode] = useState<AuthenticationMode>("HYBRID");
   const [registrationMode, setRegistrationMode] = useState<RegistrationMode>("INVITE_ONLY");
   const [breakGlass, setBreakGlass] = useState(true);
+  const [breakGlassUserId, setBreakGlassUserId] = useState("");
   const [autoRedirectProviderId, setAutoRedirectProviderId] = useState<string>("");
   const [passwordMinLength, setPasswordMinLength] = useState(12);
   const [passwordResetTtlMinutes, setPasswordResetTtlMinutes] = useState(30);
@@ -37,6 +38,7 @@ export function AuthPolicySettings() {
     setMode(policy.mode);
     setRegistrationMode(policy.registrationMode);
     setBreakGlass(policy.breakGlassCredentialsEnabled);
+    setBreakGlassUserId(policy.breakGlassUserId ?? "");
     setAutoRedirectProviderId(policy.autoRedirectProviderId ?? "");
     setPasswordMinLength(policy.passwordMinLength);
     setPasswordResetTtlMinutes(policy.passwordResetTtlMinutes);
@@ -69,6 +71,7 @@ export function AuthPolicySettings() {
               mode,
               registrationMode,
               breakGlassCredentialsEnabled: breakGlass,
+              breakGlassUserId: breakGlass ? breakGlassUserId || null : null,
               autoRedirectProviderId: autoRedirectProviderId || null,
               passwordMinLength,
               passwordResetTtlMinutes,
@@ -158,10 +161,47 @@ export function AuthPolicySettings() {
           </span>
         </label>
 
+        {breakGlass && (
+          <label className="grid gap-1.5 text-xs">
+            <span className="font-medium">Designated recovery administrator</span>
+            <Combobox
+              value={breakGlassUserId || null}
+              onChange={(value) => setBreakGlassUserId(value ?? "")}
+              options={(query.data?.breakGlassCandidates ?? []).map((user) => ({
+                value: user.id,
+                label: `${user.name ?? user.email} · ${user.email}`,
+              }))}
+              allowNone
+              noneLabel="Select an active instance administrator"
+              placeholder="Select recovery administrator"
+              ariaLabel="Designated break-glass administrator"
+              matchTriggerWidth
+              className="h-9 w-full justify-between px-2.5"
+            />
+            <span className="text-muted-foreground">
+              The selected account must use the same email as ADMIN_EMAIL. Keep it separate from a
+              person&apos;s normal OIDC identity.
+            </span>
+          </label>
+        )}
+
         {breakGlass && query.data && !query.data.breakGlassConfigured && (
           <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
             <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
             Configure ADMIN_EMAIL and ADMIN_PASSWORD before enabling break glass.
+          </div>
+        )}
+        {breakGlass && query.data?.breakGlassConfigured && !query.data.breakGlassReady && (
+          <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-warning">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Select the active instance administrator whose email matches ADMIN_EMAIL before saving.
+          </div>
+        )}
+        {breakGlass && query.data?.breakGlassReady && query.data.breakGlassPrincipal && (
+          <div className="flex items-start gap-2 rounded-md border border-success/30 bg-success/5 p-3 text-xs text-success">
+            <ShieldCheck className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            Recovery is ready for{" "}
+            {query.data.breakGlassPrincipal.name ?? query.data.breakGlassPrincipal.email}.
           </div>
         )}
 
