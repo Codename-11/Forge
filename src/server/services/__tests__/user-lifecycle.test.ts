@@ -1,6 +1,10 @@
 import {
   ConnectionProvider,
   ConnectionStatus,
+  IntegrationCapability,
+  IntegrationCredentialSource,
+  IntegrationGrantScope,
+  IntegrationPrincipalType,
   InstanceRole,
   PluginScope,
   Role,
@@ -175,6 +179,26 @@ describe("user lifecycle", () => {
         name: "Lifecycle test",
         hashedKey: `hash-${Date.now()}`,
         prefix: "frg_test",
+        kind: "PERSONAL",
+        scopes: [PluginScope.READ_ISSUES],
+      },
+    });
+    const agent = await db.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `lifecycle-service-${Date.now()}`,
+        name: "Lifecycle service",
+      },
+    });
+    const serviceKey = await db.apiKey.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        userId: fixture.user.id,
+        linkedAgentId: agent.id,
+        name: "Lifecycle service key",
+        hashedKey: `service-hash-${Date.now()}`,
+        prefix: "frg_service",
+        kind: "AGENT",
         scopes: [PluginScope.READ_ISSUES],
       },
     });
@@ -195,6 +219,65 @@ describe("user lifecycle", () => {
       },
       include: { mappings: true },
     });
+    const personalAuthorization = await db.connectionAuthorization.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        connectionMappingId: connection.mappings[0]!.id,
+        credentialSource: IntegrationCredentialSource.USER_CONNECTION,
+        capabilities: [IntegrationCapability.READ],
+        authorizedById: fixture.user.id,
+        authorizationDigest: "personal-lifecycle",
+      },
+    });
+    const personalGrant = await db.integrationGrant.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        connectionAuthorizationId: personalAuthorization.id,
+        principalType: IntegrationPrincipalType.USER,
+        principalUserId: fixture.user.id,
+        scope: IntegrationGrantScope.WORKSPACE,
+        capabilities: [IntegrationCapability.READ],
+        grantedById: fixture.user.id,
+      },
+    });
+    const app = await db.githubApp.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Lifecycle app",
+        appId: "12345",
+        installationId: "67890",
+        privateKeyEnc: "encrypted-private-key",
+      },
+    });
+    const appConnection = await db.connection.create({
+      data: {
+        ownerId: fixture.user.id,
+        provider: ConnectionProvider.GITHUB,
+        label: "Workspace GitHub App",
+        status: ConnectionStatus.CONNECTED,
+        tokenEnc: "app-token-must-survive",
+        config: { installationId: "67890" },
+        mappings: {
+          create: {
+            workspaceId: fixture.workspace.id,
+            kind: "repo",
+            target: "example/app-repo",
+          },
+        },
+      },
+      include: { mappings: true },
+    });
+    const appAuthorization = await db.connectionAuthorization.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        connectionMappingId: appConnection.mappings[0]!.id,
+        credentialSource: IntegrationCredentialSource.WORKSPACE_GITHUB_APP,
+        githubAppId: app.id,
+        capabilities: [IntegrationCapability.READ],
+        authorizedById: fixture.user.id,
+        authorizationDigest: "workspace-app-lifecycle",
+      },
+    });
 
     const suspended = await suspendUser(db, {
       actorId: fixture.secondUser.id,
@@ -207,11 +290,16 @@ describe("user lifecycle", () => {
       apiKeys: 1,
       connections: 1,
       mappings: 1,
+      connectionAuthorizations: 1,
+      integrationGrants: 1,
     });
     await expect(db.session.count({ where: { userId: fixture.user.id } })).resolves.toBe(0);
     await expect(db.apiKey.findUniqueOrThrow({ where: { id: key.id } })).resolves.toMatchObject({
       revokedAt: expect.any(Date),
     });
+    await expect(
+      db.apiKey.findUniqueOrThrow({ where: { id: serviceKey.id } }),
+    ).resolves.toMatchObject({ revokedAt: null });
     await expect(
       db.connection.findUniqueOrThrow({ where: { id: connection.id } }),
     ).resolves.toMatchObject({
@@ -221,6 +309,24 @@ describe("user lifecycle", () => {
     await expect(
       db.connectionMapping.findUniqueOrThrow({ where: { id: connection.mappings[0]!.id } }),
     ).resolves.toMatchObject({ status: "paused" });
+    await expect(
+      db.connectionAuthorization.findUniqueOrThrow({ where: { id: personalAuthorization.id } }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+    await expect(
+      db.integrationGrant.findUniqueOrThrow({ where: { id: personalGrant.id } }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+    await expect(
+      db.connection.findUniqueOrThrow({ where: { id: appConnection.id } }),
+    ).resolves.toMatchObject({
+      status: ConnectionStatus.CONNECTED,
+      tokenEnc: "app-token-must-survive",
+    });
+    await expect(
+      db.connectionMapping.findUniqueOrThrow({ where: { id: appConnection.mappings[0]!.id } }),
+    ).resolves.toMatchObject({ status: "active" });
+    await expect(
+      db.connectionAuthorization.findUniqueOrThrow({ where: { id: appAuthorization.id } }),
+    ).resolves.toMatchObject({ revokedAt: null });
 
     const active = await reactivateUser(db, {
       actorId: fixture.secondUser.id,

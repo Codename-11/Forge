@@ -2,7 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import { db } from "@/server/db";
-import type { PluginScope } from "@prisma/client";
+import { ApiKeyKind, PluginScope, type Role } from "@prisma/client";
 
 export class ApiKeyError extends Error {
   constructor(
@@ -21,7 +21,13 @@ export class ApiKeyError extends Error {
 export interface ApiKeyContext {
   keyId: string;
   workspaceId: string;
+  /** Populated by authenticateApiKey; optional only for legacy internal test contexts. */
+  kind?: ApiKeyKind;
+  principalType?: "USER" | "AGENT" | "PLUGIN";
   userId: string | null;
+  /** Current workspace role for user principals; service principals do not inherit issuer roles. */
+  membershipId?: string | null;
+  membershipRole?: Role | null;
   pluginId: string | null;
   scopes: PluginScope[];
   projectIds: string[];
@@ -42,6 +48,23 @@ export function hasApiKeyNarrowing(ctx: { apiKey?: ApiKeyContext | null }): bool
   return Boolean(key && (key.projectIds.length || key.labelIds.length || key.initiativeIds.length));
 }
 
+function userProjectAccessWhere(key: ApiKeyContext): Record<string, unknown> | null {
+  if (key.principalType !== "USER") return null;
+  if (!key.membershipId || !key.membershipRole) return { id: "__user_membership_denied__" };
+  if (key.membershipRole === "OWNER" || key.membershipRole === "ADMIN") return null;
+  const explicit = {
+    accessGrants: {
+      some: {
+        membershipId: key.membershipId,
+        role: { in: ["VIEWER", "CONTRIBUTOR", "MANAGER"] },
+      },
+    },
+  };
+  return key.membershipRole === "MEMBER"
+    ? { OR: [{ visibility: "WORKSPACE" }, explicit] }
+    : explicit;
+}
+
 /**
  * Authenticate an incoming plugin/agent request from its `Authorization: Bearer <key>`.
  * Enforces revocation, expiry, and required scopes. Updates `lastUsedAt` lazily.
@@ -56,7 +79,19 @@ export async function authenticateApiKey(
   const hashed = createHash("sha256").update(raw).digest("hex");
   const key = await db.apiKey.findUnique({
     where: { hashedKey: hashed },
-    include: { plugin: true },
+    include: {
+      plugin: true,
+      user: {
+        select: {
+          status: true,
+          disabledAt: true,
+          deletedAt: true,
+          memberships: {
+            select: { id: true, workspaceId: true, role: true },
+          },
+        },
+      },
+    },
   });
   if (!key) throw new ApiKeyError("Invalid API key.", 401);
   if (key.revokedAt) throw new ApiKeyError("API key revoked.", 401);
@@ -64,8 +99,45 @@ export async function authenticateApiKey(
   if (key.plugin && key.plugin.status !== "APPROVED")
     throw new ApiKeyError("Plugin not approved.", 403);
 
+  const principalType: ApiKeyContext["principalType"] = key.pluginId
+    ? "PLUGIN"
+    : key.kind === ApiKeyKind.PERSONAL || key.kind === ApiKeyKind.SESSION
+      ? "USER"
+      : "AGENT";
+  let membershipRole: Role | null = null;
+  let membershipId: string | null = null;
+  if (principalType === "USER") {
+    // PERSONAL and SESSION credentials are alternate sessions for a human,
+    // not durable service principals. Re-resolve their account and workspace
+    // authority on every request so suspension, deletion, and membership
+    // changes take effect immediately.
+    if (!key.userId || key.pluginId || key.linkedAgentId) {
+      throw new ApiKeyError("Invalid user API key.", 401);
+    }
+    if (!key.user || key.user.status !== "ACTIVE" || key.user.disabledAt || key.user.deletedAt) {
+      throw new ApiKeyError("API key owner is not active.", 403);
+    }
+    const membership = key.user.memberships.find(
+      (candidate) => candidate.workspaceId === key.workspaceId,
+    );
+    membershipId = membership?.id ?? null;
+    membershipRole = membership?.role ?? null;
+    if (!membershipRole) {
+      throw new ApiKeyError("API key owner is not a workspace member.", 403);
+    }
+  }
+
+  // ADMIN on a user key is only a requested ceiling. A later role demotion
+  // removes it from the effective request context without changing the
+  // durable key metadata. AGENT and PLUGIN keys retain service-principal
+  // semantics and continue to be governed by their stored scopes.
+  const scopes =
+    principalType === "USER" && membershipRole !== "OWNER" && membershipRole !== "ADMIN"
+      ? key.scopes.filter((scope) => scope !== PluginScope.ADMIN)
+      : key.scopes;
+
   for (const s of required) {
-    if (!key.scopes.includes(s)) throw new ApiKeyError(`Missing required scope: ${s}`, 403);
+    if (!scopes.includes(s)) throw new ApiKeyError(`Missing required scope: ${s}`, 403);
   }
 
   // Non-blocking last-used update. Batch in production via a queue.
@@ -76,9 +148,13 @@ export async function authenticateApiKey(
   return {
     keyId: key.id,
     workspaceId: key.workspaceId,
+    kind: key.kind,
+    principalType,
     pluginId: key.pluginId,
     userId: key.userId,
-    scopes: key.scopes,
+    membershipId,
+    membershipRole,
+    scopes,
     projectIds: key.projectIds,
     labelIds: key.labelIds,
     initiativeIds: key.initiativeIds,
@@ -105,8 +181,13 @@ export async function assertKeyScope(
   if (!key) return;
   switch (opts.entity) {
     case "project": {
-      if (!key.projectIds.length) return;
-      if (!key.projectIds.includes(opts.id)) {
+      const scope = buildKeyScopeWhere(ctx, "project");
+      if (!Object.keys(scope).length) return;
+      const project = await ctx.db.project.findFirst({
+        where: { id: opts.id, workspaceId: key.workspaceId, deletedAt: null, ...scope },
+        select: { id: true },
+      });
+      if (!project) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "API key scope does not include this resource.",
@@ -125,29 +206,13 @@ export async function assertKeyScope(
       return;
     }
     case "issue": {
-      const hasProject = key.projectIds.length > 0;
-      const hasLabel = key.labelIds.length > 0;
-      const hasInitiative = key.initiativeIds.length > 0;
-      if (!hasProject && !hasLabel && !hasInitiative) return;
-      const issue = await ctx.db.issue.findUnique({
-        where: { id: opts.id },
-        select: {
-          projectId: true,
-          project: { select: { initiativeId: true } },
-          labels: { select: { labelId: true } },
-        },
+      const scope = buildKeyScopeWhere(ctx, "issue");
+      if (!Object.keys(scope).length) return;
+      const issue = await ctx.db.issue.findFirst({
+        where: { id: opts.id, workspaceId: key.workspaceId, deletedAt: null, ...scope },
+        select: { id: true },
       });
       if (!issue) {
-        throw new TRPCError({ code: "NOT_FOUND" });
-      }
-      const projectOk =
-        hasProject && issue.projectId ? key.projectIds.includes(issue.projectId) : false;
-      const labelOk = hasLabel && issue.labels.some((l) => key.labelIds.includes(l.labelId));
-      const initiativeOk =
-        hasInitiative && issue.project?.initiativeId
-          ? key.initiativeIds.includes(issue.project.initiativeId)
-          : false;
-      if (!projectOk && !labelOk && !initiativeOk) {
         throw new TRPCError({
           code: "FORBIDDEN",
           message: "API key scope does not include this resource.",
@@ -171,26 +236,46 @@ export function buildKeyScopeWhere(
   if (!key) return {};
   switch (entity) {
     case "project": {
-      if (!key.projectIds.length) return {};
-      return { id: { in: key.projectIds } };
+      const clauses: Record<string, unknown>[] = [];
+      if (key.projectIds.length) clauses.push({ id: { in: key.projectIds } });
+      const userAccess = userProjectAccessWhere(key);
+      if (userAccess) clauses.push(userAccess);
+      if (!clauses.length) return {};
+      return clauses.length === 1 ? clauses[0]! : { AND: clauses };
     }
     case "initiative": {
       if (!key.initiativeIds.length) return {};
       return { id: { in: key.initiativeIds } };
     }
     case "issue": {
-      const clauses: Record<string, unknown>[] = [];
+      const keyClauses: Record<string, unknown>[] = [];
       if (key.projectIds.length) {
-        clauses.push({ projectId: { in: key.projectIds } });
+        keyClauses.push({ projectId: { in: key.projectIds } });
       }
       if (key.labelIds.length) {
-        clauses.push({ labels: { some: { labelId: { in: key.labelIds } } } });
+        keyClauses.push({ labels: { some: { labelId: { in: key.labelIds } } } });
       }
       if (key.initiativeIds.length) {
-        clauses.push({ project: { initiativeId: { in: key.initiativeIds } } });
+        keyClauses.push({ project: { initiativeId: { in: key.initiativeIds } } });
+      }
+      const clauses: Record<string, unknown>[] = [];
+      if (keyClauses.length)
+        clauses.push(keyClauses.length === 1 ? keyClauses[0]! : { OR: keyClauses });
+      const userProjectAccess = userProjectAccessWhere(key);
+      if (key.principalType === "USER") {
+        const canUseUnfiled =
+          key.membershipRole === "OWNER" ||
+          key.membershipRole === "ADMIN" ||
+          key.membershipRole === "MEMBER";
+        clauses.push({
+          OR: [
+            ...(canUseUnfiled ? [{ projectId: null }] : []),
+            ...(userProjectAccess ? [{ project: userProjectAccess }] : [{ project: {} }]),
+          ],
+        });
       }
       if (!clauses.length) return {};
-      return clauses.length === 1 ? clauses[0] : { OR: clauses };
+      return clauses.length === 1 ? clauses[0]! : { AND: clauses };
     }
   }
 }
@@ -209,6 +294,10 @@ export function buildArtifactKeyScopeWhere(ctx: {
   const clauses: Record<string, unknown>[] = [];
   const issueWhere = buildKeyScopeWhere(ctx, "issue");
   if (Object.keys(issueWhere).length) clauses.push({ issue: { is: issueWhere } });
+  if (key.principalType === "USER") {
+    const projectWhere = buildKeyScopeWhere(ctx, "project");
+    if (Object.keys(projectWhere).length) clauses.push({ project: { is: projectWhere } });
+  }
   if (key.projectIds.length) clauses.push({ projectId: { in: key.projectIds } });
   if (key.initiativeIds.length) {
     clauses.push({ project: { is: { initiativeId: { in: key.initiativeIds } } } });
