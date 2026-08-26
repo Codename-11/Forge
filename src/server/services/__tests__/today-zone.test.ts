@@ -1,4 +1,5 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { ProjectAccessRole, ProjectVisibility } from "@prisma/client";
 import { refreshTodayZone } from "@/server/services/today-zone";
 import {
   createIssue,
@@ -38,6 +39,65 @@ async function setup() {
 }
 
 describe("refreshTodayZone", () => {
+  it("removes restricted issue nodes immediately after project access is revoked", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "TZP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+    });
+    const canvas = await prisma.workspaceCanvas.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Member personal",
+        kind: "PERSONAL",
+        ownerUserId: fixture.secondUser.id,
+        createdById: fixture.secondUser.id,
+      },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "PRIVATE",
+        name: "Private",
+        visibility: ProjectVisibility.RESTRICTED,
+        createdById: fixture.user.id,
+      },
+    });
+    const issue = await createIssue(fixture, { projectId: project.id });
+    await prisma.issueAssignee.create({
+      data: { issueId: issue.id, userId: fixture.secondUser.id },
+    });
+    const grant = await prisma.projectAccess.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        projectId: project.id,
+        membershipId: membership.id,
+        role: ProjectAccessRole.VIEWER,
+        grantedById: fixture.user.id,
+      },
+    });
+
+    await refreshTodayZone(prisma, fixture.workspace.id, fixture.secondUser.id, canvas.id);
+    expect(
+      await prisma.workspaceCanvasNode.count({
+        where: { canvasId: canvas.id, targetId: issue.id },
+      }),
+    ).toBe(1);
+    await prisma.projectAccess.delete({ where: { id: grant.id } });
+    await refreshTodayZone(prisma, fixture.workspace.id, fixture.secondUser.id, canvas.id);
+    expect(
+      await prisma.workspaceCanvasNode.count({
+        where: { canvasId: canvas.id, targetId: issue.id },
+      }),
+    ).toBe(0);
+  });
+
   it("creates a locked Today frame on first run, then is idempotent", async () => {
     const { fixture, prisma, canvas } = await setup();
 
@@ -79,7 +139,9 @@ describe("refreshTodayZone", () => {
       where: { parentFrameId: frame.id },
       select: { targetType: true, targetId: true, lockedAt: true, meta: true },
     });
-    const issueTargets = new Set(childNodes.filter((n) => n.targetType === "issue").map((n) => n.targetId));
+    const issueTargets = new Set(
+      childNodes.filter((n) => n.targetType === "issue").map((n) => n.targetId),
+    );
     expect(issueTargets.has(a.id)).toBe(true);
     expect(issueTargets.has(b.id)).toBe(true);
     for (const n of childNodes) {

@@ -71,7 +71,11 @@ export const connectionRouter = router({
   get: globalProcedure.input(z.object({ id: z.string().cuid() })).query(async ({ ctx, input }) => {
     const c = await ctx.db.connection.findUnique({
       where: { id: input.id },
-      include: { mappings: { include: { workspace: { select: { id: true, slug: true, name: true, key: true } } } } },
+      include: {
+        mappings: {
+          include: { workspace: { select: { id: true, slug: true, name: true, key: true } } },
+        },
+      },
     });
     if (!c || c.ownerId !== ctx.session.user.id) throw new TRPCError({ code: "NOT_FOUND" });
     const { tokenEnc, config, ...rest } = c;
@@ -125,7 +129,9 @@ export const connectionRouter = router({
       const { id, config: configPatch, ...data } = input;
       // Merge over existing config so partial updates (e.g. just a new
       // clientSecret) don't clobber issuer/clientId; secret is re-encrypted.
-      const config = configPatch ? mergeConfigUpdate(readConfig(owned.config), configPatch) : undefined;
+      const config = configPatch
+        ? mergeConfigUpdate(readConfig(owned.config), configPatch)
+        : undefined;
       const row = await ctx.db.connection.update({
         where: { id },
         data: { ...data, config: (config ?? undefined) as Prisma.InputJsonValue | undefined },
@@ -141,9 +147,18 @@ export const connectionRouter = router({
    * too (also encrypted).
    */
   setToken: protectedProcedure
-    .input(z.object({ id: z.string().cuid(), token: z.string().min(1).max(8192), expiresAt: z.date().nullish() }))
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        token: z.string().min(1).max(8192),
+        expiresAt: z.date().nullish(),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
-      const owned = await ctx.db.connection.findFirst({ where: { id: input.id, ownerId: ctx.session.user.id }, select: { id: true } });
+      const owned = await ctx.db.connection.findFirst({
+        where: { id: input.id, ownerId: ctx.session.user.id },
+        select: { id: true },
+      });
       if (!owned) throw new TRPCError({ code: "NOT_FOUND" });
       const row = await ctx.db.connection.update({
         where: { id: input.id },
@@ -166,7 +181,12 @@ export const connectionRouter = router({
    * call this periodically; the procedure is enough for on-demand refresh.
    */
   refreshIfNeeded: protectedProcedure
-    .input(z.object({ id: z.string().cuid(), skewSeconds: z.number().int().min(0).max(86400).default(120) }))
+    .input(
+      z.object({
+        id: z.string().cuid(),
+        skewSeconds: z.number().int().min(0).max(86400).default(120),
+      }),
+    )
     .mutation(async ({ ctx, input }) => {
       const row = await ctx.db.connection.findFirst({
         where: { id: input.id, ownerId: ctx.session.user.id },
@@ -212,18 +232,50 @@ export const connectionRouter = router({
           where: { id: row.id },
           data: { status: ConnectionStatus.DEGRADED, error: msg.slice(0, 500) },
         });
-        return { refreshed: false as const, reason: "refresh-failed", error: msg, status: ConnectionStatus.DEGRADED };
+        return {
+          refreshed: false as const,
+          reason: "refresh-failed",
+          error: msg,
+          status: ConnectionStatus.DEGRADED,
+        };
       }
     }),
 
   disconnect: protectedProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      const owned = await ctx.db.connection.findFirst({ where: { id: input.id, ownerId: ctx.session.user.id }, select: { id: true } });
+      const owned = await ctx.db.connection.findFirst({
+        where: { id: input.id, ownerId: ctx.session.user.id },
+        select: { id: true },
+      });
       if (!owned) throw new TRPCError({ code: "NOT_FOUND" });
-      const row = await ctx.db.connection.update({
-        where: { id: input.id },
-        data: { tokenEnc: null, status: ConnectionStatus.DISCONNECTED },
+      const row = await ctx.db.$transaction(async (tx) => {
+        const mappings = await tx.connectionMapping.findMany({
+          where: { connectionId: input.id },
+          select: { id: true, authorization: { select: { id: true } } },
+        });
+        const authorizationIds = mappings
+          .map((mapping) => mapping.authorization?.id)
+          .filter((id): id is string => Boolean(id));
+        const now = new Date();
+        if (authorizationIds.length > 0) {
+          await tx.integrationGrant.updateMany({
+            where: { connectionAuthorizationId: { in: authorizationIds }, revokedAt: null },
+            data: { revokedAt: now, revokedById: ctx.session.user.id },
+          });
+          await tx.connectionAuthorization.updateMany({
+            where: { id: { in: authorizationIds }, revokedAt: null },
+            data: { revokedAt: now, revokedById: ctx.session.user.id },
+          });
+        }
+        await tx.connectionMapping.updateMany({
+          where: { connectionId: input.id },
+          data: { status: "paused" },
+        });
+        return tx.connection.update({
+          where: { id: input.id },
+          data: { tokenEnc: null, status: ConnectionStatus.DISCONNECTED },
+        });
       });
       const { tokenEnc, config, ...rest } = row;
       return { ...rest, config: redactConfig(config), hasToken: !!tokenEnc };
@@ -232,7 +284,10 @@ export const connectionRouter = router({
   delete: protectedProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      const owned = await ctx.db.connection.findFirst({ where: { id: input.id, ownerId: ctx.session.user.id }, select: { id: true } });
+      const owned = await ctx.db.connection.findFirst({
+        where: { id: input.id, ownerId: ctx.session.user.id },
+        select: { id: true },
+      });
       if (!owned) throw new TRPCError({ code: "NOT_FOUND" });
       await ctx.db.connection.delete({ where: { id: input.id } });
       return { id: input.id, deleted: true as const };

@@ -1,5 +1,11 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ActionRequestKind, ActionRequestStatus, NotificationSeverity } from "@prisma/client";
+import {
+  ActionRequestKind,
+  ActionRequestStatus,
+  NotificationSeverity,
+  ProjectAccessRole,
+  ProjectVisibility,
+} from "@prisma/client";
 import { commandCenterRouter } from "@/server/routers/command-center";
 import { actionRequestRouter } from "@/server/routers/action-request";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
@@ -23,6 +29,117 @@ afterAll(async () => {
 });
 
 describe("commandCenterRouter — action requests", () => {
+  it("does not expose an action request through an inaccessible plan source", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CAP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "PRIVATE",
+        name: "Private",
+        visibility: ProjectVisibility.RESTRICTED,
+        createdById: fixture.user.id,
+      },
+    });
+    const plan = await prisma.executionPlan.create({
+      data: { workspaceId: fixture.workspace.id, projectId: project.id, title: "Private plan" },
+    });
+    const request = await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        title: "Approve private plan",
+        sourceType: "execution-plan",
+        sourceId: plan.id,
+      },
+    });
+    const caller = actionRequestRouter.createCaller(
+      await buildContext(fixture, { asUserId: fixture.secondUser.id }),
+    );
+
+    await expect(caller.forPlan({ planId: plan.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await prisma.projectAccess.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        projectId: project.id,
+        membershipId: membership.id,
+        role: ProjectAccessRole.VIEWER,
+        grantedById: fixture.user.id,
+      },
+    });
+    await expect(caller.forPlan({ planId: plan.id })).resolves.toMatchObject({ id: request.id });
+  });
+
+  it("filters restricted action requests, active runs, and their counts until access is granted", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "CCP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "PRIVATE",
+        name: "Private",
+        visibility: ProjectVisibility.RESTRICTED,
+        createdById: fixture.user.id,
+      },
+    });
+    const issue = await createIssue(fixture, { projectId: project.id, title: "Private decision" });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, name: "Private", profileKey: "private-cc" },
+    });
+    await prisma.agentRun.create({
+      data: { workspaceId: fixture.workspace.id, issueId: issue.id, agentId: agent.id },
+    });
+    await prisma.actionRequest.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        assignedUserId: fixture.secondUser.id,
+        title: "Private ask",
+      },
+    });
+    const caller = commandCenterRouter.createCaller(
+      await buildContext(fixture, { asUserId: fixture.secondUser.id }),
+    );
+
+    let summary = await caller.summary({ limit: 20, dueWindowDays: 7 });
+    expect(summary.actionRequests).toEqual([]);
+    expect(summary.activeRuns).toEqual([]);
+    expect(summary.counts.actionRequests).toBe(0);
+    expect(summary.counts.activeRuns).toBe(0);
+
+    await prisma.projectAccess.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        projectId: project.id,
+        membershipId: membership.id,
+        role: ProjectAccessRole.VIEWER,
+        grantedById: fixture.user.id,
+      },
+    });
+    summary = await caller.summary({ limit: 20, dueWindowDays: 7 });
+    expect(summary.actionRequests).toHaveLength(1);
+    expect(summary.activeRuns).toHaveLength(1);
+    expect(summary.counts.actionRequests).toBe(1);
+    expect(summary.counts.activeRuns).toBe(1);
+  });
+
   it("returns work-session recovery actions instead of a navigation-only fallback", async () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CA" });
     fixtures.push(fixture);

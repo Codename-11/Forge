@@ -10,7 +10,10 @@ import {
   pullRequestSnapshot,
   searchGitHubIssuesAndPulls,
 } from "@/server/services/github/client";
-import { githubInstallationId } from "@/server/services/github/mapping-policy";
+import {
+  githubInstallationId,
+  readGitHubMappingConfig,
+} from "@/server/services/github/mapping-policy";
 import {
   importGitHubIssue,
   linkGitHubUrlToIssue,
@@ -27,9 +30,34 @@ import {
   resolveRepoLinkability,
 } from "@/server/services/github/linkability";
 import { parseGitHubUrl, splitRepoFullName } from "@/server/services/github/url";
-import { EXTERNAL_LINK_KINDS, GITHUB_RESOURCE_TYPES, type GitHubResourceSnapshot } from "@/server/services/github/types";
+import {
+  EXTERNAL_LINK_KINDS,
+  GITHUB_RESOURCE_TYPES,
+  type GitHubResourceSnapshot,
+} from "@/server/services/github/types";
+import {
+  assertIntegrationAction,
+  type IntegrationPrincipal,
+} from "@/server/services/integration-authorization";
 
 const linkKindSchema = z.enum(EXTERNAL_LINK_KINDS);
+
+function sessionPrincipal(userId: string): IntegrationPrincipal {
+  return { type: "USER", userId };
+}
+
+async function issueProjectId(
+  db: Parameters<typeof assertIntegrationAction>[0]["db"],
+  workspaceId: string,
+  issueId: string,
+): Promise<string | null> {
+  const issue = await db.issue.findFirst({
+    where: { id: issueId, workspaceId, deletedAt: null },
+    select: { projectId: true },
+  });
+  if (!issue) throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+  return issue.projectId;
+}
 
 /** `owner/repo` shape guard — keeps malformed input a clean 400, not a 500. */
 const repoFullNameSchema = z
@@ -58,6 +86,7 @@ export const githubRouter = router({
           repoFullName: repoFullNameSchema.optional(),
           number: z.number().int().positive().optional(),
           mappingId: z.string().cuid().optional(),
+          issueId: z.string().cuid().optional(),
         })
         .refine((v) => !!v.url || (!!v.repoFullName && !!v.number), {
           message: "Provide a url, or repoFullName + number.",
@@ -76,10 +105,22 @@ export const githubRouter = router({
         mappingId: input.mappingId,
         repoFullName: ref.repoFullName,
       });
+      await assertIntegrationAction({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: sessionPrincipal(ctx.session.user.id),
+        action: "READ",
+        projectId: input.issueId
+          ? await issueProjectId(ctx.db, ctx.workspaceId, input.issueId)
+          : null,
+      });
       const installationId = githubInstallationId(mapping.connection);
+      const githubAppId = mapping.authorization?.githubAppId ?? null;
       if (ref.type === "PULL_REQUEST") {
         const pr = await getGitHubPullRequest({
           installationId,
+          githubAppId,
           owner: ref.owner,
           repo: ref.repo,
           number: ref.number,
@@ -88,6 +129,7 @@ export const githubRouter = router({
       }
       const issue = await getGitHubIssue({
         installationId,
+        githubAppId,
         owner: ref.owner,
         repo: ref.repo,
         number: ref.number,
@@ -97,6 +139,7 @@ export const githubRouter = router({
       if (issue.pull_request) {
         const pr = await getGitHubPullRequest({
           installationId,
+          githubAppId,
           owner: ref.owner,
           repo: ref.repo,
           number: ref.number,
@@ -126,7 +169,9 @@ export const githubRouter = router({
 
   /** Active repo mappings — browse-mode repo picker + agent discovery. */
   listMappings: workspaceProcedure
-    .input(z.object({ includePaused: z.boolean().default(false) }).default({ includePaused: false }))
+    .input(
+      z.object({ includePaused: z.boolean().default(false) }).default({ includePaused: false }),
+    )
     .query(({ ctx, input }) =>
       listGitHubRepoMappings({
         db: ctx.db,
@@ -238,8 +283,23 @@ export const githubRouter = router({
         mappingId: z.string().cuid().optional(),
       }),
     )
-    .mutation(({ ctx, input }) =>
-      linkGitHubUrlToIssue({
+    .mutation(async ({ ctx, input }) => {
+      const parsed = parseGitHubUrl(input.url);
+      const mapping = await resolveGitHubRepoMapping({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: input.mappingId,
+        repoFullName: parsed.repoFullName,
+      });
+      await assertIntegrationAction({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: sessionPrincipal(ctx.session.user.id),
+        action: "LINK",
+        projectId: await issueProjectId(ctx.db, ctx.workspaceId, input.issueId),
+      });
+      return linkGitHubUrlToIssue({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         issueId: input.issueId,
@@ -252,8 +312,8 @@ export const githubRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         },
-      }),
-    ),
+      });
+    }),
 
   importIssue: workspaceProcedure
     .input(
@@ -272,8 +332,25 @@ export const githubRouter = router({
           message: "Provide a url, or repoFullName + number.",
         }),
     )
-    .mutation(({ ctx, input }) =>
-      importGitHubIssue({
+    .mutation(async ({ ctx, input }) => {
+      const parsed = input.url ? parseGitHubUrl(input.url) : null;
+      const mapping = await resolveGitHubRepoMapping({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: input.mappingId,
+        repoFullName: parsed?.repoFullName ?? input.repoFullName,
+      });
+      const projectId =
+        input.projectId ?? readGitHubMappingConfig(mapping.config).defaultProjectId ?? null;
+      await assertIntegrationAction({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: sessionPrincipal(ctx.session.user.id),
+        action: "IMPORT",
+        projectId,
+      });
+      return importGitHubIssue({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         mappingId: input.mappingId,
@@ -281,7 +358,7 @@ export const githubRouter = router({
         repoFullName: input.repoFullName,
         resourceType: input.resourceType,
         number: input.number,
-        projectId: input.projectId,
+        projectId,
         labelIds: input.labelIds,
         queue: input.queue,
         actor: {
@@ -290,13 +367,37 @@ export const githubRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         },
-      }),
-    ),
+      });
+    }),
 
   sync: workspaceProcedure
     .input(z.object({ externalResourceId: z.string().cuid() }))
-    .mutation(({ ctx, input }) =>
-      syncGitHubExternalResource({
+    .mutation(async ({ ctx, input }) => {
+      const resource = await ctx.db.externalResource.findFirst({
+        where: { id: input.externalResourceId, workspaceId: ctx.workspaceId, provider: "GITHUB" },
+        select: {
+          connectionMappingId: true,
+          links: { select: { issue: { select: { projectId: true } } } },
+        },
+      });
+      if (!resource?.connectionMappingId)
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "GitHub resource has no active credential mapping.",
+        });
+      const projectIds = new Set(resource.links.map((link) => link.issue.projectId));
+      if (projectIds.size === 0) projectIds.add(null);
+      for (const projectId of projectIds) {
+        await assertIntegrationAction({
+          db: ctx.db,
+          workspaceId: ctx.workspaceId,
+          mappingId: resource.connectionMappingId,
+          principal: sessionPrincipal(ctx.session.user.id),
+          action: "SYNC",
+          projectId,
+        });
+      }
+      return syncGitHubExternalResource({
         db: ctx.db,
         workspaceId: ctx.workspaceId,
         externalResourceId: input.externalResourceId,
@@ -306,8 +407,8 @@ export const githubRouter = router({
           ip: ctx.ip,
           userAgent: ctx.userAgent,
         },
-      }),
-    ),
+      });
+    }),
 
   search: workspaceProcedure
     .input(
@@ -315,6 +416,7 @@ export const githubRouter = router({
         mappingId: z.string().cuid(),
         query: z.string().min(1).max(200),
         type: z.enum(["issue", "pr"]).optional(),
+        projectId: z.string().cuid().nullable().optional(),
       }),
     )
     .query(async ({ ctx, input }) => {
@@ -323,8 +425,17 @@ export const githubRouter = router({
         workspaceId: ctx.workspaceId,
         mappingId: input.mappingId,
       });
+      await assertIntegrationAction({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: sessionPrincipal(ctx.session.user.id),
+        action: "READ",
+        projectId: input.projectId ?? null,
+      });
       return searchGitHubIssuesAndPulls({
         installationId: githubInstallationId(mapping.connection),
+        githubAppId: mapping.authorization?.githubAppId ?? null,
         repoFullName: mapping.target,
         query: input.query,
         type: input.type,

@@ -3,6 +3,11 @@ import { TRPCError } from "@trpc/server";
 import { InitiativeStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import {
+  assertProjectAction,
+  buildIssueAccessWhere,
+  buildProjectAccessWhere,
+} from "@/server/services/authorization";
 
 /**
  * Initiatives — umbrella containers above projects. An initiative groups
@@ -77,6 +82,12 @@ export const unlinkProjectInput = z.object({
 
 export const initiativeRouter = router({
   list: workspaceProcedure.input(listInput).query(async ({ ctx, input }) => {
+    const projectAccess = buildProjectAccessWhere({
+      workspaceId: ctx.workspaceId,
+      membershipId: ctx.membership.id,
+      membershipRole: ctx.membership.role,
+      action: "READ",
+    });
     const initiatives = await ctx.db.initiative.findMany({
       where: {
         workspaceId: ctx.workspaceId,
@@ -86,7 +97,7 @@ export const initiativeRouter = router({
       include: {
         _count: { select: { projects: true } },
         projects: {
-          where: { deletedAt: null },
+          where: { ...projectAccess, deletedAt: null },
           orderBy: { updatedAt: "desc" },
           select: { id: true, key: true, name: true, color: true },
         },
@@ -102,9 +113,14 @@ export const initiativeRouter = router({
     const grouped = await ctx.db.issue.groupBy({
       by: ["projectId", "statusId"],
       where: {
-        workspaceId: ctx.workspaceId,
-        deletedAt: null,
+        ...buildIssueAccessWhere({
+          workspaceId: ctx.workspaceId,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
+          action: "READ",
+        }),
         project: {
+          ...projectAccess,
           initiativeId: { in: initiatives.map((i) => i.id) },
         },
       },
@@ -117,7 +133,7 @@ export const initiativeRouter = router({
     );
     const projects = projectIds.length
       ? await ctx.db.project.findMany({
-          where: { id: { in: projectIds }, workspaceId: ctx.workspaceId },
+          where: { id: { in: projectIds }, ...projectAccess },
           select: { id: true, initiativeId: true },
         })
       : [];
@@ -178,7 +194,15 @@ export const initiativeRouter = router({
       where: { id: input.id, workspaceId: ctx.workspaceId },
       include: {
         projects: {
-          where: { deletedAt: null },
+          where: {
+            ...buildProjectAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+            deletedAt: null,
+          },
           orderBy: { updatedAt: "desc" },
         },
       },
@@ -238,15 +262,24 @@ export const initiativeRouter = router({
           : Promise.resolve(null),
         ctx.db.project.count({
           where: {
-            workspaceId: ctx.workspaceId,
+            ...buildProjectAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
             initiativeId: initiative.id,
             deletedAt: null,
           },
         }),
         ctx.db.issue.count({
           where: {
-            workspaceId: ctx.workspaceId,
-            deletedAt: null,
+            ...buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
             project: { initiativeId: initiative.id, deletedAt: null },
             status: { category: { notIn: ["DONE", "CANCELED"] } },
           },
@@ -392,6 +425,13 @@ export const initiativeRouter = router({
   }),
 
   linkProject: workspaceProcedure.input(linkProjectInput).mutation(async ({ ctx, input }) => {
+    await assertProjectAction(ctx.db, {
+      projectId: input.projectId,
+      workspaceId: ctx.workspaceId,
+      membershipId: ctx.membership.id,
+      membershipRole: ctx.membership.role,
+      action: "MANAGE",
+    });
     return ctx.db.$transaction(async (tx) => {
       const initiative = await tx.initiative.findFirstOrThrow({
         where: { id: input.initiativeId, workspaceId: ctx.workspaceId },
@@ -451,6 +491,13 @@ export const initiativeRouter = router({
     }),
 
   unlinkProject: workspaceProcedure.input(unlinkProjectInput).mutation(async ({ ctx, input }) => {
+    await assertProjectAction(ctx.db, {
+      projectId: input.projectId,
+      workspaceId: ctx.workspaceId,
+      membershipId: ctx.membership.id,
+      membershipRole: ctx.membership.role,
+      action: "MANAGE",
+    });
     return ctx.db.$transaction(async (tx) => {
       const before = await tx.project.findFirstOrThrow({
         where: { id: input.projectId, workspaceId: ctx.workspaceId },

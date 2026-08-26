@@ -2,6 +2,7 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import type { Prisma } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { ensureMappingAuthorization } from "@/server/services/github/linkability";
 
 /**
  * Per-workspace **mappings** of a global Connection to concrete targets
@@ -21,7 +22,9 @@ export const connectionMappingRouter = router({
       where: { workspaceId: ctx.workspaceId },
       orderBy: { createdAt: "asc" },
       include: {
-        connection: { select: { id: true, provider: true, label: true, account: true, status: true } },
+        connection: {
+          select: { id: true, provider: true, label: true, account: true, status: true },
+        },
       },
     }),
   ),
@@ -43,8 +46,9 @@ export const connectionMappingRouter = router({
         where: { id: input.connectionId, ownerId: ctx.session.user.id },
         select: { id: true },
       });
-      if (!conn) throw new TRPCError({ code: "FORBIDDEN", message: "Map only your own connections." });
-      return ctx.db.connectionMapping.create({
+      if (!conn)
+        throw new TRPCError({ code: "FORBIDDEN", message: "Map only your own connections." });
+      const mapping = await ctx.db.connectionMapping.create({
         data: {
           workspaceId: ctx.workspaceId,
           connectionId: input.connectionId,
@@ -56,6 +60,13 @@ export const connectionMappingRouter = router({
           config: (input.config ?? undefined) as Prisma.InputJsonValue | undefined,
         },
       });
+      await ensureMappingAuthorization({
+        db: ctx.db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        userId: ctx.session.user.id,
+      });
+      return mapping;
     }),
 
   update: adminProcedure

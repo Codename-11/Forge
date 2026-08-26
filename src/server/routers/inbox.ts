@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { CycleStatus, type Prisma, type PrismaClient } from "@prisma/client";
 import { router, protectedProcedure, workspaceProcedure } from "@/server/trpc";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Unified "what's next" inbox.
@@ -48,7 +49,11 @@ const VISIT_DEBOUNCE_MS = 5 * 1000;
  * caller's own handle or email local-part. Cheap heuristic — good enough
  * until we have a proper mention table.
  */
-function buildMentionHaystack(name: string | null | undefined, handle: string | null | undefined, email: string): string[] {
+function buildMentionHaystack(
+  name: string | null | undefined,
+  handle: string | null | undefined,
+  email: string,
+): string[] {
   const tokens = new Set<string>();
   if (handle) tokens.add(handle.toLowerCase());
   const emailLocal = email.split("@")[0];
@@ -98,14 +103,16 @@ export const inboxRouter = router({
     const mentionTokens = buildMentionHaystack(me.name, me.handle, me.email);
     const lastVisitAt = me.lastInboxVisitAt;
 
-    const workspaceIds = input.allWorkspaces
-      ? (
-          await ctx.db.membership.findMany({
-            where: { userId, workspace: { deletedAt: null } },
-            select: { workspaceId: true },
-          })
-        ).map((m) => m.workspaceId)
-      : [ctx.workspaceId];
+    const memberships = input.allWorkspaces
+      ? await ctx.db.membership.findMany({
+          where: { userId, workspace: { deletedAt: null } },
+          select: { id: true, role: true, workspaceId: true },
+        })
+      : [ctx.membership];
+    const workspaceIds = memberships.map((membership) => membership.workspaceId);
+    const issueAccess = memberships.map((membership) =>
+      issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+    );
 
     if (workspaceIds.length === 0) {
       return {
@@ -157,6 +164,7 @@ export const inboxRouter = router({
     const workspaceWhere: Prisma.IssueWhereInput = {
       workspaceId: { in: workspaceIds },
       deletedAt: null,
+      AND: [{ OR: issueAccess }],
     };
 
     // ---- 1. Assigned ------------------------------------------------------
@@ -188,6 +196,7 @@ export const inboxRouter = router({
         createdAt: { gte: mentionWindow },
         // Exclude self-mentions — you aren't notifying yourself.
         authorId: { not: userId },
+        issue: { OR: issueAccess },
       },
       orderBy: { createdAt: "desc" },
       take: 200,
@@ -214,9 +223,7 @@ export const inboxRouter = router({
     let humanStalled: typeof assigned = [];
     let agentStalled: typeof assigned = [];
     if (stalledThresholdDays > 0) {
-      const stalledCutoff = new Date(
-        Date.now() - stalledThresholdDays * 24 * 60 * 60 * 1000,
-      );
+      const stalledCutoff = new Date(Date.now() - stalledThresholdDays * 24 * 60 * 60 * 1000);
       // humanStalled: issues with at least one human assignee that
       // includes the calling user (back-compat semantic) and which are
       // older than the threshold. Snoozed rows excluded.
@@ -309,7 +316,7 @@ export const inboxRouter = router({
     // cross-workspace cycle rollup doesn't really mean anything.
     let cycleBurn: Awaited<ReturnType<typeof buildCycleBurn>> = null;
     if (!input.allWorkspaces) {
-      cycleBurn = await buildCycleBurn(ctx.db, ctx.workspaceId);
+      cycleBurn = await buildCycleBurn(ctx.db, ctx.workspaceId, issueAccess[0]!);
     }
 
     // ---- 6. unreadSinceVisit counts --------------------------------------
@@ -419,12 +426,14 @@ export const inboxRouter = router({
       // a chatty workspace doesn't drag the query — Phase 1B can move
       // this behind a saved view if cardinality grows.
       const since = new Date(Date.now() - MENTION_WINDOW_MS);
+      const issueAccess = issueWhereForViewer(ctx);
       const candidates = await ctx.db.comment.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           createdAt: { gte: since },
           authoringAgentId: { not: null },
+          issue: issueAccess,
         },
         orderBy: { createdAt: "desc" },
         take: 200,
@@ -453,10 +462,7 @@ export const inboxRouter = router({
       // Filter to mentions of caller, keep at most one entry per issue
       // (the most recent — Map insertion order from already-DESC
       // candidates).
-      const seenIssue = new Map<
-        string,
-        (typeof candidates)[number]
-      >();
+      const seenIssue = new Map<string, (typeof candidates)[number]>();
       for (const c of candidates) {
         // Comment.issueId is nullable post-migration 0040 (step
         // comments). The mentions inbox only surfaces issue-attached
@@ -517,10 +523,7 @@ export const inboxRouter = router({
       }
 
       // Newest-first within the page.
-      items.sort(
-        (a, b) =>
-          b.lastComment.createdAt.getTime() - a.lastComment.createdAt.getTime(),
-      );
+      items.sort((a, b) => b.lastComment.createdAt.getTime() - a.lastComment.createdAt.getTime());
       return { items };
     }),
 
@@ -546,6 +549,7 @@ export const inboxRouter = router({
           workspaceId: ctx.workspaceId,
           assignedUserId: userId,
           status: "OPEN",
+          OR: [{ issueId: null }, { issue: issueWhereForViewer(ctx) }],
         },
         orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
         // Over-fetch (a user's OPEN asks are few) so the per-issue collapse +
@@ -603,9 +607,12 @@ export const inboxRouter = router({
     const userId = ctx.session.user.id;
     const memberships = await ctx.db.membership.findMany({
       where: { userId, workspace: { deletedAt: null } },
-      select: { workspaceId: true },
+      select: { id: true, role: true, workspaceId: true },
     });
     const workspaceIds = memberships.map((m) => m.workspaceId);
+    const issueAccess = memberships.map((membership) =>
+      issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+    );
     if (workspaceIds.length === 0) return { count: 0 };
 
     // Use the first workspace's threshold as a reasonable default for
@@ -615,9 +622,7 @@ export const inboxRouter = router({
       select: { stalledThresholdDays: true },
     });
     const thresholdDays = ws?.stalledThresholdDays ?? 7;
-    const stalledCutoff = new Date(
-      Date.now() - thresholdDays * 24 * 60 * 60 * 1000,
-    );
+    const stalledCutoff = new Date(Date.now() - thresholdDays * 24 * 60 * 60 * 1000);
     const now = new Date();
     const me = await ctx.db.user.findUniqueOrThrow({
       where: { id: userId },
@@ -644,6 +649,7 @@ export const inboxRouter = router({
     const [assignedCount, stalledCount, candidates, actionRequestCount] = await Promise.all([
       ctx.db.issue.count({
         where: {
+          AND: [{ OR: issueAccess }],
           workspaceId: { in: workspaceIds },
           deletedAt: null,
           assignees: { some: { userId } },
@@ -654,15 +660,14 @@ export const inboxRouter = router({
       }),
       ctx.db.issue.count({
         where: {
+          AND: [{ OR: issueAccess }],
           workspaceId: { in: workspaceIds },
           deletedAt: null,
           assignees: { some: { userId } },
           // Stalled = aged past the threshold; "new" stalled means it
           // aged in after the last visit (gt lastVisit), so a recent
           // visit empties this — you've already seen the stale set.
-          updatedAt: lastVisitAt
-            ? { lt: stalledCutoff, gt: lastVisitAt }
-            : { lt: stalledCutoff },
+          updatedAt: lastVisitAt ? { lt: stalledCutoff, gt: lastVisitAt } : { lt: stalledCutoff },
           status: { category: { notIn: ["DONE", "CANCELED"] } },
           ...notSnoozed,
         },
@@ -671,13 +676,12 @@ export const inboxRouter = router({
         where: {
           workspaceId: { in: workspaceIds },
           deletedAt: null,
-          createdAt: lastVisitAt
-            ? { gte: mentionCutoff, gt: lastVisitAt }
-            : { gte: mentionCutoff },
+          createdAt: lastVisitAt ? { gte: mentionCutoff, gt: lastVisitAt } : { gte: mentionCutoff },
           // Agent comments can carry the API-key owner's authorId. Treat
           // authoringAgentId as authoritative so those mentions are not
           // mistaken for self-mentions.
           OR: [{ authoringAgentId: { not: null } }, { authorId: { not: userId } }],
+          issue: { OR: issueAccess },
         },
         select: { body: true },
         take: 100,
@@ -687,6 +691,7 @@ export const inboxRouter = router({
           workspaceId: { in: workspaceIds },
           assignedUserId: userId,
           status: "OPEN",
+          OR: [{ issueId: null }, { issue: { OR: issueAccess } }],
           ...(lastVisitAt ? { createdAt: { gt: lastVisitAt } } : {}),
         },
       }),
@@ -702,10 +707,7 @@ export const inboxRouter = router({
 
 type DB = PrismaClient;
 
-async function findBlockedIssueIds(
-  db: DB,
-  workspaceIds: string[],
-): Promise<Set<string>> {
+async function findBlockedIssueIds(db: DB, workspaceIds: string[]): Promise<Set<string>> {
   if (workspaceIds.length === 0) return new Set();
   // BLOCKS     : from = blocker, to = blocked.
   // BLOCKED_BY : from = blocked, to = blocker.
@@ -739,16 +741,13 @@ async function findBlockedIssueIds(
   return blocked;
 }
 
-async function buildCycleBurn(
-  db: DB,
-  workspaceId: string,
-) {
+async function buildCycleBurn(db: DB, workspaceId: string, issueAccess: Prisma.IssueWhereInput) {
   const cycle = await db.cycle.findFirst({
     where: { workspaceId, status: CycleStatus.ACTIVE },
     orderBy: { startsAt: "desc" },
     include: {
       issues: {
-        where: { deletedAt: null },
+        where: { deletedAt: null, AND: [issueAccess] },
         select: {
           id: true,
           status: { select: { category: true } },

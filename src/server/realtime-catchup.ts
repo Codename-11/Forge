@@ -1,6 +1,8 @@
 import "server-only";
 import { EventKind, type PrismaClient } from "@prisma/client";
 import type { RealtimeEvent } from "@/server/realtime";
+import { filterProjectDerivedRecords } from "@/server/services/derived-project-access";
+import type { Membership } from "@prisma/client";
 
 export const REALTIME_CATCHUP_LIMIT = 500;
 
@@ -35,7 +37,9 @@ export function encodeRealtimeCursor(cursor: RealtimeCursor): string {
 export function decodeRealtimeCursor(raw: string | null | undefined): RealtimeCursor | null {
   if (!raw || raw.length > 512) return null;
   try {
-    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Partial<RealtimeCursor>;
+    const parsed = JSON.parse(
+      Buffer.from(raw, "base64url").toString("utf8"),
+    ) as Partial<RealtimeCursor>;
     if (
       typeof parsed.at !== "string" ||
       Number.isNaN(Date.parse(parsed.at)) ||
@@ -63,6 +67,7 @@ export async function loadRealtimeCatchup(
   workspaceId: string,
   cursor: RealtimeCursor,
   limit = REALTIME_CATCHUP_LIMIT,
+  membership?: Pick<Membership, "id" | "role">,
 ): Promise<{ events: RealtimeReplayEvent[]; truncated: boolean }> {
   const at = new Date(cursor.at);
   const [activityRows, runRows] = await Promise.all([
@@ -102,8 +107,7 @@ export async function loadRealtimeCatchup(
     return a.row.id.localeCompare(b.row.id);
   });
 
-  const truncated = merged.length > limit;
-  const events = merged.slice(0, limit).map(({ source, row }) => {
+  const candidateEvents = merged.map(({ source, row }) => {
     const cursorValue = encodeRealtimeCursor({
       at: row.createdAt.toISOString(),
       source,
@@ -142,16 +146,18 @@ export async function loadRealtimeCatchup(
     } satisfies RealtimeReplayEvent;
   });
 
-  return { events, truncated };
+  const visibleEvents = membership
+    ? await filterProjectDerivedRecords(db, { workspaceId, membership }, candidateEvents)
+    : candidateEvents;
+  const truncated = merged.length > limit || visibleEvents.length > limit;
+  return { events: visibleEvents.slice(0, limit), truncated };
 }
 
 export function cursorForRealtimeEvent(evt: RealtimeEvent): string {
   return encodeRealtimeCursor({
     at: new Date(evt.createdAt).toISOString(),
     source:
-      evt.subjectType === "agent-run" && evt.kind === EventKind.AGENT_RUN_STEP
-        ? "run"
-        : "activity",
+      evt.subjectType === "agent-run" && evt.kind === EventKind.AGENT_RUN_STEP ? "run" : "activity",
     id: evt.id,
   });
 }

@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { GoalStatus } from "@prisma/client";
+import { GoalStatus, type PrismaClient, type Role } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { agentIdSchema } from "@/server/validators";
 import {
@@ -15,6 +16,61 @@ import {
   reopenGoal,
   updateGoal,
 } from "@/server/services/orchestration-service";
+import {
+  buildExecutionPlanAccessWhere,
+  buildIssueAccessWhere,
+  type ProjectAction,
+} from "@/server/services/authorization";
+
+type GoalAuthContext = {
+  db: PrismaClient;
+  workspaceId: string;
+  membership: { id: string; role: Role };
+};
+
+async function assertGoalAccess(ctx: GoalAuthContext, id: string, action: ProjectAction) {
+  const issue = buildIssueAccessWhere({
+    workspaceId: ctx.workspaceId,
+    membershipId: ctx.membership.id,
+    membershipRole: ctx.membership.role,
+    action,
+  });
+  const found = await ctx.db.goal.findFirst({
+    where: {
+      id,
+      workspaceId: ctx.workspaceId,
+      OR: [{ issueId: null }, { issue: { is: issue } }],
+    },
+    select: { id: true },
+  });
+  if (!found) {
+    throw new TRPCError({
+      code: action === "READ" ? "NOT_FOUND" : "FORBIDDEN",
+      message: action === "READ" ? "Goal not found." : "Goal access required.",
+    });
+  }
+}
+
+async function assertPlanAccess(ctx: GoalAuthContext, id: string, action: ProjectAction) {
+  const found = await ctx.db.executionPlan.findFirst({
+    where: {
+      id,
+      ...buildExecutionPlanAccessWhere({
+        workspaceId: ctx.workspaceId,
+        membershipId: ctx.membership.id,
+        membershipRole: ctx.membership.role,
+        action,
+      }),
+    },
+    select: { id: true },
+  });
+  if (!found) {
+    throw new TRPCError({
+      code: action === "READ" ? "NOT_FOUND" : "FORBIDDEN",
+      message: action === "READ" ? "Execution plan not found." : "Plan access required.",
+    });
+  }
+}
 
 const outcomeEvidenceSchema = z
   .object({
@@ -52,12 +108,34 @@ export const goalRouter = router({
         includeArchived: input.includeArchived,
         limit: input.limit,
       });
-      return { items };
+      const accessible = await ctx.db.goal.findMany({
+        where: {
+          id: { in: items.map((item) => item.id) },
+          workspaceId: ctx.workspaceId,
+          OR: [
+            { issueId: null },
+            {
+              issue: {
+                is: buildIssueAccessWhere({
+                  workspaceId: ctx.workspaceId,
+                  membershipId: ctx.membership.id,
+                  membershipRole: ctx.membership.role,
+                  action: "READ",
+                }),
+              },
+            },
+          ],
+        },
+        select: { id: true },
+      });
+      const allowed = new Set(accessible.map((row) => row.id));
+      return { items: items.filter((item) => allowed.has(item.id)) };
     }),
 
   get: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.id, "READ");
       return getGoal(ctx.db, { workspaceId: ctx.workspaceId, id: input.id });
     }),
 
@@ -77,6 +155,21 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.issueId) {
+        const issue = await ctx.db.issue.findFirst({
+          where: {
+            id: input.issueId,
+            ...buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "CONTRIBUTE",
+            }),
+          },
+          select: { id: true },
+        });
+        if (!issue) throw new TRPCError({ code: "FORBIDDEN", message: "Issue access required." });
+      }
       return createGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -110,6 +203,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.id, "CONTRIBUTE");
       return updateGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -137,6 +231,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.id, "CONTRIBUTE");
       return acceptGoalOutcome(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
@@ -154,6 +249,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.id, "CONTRIBUTE");
       return reopenGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
@@ -170,6 +266,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.id, "CONTRIBUTE");
       await abandonGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -188,6 +285,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.goalId, "CONTRIBUTE");
       return decomposeGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -206,6 +304,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertGoalAccess(ctx, input.goalId, "CONTRIBUTE");
       return generatePlanForGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -224,6 +323,10 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await Promise.all([
+        assertGoalAccess(ctx, input.goalId, "CONTRIBUTE"),
+        assertPlanAccess(ctx, input.planId, "CONTRIBUTE"),
+      ]);
       return attachPlanToGoal(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -242,6 +345,7 @@ export const goalRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.planId, "CONTRIBUTE");
       return requestPlanApproval(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,

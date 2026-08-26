@@ -1,5 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { db } from "@/server/db";
+import { auth } from "@/server/auth";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Short-link route: `/w/{slug}/i/{KEY-NN}` resolves to the corresponding
@@ -18,11 +20,20 @@ export default async function IssueByKeyRedirect({
   params: Promise<{ slug: string; key: string }>;
 }) {
   const { slug, key } = await params;
+  const session = await auth();
+  if (!session?.user?.id) notFound();
   const workspace = await db.workspace.findUnique({
     where: { slug },
     select: { id: true, key: true },
   });
   if (!workspace) notFound();
+  const membership = await db.membership.findUnique({
+    where: {
+      userId_workspaceId: { userId: session.user.id, workspaceId: workspace.id },
+    },
+    select: { id: true, role: true },
+  });
+  if (!membership) notFound();
 
   // KEY-NN format: split on the last `-`. Workspace keys are uppercase
   // alnum (validated server-side), the suffix is the integer. Reject
@@ -37,7 +48,12 @@ export default async function IssueByKeyRedirect({
   if (wsKey !== workspace.key) notFound();
 
   const issue = await db.issue.findFirst({
-    where: { workspaceId: workspace.id, number, deletedAt: null },
+    where: {
+      workspaceId: workspace.id,
+      number,
+      deletedAt: null,
+      AND: [issueWhereForViewer({ workspaceId: workspace.id, membership })],
+    },
     select: { id: true },
   });
   if (!issue) notFound();

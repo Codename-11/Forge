@@ -185,14 +185,15 @@ export const notificationRouter = router({
       userId: ctx.session.user.id,
       limit: 100,
     });
-    const count = await ctx.db.notificationState.count({
+    const rows = await ctx.db.notificationState.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
         status: NotificationStatus.UNREAD,
       },
+      include: notificationStateInclude(),
     });
-    return { count };
+    return { count: (await buildNotificationListItems(ctx.db, ctx.workspaceId, rows)).length };
   }),
 
   /** Shared unread alert count for Mission Control's cross-workspace bell. */
@@ -201,14 +202,26 @@ export const notificationRouter = router({
     const workspaces = await memberWorkspaces(ctx.db, userId);
     if (workspaces.length === 0) return { count: 0 };
     await materializeGlobalNotifications(ctx.db, userId, workspaces);
-    const count = await ctx.db.notificationState.count({
+    const rows = await ctx.db.notificationState.findMany({
       where: {
         workspaceId: { in: workspaces.map((workspace) => workspace.id) },
         userId,
         status: NotificationStatus.UNREAD,
       },
+      include: notificationStateInclude(),
     });
-    return { count };
+    const rowsByWorkspace = new Map<string, typeof rows>();
+    for (const row of rows) {
+      const group = rowsByWorkspace.get(row.workspaceId) ?? [];
+      group.push(row);
+      rowsByWorkspace.set(row.workspaceId, group);
+    }
+    const visible = await Promise.all(
+      [...rowsByWorkspace.entries()].map(([workspaceId, group]) =>
+        buildNotificationListItems(ctx.db, workspaceId, group),
+      ),
+    );
+    return { count: visible.reduce((sum, group) => sum + group.length, 0) };
   }),
 
   /** Recent actionable alerts across every workspace the caller belongs to. */
@@ -259,10 +272,28 @@ export const notificationRouter = router({
       return { count: 0, visitedAt };
     }
     await materializeGlobalNotifications(ctx.db, userId, workspaces);
+    const candidates = await ctx.db.notificationState.findMany({
+      where: {
+        workspaceId: { in: workspaces.map((workspace) => workspace.id) },
+        userId,
+        status: NotificationStatus.UNREAD,
+      },
+      include: notificationStateInclude(),
+    });
+    const visibleIds = (
+      await Promise.all(
+        workspaces.map(async (workspace) => {
+          const rows = candidates.filter((row) => row.workspaceId === workspace.id);
+          return (await buildNotificationListItems(ctx.db, workspace.id, rows)).map(
+            (row) => row.id,
+          );
+        }),
+      )
+    ).flat();
     const [result] = await ctx.db.$transaction([
       ctx.db.notificationState.updateMany({
         where: {
-          workspaceId: { in: workspaces.map((workspace) => workspace.id) },
+          id: { in: visibleIds },
           userId,
           status: NotificationStatus.UNREAD,
         },
@@ -305,12 +336,19 @@ export const notificationRouter = router({
         userId: ctx.session.user.id,
         limit: 100,
       });
-      const result = await ctx.db.notificationState.updateMany({
+      const candidates = await ctx.db.notificationState.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           userId: ctx.session.user.id,
           status: NotificationStatus.UNREAD,
         },
+        include: notificationStateInclude(),
+      });
+      const visibleIds = (
+        await buildNotificationListItems(ctx.db, ctx.workspaceId, candidates)
+      ).map((row) => row.id);
+      const result = await ctx.db.notificationState.updateMany({
+        where: { id: { in: visibleIds }, userId: ctx.session.user.id },
         data: {
           status: NotificationStatus.READ,
           readAt: now,
@@ -479,6 +517,16 @@ async function updateNotificationState(
       code: "NOT_FOUND",
       message: "Notification not found.",
     });
+  }
+  const visible = await ctx.db.notificationState.findUnique({
+    where: { id },
+    include: notificationStateInclude(),
+  });
+  if (
+    !visible ||
+    (await buildNotificationListItems(ctx.db, ctx.workspaceId, [visible])).length === 0
+  ) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Notification not found." });
   }
 
   const data = {

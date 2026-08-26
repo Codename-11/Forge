@@ -32,6 +32,48 @@ enum Role {
   GUEST
 }
 
+/// Default audience for a project. RESTRICTED projects require an explicit
+/// ProjectAccess row for non-administrators.
+enum ProjectVisibility {
+  WORKSPACE
+  RESTRICTED
+}
+
+/// Increasing project authority granted to one workspace membership.
+enum ProjectAccessRole {
+  VIEWER
+  CONTRIBUTOR
+  MANAGER
+}
+
+/// Explicit operations a person may perform through an external credential.
+enum IntegrationCapability {
+  READ
+  IMPORT
+  LINK
+  SYNC
+  WRITE
+  ADMIN
+}
+
+/// Stable provenance for the credential behind a connection mapping.
+enum IntegrationCredentialSource {
+  USER_CONNECTION
+  WORKSPACE_GITHUB_APP
+}
+
+enum IntegrationPrincipalType {
+  USER
+  AGENT
+  API_KEY
+  WORKSPACE_AUTOMATION
+}
+
+enum IntegrationGrantScope {
+  WORKSPACE
+  PROJECT
+}
+
 /// Presentation and default-provisioning profile for a workspace. This does
 /// not change tenancy, permissions, or agent capability: PERSONAL keeps the
 /// same underlying work model while simplifying the default experience.
@@ -183,6 +225,8 @@ enum EventKind {
   COMMENT_UPDATED
   PROJECT_CREATED
   PROJECT_UPDATED
+  PROJECT_ACCESS_CHANGED
+  INTEGRATION_AUTHORIZATION_CHANGED
   SKILL_INVOKED
   PLUGIN_ERROR
   AGENT_CREATED
@@ -905,58 +949,64 @@ model User {
   externalResourceLinks  ExternalResourceLink[] @relation("ExternalResourceLinkCreator")
   ownedWorkSessions      WorkSession[]          @relation("WorkSessionOwnerUser")
 
-  authoredIssues                    Issue[]                  @relation("IssueAuthor")
+  authoredIssues                    Issue[]                   @relation("IssueAuthor")
   assignedIssues                    IssueAssignee[]
   comments                          Comment[]
   auditEntries                      AuditLog[]
   events                            ActivityEvent[]
   notificationStates                NotificationState[]
   pushSubscriptions                 PushSubscription[]
-  createdProjects                   Project[]                @relation("ProjectCreator")
+  createdProjects                   Project[]                 @relation("ProjectCreator")
+  projectAccessesGranted            ProjectAccess[]           @relation("ProjectAccessGrantor")
+  connectionAuthorizationsGranted   ConnectionAuthorization[] @relation("ConnectionAuthorizationGrantor")
+  connectionAuthorizationsRevoked   ConnectionAuthorization[] @relation("ConnectionAuthorizationRevoker")
+  integrationGrantsAsPrincipal      IntegrationGrant[]        @relation("IntegrationGrantUserPrincipal")
+  integrationGrantsGranted          IntegrationGrant[]        @relation("IntegrationGrantGrantor")
+  integrationGrantsRevoked          IntegrationGrant[]        @relation("IntegrationGrantRevoker")
   apiKeys                           ApiKey[]
-  claimedIssues                     Issue[]                  @relation("IssueClaimedBy")
-  defaultIssueAssigneeForWorkspaces Workspace[]              @relation("WorkspaceDefaultIssueAssignee")
-  recurringCreated                  RecurringIssue[]         @relation("RecurringCreator")
-  scheduledTasksCreated             ScheduledTask[]          @relation("ScheduledTaskCreator")
+  claimedIssues                     Issue[]                   @relation("IssueClaimedBy")
+  defaultIssueAssigneeForWorkspaces Workspace[]               @relation("WorkspaceDefaultIssueAssignee")
+  recurringCreated                  RecurringIssue[]          @relation("RecurringCreator")
+  scheduledTasksCreated             ScheduledTask[]           @relation("ScheduledTaskCreator")
   savedViews                        SavedView[]
   issueSavedViews                   IssueSavedView[]
   timeEntries                       TimeEntry[]
   chatThreads                       ChatThread[]
   chatThreadReads                   ChatThreadRead[]
   runtimes                          Runtime[]
-  controlRequestedRuns              AgentRun[]               @relation("AgentRunControlRequester")
-  clearedAgentRuns                  AgentRun[]               @relation("AgentRunClearer")
+  controlRequestedRuns              AgentRun[]                @relation("AgentRunControlRequester")
+  clearedAgentRuns                  AgentRun[]                @relation("AgentRunClearer")
   pins                              Pin[]
   recentItems                       RecentItem[]
   notes                             Note[]
   issueWatches                      IssueWatcher[]
-  createdArtifacts                  Artifact[]               @relation("ArtifactCreator")
-  acceptedArtifacts                 Artifact[]               @relation("ArtifactAcceptor")
-  artifactVersions                  ArtifactVersion[]        @relation("ArtifactVersionCreator")
+  createdArtifacts                  Artifact[]                @relation("ArtifactCreator")
+  acceptedArtifacts                 Artifact[]                @relation("ArtifactAcceptor")
+  artifactVersions                  ArtifactVersion[]         @relation("ArtifactVersionCreator")
   artifactGrants                    ArtifactGrant[]
-  artifactComments                  ArtifactComment[]        @relation("ArtifactCommentAuthor")
-  resolvedArtifactComments          ArtifactComment[]        @relation("ArtifactCommentResolver")
-  artifactPublications              ArtifactPublication[]    @relation("ArtifactPublicationCreator")
-  revokedArtifactPublications       ArtifactPublication[]    @relation("ArtifactPublicationRevoker")
-  artifactDeployments               ArtifactDeployment[]     @relation("ArtifactDeploymentCreator")
-  ownedContextSets                  ContextSet[]             @relation("ContextSetOwnerUser")
-  createdExecutionPlans             ExecutionPlan[]          @relation("ExecutionPlanCreator")
-  createdGoals                      Goal[]                   @relation("GoalCreator")
-  executionSteps                    ExecutionStep[]          @relation("ExecutionStepUser")
-  requestedReviewGates              ReviewGate[]             @relation("ReviewGateRequester")
-  resolvedReviewGates               ReviewGate[]             @relation("ReviewGateResolver")
-  requestedActionRequests           ActionRequest[]          @relation("ActionRequestRequester")
-  assignedActionRequests            ActionRequest[]          @relation("ActionRequestAssignee")
-  resolvedActionRequests            ActionRequest[]          @relation("ActionRequestResolver")
+  artifactComments                  ArtifactComment[]         @relation("ArtifactCommentAuthor")
+  resolvedArtifactComments          ArtifactComment[]         @relation("ArtifactCommentResolver")
+  artifactPublications              ArtifactPublication[]     @relation("ArtifactPublicationCreator")
+  revokedArtifactPublications       ArtifactPublication[]     @relation("ArtifactPublicationRevoker")
+  artifactDeployments               ArtifactDeployment[]      @relation("ArtifactDeploymentCreator")
+  ownedContextSets                  ContextSet[]              @relation("ContextSetOwnerUser")
+  createdExecutionPlans             ExecutionPlan[]           @relation("ExecutionPlanCreator")
+  createdGoals                      Goal[]                    @relation("GoalCreator")
+  executionSteps                    ExecutionStep[]           @relation("ExecutionStepUser")
+  requestedReviewGates              ReviewGate[]              @relation("ReviewGateRequester")
+  resolvedReviewGates               ReviewGate[]              @relation("ReviewGateResolver")
+  requestedActionRequests           ActionRequest[]           @relation("ActionRequestRequester")
+  assignedActionRequests            ActionRequest[]           @relation("ActionRequestAssignee")
+  resolvedActionRequests            ActionRequest[]           @relation("ActionRequestResolver")
   actionRequestVotes                ActionRequestVote[]
   notificationPreferences           NotificationPreference[]
-  createdCanvases                   WorkspaceCanvas[]        @relation("WorkspaceCanvasCreator")
-  ownedCanvases                     WorkspaceCanvas[]        @relation("WorkspaceCanvasOwner")
-  createdShapes                     CanvasShape[]            @relation("CanvasShapeCreator")
-  createdCanvasFrames               CanvasFrame[]            @relation("CanvasFrameCreator")
-  createdCanvasGroups               CanvasGroup[]            @relation("CanvasGroupCreator")
-  createdCanvasComponents           CanvasComponent[]        @relation("CanvasComponentCreator")
-  createdCanvasStyles               CanvasStyle[]            @relation("CanvasStyleCreator")
+  createdCanvases                   WorkspaceCanvas[]         @relation("WorkspaceCanvasCreator")
+  ownedCanvases                     WorkspaceCanvas[]         @relation("WorkspaceCanvasOwner")
+  createdShapes                     CanvasShape[]             @relation("CanvasShapeCreator")
+  createdCanvasFrames               CanvasFrame[]             @relation("CanvasFrameCreator")
+  createdCanvasGroups               CanvasGroup[]             @relation("CanvasGroupCreator")
+  createdCanvasComponents           CanvasComponent[]         @relation("CanvasComponentCreator")
+  createdCanvasStyles               CanvasStyle[]             @relation("CanvasStyleCreator")
 
   @@index([handle])
 }
@@ -1372,84 +1422,87 @@ model Workspace {
 
   defaultIssueAssigneeUser User? @relation("WorkspaceDefaultIssueAssignee", fields: [defaultIssueAssigneeUserId], references: [id], onDelete: SetNull)
 
-  memberships             Membership[]
-  invitations             WorkspaceInvitation[]
-  projects                Project[]
-  issues                  Issue[]
-  statuses                Status[]
-  labels                  Label[]
-  comments                Comment[]
-  attachments             Attachment[]
-  auditLogs               AuditLog[]
-  events                  ActivityEvent[]
-  notificationStates      NotificationState[]
-  plugins                 Plugin[]
-  apiKeys                 ApiKey[]
-  agentConnections        AgentConnection[]
-  webhooks                Webhook[]
-  metrics                 MetricAggregate[]
-  skills                  Skill[]
-  templates               IssueTemplate[]
-  projectTemplates        ProjectTemplate[]
-  recurring               RecurringIssue[]
-  scheduledTasks          ScheduledTask[]
-  scheduledTaskRuns       ScheduledTaskRun[]
-  savedViews              SavedView[]
-  issueSavedViews         IssueSavedView[]
-  cycles                  Cycle[]
-  initiatives             Initiative[]
-  issueRelations          IssueRelation[]
-  timeEntries             TimeEntry[]
-  agents                  Agent[]
-  dispatchRules           DispatchRule[]
-  agentRuns               AgentRun[]
-  agentRunEvents          AgentRunEvent[]
-  chatThreads             ChatThread[]
-  chatThreadReads         ChatThreadRead[]
-  chatMessages            ChatMessage[]
-  connectorSessions       ConnectorSession[]
-  connectorDeliveries     ConnectorDelivery[]
-  runtimes                Runtime[]
-  githubApps              GithubApp[]
-  providerCredentials     ProviderCredential[]
-  connectionMappings      ConnectionMapping[]
-  externalResources       ExternalResource[]
-  externalResourceLinks   ExternalResourceLink[]
-  externalWebhookEvents   ExternalWebhookEvent[]
-  workSessions            WorkSession[]
-  workSessionParticipants WorkSessionParticipant[]
-  pins                    Pin[]
-  recentItems             RecentItem[]
-  notes                   Note[]
-  issueWatchers           IssueWatcher[]
-  artifacts               Artifact[]
-  artifactVersions        ArtifactVersion[]
-  artifactGrants          ArtifactGrant[]
-  artifactComments        ArtifactComment[]
-  artifactPublications    ArtifactPublication[]
-  artifactDeployments     ArtifactDeployment[]
-  contextSets             ContextSet[]
-  contextSetItems         ContextSetItem[]
-  executionPlans          ExecutionPlan[]
-  goals                   Goal[]
-  executionSteps          ExecutionStep[]
-  agentCrews              AgentCrew[]
-  agentCrewMembers        AgentCrewMember[]
-  reviewGates             ReviewGate[]
-  actionRequests          ActionRequest[]
-  notificationPreferences NotificationPreference[]
-  canvases                WorkspaceCanvas[]
-  canvasNodes             WorkspaceCanvasNode[]
-  canvasEdges             WorkspaceCanvasEdge[]
-  canvasShapes            CanvasShape[]
-  canvasFrames            CanvasFrame[]
-  canvasGroups            CanvasGroup[]
-  canvasComponents        CanvasComponent[]
-  canvasInstances         CanvasComponentInstance[]
-  canvasStyles            CanvasStyle[]
-  startedStatus           Status?                   @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
-  reviewStatus            Status?                   @relation("WorkspaceReviewStatus", fields: [reviewStatusId], references: [id], onDelete: SetNull)
-  completionStatus        Status?                   @relation("WorkspaceCompletionStatus", fields: [completionStatusId], references: [id], onDelete: SetNull)
+  memberships              Membership[]
+  invitations              WorkspaceInvitation[]
+  projects                 Project[]
+  issues                   Issue[]
+  statuses                 Status[]
+  labels                   Label[]
+  comments                 Comment[]
+  attachments              Attachment[]
+  auditLogs                AuditLog[]
+  events                   ActivityEvent[]
+  notificationStates       NotificationState[]
+  plugins                  Plugin[]
+  apiKeys                  ApiKey[]
+  agentConnections         AgentConnection[]
+  webhooks                 Webhook[]
+  metrics                  MetricAggregate[]
+  skills                   Skill[]
+  templates                IssueTemplate[]
+  projectTemplates         ProjectTemplate[]
+  recurring                RecurringIssue[]
+  scheduledTasks           ScheduledTask[]
+  scheduledTaskRuns        ScheduledTaskRun[]
+  savedViews               SavedView[]
+  issueSavedViews          IssueSavedView[]
+  cycles                   Cycle[]
+  initiatives              Initiative[]
+  issueRelations           IssueRelation[]
+  timeEntries              TimeEntry[]
+  agents                   Agent[]
+  dispatchRules            DispatchRule[]
+  agentRuns                AgentRun[]
+  agentRunEvents           AgentRunEvent[]
+  chatThreads              ChatThread[]
+  chatThreadReads          ChatThreadRead[]
+  chatMessages             ChatMessage[]
+  connectorSessions        ConnectorSession[]
+  connectorDeliveries      ConnectorDelivery[]
+  runtimes                 Runtime[]
+  githubApps               GithubApp[]
+  providerCredentials      ProviderCredential[]
+  connectionMappings       ConnectionMapping[]
+  projectAccesses          ProjectAccess[]
+  connectionAuthorizations ConnectionAuthorization[]
+  integrationGrants        IntegrationGrant[]
+  externalResources        ExternalResource[]
+  externalResourceLinks    ExternalResourceLink[]
+  externalWebhookEvents    ExternalWebhookEvent[]
+  workSessions             WorkSession[]
+  workSessionParticipants  WorkSessionParticipant[]
+  pins                     Pin[]
+  recentItems              RecentItem[]
+  notes                    Note[]
+  issueWatchers            IssueWatcher[]
+  artifacts                Artifact[]
+  artifactVersions         ArtifactVersion[]
+  artifactGrants           ArtifactGrant[]
+  artifactComments         ArtifactComment[]
+  artifactPublications     ArtifactPublication[]
+  artifactDeployments      ArtifactDeployment[]
+  contextSets              ContextSet[]
+  contextSetItems          ContextSetItem[]
+  executionPlans           ExecutionPlan[]
+  goals                    Goal[]
+  executionSteps           ExecutionStep[]
+  agentCrews               AgentCrew[]
+  agentCrewMembers         AgentCrewMember[]
+  reviewGates              ReviewGate[]
+  actionRequests           ActionRequest[]
+  notificationPreferences  NotificationPreference[]
+  canvases                 WorkspaceCanvas[]
+  canvasNodes              WorkspaceCanvasNode[]
+  canvasEdges              WorkspaceCanvasEdge[]
+  canvasShapes             CanvasShape[]
+  canvasFrames             CanvasFrame[]
+  canvasGroups             CanvasGroup[]
+  canvasComponents         CanvasComponent[]
+  canvasInstances          CanvasComponentInstance[]
+  canvasStyles             CanvasStyle[]
+  startedStatus            Status?                   @relation("WorkspaceStartedStatus", fields: [startedStatusId], references: [id], onDelete: SetNull)
+  reviewStatus             Status?                   @relation("WorkspaceReviewStatus", fields: [reviewStatusId], references: [id], onDelete: SetNull)
+  completionStatus         Status?                   @relation("WorkspaceCompletionStatus", fields: [completionStatusId], references: [id], onDelete: SetNull)
 
   @@index([slug])
   @@index([defaultIssueAssigneeUserId])
@@ -1467,10 +1520,12 @@ model Membership {
   missionControlDefaultTab String?
   createdAt                DateTime @default(now())
 
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  projectAccesses   ProjectAccess[]    @relation("ProjectAccessMembership")
 
   @@unique([userId, workspaceId])
+  @@unique([id, workspaceId])
   @@index([workspaceId, role])
 }
 
@@ -1517,6 +1572,7 @@ model Project {
   icon                 String?
   color                String?
   archived             Boolean               @default(false)
+  visibility           ProjectVisibility     @default(WORKSPACE)
   startDate            DateTime?
   targetDate           DateTime?
   /// Optional parent initiative that groups related projects.
@@ -1541,20 +1597,48 @@ model Project {
   updatedAt            DateTime              @updatedAt
   deletedAt            DateTime?
 
-  workspace      Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  createdBy      User             @relation("ProjectCreator", fields: [createdById], references: [id])
-  initiative     Initiative?      @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
-  issues         Issue[]
-  templates      IssueTemplate[]
-  recurring      RecurringIssue[]
-  scheduledTasks ScheduledTask[]
-  dispatchRules  DispatchRule[]
-  artifacts      Artifact[]
-  executionPlans ExecutionPlan[]
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  createdBy         User               @relation("ProjectCreator", fields: [createdById], references: [id])
+  initiative        Initiative?        @relation(fields: [initiativeId], references: [id], onDelete: SetNull)
+  issues            Issue[]
+  templates         IssueTemplate[]
+  recurring         RecurringIssue[]
+  scheduledTasks    ScheduledTask[]
+  dispatchRules     DispatchRule[]
+  artifacts         Artifact[]
+  executionPlans    ExecutionPlan[]
+  accessGrants      ProjectAccess[]
+  integrationGrants IntegrationGrant[]
 
   @@unique([workspaceId, key])
+  @@unique([id, workspaceId])
   @@index([workspaceId, archived])
+  @@index([workspaceId, visibility, archived])
   @@index([initiativeId])
+}
+
+/// Explicit project authority for one workspace membership. The composite
+/// relations make cross-tenant grants impossible even if a caller supplies
+/// otherwise-valid ids from different workspaces.
+model ProjectAccess {
+  id           String            @id @default(cuid())
+  workspaceId  String
+  projectId    String
+  membershipId String
+  role         ProjectAccessRole
+  grantedById  String?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  workspace  Workspace  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  project    Project    @relation(fields: [projectId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  membership Membership @relation("ProjectAccessMembership", fields: [membershipId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  grantedBy  User?      @relation("ProjectAccessGrantor", fields: [grantedById], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, membershipId])
+  @@index([workspaceId, membershipId, role])
+  @@index([workspaceId, projectId])
+  @@index([grantedById])
 }
 
 /// Workspace-scoped status; categories map to StatusCategory enum.
@@ -2262,12 +2346,14 @@ model ApiKey {
   revokedAt     DateTime?
   createdAt     DateTime      @default(now())
 
-  workspace        Workspace         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user             User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  plugin           Plugin?           @relation(fields: [pluginId], references: [id], onDelete: Cascade)
-  linkedAgent      Agent?            @relation("AgentApiKeys", fields: [linkedAgentId], references: [id], onDelete: SetNull)
-  agentConnections AgentConnection[]
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  user              User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plugin            Plugin?            @relation(fields: [pluginId], references: [id], onDelete: Cascade)
+  linkedAgent       Agent?             @relation("AgentApiKeys", fields: [linkedAgentId], references: [id], onDelete: SetNull)
+  agentConnections  AgentConnection[]
+  integrationGrants IntegrationGrant[] @relation("IntegrationGrantApiKeyPrincipal")
 
+  @@unique([id, workspaceId])
   @@index([workspaceId])
   @@index([prefix])
   @@index([linkedAgentId])
@@ -2617,9 +2703,11 @@ model GithubApp {
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  runtimes  Runtime[]
+  workspace                Workspace                 @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  runtimes                 Runtime[]
+  connectionAuthorizations ConnectionAuthorization[]
 
+  @@unique([id, workspaceId])
   @@index([workspaceId])
   @@index([installationId])
 }
@@ -2720,12 +2808,86 @@ model ConnectionMapping {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  connection        Connection         @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  workspace         Workspace                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connection        Connection               @relation(fields: [connectionId], references: [id], onDelete: Cascade)
   externalResources ExternalResource[]
+  authorization     ConnectionAuthorization?
 
+  @@unique([id, workspaceId])
   @@index([workspaceId])
   @@index([connectionId])
+}
+
+/// Credential-owner consent for one workspace mapping. This is deliberately
+/// separate from principal grants: revoking consent invalidates every grant,
+/// while changing a user's permissions does not mutate credential ownership.
+model ConnectionAuthorization {
+  id                  String                      @id @default(cuid())
+  workspaceId         String
+  connectionMappingId String                      @unique
+  credentialSource    IntegrationCredentialSource
+  githubAppId         String?
+  capabilities        IntegrationCapability[]
+  authorizedById      String
+  authorizationDigest String
+  authorizedAt        DateTime                    @default(now())
+  revokedById         String?
+  revokedAt           DateTime?
+  createdAt           DateTime                    @default(now())
+  updatedAt           DateTime                    @updatedAt
+
+  workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connectionMapping ConnectionMapping  @relation(fields: [connectionMappingId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  githubApp         GithubApp?         @relation(fields: [githubAppId, workspaceId], references: [id, workspaceId], onDelete: Restrict)
+  authorizedBy      User               @relation("ConnectionAuthorizationGrantor", fields: [authorizedById], references: [id], onDelete: Restrict)
+  revokedBy         User?              @relation("ConnectionAuthorizationRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+  grants            IntegrationGrant[]
+
+  @@unique([id, workspaceId])
+  @@unique([connectionMappingId, workspaceId])
+  @@index([workspaceId, revokedAt])
+  @@index([githubAppId])
+  @@index([authorizedById])
+  @@index([revokedById])
+}
+
+/// Explicit authority for a user, agent, API key, or workspace automation to
+/// exercise a ConnectionAuthorization. SQL CHECK constraints enforce that the
+/// principal and project foreign keys match their discriminators.
+model IntegrationGrant {
+  id                        String                   @id @default(cuid())
+  workspaceId               String
+  connectionAuthorizationId String
+  principalType             IntegrationPrincipalType
+  principalUserId           String?
+  principalAgentId          String?
+  principalApiKeyId         String?
+  scope                     IntegrationGrantScope
+  projectId                 String?
+  capabilities              IntegrationCapability[]
+  grantedById               String?
+  revokedById               String?
+  revokedAt                 DateTime?
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+
+  workspace               Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  connectionAuthorization ConnectionAuthorization @relation(fields: [connectionAuthorizationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  principalUser           User?                   @relation("IntegrationGrantUserPrincipal", fields: [principalUserId], references: [id], onDelete: Cascade)
+  principalAgent          Agent?                  @relation("IntegrationGrantAgentPrincipal", fields: [principalAgentId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  principalApiKey         ApiKey?                 @relation("IntegrationGrantApiKeyPrincipal", fields: [principalApiKeyId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  project                 Project?                @relation(fields: [projectId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
+  grantedBy               User?                   @relation("IntegrationGrantGrantor", fields: [grantedById], references: [id], onDelete: SetNull)
+  revokedBy               User?                   @relation("IntegrationGrantRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  @@index([workspaceId, principalType, revokedAt])
+  @@index([connectionAuthorizationId, revokedAt])
+  @@index([workspaceId, projectId])
+  @@index([principalUserId])
+  @@index([principalAgentId])
+  @@index([principalApiKeyId])
+  @@index([grantedById])
+  @@index([revokedById])
 }
 
 /// Workspace-scoped snapshot of an object in an external work system.
@@ -3151,8 +3313,10 @@ model Agent {
   actorAuditLogs           AuditLog[]               @relation("AuditLogActorAgent")
   actorActivityEvents      ActivityEvent[]          @relation("ActivityEventActorAgent")
   ownedWorkSessions        WorkSession[]            @relation("WorkSessionOwnerAgent")
+  integrationGrants        IntegrationGrant[]       @relation("IntegrationGrantAgentPrincipal")
 
   @@unique([workspaceId, profileKey])
+  @@unique([id, workspaceId])
   @@index([workspaceId, status])
   @@index([runtimeId])
   @@index([profileId])

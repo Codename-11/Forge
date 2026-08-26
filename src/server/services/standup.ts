@@ -1,5 +1,6 @@
 import "server-only";
 import { db } from "@/server/db";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Standup composer — pure function over the DB. Extracted from the
@@ -44,75 +45,86 @@ export interface StandupOutput {
   };
 }
 
-export async function composeStandup(
-  input: StandupInput,
-): Promise<StandupOutput> {
+export async function composeStandup(input: StandupInput): Promise<StandupOutput> {
   const since = new Date(Date.now() - input.sinceHours * 3600_000);
   const stalledCutoff = new Date(Date.now() - 3 * 86_400_000);
+  const membership = await db.membership.findUniqueOrThrow({
+    where: { userId_workspaceId: { userId: input.userId, workspaceId: input.workspaceId } },
+    select: { id: true, role: true },
+  });
+  const accessWhere = issueWhereForViewer({ workspaceId: input.workspaceId, membership });
 
-  const [workspace, closed, moved, newlyOpened, inProgress, blocked] =
-    await Promise.all([
-      db.workspace.findUniqueOrThrow({
-        where: { id: input.workspaceId },
-        select: { key: true },
-      }),
-      db.issue.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          deletedAt: null,
-          completedAt: { gte: since },
-          OR: [
-            { authorId: input.userId },
-            { assignees: { some: { userId: input.userId } } },
-          ],
+  const [workspace, closed, moved, newlyOpened, inProgress, blocked] = await Promise.all([
+    db.workspace.findUniqueOrThrow({
+      where: { id: input.workspaceId },
+      select: { key: true },
+    }),
+    db.issue.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        deletedAt: null,
+        completedAt: { gte: since },
+        OR: [{ authorId: input.userId }, { assignees: { some: { userId: input.userId } } }],
+        AND: [accessWhere],
+      },
+      select: { id: true, number: true, title: true },
+      take: 20,
+    }),
+    db.auditLog.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        actorId: input.userId,
+        entity: "Issue",
+        action: "update",
+        createdAt: { gte: since },
+        entityId: {
+          in: await db.issue
+            .findMany({
+              where: { AND: [accessWhere] },
+              select: { id: true },
+            })
+            .then((rows) => rows.map((row) => row.id)),
         },
-        select: { id: true, number: true, title: true },
-        take: 20,
-      }),
-      db.auditLog.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          actorId: input.userId,
-          entity: "Issue",
-          action: "update",
-          createdAt: { gte: since },
-        },
-        select: { entityId: true, createdAt: true },
-        orderBy: { createdAt: "desc" },
-        take: 50,
-      }),
-      db.issue.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          deletedAt: null,
-          authorId: input.userId,
-          createdAt: { gte: since },
-        },
-        select: { id: true, number: true, title: true },
-        take: 20,
-      }),
-      db.issue.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          deletedAt: null,
-          status: { category: "IN_PROGRESS" },
-          assignees: { some: { userId: input.userId } },
-        },
-        select: { id: true, number: true, title: true },
-        take: 20,
-      }),
-      db.issue.findMany({
-        where: {
-          workspaceId: input.workspaceId,
-          deletedAt: null,
-          assignees: { some: { userId: input.userId } },
-          status: { category: { notIn: ["DONE", "CANCELED"] } },
-          updatedAt: { lt: stalledCutoff },
-        },
-        select: { id: true, number: true, title: true },
-        take: 10,
-      }),
-    ]);
+      },
+      select: { entityId: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+    }),
+    db.issue.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        deletedAt: null,
+        authorId: input.userId,
+        createdAt: { gte: since },
+        AND: [accessWhere],
+      },
+      select: { id: true, number: true, title: true },
+      take: 20,
+    }),
+    db.issue.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        deletedAt: null,
+        status: { category: "IN_PROGRESS" },
+        assignees: { some: { userId: input.userId } },
+        AND: [accessWhere],
+      },
+      select: { id: true, number: true, title: true },
+      take: 20,
+    }),
+    db.issue.findMany({
+      where: {
+        workspaceId: input.workspaceId,
+        deletedAt: null,
+        assignees: { some: { userId: input.userId } },
+        status: { category: { notIn: ["DONE", "CANCELED"] } },
+        updatedAt: { lt: stalledCutoff },
+        AND: [accessWhere],
+      },
+      select: { id: true, number: true, title: true },
+      take: 10,
+    }),
+  ]);
 
   const wsKey = workspace.key;
   const tag = (n: number) => `${wsKey}-${n}`;
@@ -156,15 +168,13 @@ export async function composeStandup(
   if (groups.inProgress.length) {
     sections.push("");
     sections.push(`*Continuing (${groups.inProgress.length})*`);
-    for (const i of groups.inProgress)
-      sections.push(`• ${i.key} — ${i.title}`);
+    for (const i of groups.inProgress) sections.push(`• ${i.key} — ${i.title}`);
   }
 
   if (groups.blocked.length) {
     sections.push("");
     sections.push(`*Blocked / stalled (${groups.blocked.length})*`);
-    for (const i of groups.blocked)
-      sections.push(`• ${i.key} — ${i.title} _(no movement in 3d+)_`);
+    for (const i of groups.blocked) sections.push(`• ${i.key} — ${i.title} _(no movement in 3d+)_`);
   }
 
   if (sections.length === 1) {

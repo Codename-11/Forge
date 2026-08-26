@@ -1,5 +1,7 @@
 import "server-only";
 import type { PrismaClient, ReviewGateStatus } from "@prisma/client";
+import type { Membership } from "@prisma/client";
+import { filterProjectDerivedRecords } from "@/server/services/derived-project-access";
 
 /** Hydrate generic ReviewGate targets into operator-facing decision context. */
 export async function listReviewGatesWithContext(
@@ -9,6 +11,7 @@ export async function listReviewGatesWithContext(
     status?: ReviewGateStatus;
     targetType?: string;
     limit: number;
+    membership?: Pick<Membership, "id" | "role">;
   },
 ) {
   const rows = await db.reviewGate.findMany({
@@ -28,8 +31,20 @@ export async function listReviewGatesWithContext(
     },
   });
 
+  const visibleRows = params.membership
+    ? await filterProjectDerivedRecords(
+        db,
+        { workspaceId: params.workspaceId, membership: params.membership },
+        rows.map((row) => ({
+          ...row,
+          subjectType: row.targetType,
+          subjectId: row.targetId,
+          payload: {},
+        })),
+      )
+    : rows;
   const ids = (type: string) =>
-    rows.filter((row) => row.targetType === type).map((row) => row.targetId);
+    visibleRows.filter((row) => row.targetType === type).map((row) => row.targetId);
   const [issues, plans, goals, steps] = await Promise.all([
     ids("issue").length
       ? db.issue.findMany({
@@ -117,7 +132,7 @@ export async function listReviewGatesWithContext(
   const goalMap = new Map(goals.map((row) => [row.id, row]));
   const stepMap = new Map(steps.map((row) => [row.id, row]));
 
-  return rows.map((row) => {
+  return visibleRows.map((row) => {
     const issue = issueMap.get(row.targetId);
     const plan = planMap.get(row.targetId);
     const goal = goalMap.get(row.targetId);

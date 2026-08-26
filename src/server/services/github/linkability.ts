@@ -1,11 +1,88 @@
 import "server-only";
 import { TRPCError } from "@trpc/server";
-import { ConnectionProvider, ConnectionStatus, type Prisma, type PrismaClient } from "@prisma/client";
+import {
+  ConnectionProvider,
+  ConnectionStatus,
+  IntegrationCapability,
+  IntegrationCredentialSource,
+  IntegrationGrantScope,
+  IntegrationPrincipalType,
+  type Prisma,
+  type PrismaClient,
+} from "@prisma/client";
 import { decryptSecret } from "@/server/crypto";
-import { listGitHubInstallationRepos, type GitHubRepoResponse } from "@/server/services/github/client";
+import {
+  listGitHubInstallationRepos,
+  type GitHubRepoResponse,
+} from "@/server/services/github/client";
 import { getInstallationAccountLogin } from "@/server/services/github-app";
 import { githubInstallationId } from "@/server/services/github/mapping-policy";
 import { normalizeRepoFullName, sameRepo } from "@/server/services/github/url";
+import { connectionAuthorizationDigest } from "@/server/services/integration-authorization";
+
+const DEFAULT_MAPPING_CAPABILITIES = Object.values(IntegrationCapability);
+
+export async function ensureMappingAuthorization(args: {
+  db: PrismaClient;
+  workspaceId: string;
+  mappingId: string;
+  userId: string;
+  githubAppId?: string | null;
+}): Promise<void> {
+  const mapping = await args.db.connectionMapping.findFirst({
+    where: { id: args.mappingId, workspaceId: args.workspaceId },
+    include: { authorization: true },
+  });
+  if (!mapping || mapping.authorization) return;
+  const membership = await args.db.membership.findUnique({
+    where: { userId_workspaceId: { userId: args.userId, workspaceId: args.workspaceId } },
+    select: { id: true },
+  });
+  if (!membership)
+    throw new TRPCError({ code: "FORBIDDEN", message: "Workspace membership required." });
+  const authorization = await args.db.connectionAuthorization.create({
+    data: {
+      workspaceId: args.workspaceId,
+      connectionMappingId: mapping.id,
+      credentialSource: args.githubAppId
+        ? IntegrationCredentialSource.WORKSPACE_GITHUB_APP
+        : IntegrationCredentialSource.USER_CONNECTION,
+      githubAppId: args.githubAppId ?? null,
+      capabilities: DEFAULT_MAPPING_CAPABILITIES,
+      authorizedById: args.userId,
+      authorizationDigest: connectionAuthorizationDigest(mapping),
+      authorizedAt: new Date(),
+    },
+  });
+  const grants: Prisma.IntegrationGrantCreateManyInput[] = [
+    {
+      workspaceId: args.workspaceId,
+      connectionAuthorizationId: authorization.id,
+      principalType: IntegrationPrincipalType.USER,
+      principalUserId: args.userId,
+      scope: IntegrationGrantScope.WORKSPACE,
+      capabilities: DEFAULT_MAPPING_CAPABILITIES,
+      grantedById: args.userId,
+    },
+  ];
+  if (mapping.direction === "inbound" || mapping.direction === "inbound+outbound") {
+    grants.push({
+      workspaceId: args.workspaceId,
+      connectionAuthorizationId: authorization.id,
+      principalType: IntegrationPrincipalType.WORKSPACE_AUTOMATION,
+      principalUserId: null,
+      scope: IntegrationGrantScope.WORKSPACE,
+      capabilities: [
+        IntegrationCapability.READ,
+        IntegrationCapability.IMPORT,
+        IntegrationCapability.LINK,
+        IntegrationCapability.SYNC,
+      ],
+      grantedById: args.userId,
+    });
+  }
+  await args.db.integrationGrant.createMany({ data: grants });
+}
 
 /**
  * "Can this workspace link a PR/issue from `owner/repo` right now, and if
@@ -96,14 +173,22 @@ export function classifyLinkability(args: {
     return {
       status: "mappable",
       repoFullName,
-      connections: withRepo.map(({ connectionId, account, label }) => ({ connectionId, account, label })),
+      connections: withRepo.map(({ connectionId, account, label }) => ({
+        connectionId,
+        account,
+        label,
+      })),
     };
   }
   if (args.connections.length > 0) {
     return {
       status: "needs_repo_access",
       repoFullName,
-      connections: args.connections.map(({ connectionId, account, label }) => ({ connectionId, account, label })),
+      connections: args.connections.map(({ connectionId, account, label }) => ({
+        connectionId,
+        account,
+        label,
+      })),
     };
   }
   return { status: "no_connection", repoFullName };
@@ -112,10 +197,19 @@ export function classifyLinkability(args: {
 /** How many connections we'll probe against the GitHub API per resolve. */
 const MAX_PROBE_CONNECTIONS = 8;
 
-type RepoLister = (args: { installationId: string | number }) => Promise<GitHubRepoResponse[]>;
+type RepoLister = (args: {
+  installationId: string | number;
+  githubAppId?: string | null;
+}) => Promise<GitHubRepoResponse[]>;
 
 /** A CONNECTED GitHub connection the workspace can map repos from. */
-type CandidateConnection = { id: string; account: string | null; label: string; config: unknown };
+type CandidateConnection = {
+  id: string;
+  account: string | null;
+  label: string;
+  config: unknown;
+  githubAppId: string | null;
+};
 
 /**
  * The CONNECTED GitHub connections this workspace can act on: every connection
@@ -133,6 +227,7 @@ async function gatherCandidateGitHubConnections(
   const repoMappings = await db.connectionMapping.findMany({
     where: { workspaceId, kind: "repo", connection: { provider: ConnectionProvider.GITHUB } },
     select: {
+      authorization: { select: { githubAppId: true } },
       connection: { select: { id: true, account: true, label: true, status: true, config: true } },
     },
   });
@@ -142,6 +237,7 @@ async function gatherCandidateGitHubConnections(
       account: m.connection.account,
       label: m.connection.label,
       config: m.connection.config,
+      githubAppId: m.authorization?.githubAppId ?? null,
     });
   }
   if (userId) {
@@ -154,7 +250,14 @@ async function gatherCandidateGitHubConnections(
       select: { id: true, account: true, label: true, config: true },
     });
     for (const c of owned) {
-      if (!byId.has(c.id)) byId.set(c.id, { account: c.account, label: c.label, config: c.config });
+      if (!byId.has(c.id)) {
+        byId.set(c.id, {
+          account: c.account,
+          label: c.label,
+          config: c.config,
+          githubAppId: null,
+        });
+      }
     }
   }
   return [...byId.entries()].map(([id, c]) => ({ id, ...c }));
@@ -209,7 +312,11 @@ export async function resolveRepoLinkability(args: {
   // Fast path: an active or paused mapping already covers the repo. This is
   // safe for any member — repo mappings are already visible via
   // `connectionMapping.list` — and makes no GitHub API call.
-  const decidedByMapping = classifyLinkability({ repoFullName, mappings: mappingViews, connections: [] });
+  const decidedByMapping = classifyLinkability({
+    repoFullName,
+    mappings: mappingViews,
+    connections: [],
+  });
   if (decidedByMapping.status === "ready" || decidedByMapping.status === "paused") {
     return decidedByMapping;
   }
@@ -232,7 +339,7 @@ export async function resolveRepoLinkability(args: {
       let hasRepo = false;
       try {
         const installationId = githubInstallationId({ config: c.config as never });
-        const repos = await listRepos({ installationId });
+        const repos = await listRepos({ installationId, githubAppId: c.githubAppId });
         hasRepo = repoInInstallation(repos, repoFullName);
       } catch (err) {
         // Unreachable installation (revoked, missing id, API error) — still a
@@ -249,7 +356,11 @@ export async function resolveRepoLinkability(args: {
     }),
   );
 
-  const decided = classifyLinkability({ repoFullName, mappings: mappingViews, connections: considered });
+  const decided = classifyLinkability({
+    repoFullName,
+    mappings: mappingViews,
+    connections: considered,
+  });
 
   // No GitHub Connection at all, but the workspace already has an installed
   // GithubApp? Offer the one-click "use this app for linking" path instead of
@@ -293,6 +404,7 @@ export async function mapGitHubRepo(args: {
   direction?: string;
   labelIds?: string[];
   listRepos?: RepoLister;
+  githubAppId?: string | null;
 }): Promise<{ id: string; target: string; reactivated: boolean }> {
   const repoFullName = normalizeRepoFullName(args.repoFullName);
   const listRepos = args.listRepos ?? listGitHubInstallationRepos;
@@ -331,7 +443,7 @@ export async function mapGitHubRepo(args: {
   }
   let repos: GitHubRepoResponse[];
   try {
-    repos = await listRepos({ installationId });
+    repos = await listRepos({ installationId, githubAppId: args.githubAppId });
   } catch (err) {
     // A transient GitHub failure shouldn't surface as an opaque 500 — make it
     // a retryable upstream error.
@@ -359,11 +471,27 @@ export async function mapGitHubRepo(args: {
   });
   const match = repoMappings.find((m) => sameRepo(m.target, repoFullName)) ?? null;
   if (match) {
-    if (match.status === "active") return { id: match.id, target: match.target, reactivated: false };
+    if (match.status === "active") {
+      await ensureMappingAuthorization({
+        db: args.db,
+        workspaceId: args.workspaceId,
+        mappingId: match.id,
+        userId: args.userId,
+        githubAppId: args.githubAppId,
+      });
+      return { id: match.id, target: match.target, reactivated: false };
+    }
     const updated = await args.db.connectionMapping.update({
       where: { id: match.id },
       data: { status: "active" },
       select: { id: true, target: true },
+    });
+    await ensureMappingAuthorization({
+      db: args.db,
+      workspaceId: args.workspaceId,
+      mappingId: updated.id,
+      userId: args.userId,
+      githubAppId: args.githubAppId,
     });
     return { id: updated.id, target: updated.target, reactivated: true };
   }
@@ -379,6 +507,13 @@ export async function mapGitHubRepo(args: {
       status: "active",
     },
     select: { id: true, target: true },
+  });
+  await ensureMappingAuthorization({
+    db: args.db,
+    workspaceId: args.workspaceId,
+    mappingId: created.id,
+    userId: args.userId,
+    githubAppId: args.githubAppId,
   });
   return { id: created.id, target: created.target, reactivated: false };
 }
@@ -410,7 +545,8 @@ export async function connectGithubAppAsConnection(args: {
   if (!app?.installationId) {
     throw new TRPCError({
       code: "NOT_FOUND",
-      message: "No installed GitHub App found in this workspace. Install one in Settings → GitHub Apps.",
+      message:
+        "No installed GitHub App found in this workspace. Install one in Settings → GitHub Apps.",
     });
   }
 
@@ -475,6 +611,7 @@ export async function connectGithubAppAsConnection(args: {
         connectionId,
         repoFullName: args.repoFullName,
         listRepos: args.listRepos,
+        githubAppId: app.id,
       });
       mapped = true;
     } catch {
@@ -650,15 +787,13 @@ export async function ensureGitHubRepoLinkable(args: {
   }
 
   // 2. A connected GitHub connection whose installation already includes the repo.
-  const candidates = await gatherCandidateGitHubConnections(
-    args.db,
-    args.workspaceId,
-    args.userId,
-  );
+  const candidates = await gatherCandidateGitHubConnections(args.db, args.workspaceId, args.userId);
   for (const c of candidates.slice(0, MAX_PROBE_CONNECTIONS)) {
     let reachable = false;
     try {
-      const repos = await listRepos({ installationId: githubInstallationId({ config: c.config as never }) });
+      const repos = await listRepos({
+        installationId: githubInstallationId({ config: c.config as never }),
+      });
       reachable = repoInInstallation(repos, repoFullName);
     } catch {
       reachable = false;

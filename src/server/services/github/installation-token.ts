@@ -20,10 +20,13 @@ import { getInstallationAccessToken } from "@/server/services/github/app-auth";
  * to the global env app. So configuring one `GithubApp` is enough for both
  * runtime auth and issue/PR linking — no separate env app required.
  */
-export async function resolveInstallationToken(installationId: string | number): Promise<string> {
+export async function resolveInstallationToken(
+  installationId: string | number,
+  githubAppId?: string | null,
+): Promise<string> {
   const key = String(installationId);
   const app = await db.githubApp.findFirst({
-    where: { installationId: key },
+    where: githubAppId ? { id: githubAppId, installationId: key } : { installationId: key },
     select: { id: true, appId: true, installationId: true, privateKeyEnc: true },
   });
   if (app?.installationId) {
@@ -33,6 +36,9 @@ export async function resolveInstallationToken(installationId: string | number):
       privateKeyPem: decryptSecret(app.privateKeyEnc),
     });
     return minted.token;
+  }
+  if (githubAppId) {
+    throw new Error("The authorized GitHub App no longer owns this installation.");
   }
   // No GithubApp owns this installation — use the global env app (legacy path).
   return getInstallationAccessToken(installationId);

@@ -2,6 +2,36 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-25 — Restricted projects and explicit integration grants
+
+- Added workspace-visible and restricted projects with explicit Viewer,
+  Contributor, and Manager grants tied to tenant memberships. Project and issue
+  authorization now applies consistently to direct reads, mutations, bulk
+  operations, search, dashboards, Command Center, derived views, resources,
+  analytics, notifications, and live/catch-up realtime delivery.
+- Added credential-owner `ConnectionAuthorization` records and typed
+  `IntegrationGrant` principals for users, agents, API keys, and workspace
+  automation. Effective GitHub/integration access is the intersection of
+  project access, owner consent, capability grants, mapping state/direction,
+  key narrowing, and exact provider authority.
+- Added live PERSONAL/SESSION key revalidation for user state, workspace
+  membership, role demotion, and project grants while preserving AGENT and
+  PLUGIN keys as independent service principals. Membership/user lifecycle
+  changes revoke human keys and grants without deleting their audit history.
+- Added Project Access and Integration Access management surfaces with
+  restricted indicators, impact confirmations, owner-scoped consent views,
+  safe principal metadata, responsive layouts, and accessible controls.
+- Added compatibility-first tenant-safe migrations plus role, cross-tenant,
+  direct-ID, revocation, realtime, notification, resource, GitHub, API-key,
+  and management-flow coverage. Focused agent-owned suites and TypeScript
+  checks passed; the coordinated local and exact-head CI gates are recorded on
+  the implementation pull request.
+- Final authorization review aligned every issue-derived surface on the same
+  GUEST/unfiled policy, kept project/initiative/label API-key narrowing as an
+  integration ceiling after defaults are resolved, and now revokes derived
+  grants when credential source, exact app binding, or capability ceilings
+  change.
+
 ## 2026-08-25 — Canonical local and external user identity foundation
 
 - Added a provider-neutral instance authentication policy for local-only,

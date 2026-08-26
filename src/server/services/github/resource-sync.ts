@@ -47,6 +47,7 @@ type DbClient = PrismaClient | Prisma.TransactionClient;
 
 type GitHubMappingWithConnection = ConnectionMapping & {
   connection: { id: string; provider: ConnectionProvider; config: Prisma.JsonValue | null };
+  authorization: { githubAppId: string | null } | null;
 };
 
 export type ActorMeta = {
@@ -341,7 +342,10 @@ export async function resolveGitHubRepoMapping(args: {
         ...(requireActive ? { status: "active" } : {}),
         connection: { provider: ConnectionProvider.GITHUB },
       },
-      include: { connection: { select: { id: true, provider: true, config: true } } },
+      include: {
+        connection: { select: { id: true, provider: true, config: true } },
+        authorization: { select: { githubAppId: true } },
+      },
     });
     if (!mapping) {
       throw new TRPCError({ code: "NOT_FOUND", message: "GitHub repo mapping not found." });
@@ -369,7 +373,10 @@ export async function resolveGitHubRepoMapping(args: {
       ...(requireActive ? { status: "active" } : {}),
       connection: { provider: ConnectionProvider.GITHUB },
     },
-    include: { connection: { select: { id: true, provider: true, config: true } } },
+    include: {
+      connection: { select: { id: true, provider: true, config: true } },
+      authorization: { select: { githubAppId: true } },
+    },
   });
   const mapping = mappings.find((m) => sameRepo(m.target, repoFullName));
   if (!mapping) {
@@ -389,11 +396,13 @@ async function enrichPullRequestSnapshot(args: {
   repo: string;
   requestTimeoutMs?: number;
   signal?: AbortSignal;
+  githubAppId?: string | null;
 }): Promise<GitHubResourceSnapshot> {
   const metadata = metadataRecord(args.snapshot.metadata);
   try {
     const review = await getGitHubPullRequestReviewSummary({
       installationId: args.installationId,
+      githubAppId: args.githubAppId,
       owner: args.owner,
       repo: args.repo,
       number: args.pullRequest.number,
@@ -423,6 +432,7 @@ async function enrichPullRequestSnapshot(args: {
       ...metadataRecord(args.snapshot.metadata),
       checks: await getGitHubPullRequestChecks({
         installationId: args.installationId,
+        githubAppId: args.githubAppId,
         owner: args.owner,
         repo: args.repo,
         headSha: args.pullRequest.head.sha,
@@ -440,9 +450,11 @@ export async function fetchGitHubSnapshotForParsed(
   options: { requestTimeoutMs?: number; signal?: AbortSignal } = {},
 ): Promise<GitHubResourceSnapshot> {
   const installationId = githubInstallationId(mapping.connection);
+  const githubAppId = mapping.authorization?.githubAppId ?? null;
   if (parsed.type === "PULL_REQUEST") {
     const pr = await getGitHubPullRequest({
       installationId,
+      githubAppId,
       owner: parsed.owner,
       repo: parsed.repo,
       number: parsed.number,
@@ -456,6 +468,7 @@ export async function fetchGitHubSnapshotForParsed(
       snapshot,
       pullRequest: pr,
       installationId,
+      githubAppId,
       owner: parsed.owner,
       repo: parsed.repo,
       requestTimeoutMs: options.requestTimeoutMs,
@@ -464,6 +477,7 @@ export async function fetchGitHubSnapshotForParsed(
   }
   const issue = await getGitHubIssue({
     installationId,
+    githubAppId,
     owner: parsed.owner,
     repo: parsed.repo,
     number: parsed.number,
@@ -473,6 +487,7 @@ export async function fetchGitHubSnapshotForParsed(
   if (issue.pull_request) {
     const pr = await getGitHubPullRequest({
       installationId,
+      githubAppId,
       owner: parsed.owner,
       repo: parsed.repo,
       number: parsed.number,
@@ -484,6 +499,7 @@ export async function fetchGitHubSnapshotForParsed(
       snapshot,
       pullRequest: pr,
       installationId,
+      githubAppId,
       owner: parsed.owner,
       repo: parsed.repo,
       requestTimeoutMs: options.requestTimeoutMs,
@@ -1385,7 +1401,10 @@ export async function syncGitHubExternalResource(args: {
     },
     include: {
       connectionMapping: {
-        include: { connection: { select: { id: true, provider: true, config: true } } },
+        include: {
+          connection: { select: { id: true, provider: true, config: true } },
+          authorization: { select: { githubAppId: true } },
+        },
       },
     },
   });
