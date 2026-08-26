@@ -38,9 +38,13 @@ import type { GitHubResourceReconcileJob } from "@/server/services/github/reconc
 import { sweepScheduledTasks } from "@/server/services/scheduled-task";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
 import { sweepHermesConnectorRetries } from "@/server/services/hermes-connector-retry";
+import {
+  executeRuntimeDiagnostic,
+  type RuntimeDiagnosticJob,
+} from "@/server/services/runtime-diagnostics";
 import { webhookDeliveryJobId } from "@/server/services/webhook-delivery-job-id";
 import { logger } from "@/server/logger";
-import { webhookQueue, maintenanceQueue } from "@/server/queues";
+import { webhookQueue, maintenanceQueue, runtimeDiagnosticQueue } from "@/server/queues";
 
 const connection = { url: process.env.REDIS_URL ?? "redis://localhost:6379" };
 
@@ -77,7 +81,7 @@ const SCHEDULED_TASK_SWEEP_JOB_ID = "scheduled-task-sweep";
 const WORK_SESSION_SWEEP_INTERVAL_MS = 5 * 60_000;
 const WORK_SESSION_SWEEP_JOB_ID = "work-session-stale-sweep";
 
-export { webhookQueue, maintenanceQueue };
+export { webhookQueue, maintenanceQueue, runtimeDiagnosticQueue };
 export const webhookEvents = new QueueEvents("webhooks", { connection });
 
 export const webhookWorker = new Worker(
@@ -316,6 +320,19 @@ export const webhookWorker = new Worker(
 
 webhookWorker.on("failed", (job, err) => {
   logger.warn({ jobId: job?.id, err }, "webhook job failed");
+});
+
+// Operator-requested probes and self-tests run in this process so their DNS,
+// routing, and firewall plane matches Runs dispatch. A dedicated queue keeps a
+// 45-second self-test from blocking the single-concurrency maintenance loop.
+export const runtimeDiagnosticWorker = new Worker(
+  "runtime-diagnostics",
+  async (job) => executeRuntimeDiagnostic(job.data as RuntimeDiagnosticJob),
+  { connection, concurrency: 2 },
+);
+
+runtimeDiagnosticWorker.on("failed", (job, err) => {
+  logger.warn({ jobId: job?.id, err }, "runtime diagnostic job failed");
 });
 
 // ---------------------------------------------------------------------------

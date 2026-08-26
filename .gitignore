@@ -13,6 +13,8 @@ test-results
 .claude/
 .DS_Store
 *.log
+__pycache__/
+*.py[cod]
 prisma/migrations/dev.db*
 next-env.d.ts
 tsconfig.tsbuildinfo

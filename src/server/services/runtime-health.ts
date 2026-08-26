@@ -2,11 +2,8 @@ import "server-only";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import { db } from "@/server/db";
 import { logger } from "@/server/logger";
-import { getRuntimeAdapter } from "@/server/runtimes/adapters";
-import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
-import { runtimeInfoUpdateData } from "@/server/services/runtime-info";
-import { sanitizeRuntimeProbeDetail, supportsRuntimeProbe } from "@/server/services/runtime-status";
-import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
+import { runScheduledRuntimeProbe } from "@/server/services/runtime-diagnostics";
+import { supportsRuntimeProbe } from "@/server/services/runtime-status";
 
 /**
  * Active health probe for managed runtimes with handshake probes.
@@ -32,19 +29,12 @@ export interface RuntimeHealthSweepResult {
   reachable: number;
 }
 
-const PROBE_TIMEOUT_MS = 6_000;
-
-function probeCountsAsRuntimeHeartbeat(adapterKey: string | null): boolean {
-  const adapter = getRuntimeAdapter(adapterKey);
-  return adapter?.transport === "app-server" && adapter.capabilities.presence === "runtime-heartbeat";
-}
-
 export async function sweepRuntimeHealth(
   client: PrismaClient | Prisma.TransactionClient = db,
 ): Promise<RuntimeHealthSweepResult> {
   const runtimes = await client.runtime.findMany({
     where: { archivedAt: null, disabledAt: null, endpoint: { not: null } },
-    select: { id: true, adapterKey: true, endpoint: true, secret: true },
+    select: { id: true, workspaceId: true, adapterKey: true, endpoint: true },
   });
 
   const targets = runtimes.filter((rt) => supportsRuntimeProbe(rt.adapterKey));
@@ -53,36 +43,11 @@ export async function sweepRuntimeHealth(
   await Promise.all(
     targets.map(async (rt) => {
       try {
-        const res = await probeRuntime({
-          adapterKey: rt.adapterKey,
-          endpoint: rt.endpoint,
-          secret: rt.secret,
-          timeoutMs: PROBE_TIMEOUT_MS,
-        });
-        const now = new Date();
-        const probeData = {
-          lastProbeAt: now,
-          lastProbeAttempted: res.attempted,
-          lastProbeReachable: res.reachable,
-          lastProbeDetail: sanitizeRuntimeProbeDetail(res.detail),
-          ...runtimeInfoUpdateData(res.runtimeInfo, now),
-        };
-        if (!res.reachable) {
-          await client.runtime.updateMany({
-            where: { id: rt.id },
-            data: probeData,
-          });
-          return;
-        }
-        reachable += 1;
-        const countsAsHeartbeat = probeCountsAsRuntimeHeartbeat(rt.adapterKey);
-        const updated = await client.runtime.updateMany({
-          where: { id: rt.id },
-          data: countsAsHeartbeat ? { ...probeData, heartbeatAt: now } : probeData,
-        });
-        if (updated.count > 0 && countsAsHeartbeat) {
-          await recordRuntimeHeartbeatPresence(rt.id, now, client);
-        }
+        const res = await runScheduledRuntimeProbe(
+          { workspaceId: rt.workspaceId, runtimeId: rt.id },
+          client,
+        );
+        if (res.reachable) reachable += 1;
       } catch (err) {
         // A single bad endpoint shouldn't sink the whole sweep.
         logger.warn({ err, runtimeId: rt.id }, "runtime-health: probe failed");
@@ -91,10 +56,7 @@ export async function sweepRuntimeHealth(
   );
 
   if (targets.length) {
-    logger.info(
-      { probed: targets.length, reachable },
-      "runtime-health sweep",
-    );
+    logger.info({ probed: targets.length, reachable }, "runtime-health sweep");
   }
   return { probed: targets.length, reachable };
 }

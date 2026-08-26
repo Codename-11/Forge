@@ -35,6 +35,7 @@ import { RuntimeSelfTestBadge, RuntimeSelfTestLine } from "@/components/settings
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
+import { runtimeDisplayIdentity } from "@/lib/transport-display";
 
 /**
  * Runtimes index — workspace-scoped registry of compute environments
@@ -48,27 +49,10 @@ import { cn, relativeTime } from "@/lib/utils";
  * `./[id]/page.tsx`.
  */
 
-const KIND_LABEL: Record<RuntimeKind, string> = {
-  LOCAL_DAEMON: "local daemon",
-  REMOTE_HTTP: "remote webhook",
-  CLOUD: "cloud",
-};
-
 const KIND_ICON: Record<RuntimeKind, typeof Server> = {
   LOCAL_DAEMON: HardDrive,
   REMOTE_HTTP: Globe,
   CLOUD: Cloud,
-};
-
-/** Display label for an adapter key (mirrors src/server/runtimes/adapters.ts). */
-const ADAPTER_LABEL: Record<string, string> = {
-  hermes: "Hermes · managed",
-  "local-daemon": "Local daemon · managed",
-  "custom-http": "Custom · webhook",
-  "claude-code": "Claude Code",
-  "claude-desktop": "Claude Desktop",
-  codex: "Codex",
-  "codex-app-server": "Codex app server · managed",
 };
 
 /** Which connection tier a transport belongs to (see providers-and-transports.md). */
@@ -315,16 +299,7 @@ export default function RuntimesPage() {
                         >
                           {rt.name}
                         </Link>
-                        {rt.adapterKey && ADAPTER_LABEL[rt.adapterKey] ? (
-                          <span
-                            className="rounded-md border border-ember/30 bg-ember/5 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-foreground/80"
-                            title="Runtime adapter — what manages this runtime"
-                          >
-                            {ADAPTER_LABEL[rt.adapterKey]}
-                          </span>
-                        ) : (
-                          <KindBadge kind={rt.kind} />
-                        )}
+                        <KindBadge kind={rt.kind} adapterKey={rt.adapterKey} />
                         {isArchived && (
                           <span
                             className="rounded-md border border-border bg-subtle/40 px-1.5 py-0.5 font-mono text-[0.625rem] uppercase tracking-wider text-muted-foreground"
@@ -691,7 +666,8 @@ function PlannedAdapters({ adapters }: { adapters: PlannedAdapterOption[] }) {
   );
 }
 
-function KindBadge({ kind }: { kind: RuntimeKind }) {
+function KindBadge({ kind, adapterKey }: { kind: RuntimeKind; adapterKey?: string | null }) {
+  const identity = runtimeDisplayIdentity({ adapterKey, kind });
   return (
     <span
       className={cn(
@@ -702,9 +678,9 @@ function KindBadge({ kind }: { kind: RuntimeKind }) {
             ? "border-border bg-subtle/40 text-muted-foreground"
             : "border-border bg-subtle/40 text-muted-foreground",
       )}
-      title={KIND_LABEL[kind]}
+      title={`${identity.runtimeLabel} via ${identity.transportLabel}`}
     >
-      {KIND_LABEL[kind]}
+      {identity.runtimeLabel} · {identity.transportLabel}
     </span>
   );
 }

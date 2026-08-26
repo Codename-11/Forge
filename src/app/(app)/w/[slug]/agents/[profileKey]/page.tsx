@@ -40,6 +40,7 @@ import { trpc } from "@/lib/trpc";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
+import { runtimeDisplayIdentity } from "@/lib/transport-display";
 import type { AppRouter } from "@/server/routers/_app";
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -1297,17 +1298,6 @@ function CrewsAndWorkSection({ agentId, slug }: { agentId: string; slug: string 
   );
 }
 
-const ADAPTER_LABEL: Record<string, string> = {
-  hermes: "Hermes gateway",
-  "codex-app-server": "Codex app server",
-  "local-daemon": "Local daemon",
-  "custom-http": "Custom webhook",
-  "claude-code": "Claude Code",
-  "claude-desktop": "Claude Desktop",
-  codex: "Codex CLI",
-  acp: "ACP session",
-};
-
 function ConnectionCard({ agent }: { agent: AgentRow }) {
   const ws = useWorkspace();
   const runtime = agent.runtime;
@@ -1339,9 +1329,10 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
         : runtime?.kind === "CLOUD"
           ? Cloud
           : Server;
-  const adapterLabel = runtime?.adapterKey
-    ? (ADAPTER_LABEL[runtime.adapterKey] ?? runtime.adapterKey)
-    : null;
+  const runtimeIdentity = runtimeDisplayIdentity({
+    adapterKey: runtime?.adapterKey,
+    kind: runtime?.kind,
+  });
   const disabled = Boolean(runtime?.disabledAt);
 
   return (
@@ -1389,7 +1380,7 @@ function ConnectionCard({ agent }: { agent: AgentRow }) {
             <span className="min-w-0 flex-1">
               <span className="block truncate font-medium text-foreground">{runtime.name}</span>
               <span className="text-meta block text-muted-foreground">
-                {adapterLabel ?? runtime.kind.toLowerCase().replace("_", " ")}
+                {runtimeIdentity.runtimeLabel} · {runtimeIdentity.transportLabel}
               </span>
             </span>
             <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />

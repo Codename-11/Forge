@@ -144,6 +144,17 @@ For containerised Codex app-server deployments, use the Docker bridge pattern in
 should call `runtimes.reportInfo` on boot so operators can see the bridge,
 Codex, container, and workspace versions from the runtime detail page.
 
+## Diagnostics use the execution worker
+
+**Test connection** and the no-tool **Self-test** enqueue a diagnostic on the
+same worker process that dispatches managed Runs. The runtime detail page keeps
+the most recent diagnostic history and labels each result with its worker
+executor plus its manual or scheduled trigger. This prevents a web-container
+network pass from being presented as proof that the worker can dispatch work.
+If an operator-requested diagnostic times out, inspect the worker queue and its
+outbound DNS/network policy; Forge does not fall back to probing from the web
+process.
+
 ## MCP tools (for runtimes that auto-register)
 
 `runtimes.register`, `runtimes.heartbeat`, `runtimes.configure`, and

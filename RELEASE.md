@@ -144,6 +144,14 @@ docker compose up -d                  # entrypoint runs `prisma migrate deploy`
 # run any one-time data backfill explicitly (prod image has no tsx — copy a .cjs + `node`)
 ```
 
+The deployment Compose must preserve the checked-in
+`docker/docker-compose.production.example.yml` network contract. In
+particular, `forge-worker` needs the private data network plus a non-internal
+egress network so managed-runtime probes and Runs dispatch use the same
+reachable execution plane. It must not publish ports or join the public proxy
+network. The web app may join the proxy network and must set
+`FORGE_DISABLE_IN_PROCESS_WORKER=1` when the sidecar is present.
+
 ### 4. Smoke test
 
 `forge.axiom-labs.dev` loads · sign-in works · core flows (issue create, agent dispatch,

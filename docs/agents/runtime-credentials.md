@@ -152,7 +152,10 @@ Where to run it:
   **Settings → Runtimes → (a runtime) → Provisioning** (download button + ready
   bootstrap), or wire it as a session-start step.
 - **Persistent Hermes host:** install the `forge-provision` Hermes skill
-  (`~/.hermes/skills/forge-provision/`) — `bin/setup.sh <profile>` installs an
+  from the version-matched Forge release artifact
+  (`forge-provision-vX.Y.Z.tar.gz`, verified against `SHA256SUMS`) under
+  `~/.hermes/skills/forge-provision/`. Source installations may copy
+  `integrations/hermes/forge-provision/`. `bin/setup.sh <profile>` installs an
   hourly cron that fetches + runs the script, keeping the token + checkouts
   fresh. Companion to the `forge-presence` heartbeat skill; shares the same
   `forge.env` (`FORGE_URL` + `FORGE_API_KEY`).

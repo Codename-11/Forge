@@ -118,3 +118,15 @@ export function makeMockRunsConnector(): DispatchConnector {
     },
   };
 }
+
+let sharedMockRunsConnector: DispatchConnector | null = null;
+
+/**
+ * Worker dispatch resolves the connector separately for start, subscribe, and
+ * poll. Keep one in-process instance in E2E mode so those calls observe the
+ * same external run, matching a real managed runtime service.
+ */
+export function sharedMockRunsConnectorForTests(): DispatchConnector {
+  sharedMockRunsConnector ??= makeMockRunsConnector();
+  return sharedMockRunsConnector;
+}

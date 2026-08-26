@@ -1,0 +1,70 @@
+name: forge
+
+# Reviewable production topology. The worker receives outbound egress without
+# publishing ports and without joining the public reverse-proxy network.
+services:
+  postgres:
+    image: postgres:16-alpine
+    env_file: .env.production
+    volumes: ["forge-postgres:/var/lib/postgresql/data"]
+    networks: [forge-data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-forge}"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    volumes: ["forge-redis:/data"]
+    networks: [forge-data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data
+    env_file: .env.production
+    volumes: ["forge-minio:/data"]
+    networks: [forge-data]
+
+  forge:
+    build:
+      context: ${FORGE_SOURCE_PATH:?set FORGE_SOURCE_PATH to the exact tagged checkout}
+      target: runner
+      args: { GIT_SHA: "${GIT_SHA:-}", BUILD_TIME: "${BUILD_TIME:-}" }
+    env_file: .env.production
+    environment:
+      FORGE_DISABLE_IN_PROCESS_WORKER: "1"
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    expose: ["3000"]
+    networks: [forge-data, forge-egress, forge-proxy]
+
+  forge-worker:
+    build:
+      context: ${FORGE_SOURCE_PATH:?set FORGE_SOURCE_PATH to the exact tagged checkout}
+      target: worker
+      args: { GIT_SHA: "${GIT_SHA:-}", BUILD_TIME: "${BUILD_TIME:-}" }
+    env_file: .env.production
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [forge-data, forge-egress]
+
+networks:
+  forge-data:
+    internal: true
+  forge-egress:
+    # Non-internal bridge supplies outbound DNS/TCP without inbound exposure.
+    driver: bridge
+  forge-proxy:
+    external: true
+    name: ${FORGE_PROXY_NETWORK:-proxy}
+
+volumes:
+  forge-postgres:
+  forge-redis:
+  forge-minio:

@@ -20,6 +20,7 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import sqlite3
 import threading
 import time
@@ -36,6 +37,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 CONNECTOR_NAME = "hermes-forge-platform"
 CONNECTOR_VERSIONS = ("1.0",)
+ADAPTER_VERSION = "2.0.0"
+FORGE_USER_AGENT = f"Forge-Hermes-Platform/{ADAPTER_VERSION}"
 NEGOTIATE_TOOL = "chat.connector.negotiate"
 DELIVER_TOOL = "chat.connector.deliver"
 
@@ -157,9 +160,40 @@ class SequenceStore:
 
 
 class ForgeMcpError(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool):
+    def __init__(
+        self,
+        message: str,
+        *,
+        retryable: bool,
+        status: int | None = None,
+        error_class: str = "connector_error",
+    ):
         super().__init__(message)
         self.retryable = retryable
+        self.status = status
+        self.error_class = error_class
+
+
+def _sanitize_diagnostic(value: Any, maximum: int = 300) -> str:
+    text = str(value or "Connector request failed.")
+    text = re.sub(r"Bearer\s+[^\s,)]+", "Bearer [REDACTED]", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(token|secret|key|authorization|signature)([\"'\s:=]+)[^\s\"'&}]+",
+        r"\1\2[REDACTED]",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"https?://[^\s\"']+", "[REDACTED_URL]", text, flags=re.IGNORECASE)
+    text = " ".join(text.split())
+    return text if len(text) <= maximum else text[: maximum - 3] + "..."
+
+
+def _connector_error_fields(exc: Exception) -> tuple[str, int | None, bool]:
+    return (
+        str(getattr(exc, "error_class", exc.__class__.__name__)),
+        getattr(exc, "status", None),
+        bool(getattr(exc, "retryable", True)),
+    )
 
 
 def _negotiation_tool_missing(exc: Exception) -> bool:
@@ -260,7 +294,14 @@ class ForgeAdapter(BasePlatformAdapter):
                     "Forge connector negotiation failed",
                     retryable=True,
                 )
-                logger.error("[Forge] Connector negotiation failed")
+                error_class, status, retryable = _connector_error_fields(exc)
+                logger.error(
+                    "[Forge] Connector negotiation failed class=%s status=%s retryable=%s detail=%s",
+                    error_class,
+                    status if status is not None else "none",
+                    retryable,
+                    _sanitize_diagnostic(exc),
+                )
                 return False
             self._negotiated = False
             self._selected_version = None
@@ -656,6 +697,7 @@ class ForgeAdapter(BasePlatformAdapter):
                 "Content-Type": "application/json",
                 "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": FORGE_USER_AGENT,
             },
             method="POST",
         )
@@ -663,13 +705,19 @@ class ForgeAdapter(BasePlatformAdapter):
             with urllib.request.urlopen(req, timeout=30) as response:
                 raw = response.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", "replace")[:500]
+            detail = _sanitize_diagnostic(exc.read().decode("utf-8", "replace"))
             raise ForgeMcpError(
                 f"Forge MCP HTTP {exc.code}: {detail}",
                 retryable=exc.code == 408 or exc.code == 429 or exc.code >= 500,
+                status=exc.code,
+                error_class="http_error",
             ) from exc
         except urllib.error.URLError as exc:
-            raise ForgeMcpError("Forge MCP transport unavailable", retryable=True) from exc
+            raise ForgeMcpError(
+                "Forge MCP transport unavailable",
+                retryable=True,
+                error_class="transport_error",
+            ) from exc
         data = json.loads(raw)
         if data.get("error"):
             raise ForgeMcpError(f"Forge MCP error: {data['error']}", retryable=False)

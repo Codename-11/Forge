@@ -17,6 +17,29 @@
 - Documented reverse-proxy callback bypass, forwarded-origin, sealed-cookie
   header-buffer, and sensitive callback logging requirements for OIDC.
 
+## 2026-08-25 — Managed runtime execution-plane and Hermes hardening
+
+- Moved operator-requested runtime probes and no-tool self-tests onto a
+  dedicated BullMQ worker queue so their DNS, routing, and firewall plane is
+  the same one that dispatches managed `/v1/runs` work. Added bounded,
+  tenant-scoped diagnostic history with worker executor and manual/scheduled
+  trigger provenance.
+- Added a reviewable production Compose topology where the worker has outbound
+  egress without published ports or reverse-proxy membership, plus regression
+  coverage for the network contract and contradictory probe history.
+- Replaced `REMOTE_HTTP`-derived “remote webhook” copy with adapter-aware
+  managed-runtime and transport identity, and collapsed duplicate chat
+  readiness warnings when runtime health already reports the same probe fault.
+- Added a stable versioned User-Agent and sanitized HTTP/error classification
+  to the distributable Hermes Forge platform adapter.
+- Shipped versioned, deterministic `forge-presence` and `forge-provision`
+  helper sources, release packaging/checksums, and operator docs. Presence is a
+  script-only recurring heartbeat and remains silent on success.
+- Explicitly documented and tested that `runs.complete.completionCommentId`
+  accepts only a live BODY comment, and added one managed-runtime acceptance
+  path spanning assignment, external dispatch, inbox acknowledgement, output
+  start, final BODY comment, and terminal completion.
+
 ## 2026-08-25 — Canonical local and external user identity foundation
 
 - Added a provider-neutral instance authentication policy for local-only,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import io
 from pathlib import Path
 import sys
 import tempfile
@@ -113,6 +114,43 @@ class ForgeAdapterTest(unittest.TestCase):
         self.assertFalse(asyncio.run(adapter.connect()))
         self.assertFalse(adapter._negotiated)
         self.assertEqual(adapter.fatal_error[0][0], "connector_negotiation_failed")
+
+    def test_mcp_requests_send_stable_forge_user_agent(self):
+        adapter = self.make_adapter()
+        response = Mock()
+        response.__enter__ = Mock(return_value=response)
+        response.__exit__ = Mock(return_value=False)
+        response.read.return_value = b'{"result": {"ok": true}}'
+
+        with patch.object(adapter_module.urllib.request, "urlopen", return_value=response) as opened:
+            adapter._call_tool_once("chat.connector.negotiate", {})
+
+        request = opened.call_args.args[0]
+        self.assertEqual(request.get_header("User-agent"), adapter_module.FORGE_USER_AGENT)
+        self.assertEqual(adapter_module.FORGE_USER_AGENT, "Forge-Hermes-Platform/2.0.0")
+        plugin = (MODULE_PATH.parent / "plugin.yaml").read_text(encoding="utf-8")
+        self.assertIn(f"version: {adapter_module.ADAPTER_VERSION}", plugin)
+
+    def test_http_failures_are_classified_and_sanitized(self):
+        adapter = self.make_adapter()
+        error = adapter_module.urllib.error.HTTPError(
+            adapter.rpc_url,
+            403,
+            "Forbidden",
+            {},
+            io.BytesIO(
+                b'authorization: Bearer super-secret https://forge.example.test/private?token=bad'
+            ),
+        )
+        with patch.object(adapter_module.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(adapter_module.ForgeMcpError) as raised:
+                adapter._call_tool_once("chat.connector.negotiate", {})
+
+        self.assertEqual(raised.exception.status, 403)
+        self.assertEqual(raised.exception.error_class, "http_error")
+        self.assertFalse(raised.exception.retryable)
+        self.assertNotIn("super-secret", str(raised.exception))
+        self.assertNotIn("forge.example.test", str(raised.exception))
 
     def test_negotiated_event_has_stable_contract_and_increasing_sequence(self):
         adapter = self.make_adapter()

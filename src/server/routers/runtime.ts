@@ -1,25 +1,26 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { AgentProvider, RuntimeKind, type Runtime, type PrismaClient } from "@prisma/client";
+import {
+  AgentProvider,
+  RuntimeDiagnosticKind,
+  RuntimeDiagnosticTrigger,
+  RuntimeKind,
+  type Runtime,
+  type PrismaClient,
+} from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { encryptSecret } from "@/server/crypto";
-import {
-  getRuntimeAdapter,
-  managedAdapters,
-  PLANNED_ADAPTERS,
-} from "@/server/runtimes/adapters";
+import { getRuntimeAdapter, managedAdapters, PLANNED_ADAPTERS } from "@/server/runtimes/adapters";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
-import { probeRuntime, type RuntimeProbeResult } from "@/server/services/dispatch/runtime-probe";
-import { runtimeInfoUpdateData, summarizeRuntimeInfo } from "@/server/services/runtime-info";
-import {
-  deriveRuntimeHealthStatus,
-  sanitizeRuntimeProbeDetail,
-} from "@/server/services/runtime-status";
+import { summarizeRuntimeInfo } from "@/server/services/runtime-info";
+import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { runtimeConfigStatus, validateRuntimeConfig } from "@/server/services/runtime-config";
+import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
 import {
-  runRuntimeSelfTest,
-  summarizeRuntimeSelfTest,
-} from "@/server/services/runtime-self-test";
+  diagnosticResult,
+  requestRuntimeDiagnostic,
+  waitForRuntimeDiagnostic,
+} from "@/server/services/runtime-diagnostics";
 
 /** Compute location a managed adapter's transport implies. */
 function kindForAdapterTransport(transport: string): RuntimeKind {
@@ -67,7 +68,9 @@ function assertEndpointTransport(endpoint: string | null | undefined): void {
 }
 
 /** Never leak the HMAC secret to clients — surface only whether one is set. */
-function redactRuntime<T extends Partial<Runtime>>(rt: T): Omit<T, "secret"> & { hasSecret: boolean } {
+function redactRuntime<T extends Partial<Runtime>>(
+  rt: T,
+): Omit<T, "secret"> & { hasSecret: boolean } {
   const { secret, ...rest } = rt as T & { secret?: string | null };
   return { ...(rest as Omit<T, "secret">), hasSecret: !!secret };
 }
@@ -98,7 +101,9 @@ type RuntimeForSelfTest = Pick<
   | "lastSelfTestDurationMs"
 >;
 
-function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth & RuntimeForSelfTest>(rt: T) {
+function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth & RuntimeForSelfTest>(
+  rt: T,
+) {
   return {
     ...redactRuntime(rt),
     health: deriveRuntimeHealthStatus(rt),
@@ -106,21 +111,6 @@ function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth & Runti
     selfTest: summarizeRuntimeSelfTest(rt),
     runtimeInfoSummary: summarizeRuntimeInfo(rt),
   };
-}
-
-function probeData(res: RuntimeProbeResult, at = new Date()) {
-  return {
-    lastProbeAt: at,
-    lastProbeAttempted: res.attempted,
-    lastProbeReachable: res.reachable,
-    lastProbeDetail: sanitizeRuntimeProbeDetail(res.detail),
-    ...runtimeInfoUpdateData(res.runtimeInfo, at),
-  };
-}
-
-function shouldProbeHeartbeatCountAsRuntimeHeartbeat(rt: RuntimeForHealth): boolean {
-  const adapter = getRuntimeAdapter(rt.adapterKey);
-  return adapter?.transport === "app-server" && adapter.capabilities.presence === "runtime-heartbeat";
 }
 
 /**
@@ -186,9 +176,7 @@ const baseFields = {
 export const runtimeRouter = router({
   list: workspaceProcedure
     .input(
-      z
-        .object({ includeArchived: z.boolean().default(false) })
-        .default({ includeArchived: false }),
+      z.object({ includeArchived: z.boolean().default(false) }).default({ includeArchived: false }),
     )
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db.runtime.findMany({
@@ -205,82 +193,82 @@ export const runtimeRouter = router({
       return rows.map(withRuntimeHealth);
     }),
 
-  byId: workspaceProcedure
-    .input(z.object({ id: runtimeId }))
-    .query(async ({ ctx, input }) => {
-      const runtime = await ctx.db.runtime.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        include: {
-          owner: { select: { id: true, name: true, image: true } },
-          agents: {
-            select: {
-              id: true,
-              name: true,
-              profileKey: true,
-              avatar: true,
-              status: true,
-              provider: true,
-              runtimeMode: true,
-              lastHeartbeatAt: true,
-            },
+  byId: workspaceProcedure.input(z.object({ id: runtimeId })).query(async ({ ctx, input }) => {
+    const runtime = await ctx.db.runtime.findFirst({
+      where: { id: input.id, workspaceId: ctx.workspaceId },
+      include: {
+        owner: { select: { id: true, name: true, image: true } },
+        agents: {
+          select: {
+            id: true,
+            name: true,
+            profileKey: true,
+            avatar: true,
+            status: true,
+            provider: true,
+            runtimeMode: true,
+            lastHeartbeatAt: true,
           },
         },
-      });
-      if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
-      return withRuntimeHealth(runtime);
-    }),
+        diagnosticAttempts: {
+          orderBy: { createdAt: "desc" },
+          take: 20,
+        },
+      },
+    });
+    if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
+    return withRuntimeHealth(runtime);
+  }),
 
-  register: workspaceProcedure
-    .input(z.object(baseFields))
-    .mutation(async ({ ctx, input }) => {
-      // Same transport guard as `create` / `update`: a REMOTE_HTTP endpoint
-      // on a public host must use TLS. `register` previously skipped this, so
-      // a plaintext public endpoint could slip in through this path.
-      assertEndpointTransport(input.endpoint || null);
-      const now = new Date();
-      // LOCAL_DAEMON: "connected" the moment we register; REMOTE_HTTP gets
-      // connectedAt only on real heartbeats.
-      const liveTimes =
-        input.kind === RuntimeKind.LOCAL_DAEMON ? { connectedAt: now, heartbeatAt: now } : {};
-      // Upsert on the natural key (workspaceId + name + kind). There's no
-      // unique index to Prisma-upsert against, and the daemon can lose its
-      // cached runtime id (fresh clone / config wipe), so a plain create would
-      // stack a duplicate row for the same host every re-register. Reuse a
-      // non-archived match instead.
-      const existing = await ctx.db.runtime.findFirst({
-        where: {
-          workspaceId: ctx.workspaceId,
-          name: input.name,
-          kind: input.kind,
-          archivedAt: null,
-        },
-        select: { id: true },
-      });
-      if (existing) {
-        return ctx.db.runtime.update({
-          where: { id: existing.id },
-          data: {
-            endpoint: input.endpoint || null,
-            providersAvailable: input.providersAvailable,
-            ...liveTimes,
-          },
-        });
-      }
-      // For LOCAL_DAEMON the daemon registers itself and owns the row;
-      // for REMOTE_HTTP an admin typically registers it but the same
-      // attribution holds. ownerId is set from the calling user.
-      return ctx.db.runtime.create({
+  register: workspaceProcedure.input(z.object(baseFields)).mutation(async ({ ctx, input }) => {
+    // Same transport guard as `create` / `update`: a REMOTE_HTTP endpoint
+    // on a public host must use TLS. `register` previously skipped this, so
+    // a plaintext public endpoint could slip in through this path.
+    assertEndpointTransport(input.endpoint || null);
+    const now = new Date();
+    // LOCAL_DAEMON: "connected" the moment we register; REMOTE_HTTP gets
+    // connectedAt only on real heartbeats.
+    const liveTimes =
+      input.kind === RuntimeKind.LOCAL_DAEMON ? { connectedAt: now, heartbeatAt: now } : {};
+    // Upsert on the natural key (workspaceId + name + kind). There's no
+    // unique index to Prisma-upsert against, and the daemon can lose its
+    // cached runtime id (fresh clone / config wipe), so a plain create would
+    // stack a duplicate row for the same host every re-register. Reuse a
+    // non-archived match instead.
+    const existing = await ctx.db.runtime.findFirst({
+      where: {
+        workspaceId: ctx.workspaceId,
+        name: input.name,
+        kind: input.kind,
+        archivedAt: null,
+      },
+      select: { id: true },
+    });
+    if (existing) {
+      return ctx.db.runtime.update({
+        where: { id: existing.id },
         data: {
-          workspaceId: ctx.workspaceId,
-          name: input.name,
-          kind: input.kind,
           endpoint: input.endpoint || null,
           providersAvailable: input.providersAvailable,
-          ownerId: ctx.session.user.id,
           ...liveTimes,
         },
       });
-    }),
+    }
+    // For LOCAL_DAEMON the daemon registers itself and owns the row;
+    // for REMOTE_HTTP an admin typically registers it but the same
+    // attribution holds. ownerId is set from the calling user.
+    return ctx.db.runtime.create({
+      data: {
+        workspaceId: ctx.workspaceId,
+        name: input.name,
+        kind: input.kind,
+        endpoint: input.endpoint || null,
+        providersAvailable: input.providersAvailable,
+        ownerId: ctx.session.user.id,
+        ...liveTimes,
+      },
+    });
+  }),
 
   heartbeat: workspaceProcedure
     .input(z.object({ id: runtimeId }))
@@ -410,10 +398,7 @@ export const runtimeRouter = router({
         endpoint: z.string().url().max(500).nullable().optional().or(z.literal("")),
         // Empty string = leave the stored secret unchanged; explicit null clears it.
         secret: z.string().max(500).nullable().optional(),
-        providersAvailable: z
-          .array(z.nativeEnum(AgentProvider))
-          .max(16)
-          .optional(),
+        providersAvailable: z.array(z.nativeEnum(AgentProvider)).max(16).optional(),
         config: z.record(z.unknown()).optional(),
       }),
     )
@@ -454,34 +439,32 @@ export const runtimeRouter = router({
       });
       if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
       if (runtime.archivedAt) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime is archived; restore it before testing." });
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Runtime is archived; restore it before testing.",
+        });
       }
-      const probe = await probeRuntime({
-        adapterKey: runtime.adapterKey,
-        endpoint: runtime.endpoint,
-        secret: runtime.secret,
+      const requestId = await requestRuntimeDiagnostic({
+        workspaceId: ctx.workspaceId,
+        runtimeId: runtime.id,
+        kind: RuntimeDiagnosticKind.PROBE,
+        trigger: RuntimeDiagnosticTrigger.MANUAL_RUNTIME,
+        requestedById: ctx.session.user.id,
       });
-      const now = new Date();
-      const data = probeData(probe, now);
-      const heartbeatData =
-        probe.reachable && shouldProbeHeartbeatCountAsRuntimeHeartbeat(runtime)
-          ? { heartbeatAt: now }
-          : {};
-      const updated = await ctx.db.runtime.update({
-        where: { id: runtime.id },
-        data: { ...data, ...heartbeatData },
-      });
-      if (probe.reachable && heartbeatData.heartbeatAt) {
-        await recordRuntimeHeartbeatPresence(runtime.id, now, ctx.db);
+      let attempt;
+      try {
+        attempt = await waitForRuntimeDiagnostic(requestId, { timeoutMs: 15_000 });
+      } catch (error) {
+        throw new TRPCError({
+          code: "TIMEOUT",
+          message: error instanceof Error ? error.message : "Runtime diagnostic timed out.",
+        });
       }
+      const updated = await ctx.db.runtime.findUniqueOrThrow({ where: { id: runtime.id } });
       const health = deriveRuntimeHealthStatus(updated);
       return {
         runtime: withRuntimeHealth(updated),
-        probe: {
-          attempted: probe.attempted,
-          reachable: probe.reachable,
-          detail: data.lastProbeDetail ?? probe.detail,
-        },
+        probe: diagnosticResult(attempt),
         health,
       };
     }),
@@ -500,16 +483,24 @@ export const runtimeRouter = router({
         });
       }
 
-      const result = await runRuntimeSelfTest(runtime);
-      const updated = await ctx.db.runtime.update({
-        where: { id: runtime.id },
-        data: {
-          lastSelfTestAt: new Date(),
-          lastSelfTestStatus: result.status,
-          lastSelfTestDetail: result.detail,
-          lastSelfTestDurationMs: result.durationMs,
-        },
+      const requestId = await requestRuntimeDiagnostic({
+        workspaceId: ctx.workspaceId,
+        runtimeId: runtime.id,
+        kind: RuntimeDiagnosticKind.SELF_TEST,
+        trigger: RuntimeDiagnosticTrigger.MANUAL_RUNTIME,
+        requestedById: ctx.session.user.id,
       });
+      let attempt;
+      try {
+        attempt = await waitForRuntimeDiagnostic(requestId, { timeoutMs: 55_000 });
+      } catch (error) {
+        throw new TRPCError({
+          code: "TIMEOUT",
+          message: error instanceof Error ? error.message : "Runtime self-test timed out.",
+        });
+      }
+      const updated = await ctx.db.runtime.findUniqueOrThrow({ where: { id: runtime.id } });
+      const result = diagnosticResult(attempt);
       return {
         runtime: withRuntimeHealth(updated),
         selfTest: summarizeRuntimeSelfTest(updated),
@@ -575,17 +566,15 @@ export const runtimeRouter = router({
   // deploy creds, …). Values are WRITE-ONLY — never returned to any client.
   // The runtime fetches its own decrypted values via `runtimes.provisioning`.
 
-  listSecrets: workspaceProcedure
-    .input(z.object({ runtimeId }))
-    .query(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      // valueEnc is intentionally never selected — only key + metadata leave.
-      return ctx.db.runtimeSecret.findMany({
-        where: { runtimeId: input.runtimeId },
-        orderBy: { key: "asc" },
-        select: { id: true, key: true, description: true, createdAt: true, updatedAt: true },
-      });
-    }),
+  listSecrets: workspaceProcedure.input(z.object({ runtimeId })).query(async ({ ctx, input }) => {
+    await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+    // valueEnc is intentionally never selected — only key + metadata leave.
+    return ctx.db.runtimeSecret.findMany({
+      where: { runtimeId: input.runtimeId },
+      orderBy: { key: "asc" },
+      select: { id: true, key: true, description: true, createdAt: true, updatedAt: true },
+    });
+  }),
 
   setSecret: adminProcedure
     .input(
@@ -627,16 +616,14 @@ export const runtimeRouter = router({
   // Repositories the runtime materializes (clone-or-pull) into its workspace
   // so a dispatched agent lands in a ready checkout. Auth comes from secrets.
 
-  listRepos: workspaceProcedure
-    .input(z.object({ runtimeId }))
-    .query(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      return ctx.db.runtimeRepo.findMany({
-        where: { runtimeId: input.runtimeId },
-        orderBy: { path: "asc" },
-        select: { id: true, url: true, branch: true, path: true, createdAt: true, updatedAt: true },
-      });
-    }),
+  listRepos: workspaceProcedure.input(z.object({ runtimeId })).query(async ({ ctx, input }) => {
+    await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
+    return ctx.db.runtimeRepo.findMany({
+      where: { runtimeId: input.runtimeId },
+      orderBy: { path: "asc" },
+      select: { id: true, url: true, branch: true, path: true, createdAt: true, updatedAt: true },
+    });
+  }),
 
   setRepo: adminProcedure
     .input(
@@ -682,31 +669,29 @@ export const runtimeRouter = router({
   // Which workspace GitHub App (if any) this runtime uses for git auth. Apps
   // are managed workspace-wide (see the `githubApp` router); a runtime just
   // links to one. Returns the linked app's metadata (never the PEM).
-  getGithubApp: workspaceProcedure
-    .input(z.object({ runtimeId }))
-    .query(async ({ ctx, input }) => {
-      const rt = await ctx.db.runtime.findFirst({
-        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
-        select: {
-          githubAppId: true,
-          githubApp: {
-            select: {
-              id: true,
-              name: true,
-              appId: true,
-              installationId: true,
-              slug: true,
-              lastMintedAt: true,
-              lastError: true,
-            },
+  getGithubApp: workspaceProcedure.input(z.object({ runtimeId })).query(async ({ ctx, input }) => {
+    const rt = await ctx.db.runtime.findFirst({
+      where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
+      select: {
+        githubAppId: true,
+        githubApp: {
+          select: {
+            id: true,
+            name: true,
+            appId: true,
+            installationId: true,
+            slug: true,
+            lastMintedAt: true,
+            lastError: true,
           },
         },
-      });
-      if (!rt) {
-        throw new TRPCError({ code: "NOT_FOUND", message: "Runtime not found in this workspace." });
-      }
-      return rt.githubApp; // null = no app linked
-    }),
+      },
+    });
+    if (!rt) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Runtime not found in this workspace." });
+    }
+    return rt.githubApp; // null = no app linked
+  }),
 
   // Link this runtime to a workspace GitHub App (or pass null to unlink).
   linkGithubApp: adminProcedure
@@ -720,7 +705,10 @@ export const runtimeRouter = router({
           select: { id: true },
         });
         if (!app) {
-          throw new TRPCError({ code: "NOT_FOUND", message: "GitHub App not found in this workspace." });
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: "GitHub App not found in this workspace.",
+          });
         }
       }
       await ctx.db.runtime.update({

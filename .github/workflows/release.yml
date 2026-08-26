@@ -136,6 +136,10 @@ jobs:
           git tag "$TAG"
           git push origin "$TAG"
 
+      - name: Package Hermes runtime helpers
+        if: ${{ !inputs.dry_run }}
+        run: bash scripts/package-hermes-helpers.sh "${{ steps.version.outputs.tag }}"
+
       - name: Create GitHub Release
         if: ${{ !inputs.dry_run }}
         env:
@@ -151,4 +155,5 @@ jobs:
             --title "$TAG" \
             --generate-notes \
             $PRERELEASE \
+            dist/hermes-helpers/* \
             --notes-start-tag "$(git describe --tags --abbrev=0 "$TAG^" 2>/dev/null || echo '')"

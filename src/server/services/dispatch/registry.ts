@@ -11,7 +11,7 @@ import {
   makeCodexAppServerConnector,
   parseCodexRuntimeConfig,
 } from "./codex-app-server";
-import { makeMockRunsConnector } from "./mock-runs";
+import { sharedMockRunsConnectorForTests } from "./mock-runs";
 import type { DispatchConnector, RunEngine, RunEvent } from "./types";
 
 /**
@@ -153,7 +153,7 @@ export function getRunsConnectorForAgent(agent: {
   // E2E-only: an in-process scripted connector so the RUNS path (streaming +
   // approvals) is testable with no external runtime. Never resolves in prod.
   if (process.env.FORGE_E2E === "1" && rt?.adapterKey === "mock-runs") {
-    return makeMockRunsConnector();
+    return sharedMockRunsConnectorForTests();
   }
   if (rt && rt.endpoint) {
     if (rt.adapterKey === "hermes") {

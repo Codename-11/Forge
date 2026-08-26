@@ -9,6 +9,8 @@ import {
   EventKind,
   RelationKind,
   RunEngine,
+  RuntimeDiagnosticKind,
+  RuntimeDiagnosticTrigger,
   type Prisma,
   type PrismaClient,
 } from "@prisma/client";
@@ -23,8 +25,12 @@ import type { db as PrismaDb } from "@/server/db";
 import { deliverWebhook } from "@/server/services/plugin-runtime";
 import { resolveChatReadiness } from "@/server/services/chat-readiness";
 import { workspaceChatProviderAvailability } from "@/server/services/ai-providers";
-import { probeRuntime } from "@/server/services/dispatch/runtime-probe";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
+import {
+  diagnosticResult,
+  requestRuntimeDiagnostic,
+  waitForRuntimeDiagnostic,
+} from "@/server/services/runtime-diagnostics";
 import { agentAvailabilityModel } from "@/lib/transport-display";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { agentIdSchema } from "@/server/validators";
@@ -297,6 +303,7 @@ export const agentRouter = router({
           engagementMode: true,
           runtime: {
             select: {
+              id: true,
               adapterKey: true,
               endpoint: true,
               secret: true,
@@ -364,6 +371,7 @@ export const agentRouter = router({
           webhookUrl: true,
           runtime: {
             select: {
+              id: true,
               adapterKey: true,
               endpoint: true,
               secret: true,
@@ -382,7 +390,7 @@ export const agentRouter = router({
         (await ctx.db.apiKey.count({
           where: { workspaceId: ctx.workspaceId, linkedAgentId: agent.id, revokedAt: null },
         })) > 0;
-      const readiness = resolveChatReadiness({
+      let readiness = resolveChatReadiness({
         provider: agent.provider,
         runEngine: agent.runEngine,
         runtime: agent.runtime
@@ -398,20 +406,58 @@ export const agentRouter = router({
         daemonLinked,
         providerAvailable,
       });
-      const probe =
-        readiness.mode === "runs" || readiness.mode === "sessions"
-          ? await probeRuntime({
-              adapterKey: agent.runtime?.adapterKey,
-              endpoint: agent.runtime?.endpoint,
-              secret: agent.runtime?.secret,
-            })
-          : { attempted: false, reachable: null, detail: "" };
+      let probe: ReturnType<typeof diagnosticResult> | null = null;
+      if ((readiness.mode === "runs" || readiness.mode === "sessions") && agent.runtime?.id) {
+        const requestId = await requestRuntimeDiagnostic({
+          workspaceId: ctx.workspaceId,
+          runtimeId: agent.runtime.id,
+          kind: RuntimeDiagnosticKind.PROBE,
+          trigger: RuntimeDiagnosticTrigger.MANUAL_AGENT,
+          requestedById: ctx.session.user.id,
+        });
+        let attempt;
+        try {
+          attempt = await waitForRuntimeDiagnostic(requestId, { timeoutMs: 15_000 });
+        } catch (error) {
+          throw new TRPCError({
+            code: "TIMEOUT",
+            message: error instanceof Error ? error.message : "Runtime diagnostic timed out.",
+          });
+        }
+        probe = diagnosticResult(attempt);
+        const refreshedRuntime = await ctx.db.runtime.findUniqueOrThrow({
+          where: { id: agent.runtime.id },
+          select: {
+            adapterKey: true,
+            endpoint: true,
+            secret: true,
+            kind: true,
+            lastProbeAttempted: true,
+            lastProbeReachable: true,
+            lastProbeDetail: true,
+            runtimeInfo: true,
+          },
+        });
+        readiness = resolveChatReadiness({
+          provider: agent.provider,
+          runEngine: agent.runEngine,
+          runtime: refreshedRuntime,
+          webhookUrl: agent.webhookUrl,
+          runtimeKind: refreshedRuntime.kind,
+          daemonLinked,
+          providerAvailable,
+        });
+      }
       return {
         mode: readiness.mode,
         transportLabel: readiness.transportLabel,
         ready: readiness.ready,
         hint: readiness.hint,
-        probe,
+        probe: probe ?? {
+          attempted: false,
+          reachable: null,
+          detail: "No worker diagnostic is required for this chat transport.",
+        },
       };
     }),
 
