@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { Prisma } from "@prisma/client";
 import { router, protectedProcedure } from "@/server/trpc";
 import { issueSearchWhere, parseIssueSearch } from "@/server/services/issue-search";
+import { issueWhereForViewer, projectWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Command palette search — fans out across every entity type the
@@ -121,6 +122,21 @@ export const commandPaletteRouter = router({
       memberships: { some: { userId } },
       ...(input.workspaceId ? { id: input.workspaceId } : {}),
     };
+    const memberships = await ctx.db.membership.findMany({
+      where: {
+        userId,
+        workspace: { deletedAt: null },
+        ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
+      },
+      select: { id: true, role: true, workspaceId: true },
+    });
+    const issueAccess = memberships.map((membership) =>
+      issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+    );
+    const projectAccess = memberships.map((membership) =>
+      projectWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+    );
+    if (memberships.length === 0) return empty;
 
     const parsedIssueSearch = parseIssueSearch(q);
 
@@ -131,7 +147,7 @@ export const commandPaletteRouter = router({
           where: {
             deletedAt: null,
             workspace: workspaceGate,
-            AND: [issueSearchWhere(q)!],
+            AND: [{ OR: issueAccess }, issueSearchWhere(q)!],
           },
           take: input.limit,
           orderBy:
@@ -152,12 +168,17 @@ export const commandPaletteRouter = router({
         // ---- Projects ---------------------------------------------------
         ctx.db.project.findMany({
           where: {
-            deletedAt: null,
-            archived: false,
-            workspace: workspaceGate,
-            OR: [
-              { name: { contains: q, mode: "insensitive" } },
-              { key: { contains: q, mode: "insensitive" } },
+            AND: [
+              { OR: projectAccess },
+              {
+                deletedAt: null,
+                archived: false,
+                workspace: workspaceGate,
+                OR: [
+                  { name: { contains: q, mode: "insensitive" } },
+                  { key: { contains: q, mode: "insensitive" } },
+                ],
+              },
             ],
           },
           take: input.limit,
@@ -253,6 +274,7 @@ export const commandPaletteRouter = router({
             archivedAt: null,
             workspace: workspaceGate,
             title: { contains: q, mode: "insensitive" },
+            OR: [{ issueId: null }, { issue: { OR: issueAccess } }],
           },
           take: input.limit,
           orderBy: { updatedAt: "desc" },
@@ -289,9 +311,20 @@ export const commandPaletteRouter = router({
           where: {
             archivedAt: null,
             workspace: workspaceGate,
-            OR: [
-              { title: { contains: q, mode: "insensitive" } },
-              { description: { contains: q, mode: "insensitive" } },
+            AND: [
+              {
+                OR: [
+                  { projectId: null, issueId: null },
+                  { project: { OR: projectAccess } },
+                  { issue: { OR: issueAccess } },
+                ],
+              },
+              {
+                OR: [
+                  { title: { contains: q, mode: "insensitive" } },
+                  { description: { contains: q, mode: "insensitive" } },
+                ],
+              },
             ],
           },
           take: input.limit,

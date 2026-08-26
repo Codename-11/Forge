@@ -56,6 +56,9 @@ export const contextSetRouter = router({
         workspaceId: ctx.workspaceId,
         contextSetId: input.id,
         workspaceSlug: ctx.workspaceSlug ?? undefined,
+        userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
+        membershipRole: ctx.membership.role,
       });
       if (!result) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Context set not found." });

@@ -1,11 +1,12 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { EventKind } from "@prisma/client";
+import { EventKind, ProjectAccessRole, ProjectVisibility } from "@prisma/client";
 import {
   compareRealtimeCursors,
   decodeRealtimeCursor,
   encodeRealtimeCursor,
   loadRealtimeCatchup,
 } from "@/server/realtime-catchup";
+import { canReadProjectDerivedRecord } from "@/server/services/derived-project-access";
 import {
   createIssue,
   createWorkspaceFixture,
@@ -153,5 +154,91 @@ describe("realtime durable catch-up", () => {
     );
     expect(result.events).toHaveLength(2);
     expect(result.truncated).toBe(true);
+  });
+
+  it("filters restricted issue activity and run events immediately after grant revocation", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RTP" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+      select: { id: true, role: true },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "PRIVATE",
+        name: "Private",
+        visibility: ProjectVisibility.RESTRICTED,
+        createdById: fixture.user.id,
+      },
+    });
+    const issue = await createIssue(fixture, { projectId: project.id });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, name: "Private agent", profileKey: "private" },
+    });
+    const run = await prisma.agentRun.create({
+      data: { workspaceId: fixture.workspace.id, issueId: issue.id, agentId: agent.id },
+    });
+    const base = new Date("2026-08-25T12:00:00.000Z");
+    const activity = await prisma.activityEvent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.ISSUE_UPDATED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: { issueId: issue.id },
+        createdAt: new Date(base.getTime() + 1_000),
+      },
+    });
+    await prisma.agentRunEvent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        runId: run.id,
+        kind: "STEP",
+        createdAt: new Date(base.getTime() + 2_000),
+      },
+    });
+    const replay = () =>
+      loadRealtimeCatchup(
+        prisma,
+        fixture.workspace.id,
+        { at: base.toISOString(), source: "activity", id: "before" },
+        500,
+        membership,
+      );
+
+    expect((await replay()).events).toEqual([]);
+    await expect(
+      canReadProjectDerivedRecord(
+        prisma,
+        { workspaceId: fixture.workspace.id, membership },
+        activity,
+      ),
+    ).resolves.toBe(false);
+    const grant = await prisma.projectAccess.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        projectId: project.id,
+        membershipId: membership.id,
+        role: ProjectAccessRole.VIEWER,
+        grantedById: fixture.user.id,
+      },
+    });
+    expect((await replay()).events).toHaveLength(2);
+    await expect(
+      canReadProjectDerivedRecord(
+        prisma,
+        { workspaceId: fixture.workspace.id, membership },
+        activity,
+      ),
+    ).resolves.toBe(true);
+    await prisma.projectAccess.delete({ where: { id: grant.id } });
+    expect((await replay()).events).toEqual([]);
   });
 });

@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, ExecutionPlanStatus, ExecutionStepStatus, Prisma } from "@prisma/client";
+import {
+  EventKind,
+  ExecutionPlanStatus,
+  ExecutionStepStatus,
+  Prisma,
+  type PrismaClient,
+  type Role,
+} from "@prisma/client";
 import { adminProcedure, router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { agentIdSchema } from "@/server/validators";
@@ -22,6 +29,80 @@ import {
   updateExecutionPlan,
   updateExecutionStep,
 } from "@/server/services/execution-plan-service";
+import {
+  assertProjectAction,
+  buildExecutionPlanAccessWhere,
+  buildIssueAccessWhere,
+  type ProjectAction,
+} from "@/server/services/authorization";
+
+type PlanAuthContext = {
+  db: PrismaClient;
+  workspaceId: string;
+  membership: { id: string; role: Role };
+};
+
+async function assertPlanAccess(
+  ctx: PlanAuthContext,
+  id: string,
+  action: ProjectAction,
+  options: { includeArchived?: boolean } = {},
+) {
+  const accessWhere = buildExecutionPlanAccessWhere({
+    workspaceId: ctx.workspaceId,
+    membershipId: ctx.membership.id,
+    membershipRole: ctx.membership.role,
+    action,
+  });
+  if (options.includeArchived) delete accessWhere.archivedAt;
+  const found = await ctx.db.executionPlan.findFirst({
+    where: {
+      id,
+      ...accessWhere,
+    },
+    select: { id: true },
+  });
+  if (!found) {
+    const exists = await ctx.db.executionPlan.findFirst({
+      where: { id, workspaceId: ctx.workspaceId },
+      select: { id: true },
+    });
+    const notFound = action === "READ" || !exists;
+    throw new TRPCError({
+      code: notFound ? "NOT_FOUND" : "FORBIDDEN",
+      message: notFound ? "Execution plan not found." : "Plan access required.",
+    });
+  }
+}
+
+async function assertStepAccess(ctx: PlanAuthContext, id: string, action: ProjectAction) {
+  const found = await ctx.db.executionStep.findFirst({
+    where: {
+      id,
+      workspaceId: ctx.workspaceId,
+      plan: {
+        is: buildExecutionPlanAccessWhere({
+          workspaceId: ctx.workspaceId,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
+          action,
+        }),
+      },
+    },
+    select: { id: true },
+  });
+  if (!found) {
+    const exists = await ctx.db.executionStep.findFirst({
+      where: { id, workspaceId: ctx.workspaceId },
+      select: { id: true },
+    });
+    const notFound = action === "READ" || !exists;
+    throw new TRPCError({
+      code: notFound ? "NOT_FOUND" : "FORBIDDEN",
+      message: notFound ? "Execution step not found." : "Plan access required.",
+    });
+  }
+}
 
 const verificationSchema = z
   .array(
@@ -68,7 +149,12 @@ export const executionPlanRouter = router({
           : null;
       const rows = await ctx.db.executionPlan.findMany({
         where: {
-          workspaceId: ctx.workspaceId,
+          ...buildExecutionPlanAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
           status: input.status,
           issueId: input.issueId,
           projectId: input.projectId,
@@ -99,7 +185,15 @@ export const executionPlanRouter = router({
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
       const plan = await ctx.db.executionPlan.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
+        where: {
+          id: input.id,
+          ...buildExecutionPlanAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
+        },
         include: {
           steps: {
             orderBy: { position: "asc" },
@@ -261,6 +355,30 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.projectId) {
+        await assertProjectAction(ctx.db, {
+          projectId: input.projectId,
+          workspaceId: ctx.workspaceId,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
+          action: "CONTRIBUTE",
+        });
+      }
+      if (input.issueId) {
+        const issue = await ctx.db.issue.findFirst({
+          where: {
+            id: input.issueId,
+            ...buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "CONTRIBUTE",
+            }),
+          },
+          select: { id: true },
+        });
+        if (!issue) throw new TRPCError({ code: "FORBIDDEN", message: "Issue access required." });
+      }
       const result = await createExecutionPlan(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -297,6 +415,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.id, "CONTRIBUTE");
       const activate = input.status === ExecutionPlanStatus.RUNNING;
       await updateExecutionPlan(ctx.db, {
         workspaceId: ctx.workspaceId,
@@ -322,6 +441,7 @@ export const executionPlanRouter = router({
   activate: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.id, "CONTRIBUTE");
       await ctx.db.$transaction((tx) =>
         activatePlan(tx, {
           workspaceId: ctx.workspaceId,
@@ -335,6 +455,7 @@ export const executionPlanRouter = router({
   retryStep: workspaceProcedure
     .input(z.object({ stepId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.stepId, "CONTRIBUTE");
       return retryExecutionStep(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -351,6 +472,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.stepId, "CONTRIBUTE");
       const result = await dispatchJudge(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -416,6 +538,7 @@ export const executionPlanRouter = router({
   materializeStep: workspaceProcedure
     .input(z.object({ stepId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.stepId, "CONTRIBUTE");
       return materializeStepAsIssue(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -427,6 +550,7 @@ export const executionPlanRouter = router({
   archive: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.id, "CONTRIBUTE");
       const plan = await ctx.db.executionPlan.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         select: { id: true, title: true, status: true, archivedAt: true },
@@ -472,6 +596,7 @@ export const executionPlanRouter = router({
   restore: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.id, "CONTRIBUTE", { includeArchived: true });
       const plan = await ctx.db.executionPlan.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         select: { id: true, title: true, status: true, archivedAt: true },
@@ -512,6 +637,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.id, "READ");
       const source = await ctx.db.executionPlan.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         include: { steps: { orderBy: { position: "asc" } } },
@@ -672,6 +798,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertPlanAccess(ctx, input.planId, "CONTRIBUTE");
       const result = await addExecutionStep(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -703,6 +830,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.id, "CONTRIBUTE");
       await updateExecutionStep(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -723,6 +851,7 @@ export const executionPlanRouter = router({
   removeStep: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.id, "CONTRIBUTE");
       const step = await ctx.db.executionStep.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         select: { id: true, title: true, planId: true, plan: { select: { status: true } } },
@@ -795,6 +924,7 @@ export const executionPlanRouter = router({
   stepCommentList: workspaceProcedure
     .input(z.object({ stepId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.stepId, "READ");
       const rows = await listExecutionStepComments(ctx.db, {
         workspaceId: ctx.workspaceId,
         stepId: input.stepId,
@@ -810,6 +940,7 @@ export const executionPlanRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertStepAccess(ctx, input.stepId, "CONTRIBUTE");
       return createExecutionStepComment(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session.user.id,
@@ -835,6 +966,7 @@ export const executionPlanRouter = router({
       if (!comment) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Step comment not found." });
       }
+      await assertStepAccess(ctx, comment.executionStepId!, "CONTRIBUTE");
       // Author-or-admin gate. `ctx.membership.role` is injected by
       // workspaceProcedure middleware (OWNER / ADMIN / MEMBER).
       const isAuthor = comment.authorId === ctx.session.user.id;

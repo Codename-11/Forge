@@ -20,6 +20,7 @@ import {
   type RunRecoveryAction,
 } from "@/server/services/agent-run-recovery";
 import { runtimeComplianceScorecard } from "@/server/services/runtime-compliance";
+import { buildIssueAccessWhere } from "@/server/services/authorization";
 
 // Forge has mixed id formats across rows (some cuid v1, some hex). Use
 // a loose validator instead of `.cuid()` so both shapes pass.
@@ -126,8 +127,12 @@ export const agentRunRouter = router({
       const issue = await ctx.db.issue.findFirst({
         where: {
           id: input.issueId,
-          workspaceId: ctx.workspaceId,
-          deletedAt: null,
+          ...buildIssueAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
         },
         select: { id: true },
       });
@@ -215,7 +220,18 @@ export const agentRunRouter = router({
       // Workspace scoping defensively — confirm the run belongs to the
       // calling tenant before returning its events.
       const run = await ctx.db.agentRun.findFirst({
-        where: { id: input.runId, workspaceId: ctx.workspaceId },
+        where: {
+          id: input.runId,
+          workspaceId: ctx.workspaceId,
+          issue: {
+            is: buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+          },
+        },
         select: { id: true },
       });
       if (!run) return [];
@@ -239,6 +255,14 @@ export const agentRunRouter = router({
         where: {
           id: input.runId,
           workspaceId: ctx.workspaceId,
+          issue: {
+            is: buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "CONTRIBUTE",
+            }),
+          },
           status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
         },
         select: { id: true, engagementMode: true },
@@ -274,6 +298,14 @@ export const agentRunRouter = router({
       const runs = await ctx.db.agentRun.findMany({
         where: {
           workspaceId: ctx.workspaceId,
+          issue: {
+            is: buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+          },
           status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
         },
         orderBy: { lastEventAt: "desc" },
@@ -342,7 +374,18 @@ export const agentRunRouter = router({
       const since = new Date(Date.now() - input.sinceDays * 86_400_000);
       const grouped = await ctx.db.agentRun.groupBy({
         by: ["agentId"],
-        where: { workspaceId: ctx.workspaceId, startedAt: { gte: since } },
+        where: {
+          workspaceId: ctx.workspaceId,
+          startedAt: { gte: since },
+          issue: {
+            is: buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+          },
+        },
         _sum: { costUsd: true, tokensIn: true, tokensOut: true, tokensCached: true },
         _count: true,
       });
@@ -407,7 +450,18 @@ export const agentRunRouter = router({
     .query(async ({ ctx, input }) => {
       if (input.ids.length === 0) return [];
       const rows = await ctx.db.agentRun.findMany({
-        where: { workspaceId: ctx.workspaceId, id: { in: input.ids } },
+        where: {
+          workspaceId: ctx.workspaceId,
+          id: { in: input.ids },
+          issue: {
+            is: buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+          },
+        },
         select: {
           id: true,
           costUsd: true,
@@ -449,6 +503,14 @@ export const agentRunRouter = router({
       const runs = await ctx.db.agentRun.findMany({
         where: {
           workspaceId: ctx.workspaceId,
+          issue: {
+            is: buildIssueAccessWhere({
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+          },
           status: {
             notIn: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING],
           },

@@ -4,6 +4,7 @@ import type { Prisma } from "@prisma/client";
 import { CycleStatus, EventKind } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { buildIssueAccessWhere } from "@/server/services/authorization";
 
 /**
  * Cycles — time-boxed iterations that group in-flight issues.
@@ -92,13 +93,19 @@ async function assertNoOtherActiveCycle(
 
 export const cycleRouter = router({
   list: workspaceProcedure.input(listInput.default({})).query(async ({ ctx, input }) => {
+    const issueAccess = buildIssueAccessWhere({
+      workspaceId: ctx.workspaceId,
+      membershipId: ctx.membership.id,
+      membershipRole: ctx.membership.role,
+      action: "READ",
+    });
     return ctx.db.cycle.findMany({
       where: {
         workspaceId: ctx.workspaceId,
         ...(input.status ? { status: input.status } : {}),
       },
       orderBy: { startsAt: "desc" },
-      include: { _count: { select: { issues: true } } },
+      include: { _count: { select: { issues: { where: issueAccess } } } },
     });
   }),
 
@@ -107,7 +114,12 @@ export const cycleRouter = router({
       where: { id: input.id, workspaceId: ctx.workspaceId },
       include: {
         issues: {
-          where: { deletedAt: null },
+          where: buildIssueAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
           include: { status: true },
           orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
         },
@@ -153,9 +165,13 @@ export const cycleRouter = router({
       // Bucket the cycle's issues by status category in one round-trip.
       const rows = await ctx.db.issue.findMany({
         where: {
-          workspaceId: ctx.workspaceId,
+          ...buildIssueAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
           cycleId: cycle.id,
-          deletedAt: null,
         },
         select: { status: { select: { category: true } } },
       });
@@ -380,8 +396,12 @@ export const cycleRouter = router({
       const issues = await tx.issue.findMany({
         where: {
           id: { in: input.issueIds },
-          workspaceId: ctx.workspaceId,
-          deletedAt: null,
+          ...buildIssueAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "CONTRIBUTE",
+          }),
         },
         select: { id: true, cycleId: true },
       });

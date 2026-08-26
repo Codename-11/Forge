@@ -1,7 +1,10 @@
 import "server-only";
 
 import {
+  ApiKeyKind,
   ConnectionStatus,
+  IntegrationCredentialSource,
+  IntegrationPrincipalType,
   InstanceRole,
   Prisma,
   type PrismaClient,
@@ -496,26 +499,95 @@ async function revokeUserAccess(
   userId: string,
   now: Date,
   reason: string,
-): Promise<{ sessions: number; apiKeys: number; connections: number; mappings: number }> {
+  revokedById: string | null,
+): Promise<{
+  sessions: number;
+  apiKeys: number;
+  connections: number;
+  mappings: number;
+  connectionAuthorizations: number;
+  integrationGrants: number;
+}> {
   const connections = await tx.connection.findMany({
     where: { ownerId: userId },
-    select: { id: true },
+    select: {
+      id: true,
+      mappings: {
+        select: {
+          id: true,
+          authorization: {
+            select: { id: true, credentialSource: true, revokedAt: true },
+          },
+        },
+      },
+    },
   });
-  const connectionIds = connections.map((connection) => connection.id);
-  const [sessions, apiKeys, actionTokens, mappings] = await Promise.all([
-    tx.session.deleteMany({ where: { userId } }),
-    tx.apiKey.updateMany({ where: { userId, revokedAt: null }, data: { revokedAt: now } }),
-    tx.userActionToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: now } }),
-    connectionIds.length
-      ? tx.connectionMapping.updateMany({
-          where: { connectionId: { in: connectionIds } },
-          data: { status: "paused" },
-        })
-      : Promise.resolve({ count: 0 }),
-  ]);
-  if (connectionIds.length) {
+  const personalMappings = connections.flatMap((connection) =>
+    connection.mappings.filter(
+      (mapping) =>
+        !mapping.authorization ||
+        mapping.authorization.credentialSource === IntegrationCredentialSource.USER_CONNECTION,
+    ),
+  );
+  const personalMappingIds = personalMappings.map((mapping) => mapping.id);
+  const personalAuthorizationIds = personalMappings.flatMap((mapping) =>
+    mapping.authorization && !mapping.authorization.revokedAt ? [mapping.authorization.id] : [],
+  );
+  const disconnectConnectionIds = connections
+    .filter(
+      (connection) =>
+        !connection.mappings.some(
+          (mapping) =>
+            mapping.authorization?.credentialSource ===
+              IntegrationCredentialSource.WORKSPACE_GITHUB_APP && !mapping.authorization.revokedAt,
+        ),
+    )
+    .map((connection) => connection.id);
+  const [sessions, apiKeys, actionTokens, mappings, authorizations, integrationGrants] =
+    await Promise.all([
+      tx.session.deleteMany({ where: { userId } }),
+      // userId is the human principal for PERSONAL / SESSION keys, but only
+      // issuer attribution for AGENT service credentials. Disabling a person
+      // must not take an independently operated agent or plugin offline.
+      tx.apiKey.updateMany({
+        where: {
+          userId,
+          kind: { in: [ApiKeyKind.PERSONAL, ApiKeyKind.SESSION] },
+          pluginId: null,
+          linkedAgentId: null,
+          revokedAt: null,
+        },
+        data: { revokedAt: now },
+      }),
+      tx.userActionToken.updateMany({ where: { userId, usedAt: null }, data: { usedAt: now } }),
+      personalMappingIds.length
+        ? tx.connectionMapping.updateMany({
+            where: { id: { in: personalMappingIds } },
+            data: { status: "paused" },
+          })
+        : Promise.resolve({ count: 0 }),
+      personalAuthorizationIds.length
+        ? tx.connectionAuthorization.updateMany({
+            where: {
+              id: { in: personalAuthorizationIds },
+              credentialSource: IntegrationCredentialSource.USER_CONNECTION,
+              revokedAt: null,
+            },
+            data: { revokedAt: now, revokedById },
+          })
+        : Promise.resolve({ count: 0 }),
+      tx.integrationGrant.updateMany({
+        where: {
+          principalType: IntegrationPrincipalType.USER,
+          principalUserId: userId,
+          revokedAt: null,
+        },
+        data: { revokedAt: now, revokedById },
+      }),
+    ]);
+  if (disconnectConnectionIds.length) {
     await tx.connection.updateMany({
-      where: { id: { in: connectionIds } },
+      where: { id: { in: disconnectConnectionIds } },
       data: { tokenEnc: null, status: ConnectionStatus.DISCONNECTED, error: reason },
     });
   }
@@ -523,8 +595,10 @@ async function revokeUserAccess(
   return {
     sessions: sessions.count,
     apiKeys: apiKeys.count,
-    connections: connections.length,
+    connections: disconnectConnectionIds.length,
     mappings: mappings.count,
+    connectionAuthorizations: authorizations.count,
+    integrationGrants: integrationGrants.count,
   };
 }
 
@@ -561,7 +635,13 @@ export async function suspendUser(
       data: { status: UserStatus.SUSPENDED, disabledAt: now, authVersion: { increment: 1 } },
       select: { id: true, status: true, disabledAt: true, authVersion: true },
     });
-    const revoked = await revokeUserAccess(tx, user.id, now, "Owner account suspended.");
+    const revoked = await revokeUserAccess(
+      tx,
+      user.id,
+      now,
+      "Owner account suspended.",
+      input.actorId ?? null,
+    );
     await writeInstanceAudit(tx, {
       ...input,
       targetUserId: user.id,
@@ -605,7 +685,13 @@ export async function softDeleteUser(
     await assertLifecycleQuorum(tx, input.userId);
     const now = new Date();
     const tombstoneEmail = `deleted+${input.userId}@invalid.local`;
-    const revoked = await revokeUserAccess(tx, input.userId, now, "Owner account deleted.");
+    const revoked = await revokeUserAccess(
+      tx,
+      input.userId,
+      now,
+      "Owner account deleted.",
+      input.actorId ?? null,
+    );
 
     await Promise.all([
       tx.localCredential.deleteMany({ where: { userId: input.userId } }),

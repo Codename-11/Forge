@@ -1,5 +1,5 @@
 import "server-only";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient, Role } from "@prisma/client";
 import { EventKind } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
@@ -186,7 +186,14 @@ export interface HydratedContextSet {
  */
 export async function hydrateContextSet(
   db: PrismaClient,
-  params: { workspaceId: string; contextSetId: string; workspaceSlug?: string },
+  params: {
+    workspaceId: string;
+    contextSetId: string;
+    workspaceSlug?: string;
+    userId?: string | null;
+    membershipId?: string | null;
+    membershipRole?: Role | null;
+  },
 ): Promise<HydratedContextSet | null> {
   const set = await db.contextSet.findFirst({
     where: { id: params.contextSetId, workspaceId: params.workspaceId },
@@ -200,7 +207,14 @@ export async function hydrateContextSet(
     id: item.targetId,
   }));
   const hydrated = await hydrateEntityRefs(
-    { db, workspaceId: params.workspaceId, workspaceSlug: params.workspaceSlug },
+    {
+      db,
+      workspaceId: params.workspaceId,
+      workspaceSlug: params.workspaceSlug,
+      userId: params.userId,
+      membershipId: params.membershipId,
+      membershipRole: params.membershipRole,
+    },
     refs,
   );
   const items = set.items.map((item, idx) => ({

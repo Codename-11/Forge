@@ -16,6 +16,7 @@ import {
 } from "@/lib/notifications/event-notification";
 import { logger } from "@/server/logger";
 import { sendBrowserPushToUser, type BrowserPushPayload } from "@/server/services/web-push";
+import { filterProjectDerivedRecords } from "@/server/services/derived-project-access";
 
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
@@ -331,7 +332,16 @@ export async function materializeRecentNotifications(
     push?: boolean;
   },
 ): Promise<number> {
-  const events = await findAlertableEvents(db, params);
+  const membership = await db.membership.findUnique({
+    where: { userId_workspaceId: { userId: params.userId, workspaceId: params.workspaceId } },
+    select: { id: true, role: true },
+  });
+  if (!membership) return 0;
+  const events = await filterProjectDerivedRecords(
+    db,
+    { workspaceId: params.workspaceId, membership },
+    await findAlertableEvents(db, params),
+  );
   if (events.length === 0) return 0;
 
   // Load the user's effective preferences once before the per-event
@@ -538,14 +548,34 @@ export async function buildNotificationListItems(
 ): Promise<NotificationListItem[]> {
   if (states.length === 0) return [];
 
+  const membership = await db.membership.findUnique({
+    where: {
+      userId_workspaceId: {
+        userId: states[0].userId,
+        workspaceId,
+      },
+    },
+    select: { id: true, role: true },
+  });
+  if (!membership) return [];
+  const visibleStates = await filterProjectDerivedRecords(
+    db,
+    { workspaceId, membership },
+    states.map((state) => ({
+      ...state,
+      subjectType: state.event.subjectType,
+      subjectId: state.event.subjectId,
+      payload: state.event.payload,
+    })),
+  );
   const hydrated = await hydrateNotificationEvents(
     db,
     workspaceId,
-    states.map((s) => s.event),
+    visibleStates.map((s) => s.event),
   );
   const byEventId = new Map(hydrated.map((item) => [item.event.id, item]));
 
-  return states
+  return visibleStates
     .map((state) => {
       const hydratedEvent = byEventId.get(state.eventId);
       if (!hydratedEvent) return null;

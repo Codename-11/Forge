@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { router, workspaceProcedure } from "@/server/trpc";
+import {
+  buildIssueAccessWhere,
+  buildProjectAccessWhere,
+} from "@/server/services/authorization";
 
 /**
  * Analytics endpoints return precomputed rollups from MetricAggregate, with
@@ -437,31 +441,43 @@ const dispatchRouter = router({
 
 export const analyticsRouter = router({
   summary: workspaceProcedure.query(async ({ ctx }) => {
+    const issueAccess = buildIssueAccessWhere({
+      workspaceId: ctx.workspaceId,
+      membershipId: ctx.membership.id,
+      membershipRole: ctx.membership.role,
+      action: "READ",
+    });
     const [openIssues, doneIssues, overdue, totalProjects] = await Promise.all([
       ctx.db.issue.count({
         where: {
-          workspaceId: ctx.workspaceId,
-          deletedAt: null,
+          ...issueAccess,
           status: { category: { notIn: ["DONE", "CANCELED"] } },
         },
       }),
       ctx.db.issue.count({
         where: {
-          workspaceId: ctx.workspaceId,
-          deletedAt: null,
+          ...issueAccess,
           status: { category: "DONE" },
         },
       }),
       ctx.db.issue.count({
         where: {
-          workspaceId: ctx.workspaceId,
-          deletedAt: null,
+          ...issueAccess,
           dueDate: { lt: new Date() },
           status: { category: { notIn: ["DONE", "CANCELED"] } },
         },
       }),
       ctx.db.project.count({
-        where: { workspaceId: ctx.workspaceId, archived: false, deletedAt: null },
+        where: {
+          ...buildProjectAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
+          archived: false,
+          deletedAt: null,
+        },
       }),
     ]);
     return { openIssues, doneIssues, overdue, totalProjects };
@@ -470,7 +486,12 @@ export const analyticsRouter = router({
   statusDistribution: workspaceProcedure.query(async ({ ctx }) => {
     const rows = await ctx.db.issue.groupBy({
       by: ["statusId"],
-      where: { workspaceId: ctx.workspaceId, deletedAt: null },
+      where: buildIssueAccessWhere({
+        workspaceId: ctx.workspaceId,
+        membershipId: ctx.membership.id,
+        membershipRole: ctx.membership.role,
+        action: "READ",
+      }),
       _count: { _all: true },
     });
     const statuses = await ctx.db.status.findMany({
@@ -495,21 +516,34 @@ export const analyticsRouter = router({
         .default({ granularity: "week", lookbackDays: 84 }),
     )
     .query(async ({ ctx, input }) => {
-      // Live aggregation via raw SQL — date_trunc keeps things simple.
-      // TODO: read from MetricAggregate when warmed.
       const since = new Date(Date.now() - input.lookbackDays * 86_400_000);
-      const rows = await ctx.db.$queryRawUnsafe<{ bucket: Date; completed: bigint }[]>(
-        `
-        SELECT date_trunc($1, "completedAt") AS bucket, count(*)::bigint AS completed
-        FROM "Issue"
-        WHERE "workspaceId" = $2 AND "completedAt" IS NOT NULL AND "completedAt" >= $3
-        GROUP BY 1 ORDER BY 1 ASC
-        `,
-        input.granularity,
-        ctx.workspaceId,
-        since,
-      );
-      return rows.map((r) => ({ bucket: r.bucket.toISOString(), completed: Number(r.completed) }));
+      const rows = await ctx.db.issue.findMany({
+        where: {
+          ...buildIssueAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
+          completedAt: { not: null, gte: since },
+        },
+        select: { completedAt: true },
+      });
+      const buckets = new Map<string, number>();
+      for (const row of rows) {
+        if (!row.completedAt) continue;
+        const date = new Date(row.completedAt);
+        date.setUTCHours(0, 0, 0, 0);
+        if (input.granularity === "week") {
+          const weekday = date.getUTCDay();
+          date.setUTCDate(date.getUTCDate() - ((weekday + 6) % 7));
+        }
+        const key = date.toISOString();
+        buckets.set(key, (buckets.get(key) ?? 0) + 1);
+      }
+      return [...buckets.entries()]
+        .sort(([a], [b]) => a.localeCompare(b))
+        .map(([bucket, completed]) => ({ bucket, completed }));
     }),
 
   cycleTime: workspaceProcedure
@@ -518,7 +552,12 @@ export const analyticsRouter = router({
       const since = new Date(Date.now() - input.lookbackDays * 86_400_000);
       const rows = await ctx.db.issue.findMany({
         where: {
-          workspaceId: ctx.workspaceId,
+          ...buildIssueAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
           startedAt: { not: null },
           completedAt: { not: null, gte: since },
         },
@@ -543,8 +582,12 @@ export const analyticsRouter = router({
   slaBreaches: workspaceProcedure.query(async ({ ctx }) => {
     const open = await ctx.db.issue.findMany({
       where: {
-        workspaceId: ctx.workspaceId,
-        deletedAt: null,
+        ...buildIssueAccessWhere({
+          workspaceId: ctx.workspaceId,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
+          action: "READ",
+        }),
         slaMinutes: { not: null },
         status: { category: { notIn: ["DONE", "CANCELED"] } },
       },

@@ -1,9 +1,16 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { CompletionAutomation, EventKind, type StatusCategory } from "@prisma/client";
+import {
+  CompletionAutomation,
+  EventKind,
+  ProjectAccessRole,
+  ProjectVisibility,
+  type StatusCategory,
+} from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
 import { assertWorkspaceAction } from "@/server/services/authorization";
+import { assertProjectForViewer, projectWhereForViewer } from "@/server/services/project-access";
 
 const cursorSchema = z.string().optional();
 const projectKey = z
@@ -43,7 +50,9 @@ export const projectRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db.project.findMany({
-        where: { workspaceId: ctx.workspaceId, archived: input.archived, deletedAt: null },
+        where: {
+          AND: [projectWhereForViewer(ctx), { archived: input.archived, deletedAt: null }],
+        },
         take: input.limit + 1,
         cursor: input.cursor ? { id: input.cursor } : undefined,
         orderBy: { updatedAt: "desc" },
@@ -102,6 +111,7 @@ export const projectRouter = router({
   byId: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertProjectForViewer(ctx.db, ctx, input.id, "READ");
       const project = await ctx.db.project.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
       });
@@ -123,6 +133,7 @@ export const projectRouter = router({
   summary: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertProjectForViewer(ctx.db, ctx, input.id, "READ");
       const project = await ctx.db.project.findFirst({
         where: {
           id: input.id,
@@ -187,6 +198,7 @@ export const projectRouter = router({
   overview: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertProjectForViewer(ctx.db, ctx, input.id, "READ");
       const project = await ctx.db.project.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
       });
@@ -459,6 +471,7 @@ export const projectRouter = router({
         repoUrl: projectRepoUrl.optional(),
         repoBranch: z.string().trim().max(200).optional(),
         completionAutomation: z.nativeEnum(CompletionAutomation).optional(),
+        visibility: z.nativeEnum(ProjectVisibility).default(ProjectVisibility.WORKSPACE),
       }),
     )
     .mutation(async ({ ctx, input }) => {
@@ -477,6 +490,17 @@ export const projectRouter = router({
         const project = await tx.project.create({
           data: { ...input, workspaceId: ctx.workspaceId, createdById: ctx.session.user.id },
         });
+        if (ctx.membership.role !== "OWNER" && ctx.membership.role !== "ADMIN") {
+          await tx.projectAccess.create({
+            data: {
+              workspaceId: ctx.workspaceId,
+              projectId: project.id,
+              membershipId: ctx.membership.id,
+              role: ProjectAccessRole.MANAGER,
+              grantedById: ctx.session.user.id,
+            },
+          });
+        }
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,
           actorId: ctx.session.user.id,
@@ -513,10 +537,12 @@ export const projectRouter = router({
         repoUrl: projectRepoUrl.nullable().optional(),
         repoBranch: z.string().trim().max(200).nullable().optional(),
         completionAutomation: z.nativeEnum(CompletionAutomation).nullable().optional(),
+        visibility: z.nativeEnum(ProjectVisibility).optional(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
       assertWorkspaceAction(ctx.membership.role, "MUTATE_PROJECT");
+      await assertProjectForViewer(ctx.db, ctx, input.id, "MANAGE");
       const { id, ...patch } = input;
       return ctx.db.$transaction(async (tx) => {
         const before = await tx.project.findFirstOrThrow({
@@ -555,6 +581,7 @@ export const projectRouter = router({
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       assertWorkspaceAction(ctx.membership.role, "MUTATE_PROJECT");
+      await assertProjectForViewer(ctx.db, ctx, input.id, "MANAGE");
       const project = await ctx.db.project.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
         select: { id: true },
@@ -569,6 +596,7 @@ export const projectRouter = router({
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
       assertWorkspaceAction(ctx.membership.role, "MUTATE_PROJECT");
+      await assertProjectForViewer(ctx.db, ctx, input.id, "MANAGE");
       const p = await ctx.db.project.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId },
       });

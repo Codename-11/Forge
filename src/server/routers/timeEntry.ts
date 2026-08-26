@@ -4,6 +4,8 @@ import { EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { buildIssueAccessWhere, type ProjectAction } from "@/server/services/authorization";
+import { assertIssueForViewer } from "@/server/services/project-access";
 
 /**
  * Time tracking — per-user, workspace-scoped duration rows.
@@ -90,6 +92,32 @@ function csvEscape(value: string | number | null | undefined): string {
   return s;
 }
 
+function visibleIssueWhere(
+  ctx: {
+    workspaceId: string;
+    membership: {
+      id: string;
+      role: Parameters<typeof buildIssueAccessWhere>[0]["membershipRole"];
+    };
+  },
+  action: ProjectAction = "READ",
+): Prisma.IssueWhereInput {
+  return buildIssueAccessWhere({
+    workspaceId: ctx.workspaceId,
+    membershipId: ctx.membership.id,
+    membershipRole: ctx.membership.role,
+    action,
+  });
+}
+
+function visibleTimeEntryWhere(
+  ctx: Parameters<typeof visibleIssueWhere>[0],
+): Prisma.TimeEntryWhereInput {
+  return {
+    OR: [{ issueId: null }, { issue: { is: visibleIssueWhere(ctx) } }],
+  };
+}
+
 export const timeEntryRouter = router({
   start: workspaceProcedure.input(startInput).mutation(async ({ ctx, input }) => {
     return ctx.db.$transaction(async (tx) => {
@@ -108,13 +136,7 @@ export const timeEntryRouter = router({
       }
 
       if (input.issueId) {
-        const issue = await tx.issue.findFirst({
-          where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
-        });
-        if (!issue) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Issue not found in workspace." });
-        }
+        await assertIssueForViewer(tx, ctx, input.issueId, "CONTRIBUTE");
       }
 
       const entry = await tx.timeEntry.create({
@@ -161,6 +183,9 @@ export const timeEntryRouter = router({
         },
       });
       if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+      if (entry.issueId) {
+        await assertIssueForViewer(tx, ctx, entry.issueId, "CONTRIBUTE");
+      }
       if (entry.endedAt) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Entry is already stopped." });
       }
@@ -203,6 +228,7 @@ export const timeEntryRouter = router({
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
         endedAt: null,
+        ...visibleTimeEntryWhere(ctx),
       },
       include: {
         issue: {
@@ -217,6 +243,7 @@ export const timeEntryRouter = router({
     const where: Prisma.TimeEntryWhereInput = {
       workspaceId: ctx.workspaceId,
       userId,
+      ...visibleTimeEntryWhere(ctx),
       ...(input.issueId ? { issueId: input.issueId } : {}),
       ...(input.billable !== undefined ? { billable: input.billable } : {}),
       ...(input.from || input.to
@@ -257,6 +284,9 @@ export const timeEntryRouter = router({
         },
       });
       if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+      if (entry.issueId) {
+        await assertIssueForViewer(tx, ctx, entry.issueId, "CONTRIBUTE");
+      }
       return tx.timeEntry.update({ where: { id: entry.id }, data: patch });
     });
   }),
@@ -271,6 +301,9 @@ export const timeEntryRouter = router({
         },
       });
       if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+      if (entry.issueId) {
+        await assertIssueForViewer(tx, ctx, entry.issueId, "CONTRIBUTE");
+      }
       await tx.timeEntry.delete({ where: { id: entry.id } });
       return { ok: true };
     });
@@ -282,6 +315,7 @@ export const timeEntryRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         userId,
+        ...visibleTimeEntryWhere(ctx),
         startedAt: { gte: input.from, lte: input.to },
         endedAt: { not: null },
       },
@@ -335,6 +369,7 @@ export const timeEntryRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         userId,
+        ...visibleTimeEntryWhere(ctx),
         startedAt: { gte: input.from, lte: input.to },
       },
       include: {
@@ -368,9 +403,7 @@ export const timeEntryRouter = router({
     const rows = entries.map((e) => {
       const minutes = e.endedAt ? minutesBetween(e.startedAt, e.endedAt) : 0;
       const amount = e.billable && e.endedAt ? amountFor(minutes, e.hourlyRate) : 0;
-      const issueKey = e.issue
-        ? `${e.issue.workspace.key}-${e.issue.number}`
-        : "";
+      const issueKey = e.issue ? `${e.issue.workspace.key}-${e.issue.number}` : "";
       return [
         dayKey(e.startedAt),
         issueKey,

@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams, usePathname } from "next/navigation";
 import { toast } from "sonner";
-import { Compass, Folder, Plus } from "lucide-react";
+import { Compass, Folder, LockKeyhole, Plus } from "lucide-react";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -219,6 +219,11 @@ export default function ProjectsPage() {
                   <div className="mt-2 text-sm font-medium">
                     {p.icon && <span className="mr-1">{p.icon}</span>}
                     {p.name}
+                    {p.visibility === "RESTRICTED" && (
+                      <Badge className="ml-2 inline-flex gap-1 align-middle">
+                        <LockKeyhole className="h-3 w-3" aria-hidden /> Restricted
+                      </Badge>
+                    )}
                   </div>
                   {p.description && (
                     <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">

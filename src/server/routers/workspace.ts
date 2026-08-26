@@ -1317,7 +1317,64 @@ export const workspaceRouter = router({
           }
         }
 
+        const revokedAt = new Date();
+        const personalMappings = await tx.connectionMapping.findMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            connection: { ownerId: target.userId },
+            authorization: {
+              credentialSource: "USER_CONNECTION",
+              revokedAt: null,
+            },
+          },
+          select: { id: true, authorization: { select: { id: true } } },
+        });
+        const personalMappingIds = personalMappings.map((mapping) => mapping.id);
+        const personalAuthorizationIds = personalMappings.flatMap((mapping) =>
+          mapping.authorization ? [mapping.authorization.id] : [],
+        );
+        const [revokedIntegrationGrants, revokedConnectionAuthorizations, pausedMappings] =
+          await Promise.all([
+            tx.integrationGrant.updateMany({
+              where: {
+                workspaceId: ctx.workspaceId,
+                principalType: "USER",
+                principalUserId: target.userId,
+                revokedAt: null,
+              },
+              data: { revokedAt, revokedById: ctx.session.user.id },
+            }),
+            personalAuthorizationIds.length
+              ? tx.connectionAuthorization.updateMany({
+                  where: {
+                    id: { in: personalAuthorizationIds },
+                    workspaceId: ctx.workspaceId,
+                    credentialSource: "USER_CONNECTION",
+                    revokedAt: null,
+                  },
+                  data: { revokedAt, revokedById: ctx.session.user.id },
+                })
+              : Promise.resolve({ count: 0 }),
+            personalMappingIds.length
+              ? tx.connectionMapping.updateMany({
+                  where: { id: { in: personalMappingIds }, workspaceId: ctx.workspaceId },
+                  data: { status: "paused" },
+                })
+              : Promise.resolve({ count: 0 }),
+          ]);
+
         await tx.membership.delete({ where: { id: target.id } });
+        const revokedUserKeys = await tx.apiKey.updateMany({
+          where: {
+            workspaceId: ctx.workspaceId,
+            userId: target.userId,
+            kind: { in: ["PERSONAL", "SESSION"] },
+            pluginId: null,
+            linkedAgentId: null,
+            revokedAt: null,
+          },
+          data: { revokedAt },
+        });
         await tx.workspace.updateMany({
           where: {
             id: ctx.workspaceId,
@@ -1344,6 +1401,10 @@ export const workspaceRouter = router({
             userId: target.userId,
             email: target.user.email,
             role: target.role,
+            revokedUserApiKeys: revokedUserKeys.count,
+            revokedIntegrationGrants: revokedIntegrationGrants.count,
+            revokedConnectionAuthorizations: revokedConnectionAuthorizations.count,
+            pausedPersonalConnectionMappings: pausedMappings.count,
           },
           ip: ctx.ip,
           userAgent: ctx.userAgent,

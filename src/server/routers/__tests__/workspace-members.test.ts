@@ -1,5 +1,16 @@
 import { describe, it, expect, afterAll, afterEach } from "vitest";
-import { AutoDispatchMode, DefaultIssueAssigneeMode, InvitationStatus, Role } from "@prisma/client";
+import {
+  AutoDispatchMode,
+  ConnectionProvider,
+  ConnectionStatus,
+  DefaultIssueAssigneeMode,
+  IntegrationCapability,
+  IntegrationCredentialSource,
+  IntegrationGrantScope,
+  IntegrationPrincipalType,
+  InvitationStatus,
+  Role,
+} from "@prisma/client";
 import { workspaceRouter } from "@/server/routers/workspace";
 import {
   acceptWorkspaceInvitation,
@@ -355,6 +366,125 @@ describe("workspaceRouter — admin member management", () => {
   it("removeMember deletes the membership and preserves the user row", async () => {
     const { caller, fixture } = await adminSetup();
     const prisma = getPrisma();
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        profileKey: `member-service-${Date.now()}`,
+        name: "Member-issued service",
+      },
+    });
+    const [personalKey, sessionKey, agentKey] = await Promise.all([
+      prisma.apiKey.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          userId: fixture.secondUser.id,
+          name: "personal",
+          hashedKey: `member-personal-${Date.now()}`,
+          prefix: "member-personal",
+          kind: "PERSONAL",
+          scopes: ["READ_ISSUES"],
+        },
+      }),
+      prisma.apiKey.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          userId: fixture.secondUser.id,
+          name: "session",
+          hashedKey: `member-session-${Date.now()}`,
+          prefix: "member-session",
+          kind: "SESSION",
+          scopes: ["READ_ISSUES"],
+        },
+      }),
+      prisma.apiKey.create({
+        data: {
+          workspaceId: fixture.workspace.id,
+          userId: fixture.secondUser.id,
+          linkedAgentId: agent.id,
+          name: "agent",
+          hashedKey: `member-agent-${Date.now()}`,
+          prefix: "member-agent",
+          kind: "AGENT",
+          scopes: ["READ_ISSUES"],
+        },
+      }),
+    ]);
+    const personalConnection = await prisma.connection.create({
+      data: {
+        ownerId: fixture.secondUser.id,
+        provider: ConnectionProvider.GITHUB,
+        label: "Removed member personal GitHub",
+        status: ConnectionStatus.CONNECTED,
+        tokenEnc: "personal-token",
+        mappings: {
+          create: {
+            workspaceId: fixture.workspace.id,
+            kind: "repo",
+            target: "example/personal",
+          },
+        },
+      },
+      include: { mappings: true },
+    });
+    const personalAuthorization = await prisma.connectionAuthorization.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        connectionMappingId: personalConnection.mappings[0]!.id,
+        credentialSource: IntegrationCredentialSource.USER_CONNECTION,
+        capabilities: [IntegrationCapability.READ],
+        authorizedById: fixture.secondUser.id,
+        authorizationDigest: "removed-member-personal",
+      },
+    });
+    const personalGrant = await prisma.integrationGrant.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        connectionAuthorizationId: personalAuthorization.id,
+        principalType: IntegrationPrincipalType.USER,
+        principalUserId: fixture.secondUser.id,
+        scope: IntegrationGrantScope.WORKSPACE,
+        capabilities: [IntegrationCapability.READ],
+        grantedById: fixture.user.id,
+      },
+    });
+    const app = await prisma.githubApp.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Removed member workspace app",
+        appId: "81234",
+        installationId: "85678",
+        privateKeyEnc: "workspace-app-private-key",
+      },
+    });
+    const appConnection = await prisma.connection.create({
+      data: {
+        ownerId: fixture.secondUser.id,
+        provider: ConnectionProvider.GITHUB,
+        label: "Removed member workspace GitHub App",
+        status: ConnectionStatus.CONNECTED,
+        tokenEnc: "workspace-app-token",
+        config: { installationId: "85678" },
+        mappings: {
+          create: {
+            workspaceId: fixture.workspace.id,
+            kind: "repo",
+            target: "example/workspace-app",
+          },
+        },
+      },
+      include: { mappings: true },
+    });
+    const appAuthorization = await prisma.connectionAuthorization.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        connectionMappingId: appConnection.mappings[0]!.id,
+        credentialSource: IntegrationCredentialSource.WORKSPACE_GITHUB_APP,
+        githubAppId: app.id,
+        capabilities: [IntegrationCapability.READ],
+        authorizedById: fixture.user.id,
+        authorizationDigest: "removed-member-workspace-app",
+      },
+    });
 
     const res = await caller.removeMember({ userId: fixture.secondUser.id });
     expect(res.removed).toBe(true);
@@ -372,6 +502,32 @@ describe("workspaceRouter — admin member management", () => {
     // User row itself is intact.
     const user = await prisma.user.findUnique({ where: { id: fixture.secondUser.id } });
     expect(user).toBeTruthy();
+
+    const keys = await prisma.apiKey.findMany({
+      where: { id: { in: [personalKey.id, sessionKey.id, agentKey.id] } },
+      select: { id: true, revokedAt: true },
+    });
+    const revokedById = new Map(keys.map((key) => [key.id, key.revokedAt]));
+    expect(revokedById.get(personalKey.id)).toBeInstanceOf(Date);
+    expect(revokedById.get(sessionKey.id)).toBeInstanceOf(Date);
+    expect(revokedById.get(agentKey.id)).toBeNull();
+    await expect(
+      prisma.connectionMapping.findUniqueOrThrow({
+        where: { id: personalConnection.mappings[0]!.id },
+      }),
+    ).resolves.toMatchObject({ status: "paused" });
+    await expect(
+      prisma.connectionAuthorization.findUniqueOrThrow({ where: { id: personalAuthorization.id } }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+    await expect(
+      prisma.integrationGrant.findUniqueOrThrow({ where: { id: personalGrant.id } }),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Date) });
+    await expect(
+      prisma.connectionMapping.findUniqueOrThrow({ where: { id: appConnection.mappings[0]!.id } }),
+    ).resolves.toMatchObject({ status: "active" });
+    await expect(
+      prisma.connectionAuthorization.findUniqueOrThrow({ where: { id: appAuthorization.id } }),
+    ).resolves.toMatchObject({ revokedAt: null });
 
     const event = await prisma.activityEvent.findFirst({
       where: {

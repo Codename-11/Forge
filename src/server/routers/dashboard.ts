@@ -4,6 +4,7 @@ import type { PrismaClient } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { STALE_RUN_MS } from "@/server/services/agent-presence";
 import { presenceAvailability } from "@/lib/transport-display";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Dashboard zero-state suggestions. Three buckets — current sprint,
@@ -136,6 +137,7 @@ export const dashboardRouter = router({
     .query(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
       const limit = input.limit;
+      const accessWhere = issueWhereForViewer(ctx);
 
       // 1. Current sprint slice — unassigned first (so the bucket reads as
       //    "next thing for the team"), then assigned. The active cycle is
@@ -146,13 +148,12 @@ export const dashboardRouter = router({
         select: { id: true, name: true },
       });
 
-      let currentSprintSlice: Array<
-        Awaited<ReturnType<typeof fetchSlice>>[number]
-      > = [];
+      let currentSprintSlice: Array<Awaited<ReturnType<typeof fetchSlice>>[number]> = [];
       if (activeCycle) {
         currentSprintSlice = await fetchSlice(ctx.db, {
           workspaceId: ctx.workspaceId,
           where: {
+            AND: [accessWhere],
             cycleId: activeCycle.id,
             status: { category: { notIn: ["DONE", "CANCELED"] } },
           },
@@ -168,6 +169,7 @@ export const dashboardRouter = router({
           fetchSlice(ctx.db, {
             workspaceId: ctx.workspaceId,
             where: {
+              AND: [accessWhere],
               cycleId: activeCycle.id,
               status: { category: { notIn: ["DONE", "CANCELED"] } },
               assignees: { none: {} },
@@ -179,12 +181,10 @@ export const dashboardRouter = router({
           fetchSlice(ctx.db, {
             workspaceId: ctx.workspaceId,
             where: {
+              AND: [accessWhere],
               cycleId: activeCycle.id,
               status: { category: { notIn: ["DONE", "CANCELED"] } },
-              OR: [
-                { assignees: { some: {} } },
-                { assignedAgentId: { not: null } },
-              ],
+              OR: [{ assignees: { some: {} } }, { assignedAgentId: { not: null } }],
             },
             orderBy: [{ priority: "desc" }, { createdAt: "desc" }],
             take: limit,
@@ -199,11 +199,13 @@ export const dashboardRouter = router({
       const myProjectIds = await myProjectIdSet(ctx.db, {
         workspaceId: ctx.workspaceId,
         userId,
+        accessWhere,
       });
       const unassignedInMyProjects = myProjectIds.size
         ? await fetchSlice(ctx.db, {
             workspaceId: ctx.workspaceId,
             where: {
+              AND: [accessWhere],
               projectId: { in: Array.from(myProjectIds) },
               assignees: { none: {} },
               assignedAgentId: null,
@@ -233,12 +235,9 @@ export const dashboardRouter = router({
         select: { stalledThresholdDays: true },
       });
       let stalled: Array<Awaited<ReturnType<typeof fetchSlice>>[number]> = [];
-      let agentStalled: Array<Awaited<ReturnType<typeof fetchSlice>>[number]> =
-        [];
+      let agentStalled: Array<Awaited<ReturnType<typeof fetchSlice>>[number]> = [];
       if (ws.stalledThresholdDays > 0) {
-        const cutoff = new Date(
-          Date.now() - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
-        );
+        const cutoff = new Date(Date.now() - ws.stalledThresholdDays * 24 * 60 * 60 * 1000);
         const now = new Date();
         const notSnoozed = {
           OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
@@ -246,6 +245,7 @@ export const dashboardRouter = router({
         stalled = await fetchSlice(ctx.db, {
           workspaceId: ctx.workspaceId,
           where: {
+            AND: [accessWhere],
             updatedAt: { lt: cutoff },
             status: { category: { notIn: ["DONE", "CANCELED"] } },
             ...notSnoozed,
@@ -256,6 +256,7 @@ export const dashboardRouter = router({
         agentStalled = await fetchSlice(ctx.db, {
           workspaceId: ctx.workspaceId,
           where: {
+            AND: [accessWhere],
             updatedAt: { lt: cutoff },
             assignedAgentId: { not: null },
             status: { category: { notIn: ["DONE", "CANCELED"] } },
@@ -298,6 +299,7 @@ export const dashboardRouter = router({
    */
   today: workspaceProcedure.query(async ({ ctx }) => {
     const now = new Date();
+    const accessWhere = issueWhereForViewer(ctx);
 
     // 1. Active sprint countdown.
     const activeCycle = await ctx.db.cycle.findFirst({
@@ -323,6 +325,7 @@ export const dashboardRouter = router({
     const dueSoonCutoff = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
     const dueSoonRows = await ctx.db.issue.findMany({
       where: {
+        AND: [accessWhere],
         workspaceId: ctx.workspaceId,
         deletedAt: null,
         dueDate: { not: null, lte: dueSoonCutoff },
@@ -357,6 +360,7 @@ export const dashboardRouter = router({
     // [weekStart, weekEnd) range, grouped by UTC date.
     const weekIssues = await ctx.db.issue.findMany({
       where: {
+        AND: [accessWhere],
         workspaceId: ctx.workspaceId,
         deletedAt: null,
         dueDate: { gte: weekStart, lt: weekEnd },
@@ -402,6 +406,7 @@ export const dashboardRouter = router({
         .default({ limit: 8 }),
     )
     .query(async ({ ctx, input }) => {
+      const accessWhere = issueWhereForViewer(ctx);
       const ws = await ctx.db.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
         select: { stalledThresholdDays: true },
@@ -409,13 +414,12 @@ export const dashboardRouter = router({
       if (ws.stalledThresholdDays <= 0) {
         return { items: [], stalledThresholdDays: 0 };
       }
-      const cutoff = new Date(
-        Date.now() - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
-      );
+      const cutoff = new Date(Date.now() - ws.stalledThresholdDays * 24 * 60 * 60 * 1000);
       const now = new Date();
       const items = await fetchSlice(ctx.db, {
         workspaceId: ctx.workspaceId,
         where: {
+          AND: [accessWhere],
           updatedAt: { lt: cutoff },
           status: { category: "IN_PROGRESS" },
           OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: now } }],
@@ -444,28 +448,22 @@ export const dashboardRouter = router({
    * CARD_FIELDS). Capped small so the child + run pulls stay cheap.
    */
   myWork: workspaceProcedure
-    .input(
-      z
-        .object({ limit: z.number().int().min(1).max(12).default(6) })
-        .default({ limit: 6 }),
-    )
+    .input(z.object({ limit: z.number().int().min(1).max(12).default(6) }).default({ limit: 6 }))
     .query(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
       const limit = input.limit;
+      const accessWhere = issueWhereForViewer(ctx);
 
       const [focusRows, resumeRows] = await Promise.all([
         ctx.db.issue.findMany({
           where: {
+            AND: [accessWhere],
             workspaceId: ctx.workspaceId,
             deletedAt: null,
             assignees: { some: { userId } },
             status: { category: { notIn: ["DONE", "CANCELED"] } },
           },
-          orderBy: [
-            { priority: "desc" },
-            { dueDate: "asc" },
-            { updatedAt: "desc" },
-          ],
+          orderBy: [{ priority: "desc" }, { dueDate: "asc" }, { updatedAt: "desc" }],
           take: limit,
           select: CARD_FIELDS,
         }),
@@ -473,14 +471,13 @@ export const dashboardRouter = router({
           workspaceId: ctx.workspaceId,
           userId,
           take: limit * 2,
+          accessWhere,
         }),
       ]);
 
       const focus = focusRows.map(shapeCard);
       const focusIds = new Set(focus.map((f) => f.id));
-      const resume = resumeRows
-        .filter((r) => !focusIds.has(r.id))
-        .slice(0, limit);
+      const resume = resumeRows.filter((r) => !focusIds.has(r.id)).slice(0, limit);
 
       return { focus, resume };
     }),
@@ -503,6 +500,7 @@ export const dashboardRouter = router({
    * Empty array when no agents exist (the client hides the tile).
    */
   agentActivity: workspaceProcedure.query(async ({ ctx }) => {
+    const accessWhere = issueWhereForViewer(ctx);
     const agents = await ctx.db.agent.findMany({
       where: { workspaceId: ctx.workspaceId, archivedAt: null },
       orderBy: { name: "asc" },
@@ -541,6 +539,7 @@ export const dashboardRouter = router({
     // can switch to GROUP BY).
     const activeRuns = await ctx.db.agentRun.findMany({
       where: {
+        issue: accessWhere,
         workspaceId: ctx.workspaceId,
         agentId: { in: agentIds },
         status: AgentRunStatus.ACTIVE,
@@ -552,10 +551,7 @@ export const dashboardRouter = router({
     for (const r of activeRuns) {
       loadByAgent.set(r.agentId, (loadByAgent.get(r.agentId) ?? 0) + 1);
       if (r.lastEventAt < runCutoff) {
-        stalledRunsByAgent.set(
-          r.agentId,
-          (stalledRunsByAgent.get(r.agentId) ?? 0) + 1,
-        );
+        stalledRunsByAgent.set(r.agentId, (stalledRunsByAgent.get(r.agentId) ?? 0) + 1);
       }
     }
 
@@ -563,22 +559,18 @@ export const dashboardRouter = router({
     // workspace setting is enabled.
     const stalledIssuesByAgent = new Map<string, number>();
     if (ws.stalledThresholdDays > 0) {
-      const issueCutoff = new Date(
-        now - ws.stalledThresholdDays * 24 * 60 * 60 * 1000,
-      );
+      const issueCutoff = new Date(now - ws.stalledThresholdDays * 24 * 60 * 60 * 1000);
       const snoozeNow = new Date();
       const stalledIssues = await ctx.db.issue.groupBy({
         by: ["assignedAgentId"],
         where: {
+          AND: [accessWhere],
           workspaceId: ctx.workspaceId,
           deletedAt: null,
           assignedAgentId: { in: agentIds },
           updatedAt: { lt: issueCutoff },
           status: { category: { in: ["IN_PROGRESS", "IN_REVIEW"] } },
-          OR: [
-            { snoozedUntil: null },
-            { snoozedUntil: { lte: snoozeNow } },
-          ],
+          OR: [{ snoozedUntil: null }, { snoozedUntil: { lte: snoozeNow } }],
         },
         _count: { _all: true },
       });
@@ -606,8 +598,7 @@ export const dashboardRouter = router({
 
     rows.sort((a, b) => {
       if (a.stalledRuns !== b.stalledRuns) return b.stalledRuns - a.stalledRuns;
-      if (a.stalledIssues !== b.stalledIssues)
-        return b.stalledIssues - a.stalledIssues;
+      if (a.stalledIssues !== b.stalledIssues) return b.stalledIssues - a.stalledIssues;
       if (a.load !== b.load) return b.load - a.load;
       return a.name.localeCompare(b.name);
     });
@@ -644,9 +635,11 @@ async function fetchSlice(
 function resumeIssueWhere(args: {
   workspaceId: string;
   userId: string;
+  accessWhere: Prisma.IssueWhereInput;
 }): Prisma.IssueWhereInput {
   return {
     workspaceId: args.workspaceId,
+    AND: [args.accessWhere],
     deletedAt: null,
     status: { category: { notIn: ["DONE", "CANCELED"] } },
     OR: [
@@ -659,7 +652,12 @@ function resumeIssueWhere(args: {
 
 async function fetchResumeCards(
   db: DB,
-  args: { workspaceId: string; userId: string; take: number },
+  args: {
+    workspaceId: string;
+    userId: string;
+    take: number;
+    accessWhere: Prisma.IssueWhereInput;
+  },
 ): Promise<ShapedCard[]> {
   if (args.take === 0) return [];
 
@@ -715,19 +713,25 @@ async function fetchResumeCards(
  */
 async function myProjectIdSet(
   db: DB,
-  args: { workspaceId: string; userId: string },
+  args: { workspaceId: string; userId: string; accessWhere: Prisma.IssueWhereInput },
 ): Promise<Set<string>> {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const [assigned, authored] = await Promise.all([
     db.issueAssignee.findMany({
       where: {
         userId: args.userId,
-        issue: { workspaceId: args.workspaceId, deletedAt: null, projectId: { not: null } },
+        issue: {
+          workspaceId: args.workspaceId,
+          deletedAt: null,
+          projectId: { not: null },
+          AND: [args.accessWhere],
+        },
       },
       select: { issue: { select: { projectId: true } } },
     }),
     db.issue.findMany({
       where: {
+        AND: [args.accessWhere],
         workspaceId: args.workspaceId,
         authorId: args.userId,
         createdAt: { gte: since },

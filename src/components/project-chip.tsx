@@ -1,6 +1,6 @@
 "use client";
 import Link from "next/link";
-import { Folder } from "lucide-react";
+import { Folder, LockKeyhole } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { EntityHoverPreview } from "@/components/entity-hover-preview";
@@ -23,6 +23,7 @@ export type ProjectChipData = {
   name: string;
   color?: string | null;
   icon?: string | null;
+  visibility?: "WORKSPACE" | "RESTRICTED";
 };
 
 export function ProjectChip({
@@ -37,9 +38,7 @@ export function ProjectChip({
 }) {
   const ws = useMaybeWorkspace();
   const resolvedSlug = slug ?? ws?.slug;
-  const href = resolvedSlug
-    ? `/w/${resolvedSlug}/projects/${project.id}`
-    : null;
+  const href = resolvedSlug ? `/w/${resolvedSlug}/projects/${project.id}` : null;
 
   const dot = (
     <span
@@ -60,15 +59,17 @@ export function ProjectChip({
       ) : (
         <Folder className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
       )}
-      <span className="text-id shrink-0 font-mono text-foreground/90">
-        {project.key}
-      </span>
+      <span className="text-id shrink-0 font-mono text-foreground/90">{project.key}</span>
       <span aria-hidden className="text-muted-foreground/40">
         ·
       </span>
-      <span className="min-w-0 truncate text-xs text-muted-foreground">
-        {project.name}
-      </span>
+      <span className="min-w-0 truncate text-xs text-muted-foreground">{project.name}</span>
+      {project.visibility === "RESTRICTED" && (
+        <span className="inline-flex shrink-0 items-center text-muted-foreground">
+          <LockKeyhole className="h-3 w-3" aria-hidden />
+          <span className="sr-only">Restricted project</span>
+        </span>
+      )}
     </>
   );
 

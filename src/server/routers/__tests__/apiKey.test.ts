@@ -300,3 +300,69 @@ describe("apiKey (access) router — narrowing", () => {
     expect(directDenied.items).toEqual([]);
   });
 });
+
+describe("apiKey (access) router — ownership and metadata", () => {
+  it("lets members manage only their own PERSONAL and SESSION keys", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "KAC" });
+    fixtures.push(fixture);
+    const owner = accessRouter.createCaller(await buildContext(fixture));
+    const member = accessRouter.createCaller(
+      await buildContext(fixture, { asUserId: fixture.secondUser.id }),
+    );
+
+    const ownerKey = await owner.createPersonal({
+      name: "owner personal",
+      scopes: ["READ_ISSUES"],
+    });
+    const memberKey = await member.createSession({
+      name: "member session",
+      scopes: ["READ_ISSUES"],
+      ttlHours: 2,
+    });
+
+    expect((await member.list()).map((key) => key.id)).toEqual([memberKey.id]);
+    await expect(member.revoke({ id: ownerKey.id })).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    const rotated = await member.rotate({ id: memberKey.id });
+    expect(rotated.id).not.toBe(memberKey.id);
+    expect(rotated.kind).toBe("SESSION");
+    expect((await owner.list()).map((key) => key.id)).toEqual(
+      expect.arrayContaining([ownerKey.id, memberKey.id, rotated.id]),
+    );
+  });
+
+  it("does not let a non-admin mint an ADMIN-scoped user key", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "KAD" });
+    fixtures.push(fixture);
+    const member = accessRouter.createCaller(
+      await buildContext(fixture, { asUserId: fixture.secondUser.id }),
+    );
+
+    await expect(
+      member.createPersonal({ name: "escalation", scopes: ["READ_ISSUES", "ADMIN"] }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+
+  it("records secret-free audit metadata for key lifecycle changes", async () => {
+    const { access, fixture } = await setup();
+    const key = await access.createPersonal({ name: "audited", scopes: ["READ_ISSUES"] });
+    await access.update({ id: key.id, name: "audited renamed" });
+    await access.revoke({ id: key.id });
+
+    const rows = await getPrisma().auditLog.findMany({
+      where: { workspaceId: fixture.workspace.id, entity: "ApiKey", entityId: key.id },
+      orderBy: { createdAt: "asc" },
+      select: { action: true, before: true, after: true },
+    });
+    expect(rows.map((row) => row.action)).toEqual(["create", "update", "revoke"]);
+    expect(JSON.stringify(rows)).not.toContain("hashedKey");
+    expect(JSON.stringify(rows)).not.toContain("rawKey");
+  });
+
+  it("requires AGENT keys to retain a linked agent identity", async () => {
+    const { access } = await setup();
+    await expect(
+      access.create({ name: "unlinked", kind: "AGENT", scopes: ["READ_ISSUES"] }),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+  });
+});

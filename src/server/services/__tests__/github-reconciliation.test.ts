@@ -10,6 +10,7 @@ import {
   claimGitHubReconciliationCandidate,
   sweepGitHubStatusReconciliation,
 } from "@/server/services/github/reconciliation";
+import { ensureMappingAuthorization } from "@/server/services/github/linkability";
 import {
   createIssue,
   createWorkspaceFixture,
@@ -63,6 +64,12 @@ async function setupResource() {
       kind: "repo",
       target: "acme/forge",
     },
+  });
+  await ensureMappingAuthorization({
+    db: prisma,
+    workspaceId: fixture.workspace.id,
+    mappingId: mapping.id,
+    userId: fixture.user.id,
   });
   const resource = await prisma.externalResource.create({
     data: {
@@ -645,7 +652,7 @@ describe("GitHub status reconciliation", () => {
   });
 
   it("stops starting resources after the workspace sweep budget is exhausted", async () => {
-    const { fixture, prisma, resource } = await setupResource();
+    const { fixture, prisma, resource, mapping } = await setupResource();
     const issue = await createIssue(fixture, { statusCategory: "IN_PROGRESS" });
     const second = await prisma.externalResource.create({
       data: {
@@ -657,6 +664,7 @@ describe("GitHub status reconciliation", () => {
         url: "https://github.com/acme/forge/pull/43",
         title: "Second PR",
         state: "open",
+        connectionMappingId: mapping.id,
         lastSyncedAt: new Date("2026-07-14T10:00:00.000Z"),
       },
     });

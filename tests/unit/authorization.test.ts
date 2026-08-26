@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  assertProjectAction,
   assertWorkspaceAction,
+  buildProjectAccessWhere,
   canPerformIntegrationAction,
   canPerformProjectAction,
   canPerformWorkspaceAction,
 } from "@/server/services/authorization";
+import { ProjectAccessRole, ProjectVisibility } from "@prisma/client";
 
 describe("workspace authorization", () => {
   it("allows every member role to read the workspace", () => {
@@ -92,6 +95,59 @@ describe("project authorization policy", () => {
         action: "MANAGE",
       }),
     ).toBe(true);
+  });
+
+  it("builds the same tenant-scoped predicate used by project lists", () => {
+    expect(
+      buildProjectAccessWhere({
+        workspaceId: "workspace-1",
+        membershipId: "membership-1",
+        membershipRole: "MEMBER",
+        action: "READ",
+      }),
+    ).toEqual({
+      workspaceId: "workspace-1",
+      OR: [
+        { visibility: ProjectVisibility.WORKSPACE },
+        {
+          accessGrants: {
+            some: {
+              membershipId: "membership-1",
+              role: {
+                in: [
+                  ProjectAccessRole.VIEWER,
+                  ProjectAccessRole.CONTRIBUTOR,
+                  ProjectAccessRole.MANAGER,
+                ],
+              },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  it("hides a restricted project from a reader without a grant", async () => {
+    const db = {
+      project: {
+        findFirst: async () => ({
+          id: "project-1",
+          workspaceId: "workspace-1",
+          visibility: ProjectVisibility.RESTRICTED,
+          accessGrants: [],
+        }),
+      },
+    } as unknown as Parameters<typeof assertProjectAction>[0];
+
+    await expect(
+      assertProjectAction(db, {
+        workspaceId: "workspace-1",
+        membershipId: "membership-1",
+        membershipRole: "MEMBER",
+        projectId: "project-1",
+        action: "READ",
+      }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });
 

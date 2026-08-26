@@ -1,6 +1,7 @@
 import "server-only";
 import type { ArtifactRole, Prisma, PrismaClient, Role } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
+import { buildProjectAccessWhere } from "@/server/services/authorization";
 
 const ROLE_RANK: Record<ArtifactRole, number> = {
   VIEWER: 1,
@@ -16,17 +17,46 @@ export function isWorkspaceAdmin(role: Role): boolean {
 export function artifactReadWhere(params: {
   workspaceId: string;
   userId: string;
+  membershipId: string;
   membershipRole: Role;
 }): Prisma.ArtifactWhereInput {
+  const projectAccess = buildProjectAccessWhere({
+    workspaceId: params.workspaceId,
+    membershipId: params.membershipId,
+    membershipRole: params.membershipRole,
+    action: "READ",
+  });
+  const underlyingAccess: Prisma.ArtifactWhereInput = {
+    AND: [
+      { OR: [{ projectId: null }, { project: { is: projectAccess } }] },
+      {
+        OR: [
+          { issueId: null },
+          {
+            issue: {
+              is: {
+                OR: [{ projectId: null }, { project: { is: projectAccess } }],
+              },
+            },
+          },
+        ],
+      },
+    ],
+  };
   if (isWorkspaceAdmin(params.membershipRole)) {
-    return { workspaceId: params.workspaceId };
+    return { workspaceId: params.workspaceId, ...underlyingAccess };
   }
   return {
     workspaceId: params.workspaceId,
-    OR: [
-      { visibility: "WORKSPACE" },
-      { createdById: params.userId },
-      { grants: { some: { userId: params.userId } } },
+    AND: [
+      underlyingAccess,
+      {
+        OR: [
+          { visibility: "WORKSPACE" },
+          { createdById: params.userId },
+          { grants: { some: { userId: params.userId } } },
+        ],
+      },
     ],
   };
 }
@@ -109,12 +139,16 @@ export async function assertArtifactRole(
     artifactId: string;
     workspaceId: string;
     userId: string;
+    membershipId: string;
     membershipRole: Role;
     minimum: ArtifactRole;
   },
 ) {
   const artifact = await db.artifact.findFirst({
-    where: { id: params.artifactId, workspaceId: params.workspaceId },
+    where: {
+      id: params.artifactId,
+      ...artifactReadWhere(params),
+    },
     select: {
       id: true,
       visibility: true,

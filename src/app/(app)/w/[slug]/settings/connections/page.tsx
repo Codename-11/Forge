@@ -26,6 +26,7 @@ import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { GitHubReconciliationPolicy } from "@/components/settings/github-reconciliation-policy";
+import { IntegrationAccessPanel } from "@/components/settings/integration-access-panel";
 import { Section } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 
@@ -56,10 +57,7 @@ const DIRECTION_OPTIONS: { value: Direction; label: string }[] = [
   { value: "outbound", label: "Outbound only" },
 ];
 
-const PROVIDER_META: Record<
-  ConnectionProvider,
-  { label: string; glyph: string; color: string }
-> = {
+const PROVIDER_META: Record<ConnectionProvider, { label: string; glyph: string; color: string }> = {
   GITHUB: { label: "GitHub", glyph: "GH", color: "#24292f" },
   SLACK: { label: "Slack", glyph: "S", color: "#4A154B" },
   GOOGLE: { label: "Google", glyph: "G", color: "#4285F4" },
@@ -192,10 +190,7 @@ function githubConfigForSave(config: GitHubMappingUiConfig): Record<string, unkn
       assignedAgentId: config.assignedAgentId || null,
       claimedById: config.claimedById || null,
       statusRules: Object.fromEntries(
-        GITHUB_STATUS_RULES.map((rule) => [
-          rule.key,
-          config.statusRules[rule.key] || null,
-        ]),
+        GITHUB_STATUS_RULES.map((rule) => [rule.key, config.statusRules[rule.key] || null]),
       ),
     },
   };
@@ -207,20 +202,15 @@ export default function ConnectionsMappingPage() {
   const utils = trpc.useUtils();
   const isAdmin = ws.role === "OWNER" || ws.role === "ADMIN";
 
-  const { data: connections, isLoading: connectionsLoading } =
-    trpc.connection.list.useQuery();
-  const { data: mappings, isLoading: mappingsLoading } =
-    trpc.connectionMapping.list.useQuery();
+  const { data: connections, isLoading: connectionsLoading } = trpc.connection.list.useQuery();
+  const { data: mappings, isLoading: mappingsLoading } = trpc.connectionMapping.list.useQuery();
   const { data: labels } = trpc.label.list.useQuery();
   const { data: statuses } = trpc.status.list.useQuery();
   const { data: projects } = trpc.project.list.useQuery({ archived: false, limit: 100 });
   const { data: agents } = trpc.agent.list.useQuery({ includeArchived: false });
 
   // Quick lookup so mapping rows can render chosen labels by id.
-  const labelById = useMemo(
-    () => new Map((labels ?? []).map((l) => [l.id, l])),
-    [labels],
-  );
+  const labelById = useMemo(() => new Map((labels ?? []).map((l) => [l.id, l])), [labels]);
 
   const [editing, setEditing] = useState<EditingState | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<{
@@ -320,10 +310,7 @@ export default function ConnectionsMappingPage() {
 
   // Connected identities not yet mapped into this workspace.
   const availableIdentities = useMemo(
-    () =>
-      (connections ?? []).filter(
-        (c) => c.status === "CONNECTED" && !byConnection.has(c.id),
-      ),
+    () => (connections ?? []).filter((c) => c.status === "CONNECTED" && !byConnection.has(c.id)),
     [connections, byConnection],
   );
 
@@ -431,16 +418,14 @@ export default function ConnectionsMappingPage() {
                 Identities live at your account. Workspaces decide what they map to.
               </span>
             </div>
-            <p className="mt-1 text-meta text-muted-foreground">
+            <p className="text-meta mt-1 text-muted-foreground">
               The same GitHub identity might post to{" "}
               <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">
                 forge-platform/forge
               </code>{" "}
               in this workspace and{" "}
-              <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">
-                bailey/axiom
-              </code>{" "}
-              in another — same token, different mapping.
+              <code className="rounded bg-subtle px-1 py-0.5 text-[10.5px]">bailey/axiom</code> in
+              another — same token, different mapping.
             </p>
           </div>
 
@@ -483,9 +468,7 @@ export default function ConnectionsMappingPage() {
                   queue: readGitHubConfig(row.config).queueOnCreate,
                 })
               }
-              onDelete={(row) =>
-                setDeleteTarget({ id: row.id, target: row.target })
-              }
+              onDelete={(row) => setDeleteTarget({ id: row.id, target: row.target })}
               onTogglePause={(row) =>
                 update.mutate({
                   id: row.id,
@@ -496,22 +479,19 @@ export default function ConnectionsMappingPage() {
             />
           ))}
 
-          {!mappingsLoading &&
-            hasAnyConnection &&
-            mappedConnections.length === 0 && (
-              <EmptyState
-                as="div"
-                icon={GitBranch}
-                title="No mappings yet"
-                hint="Map one of your connected identities to a repo, channel, or webhook in this workspace using the section below."
-              />
-            )}
+          {!mappingsLoading && hasAnyConnection && mappedConnections.length === 0 && (
+            <EmptyState
+              as="div"
+              icon={GitBranch}
+              title="No mappings yet"
+              hint="Map one of your connected identities to a repo, channel, or webhook in this workspace using the section below."
+            />
+          )}
+
+          <IntegrationAccessPanel isAdmin={isAdmin} />
 
           {/* Available identities */}
-          <Section
-            title="Available identities"
-            hint="Connected globally but not mapped here yet."
-          >
+          <Section title="Available identities" hint="Connected globally but not mapped here yet.">
             <Card as="div">
               {availableIdentities.map((c) => {
                 const meta = PROVIDER_META[c.provider];
@@ -522,11 +502,9 @@ export default function ConnectionsMappingPage() {
                   >
                     <ProviderGlyph provider={c.provider} />
                     <div className="min-w-0 flex-1">
-                      <span className="text-[0.8125rem] font-semibold">
-                        {meta.label}
-                      </span>
+                      <span className="text-[0.8125rem] font-semibold">{meta.label}</span>
                       {c.account && (
-                        <span className="ml-2 font-mono text-meta text-muted-foreground">
+                        <span className="text-meta ml-2 font-mono text-muted-foreground">
                           {c.account}
                         </span>
                       )}
@@ -544,20 +522,18 @@ export default function ConnectionsMappingPage() {
                   </div>
                 );
               })}
-              {!connectionsLoading &&
-                hasAnyConnection &&
-                availableIdentities.length === 0 && (
-                  <div className="p-6 text-center text-meta text-muted-foreground">
-                    All connected identities are mapped here. Add a new one from{" "}
-                    <Link
-                      href="/settings/connections"
-                      className="underline decoration-dotted underline-offset-2 hover:text-foreground"
-                    >
-                      your global connections
-                    </Link>
-                    .
-                  </div>
-                )}
+              {!connectionsLoading && hasAnyConnection && availableIdentities.length === 0 && (
+                <div className="text-meta p-6 text-center text-muted-foreground">
+                  All connected identities are mapped here. Add a new one from{" "}
+                  <Link
+                    href="/settings/connections"
+                    className="underline decoration-dotted underline-offset-2 hover:text-foreground"
+                  >
+                    your global connections
+                  </Link>
+                  .
+                </div>
+              )}
             </Card>
           </Section>
         </div>
@@ -604,9 +580,7 @@ export default function ConnectionsMappingPage() {
                 <select
                   value={editing.kind}
                   disabled={!!editing.id}
-                  onChange={(e) =>
-                    setEditing({ ...editing, kind: e.target.value as MappingKind })
-                  }
+                  onChange={(e) => setEditing({ ...editing, kind: e.target.value as MappingKind })}
                   className="focus-ring h-8 w-full rounded-md border border-input bg-background px-2 text-sm disabled:opacity-60"
                 >
                   {KIND_OPTIONS.map((k) => (
@@ -635,11 +609,7 @@ export default function ConnectionsMappingPage() {
                 </select>
               </QuickForm.Field>
             </div>
-            <QuickForm.Field
-              label="Target"
-              required
-              hint={targetHint(editing.kind)}
-            >
+            <QuickForm.Field label="Target" required hint={targetHint(editing.kind)}>
               {isGitHubRepoEditing && (installationRepos?.length ?? 0) > 0 ? (
                 <select
                   value={editing.target}
@@ -658,9 +628,7 @@ export default function ConnectionsMappingPage() {
               ) : (
                 <Input
                   value={editing.target}
-                  onChange={(e) =>
-                    setEditing({ ...editing, target: e.target.value })
-                  }
+                  onChange={(e) => setEditing({ ...editing, target: e.target.value })}
                   maxLength={400}
                   placeholder={targetPlaceholder(editing.kind)}
                   className="font-mono"
@@ -679,9 +647,7 @@ export default function ConnectionsMappingPage() {
             >
               <Input
                 value={editing.routeTo}
-                onChange={(e) =>
-                  setEditing({ ...editing, routeTo: e.target.value })
-                }
+                onChange={(e) => setEditing({ ...editing, routeTo: e.target.value })}
                 maxLength={200}
                 placeholder="Dispatch matrix"
               />
@@ -711,7 +677,7 @@ export default function ConnectionsMappingPage() {
                           })
                         }
                         className={
-                          "inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-meta transition-colors " +
+                          "text-meta inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 transition-colors " +
                           (selected
                             ? "border-ember/40 bg-ember/10 text-foreground"
                             : "border-dashed border-border bg-background text-muted-foreground")
@@ -746,7 +712,9 @@ export default function ConnectionsMappingPage() {
         open={!!importing}
         onOpenChange={(v) => !v && setImporting(null)}
         title="Import GitHub issue"
-        description={importing ? `Create or open the Forge issue sourced from ${importing.repo}.` : ""}
+        description={
+          importing ? `Create or open the Forge issue sourced from ${importing.repo}.` : ""
+        }
         primaryLabel="Import"
         loading={importIssue.isPending}
         onSubmit={async () => {
@@ -839,8 +807,7 @@ function GitHubMappingFields({
   agents: AgentRow[];
   onChange: (config: GitHubMappingUiConfig) => void;
 }) {
-  const set = (patch: Partial<GitHubMappingUiConfig>) =>
-    onChange({ ...config, ...patch });
+  const set = (patch: Partial<GitHubMappingUiConfig>) => onChange({ ...config, ...patch });
   const setRule = (key: GitHubStatusRuleKey, value: string) =>
     onChange({
       ...config,
@@ -943,9 +910,7 @@ function GitHubMappingFields({
               key={rule.key}
               className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)] items-center gap-2"
             >
-              <span className="text-[0.8125rem] text-muted-foreground">
-                {rule.label}
-              </span>
+              <span className="text-[0.8125rem] text-muted-foreground">{rule.label}</span>
               <select
                 value={config.statusRules[rule.key]}
                 onChange={(e) => setRule(rule.key, e.target.value)}
@@ -1051,7 +1016,7 @@ function ConnectionMappingSection({
         </div>
 
         {/* Column header */}
-        <div className="hidden grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] items-center gap-3 border-b border-border bg-subtle/40 px-4 py-2 text-meta text-muted-foreground md:grid">
+        <div className="text-meta hidden grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] items-center gap-3 border-b border-border bg-subtle/40 px-4 py-2 text-muted-foreground md:grid">
           <span>{conn.provider === "SLACK" ? "Channel" : "Target"}</span>
           <span>Routes to</span>
           <span>Direction</span>
@@ -1063,154 +1028,152 @@ function ConnectionMappingSection({
           const githubChips =
             conn.provider === "GITHUB" && m.kind === "repo" ? githubPolicyChips(m) : [];
           return (
-          <div
-            key={m.id}
-            className="grid grid-cols-[minmax(0,1fr)_28px] items-start gap-x-3 gap-y-2 border-b border-border/60 px-4 py-3 last:border-b-0 md:grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] md:items-center"
-          >
-            <span className="flex min-w-0 flex-col gap-1">
-              <span className="flex items-center gap-2">
-                <KindIcon kind={m.kind as MappingKind} />
-                <span className="truncate font-mono text-[0.8125rem]">{m.target}</span>
-              </span>
-              {m.labelIds.length > 0 && (
-                <span className="flex flex-wrap items-center gap-1">
-                  {m.labelIds.map((id) => {
-                    const l = labelById.get(id);
-                    return (
-                      <span
-                        key={id}
-                        className="inline-flex items-center gap-1 rounded border border-border/60 bg-background px-1 py-0.5 text-[10px] text-muted-foreground"
-                      >
+            <div
+              key={m.id}
+              className="grid grid-cols-[minmax(0,1fr)_28px] items-start gap-x-3 gap-y-2 border-b border-border/60 px-4 py-3 last:border-b-0 md:grid-cols-[1.4fr_0.8fr_0.7fr_0.4fr_28px] md:items-center"
+            >
+              <span className="flex min-w-0 flex-col gap-1">
+                <span className="flex items-center gap-2">
+                  <KindIcon kind={m.kind as MappingKind} />
+                  <span className="truncate font-mono text-[0.8125rem]">{m.target}</span>
+                </span>
+                {m.labelIds.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-1">
+                    {m.labelIds.map((id) => {
+                      const l = labelById.get(id);
+                      return (
                         <span
-                          aria-hidden
-                          className="inline-block h-1.5 w-1.5 rounded-full"
-                          style={{ background: l?.color ?? "var(--admin-border)" }}
-                        />
-                        {l?.name ?? id.slice(0, 6)}
+                          key={id}
+                          className="inline-flex items-center gap-1 rounded border border-border/60 bg-background px-1 py-0.5 text-[10px] text-muted-foreground"
+                        >
+                          <span
+                            aria-hidden
+                            className="inline-block h-1.5 w-1.5 rounded-full"
+                            style={{ background: l?.color ?? "var(--admin-border)" }}
+                          />
+                          {l?.name ?? id.slice(0, 6)}
+                        </span>
+                      );
+                    })}
+                  </span>
+                )}
+                {githubChips.length > 0 && (
+                  <span className="flex flex-wrap items-center gap-1">
+                    {githubChips.map((chip) => (
+                      <span
+                        key={chip}
+                        className="inline-flex items-center rounded border border-border/60 bg-card/40 px-1 py-0.5 text-[10px] text-muted-foreground"
+                      >
+                        {chip}
                       </span>
-                    );
-                  })}
-                </span>
-              )}
-              {githubChips.length > 0 && (
-                <span className="flex flex-wrap items-center gap-1">
-                  {githubChips.map((chip) => (
-                    <span
-                      key={chip}
-                      className="inline-flex items-center rounded border border-border/60 bg-card/40 px-1 py-0.5 text-[10px] text-muted-foreground"
-                    >
-                      {chip}
-                    </span>
-                  ))}
-                </span>
-              )}
-            </span>
-            <span className="col-span-2 flex items-center justify-between gap-3 text-[0.8125rem] text-muted-foreground md:col-auto md:block md:truncate">
-              <span className="text-meta text-muted-foreground/70 md:hidden">
-                Routes to
+                    ))}
+                  </span>
+                )}
               </span>
-              <span className="min-w-0 truncate">{m.routeTo || "—"}</span>
-            </span>
-            <span className="col-span-2 flex items-center justify-between gap-3 text-meta text-muted-foreground md:col-auto md:block">
-              <span className="text-muted-foreground/70 md:hidden">Direction</span>
-              <span>{directionLabel(m.direction as Direction)}</span>
-            </span>
-            <span className="col-span-2 flex items-center justify-between gap-3 text-right md:col-auto md:block">
-              <span className="text-meta text-muted-foreground/70 md:hidden">Status</span>
-              <span
-                className={
-                  "inline-flex items-center gap-1 text-meta " +
-                  (m.status === "active" ? "text-success" : "text-muted-foreground")
-                }
-              >
+              <span className="col-span-2 flex items-center justify-between gap-3 text-[0.8125rem] text-muted-foreground md:col-auto md:block md:truncate">
+                <span className="text-meta text-muted-foreground/70 md:hidden">Routes to</span>
+                <span className="min-w-0 truncate">{m.routeTo || "—"}</span>
+              </span>
+              <span className="text-meta col-span-2 flex items-center justify-between gap-3 text-muted-foreground md:col-auto md:block">
+                <span className="text-muted-foreground/70 md:hidden">Direction</span>
+                <span>{directionLabel(m.direction as Direction)}</span>
+              </span>
+              <span className="col-span-2 flex items-center justify-between gap-3 text-right md:col-auto md:block">
+                <span className="text-meta text-muted-foreground/70 md:hidden">Status</span>
                 <span
-                  aria-hidden
                   className={
-                    "inline-block h-1.5 w-1.5 rounded-full " +
-                    (m.status === "active" ? "bg-success" : "bg-muted-foreground/60")
+                    "text-meta inline-flex items-center gap-1 " +
+                    (m.status === "active" ? "text-success" : "text-muted-foreground")
                   }
-                />
-                {m.status}
-              </span>
-            </span>
-            <div className="relative col-start-2 row-start-1 flex justify-end md:col-auto md:row-auto">
-              <button
-                type="button"
-                aria-label="Mapping actions"
-                disabled={!isAdmin}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setOpenMenuId(openMenuId === m.id ? null : m.id);
-                }}
-                className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-40"
-              >
-                <MoreHorizontal className="h-3.5 w-3.5" />
-              </button>
-              {openMenuId === m.id && (
-                <div
-                  role="menu"
-                  className="absolute right-0 top-7 z-10 w-40 overflow-hidden rounded-md border border-border bg-card py-1 shadow-md"
-                  onMouseLeave={() => setOpenMenuId(null)}
                 >
-                  {conn.provider === "GITHUB" && m.kind === "repo" && (
+                  <span
+                    aria-hidden
+                    className={
+                      "inline-block h-1.5 w-1.5 rounded-full " +
+                      (m.status === "active" ? "bg-success" : "bg-muted-foreground/60")
+                    }
+                  />
+                  {m.status}
+                </span>
+              </span>
+              <div className="relative col-start-2 row-start-1 flex justify-end md:col-auto md:row-auto">
+                <button
+                  type="button"
+                  aria-label="Mapping actions"
+                  disabled={!isAdmin}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenMenuId(openMenuId === m.id ? null : m.id);
+                  }}
+                  className="focus-ring inline-flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground hover:bg-subtle hover:text-foreground disabled:opacity-40"
+                >
+                  <MoreHorizontal className="h-3.5 w-3.5" />
+                </button>
+                {openMenuId === m.id && (
+                  <div
+                    role="menu"
+                    className="absolute right-0 top-7 z-10 w-40 overflow-hidden rounded-md border border-border bg-card py-1 shadow-md"
+                    onMouseLeave={() => setOpenMenuId(null)}
+                  >
+                    {conn.provider === "GITHUB" && m.kind === "repo" && (
+                      <button
+                        role="menuitem"
+                        type="button"
+                        onClick={() => {
+                          setOpenMenuId(null);
+                          onImport(m);
+                        }}
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-subtle"
+                      >
+                        Import issue
+                      </button>
+                    )}
                     <button
                       role="menuitem"
                       type="button"
                       onClick={() => {
                         setOpenMenuId(null);
-                        onImport(m);
+                        onEdit(m);
                       }}
                       className="flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-subtle"
                     >
-                      Import issue
+                      Edit
                     </button>
-                  )}
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setOpenMenuId(null);
-                      onEdit(m);
-                    }}
-                    className="flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-subtle"
-                  >
-                    Edit
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    disabled={saving}
-                    onClick={() => {
-                      setOpenMenuId(null);
-                      onTogglePause(m);
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-subtle"
-                  >
-                    {m.status === "active" ? (
-                      <>
-                        <Pause className="h-3 w-3" /> Pause
-                      </>
-                    ) : (
-                      <>
-                        <Play className="h-3 w-3" /> Resume
-                      </>
-                    )}
-                  </button>
-                  <button
-                    role="menuitem"
-                    type="button"
-                    onClick={() => {
-                      setOpenMenuId(null);
-                      onDelete(m);
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-danger hover:bg-subtle"
-                  >
-                    <Trash2 className="h-3 w-3" /> Remove
-                  </button>
-                </div>
-              )}
+                    <button
+                      role="menuitem"
+                      type="button"
+                      disabled={saving}
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        onTogglePause(m);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-subtle"
+                    >
+                      {m.status === "active" ? (
+                        <>
+                          <Pause className="h-3 w-3" /> Pause
+                        </>
+                      ) : (
+                        <>
+                          <Play className="h-3 w-3" /> Resume
+                        </>
+                      )}
+                    </button>
+                    <button
+                      role="menuitem"
+                      type="button"
+                      onClick={() => {
+                        setOpenMenuId(null);
+                        onDelete(m);
+                      }}
+                      className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-danger hover:bg-subtle"
+                    >
+                      <Trash2 className="h-3 w-3" /> Remove
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
           );
         })}
 
@@ -1251,7 +1214,7 @@ function KindIcon({ kind }: { kind: MappingKind }) {
 function StatusChip({ status }: { status: ConnectionRow["status"] }) {
   if (status === "CONNECTED") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-success/10 px-1.5 py-0.5 text-meta text-success">
+      <span className="text-meta inline-flex items-center gap-1 rounded-md bg-success/10 px-1.5 py-0.5 text-success">
         <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-success" />
         connected
       </span>
@@ -1259,14 +1222,14 @@ function StatusChip({ status }: { status: ConnectionRow["status"] }) {
   }
   if (status === "DEGRADED") {
     return (
-      <span className="inline-flex items-center gap-1 rounded-md bg-warning/10 px-1.5 py-0.5 text-meta text-warning">
+      <span className="text-meta inline-flex items-center gap-1 rounded-md bg-warning/10 px-1.5 py-0.5 text-warning">
         <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-warning" />
         degraded
       </span>
     );
   }
   return (
-    <span className="inline-flex items-center gap-1 rounded-md bg-subtle/40 px-1.5 py-0.5 text-meta text-muted-foreground">
+    <span className="text-meta inline-flex items-center gap-1 rounded-md bg-subtle/40 px-1.5 py-0.5 text-muted-foreground">
       <span aria-hidden className="inline-block h-1.5 w-1.5 rounded-full bg-muted-foreground/60" />
       disconnected
     </span>

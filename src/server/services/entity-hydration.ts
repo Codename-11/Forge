@@ -1,10 +1,16 @@
 import "server-only";
-import type { Prisma, PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient, Role } from "@prisma/client";
 import {
   type ForgeEntityRef,
   type ForgeEntityType,
   entityRefKey,
 } from "@/lib/entity-ref";
+import {
+  buildIssueAccessWhere,
+  buildExecutionPlanAccessWhere,
+  buildProjectAccessWhere,
+} from "@/server/services/authorization";
+import { artifactReadWhere } from "@/server/services/artifact-access";
 
 /**
  * Hydrated entity ref returned to clients/agents. Shape is intentionally
@@ -50,6 +56,10 @@ interface HydrationContext {
    * agent/MCP code paths where there is no human "viewer".
    */
   userId?: string | null;
+  /** Membership context enables restricted-project filtering. Omit only for
+   * trusted background jobs whose own caller authorization has already run. */
+  membershipId?: string | null;
+  membershipRole?: Role | null;
 }
 
 function workspaceUrl(slug: string | undefined, path: string): string | undefined {
@@ -126,8 +136,17 @@ async function hydrateOne(
   const { db, workspaceId, workspaceSlug } = ctx;
   switch (type) {
     case "issue": {
+      const accessWhere =
+        ctx.membershipId && ctx.membershipRole
+          ? buildIssueAccessWhere({
+              workspaceId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+              action: "READ",
+            })
+          : { workspaceId, deletedAt: null };
       const rows = await db.issue.findMany({
-        where: { workspaceId, id: { in: ids }, deletedAt: null },
+        where: { ...accessWhere, id: { in: ids } },
         select: {
           id: true,
           number: true,
@@ -157,8 +176,17 @@ async function hydrateOne(
       });
     }
     case "project": {
+      const accessWhere =
+        ctx.membershipId && ctx.membershipRole
+          ? buildProjectAccessWhere({
+              workspaceId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+              action: "READ",
+            })
+          : { workspaceId };
       const rows = await db.project.findMany({
-        where: { workspaceId, id: { in: ids }, deletedAt: null },
+        where: { ...accessWhere, id: { in: ids }, deletedAt: null },
         select: { id: true, name: true, key: true, archived: true },
       });
       return rows.map((row) => ({
@@ -301,8 +329,17 @@ async function hydrateOne(
       }));
     }
     case "agent-run": {
+      const issueAccess =
+        ctx.membershipId && ctx.membershipRole
+          ? buildIssueAccessWhere({
+              workspaceId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+              action: "READ",
+            })
+          : { workspaceId, deletedAt: null };
       const rows = await db.agentRun.findMany({
-        where: { workspaceId, id: { in: ids } },
+        where: { workspaceId, id: { in: ids }, issue: { is: issueAccess } },
         select: {
           id: true,
           status: true,
@@ -374,8 +411,22 @@ async function hydrateOne(
       }));
     }
     case "comment": {
+      const issueAccess =
+        ctx.membershipId && ctx.membershipRole
+          ? buildIssueAccessWhere({
+              workspaceId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+              action: "READ",
+            })
+          : { workspaceId, deletedAt: null };
       const rows = await db.comment.findMany({
-        where: { workspaceId, id: { in: ids }, deletedAt: null },
+        where: {
+          workspaceId,
+          id: { in: ids },
+          deletedAt: null,
+          OR: [{ issueId: null }, { issue: { is: issueAccess } }],
+        },
         select: {
           id: true,
           body: true,
@@ -406,8 +457,17 @@ async function hydrateOne(
       });
     }
     case "artifact": {
+      const accessWhere =
+        ctx.userId && ctx.membershipId && ctx.membershipRole
+          ? artifactReadWhere({
+              workspaceId,
+              userId: ctx.userId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+            })
+          : { workspaceId };
       const rows = await db.artifact.findMany({
-        where: { workspaceId, id: { in: ids }, archivedAt: null },
+        where: { ...accessWhere, id: { in: ids }, archivedAt: null },
         select: {
           id: true,
           title: true,
@@ -472,8 +532,17 @@ async function hydrateOne(
       }));
     }
     case "execution-plan": {
+      const accessWhere =
+        ctx.membershipId && ctx.membershipRole
+          ? buildExecutionPlanAccessWhere({
+              workspaceId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+              action: "READ",
+            })
+          : { workspaceId, archivedAt: null };
       const rows = await db.executionPlan.findMany({
-        where: { workspaceId, id: { in: ids }, archivedAt: null },
+        where: { ...accessWhere, id: { in: ids } },
         select: {
           id: true,
           title: true,
@@ -505,8 +574,17 @@ async function hydrateOne(
       });
     }
     case "execution-step": {
+      const planAccess =
+        ctx.membershipId && ctx.membershipRole
+          ? buildExecutionPlanAccessWhere({
+              workspaceId,
+              membershipId: ctx.membershipId,
+              membershipRole: ctx.membershipRole,
+              action: "READ",
+            })
+          : { workspaceId, archivedAt: null };
       const rows = await db.executionStep.findMany({
-        where: { workspaceId, id: { in: ids } },
+        where: { workspaceId, id: { in: ids }, plan: { is: planAccess } },
         select: {
           id: true,
           title: true,

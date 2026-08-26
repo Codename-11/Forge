@@ -206,11 +206,12 @@ async function githubRequest<T>(
   path: string,
   init: RequestInit = {},
   timeoutMs = DEFAULT_GITHUB_REQUEST_TIMEOUT_MS,
+  githubAppId?: string | null,
 ): Promise<T> {
   // Prefer a configured GithubApp's credentials for this installation, falling
   // back to the global env app — so linking works off the same app a workspace
   // set up in Settings → GitHub Apps.
-  const token = await resolveInstallationToken(installationId);
+  const token = await resolveInstallationToken(installationId, githubAppId);
   let res: Response;
   try {
     res = await fetch(`${GITHUB_API_BASE}${path}`, {
@@ -284,6 +285,7 @@ function assignees(users: GitHubUser[] | undefined): Array<{ login: string }> {
 
 export async function getGitHubIssue(args: {
   installationId: string | number;
+  githubAppId?: string | null;
   owner: string;
   repo: string;
   number: number;
@@ -295,11 +297,13 @@ export async function getGitHubIssue(args: {
     `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/issues/${args.number}`,
     { signal: args.signal },
     args.requestTimeoutMs,
+    args.githubAppId,
   );
 }
 
 export async function getGitHubPullRequest(args: {
   installationId: string | number;
+  githubAppId?: string | null;
   owner: string;
   repo: string;
   number: number;
@@ -311,6 +315,7 @@ export async function getGitHubPullRequest(args: {
     `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/pulls/${args.number}`,
     { signal: args.signal },
     args.requestTimeoutMs,
+    args.githubAppId,
   );
 }
 
@@ -322,6 +327,7 @@ export async function getGitHubPullRequest(args: {
  */
 export async function getGitHubPullRequestReviewSummary(args: {
   installationId: string | number;
+  githubAppId?: string | null;
   owner: string;
   repo: string;
   number: number;
@@ -338,6 +344,7 @@ export async function getGitHubPullRequestReviewSummary(args: {
       `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/pulls/${args.number}/reviews?per_page=100&page=${page}`,
       { signal: args.signal },
       args.requestTimeoutMs,
+      args.githubAppId,
     );
     reviews.push(...rows);
     if (rows.length < 100) break;
@@ -387,6 +394,7 @@ export async function getGitHubPullRequestReviewSummary(args: {
  */
 export async function getGitHubPullRequestChecks(args: {
   installationId: string | number;
+  githubAppId?: string | null;
   owner: string;
   repo: string;
   headSha: string;
@@ -403,6 +411,7 @@ export async function getGitHubPullRequestChecks(args: {
       `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${ref}/status`,
       { signal: args.signal },
       args.requestTimeoutMs,
+      args.githubAppId,
     ),
   );
   const suites: GitHubCheckSuitesResponse & { truncated?: boolean } =
@@ -516,6 +525,7 @@ async function settle<T>(fn: () => Promise<T>): Promise<Settled<T>> {
 
 async function listAllCheckSuites(args: {
   installationId: string | number;
+  githubAppId?: string | null;
   owner: string;
   repo: string;
   ref: string;
@@ -530,6 +540,7 @@ async function listAllCheckSuites(args: {
       `/repos/${encodeURIComponent(args.owner)}/${encodeURIComponent(args.repo)}/commits/${args.ref}/check-suites?per_page=100&page=${page}`,
       { signal: args.signal },
       args.requestTimeoutMs,
+      args.githubAppId,
     );
     const rows = response.check_suites ?? [];
     check_suites.push(...rows);
@@ -543,10 +554,14 @@ async function listAllCheckSuites(args: {
 
 export async function listGitHubInstallationRepos(args: {
   installationId: string | number;
+  githubAppId?: string | null;
 }): Promise<GitHubRepoResponse[]> {
   const first = await githubRequest<GitHubListReposResponse>(
     args.installationId,
     "/installation/repositories?per_page=100",
+    {},
+    DEFAULT_GITHUB_REQUEST_TIMEOUT_MS,
+    args.githubAppId,
   );
   return first.repositories ?? [];
 }
@@ -559,6 +574,7 @@ export async function getGitHubAppInstallation(args: {
 
 export async function searchGitHubIssuesAndPulls(args: {
   installationId: string | number;
+  githubAppId?: string | null;
   repoFullName: string;
   query: string;
   type?: "issue" | "pr";
@@ -569,6 +585,9 @@ export async function searchGitHubIssuesAndPulls(args: {
   const result = await githubRequest<{ items?: GitHubIssueResponse[] }>(
     args.installationId,
     `/search/issues?${params.toString()}`,
+    {},
+    DEFAULT_GITHUB_REQUEST_TIMEOUT_MS,
+    args.githubAppId,
   );
   return result.items ?? [];
 }

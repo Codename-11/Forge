@@ -47,6 +47,14 @@ import {
 } from "@/lib/saved-view-filters";
 import type { SlashCommand } from "@/lib/slash-commands";
 import type { db as DbHandleType } from "@/server/db";
+import {
+  assertIssueForViewer,
+  assertIssuesForViewer,
+  assertMembersCanReadProject,
+  assertProjectForViewer,
+  issueWhereForViewer,
+} from "@/server/services/project-access";
+import type { Membership } from "@prisma/client";
 
 const cursorSchema = z.string().optional();
 
@@ -99,6 +107,7 @@ async function applySlashCommandsToIssue(opts: {
   commands: SlashCommand[];
   ip: string | null;
   userAgent: string | null;
+  membership: Pick<Membership, "id" | "role">;
 }): Promise<Array<{ kind: string; status: "applied" | "skipped"; reason?: string }>> {
   const out: Array<{ kind: string; status: "applied" | "skipped"; reason?: string }> = [];
   const db = opts.db;
@@ -228,6 +237,12 @@ async function applySlashCommandsToIssue(opts: {
             out.push({ kind: cmd.kind, status: "skipped", reason: "project not found" });
             break;
           }
+          await assertProjectForViewer(
+            db,
+            { workspaceId: opts.workspaceId, membership: opts.membership },
+            proj.id,
+            "CONTRIBUTE",
+          );
           await db.issue.update({
             where: { id: opts.issueId },
             data: { projectId: proj.id },
@@ -388,13 +403,14 @@ async function buildIssueListWhere(
   ctx: Parameters<typeof buildKeyScopeWhere>[0] & {
     db: PrismaClient;
     workspaceId: string;
+    membership: Pick<Membership, "id" | "role">;
   },
   input: IssueListFilter,
 ): Promise<Prisma.IssueWhereInput | null> {
   const keyWhere = buildKeyScopeWhere(ctx, "issue");
   // Compose optional OR clauses under AND so multiple predicates that each
   // need OR (query, initiativeId=null) don't clobber each other.
-  const andClauses: Array<Record<string, unknown>> = [];
+  const andClauses: Array<Record<string, unknown>> = [issueWhereForViewer(ctx)];
   if (input.initiativeId === null || input.withoutInitiative === true) {
     andClauses.push({
       OR: [{ projectId: null }, { project: { initiativeId: null } }],
@@ -630,6 +646,7 @@ export const issueRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "READ", input.includeArchived);
       const issue = await ctx.db.issue.findFirst({
         where: {
           id: input.id,
@@ -846,6 +863,7 @@ export const issueRouter = router({
   children: workspaceProcedure
     .input(z.object({ parentId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.parentId, "READ");
       const parent = await ctx.db.issue.findFirst({
         where: { id: input.parentId, workspaceId: ctx.workspaceId, deletedAt: null },
         select: { id: true },
@@ -857,6 +875,7 @@ export const issueRouter = router({
           parentId: input.parentId,
           workspaceId: ctx.workspaceId,
           deletedAt: null,
+          AND: [issueWhereForViewer(ctx)],
         },
         orderBy: [{ status: { position: "asc" } }, { number: "asc" }],
         select: {
@@ -889,6 +908,7 @@ export const issueRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.issueId, "READ");
       // Confirm the issue exists and lives in this tenant before reading
       // its events — avoids leaking cross-tenant subjectIds through guesses.
       const issue = await ctx.db.issue.findFirst({
@@ -963,6 +983,7 @@ export const issueRouter = router({
           workspaceId: ctx.workspaceId,
           number,
           deletedAt: null,
+          AND: [issueWhereForViewer(ctx)],
         },
         select: {
           id: true,
@@ -1035,6 +1056,19 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      let destinationProjectId = input.projectId ?? null;
+      if (input.parentId) {
+        const parent = await assertIssueForViewer(ctx.db, ctx, input.parentId, "CONTRIBUTE");
+        destinationProjectId ??= parent.projectId;
+      }
+      if (input.projectId) {
+        await assertProjectForViewer(ctx.db, ctx, input.projectId, "CONTRIBUTE");
+      }
+      await assertMembersCanReadProject(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        projectId: destinationProjectId,
+        userIds: input.assigneeIds,
+      });
       const { applyCommands, ...createInput } = input;
       const issue = await createIssueWithSideEffects({
         db: ctx.db,
@@ -1063,6 +1097,7 @@ export const issueRouter = router({
           commands: applyCommands,
           ip: ctx.ip,
           userAgent: ctx.userAgent,
+          membership: ctx.membership,
         });
       }
       // Fire-and-forget AI triage. Skipped server-side when AI is off
@@ -1132,6 +1167,17 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      const authorizedIssue = await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
+      if (
+        Object.prototype.hasOwnProperty.call(input, "projectId") &&
+        input.projectId !== authorizedIssue.projectId &&
+        authorizedIssue.projectId
+      ) {
+        await assertProjectForViewer(ctx.db, ctx, authorizedIssue.projectId, "MANAGE");
+      }
+      if (input.projectId) {
+        await assertProjectForViewer(ctx.db, ctx, input.projectId, "CONTRIBUTE");
+      }
       // `mode` is dispatch metadata, not an Issue column — pull it out of
       // the patch so it never reaches `issue.update`'s data payload. It's
       // resolved + stamped on the AGENT_ASSIGNED event below.
@@ -1463,6 +1509,12 @@ export const issueRouter = router({
   assign: workspaceProcedure
     .input(z.object({ id: z.string().cuid(), userIds: z.array(z.string().cuid()) }))
     .mutation(async ({ ctx, input }) => {
+      const authorizedIssue = await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
+      await assertMembersCanReadProject(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        projectId: authorizedIssue.projectId,
+        userIds: input.userIds,
+      });
       return ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findFirst({
           where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
@@ -1541,6 +1593,7 @@ export const issueRouter = router({
   archive: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       try {
         return await ctx.db.$transaction((tx) =>
           archiveIssue(tx, {
@@ -1561,6 +1614,7 @@ export const issueRouter = router({
   softDelete: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       try {
         const result = await ctx.db.$transaction((tx) =>
           archiveIssue(tx, {
@@ -1581,6 +1635,7 @@ export const issueRouter = router({
   restore: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE", true);
       try {
         return await ctx.db.$transaction((tx) =>
           restoreIssue(tx, {
@@ -1599,16 +1654,17 @@ export const issueRouter = router({
 
   bulkStatus: workspaceProcedure
     .input(z.object({ ids: z.array(z.string().cuid()).max(200), statusId: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.issue.updateMany({
+    .mutation(async ({ ctx, input }) => {
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE", true);
+      return ctx.db.issue.updateMany({
         where: {
           id: { in: input.ids },
           workspaceId: ctx.workspaceId,
           deletedAt: null,
         },
         data: { statusId: input.statusId },
-      }),
-    ),
+      });
+    }),
 
   /**
    * Bulk add/remove labels across many issues in one RPC. All referenced
@@ -1630,6 +1686,7 @@ export const issueRouter = router({
       if (input.issueIds.length === 0) {
         return { updated: 0, added: 0, removed: 0 };
       }
+      await assertIssuesForViewer(ctx.db, ctx, input.issueIds, "CONTRIBUTE");
       const labelIds = Array.from(new Set([...input.add, ...input.remove]));
       if (labelIds.length > 0) {
         const found = await ctx.db.label.findMany({
@@ -1736,7 +1793,23 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.issueIds.length === 0) return { updated: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.issueIds, "CONTRIBUTE");
+      const sourceProjects = await ctx.db.issue.findMany({
+        where: {
+          id: { in: input.issueIds },
+          workspaceId: ctx.workspaceId,
+          projectId: { not: null },
+        },
+        distinct: ["projectId"],
+        select: { projectId: true },
+      });
+      for (const source of sourceProjects) {
+        if (source.projectId && source.projectId !== input.projectId) {
+          await assertProjectForViewer(ctx.db, ctx, source.projectId, "MANAGE");
+        }
+      }
       if (input.projectId) {
+        await assertProjectForViewer(ctx.db, ctx, input.projectId, "CONTRIBUTE");
         const proj = await ctx.db.project.findFirst({
           where: { id: input.projectId, workspaceId: ctx.workspaceId },
           select: { id: true },
@@ -1793,6 +1866,7 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.issueIds.length === 0) return { updated: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.issueIds, "CONTRIBUTE");
       if (input.cycleId) {
         const cyc = await ctx.db.cycle.findFirst({
           where: { id: input.cycleId, workspaceId: ctx.workspaceId },
@@ -1852,6 +1926,7 @@ export const issueRouter = router({
       if (input.issueIds.length === 0) {
         return { updated: 0 };
       }
+      await assertIssuesForViewer(ctx.db, ctx, input.issueIds, "CONTRIBUTE");
       // Cross-tenant guard: claimedById must be a workspace member when set.
       if (input.claimedById) {
         const member = await ctx.db.membership.findFirst({
@@ -1865,6 +1940,18 @@ export const issueRouter = router({
           throw new TRPCError({
             code: "FORBIDDEN",
             message: "User is not a member of this workspace.",
+          });
+        }
+        const projects = await ctx.db.issue.findMany({
+          where: { id: { in: input.issueIds }, workspaceId: ctx.workspaceId },
+          distinct: ["projectId"],
+          select: { projectId: true },
+        });
+        for (const project of projects) {
+          await assertMembersCanReadProject(ctx.db, {
+            workspaceId: ctx.workspaceId,
+            projectId: project.projectId,
+            userIds: [input.claimedById],
           });
         }
       }
@@ -1937,6 +2024,7 @@ export const issueRouter = router({
       if (input.issueIds.length === 0) {
         return { updated: 0 };
       }
+      await assertIssuesForViewer(ctx.db, ctx, input.issueIds, "CONTRIBUTE");
       if (input.assignedAgentId) {
         const agent = await ctx.db.agent.findFirst({
           where: {
@@ -2077,6 +2165,7 @@ export const issueRouter = router({
   setQueued: workspaceProcedure
     .input(z.object({ id: z.string().cuid(), queued: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       return ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findFirstOrThrow({
           where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
@@ -2123,6 +2212,7 @@ export const issueRouter = router({
   release: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       const issue = await ctx.db.issue.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
       });
@@ -2148,6 +2238,7 @@ export const issueRouter = router({
           queued: true,
           ...keyWhere,
           ...(input.includeClaimed ? {} : { claimedAt: null }),
+          AND: [issueWhereForViewer(ctx)],
         },
         orderBy: [{ claimedAt: { sort: "asc", nulls: "first" } }, { createdAt: "asc" }],
         take: input.limit,
@@ -2202,6 +2293,7 @@ export const issueRouter = router({
 
       if (input.issueId) {
         await assertKeyScope(ctx, { entity: "issue", id: input.issueId });
+        await assertIssueForViewer(ctx.db, ctx, input.issueId, "CONTRIBUTE");
         return ctx.db.$transaction(async (tx) => {
           const issue = await tx.issue.findFirstOrThrow({
             where: {
@@ -2242,6 +2334,7 @@ export const issueRouter = router({
           status: { category: { notIn: ["DONE", "CANCELED"] } },
           ...keyWhere,
           ...(blockedIds.size ? { id: { notIn: [...blockedIds] } } : {}),
+          AND: [issueWhereForViewer(ctx, "CONTRIBUTE")],
         },
         orderBy: [{ priority: "desc" }, { createdAt: "asc" }],
       });
@@ -2282,6 +2375,7 @@ export const issueRouter = router({
       }),
     )
     .query(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.issueId, "READ");
       const current = await ctx.db.issue.findFirst({
         where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
         select: {
@@ -2298,11 +2392,12 @@ export const issueRouter = router({
           ? { projectId: current.projectId ?? null }
           : { cycleId: current.cycleId ?? null };
 
-      const baseWhere = {
+      const baseWhere: Prisma.IssueWhereInput = {
         workspaceId: ctx.workspaceId,
         deletedAt: null,
         ...scopeWhere,
-      } as const;
+        AND: [issueWhereForViewer(ctx)],
+      };
 
       const [prev, next] = await Promise.all([
         ctx.db.issue.findFirst({
@@ -2347,6 +2442,7 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       if (input.until.getTime() <= Date.now()) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -2394,6 +2490,7 @@ export const issueRouter = router({
   unsnooze: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       return ctx.db.$transaction(async (tx) => {
         const before = await tx.issue.findFirstOrThrow({
           where: {
@@ -2447,6 +2544,7 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE");
       if (input.until && input.until.getTime() <= Date.now()) {
         throw new TRPCError({
           code: "BAD_REQUEST",
@@ -2515,6 +2613,7 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.id, "CONTRIBUTE");
       return ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findFirstOrThrow({
           where: {
@@ -2627,6 +2726,7 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.ids.length === 0) return { updated: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE");
       // Tenant-scope guard for the destination status.
       const status = await ctx.db.status.findFirst({
         where: { id: input.statusId, workspaceId: ctx.workspaceId },
@@ -2738,6 +2838,7 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.ids.length === 0) return { updated: 0, added: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE");
       const label = await ctx.db.label.findFirst({
         where: { id: input.labelId, workspaceId: ctx.workspaceId },
         select: { id: true },
@@ -2803,6 +2904,7 @@ export const issueRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       if (input.ids.length === 0) return { updated: 0, removed: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE");
       const label = await ctx.db.label.findFirst({
         where: { id: input.labelId, workspaceId: ctx.workspaceId },
         select: { id: true },
@@ -2868,6 +2970,7 @@ export const issueRouter = router({
     .input(z.object({ ids: z.array(z.string().cuid()).max(500) }))
     .mutation(async ({ ctx, input }) => {
       if (input.ids.length === 0) return { updated: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE");
       try {
         return await ctx.db.$transaction(async (tx) => {
           let updated = 0;
@@ -2905,6 +3008,7 @@ export const issueRouter = router({
     .input(z.object({ ids: z.array(z.string().cuid()).max(500) }))
     .mutation(async ({ ctx, input }) => {
       if (input.ids.length === 0) return { updated: 0 };
+      await assertIssuesForViewer(ctx.db, ctx, input.ids, "CONTRIBUTE", true);
       try {
         return await ctx.db.$transaction(async (tx) => {
           let updated = 0;
@@ -2950,6 +3054,7 @@ export const issueRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.issueId, "CONTRIBUTE");
       const issue = await ctx.db.issue.findFirst({
         where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
         select: { id: true },
@@ -2966,6 +3071,7 @@ export const issueRouter = router({
         commands: input.commands,
         ip: ctx.ip,
         userAgent: ctx.userAgent,
+        membership: ctx.membership,
       });
       return { results };
     }),
@@ -2985,6 +3091,7 @@ export const issueRouter = router({
   watch: workspaceProcedure
     .input(z.object({ issueId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.issueId, "CONTRIBUTE");
       const issue = await ctx.db.issue.findFirst({
         where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
         select: { id: true },
@@ -3024,6 +3131,7 @@ export const issueRouter = router({
   unwatch: workspaceProcedure
     .input(z.object({ issueId: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.issueId, "CONTRIBUTE");
       const callerAgentId = ctx.apiKey?.linkedAgentId ?? null;
       if (callerAgentId) {
         await ctx.db.issueWatcher.deleteMany({
@@ -3045,6 +3153,7 @@ export const issueRouter = router({
   watchers: workspaceProcedure
     .input(z.object({ issueId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertIssueForViewer(ctx.db, ctx, input.issueId, "READ");
       const rows = await ctx.db.issueWatcher.findMany({
         where: { issueId: input.issueId, workspaceId: ctx.workspaceId },
         orderBy: { createdAt: "asc" },
@@ -3069,7 +3178,7 @@ export const issueRouter = router({
         ? { workspaceId: ctx.workspaceId, agentId: callerAgentId }
         : { workspaceId: ctx.workspaceId, userId: ctx.session.user.id };
       const rows = await ctx.db.issueWatcher.findMany({
-        where,
+        where: { ...where, issue: issueWhereForViewer(ctx) },
         orderBy: { createdAt: "desc" },
         take: input.limit,
         include: {
@@ -3131,6 +3240,7 @@ export const issueRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        issue: issueWhereForViewer(ctx),
       },
       select: {
         issueId: true,
