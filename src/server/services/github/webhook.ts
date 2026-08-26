@@ -1,6 +1,7 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { CommentKind, type ExternalResource, type Prisma, type PrismaClient } from "@prisma/client";
+import { TRPCError } from "@trpc/server";
 import { recordChange } from "@/server/audit";
 import { decryptSecret } from "@/server/crypto";
 import { createIssueWithSideEffects } from "@/server/services/issue-create";
@@ -34,6 +35,7 @@ import {
   type GitHubResourceSnapshot,
 } from "@/server/services/github/types";
 import { derivePullRequestIssueRelations } from "@/server/services/github/relation";
+import { assertIntegrationAction } from "@/server/services/integration-authorization";
 
 type GitHubWebhookRepository = {
   full_name?: string;
@@ -1047,6 +1049,49 @@ export async function processGitHubWebhook(args: {
   let processed = 0;
   try {
     for (const mapping of mappings) {
+      try {
+        await assertIntegrationAction({
+          db: args.db,
+          workspaceId: mapping.workspaceId,
+          mappingId: mapping.id,
+          principal: { type: "WORKSPACE_AUTOMATION" },
+          action: "SYNC",
+          projectId: null,
+        });
+        const config = readGitHubMappingConfig(mapping.config);
+        if (
+          args.event === "issues" &&
+          args.payload.action === "opened" &&
+          config.autoCreateIssues
+        ) {
+          await assertIntegrationAction({
+            db: args.db,
+            workspaceId: mapping.workspaceId,
+            mappingId: mapping.id,
+            principal: { type: "WORKSPACE_AUTOMATION" },
+            action: "IMPORT",
+            projectId: config.defaultProjectId ?? null,
+          });
+        }
+        if (args.event === "pull_request") {
+          await assertIntegrationAction({
+            db: args.db,
+            workspaceId: mapping.workspaceId,
+            mappingId: mapping.id,
+            principal: { type: "WORKSPACE_AUTOMATION" },
+            action: "LINK",
+            projectId: null,
+          });
+        }
+      } catch (error) {
+        if (
+          error instanceof TRPCError &&
+          ["FORBIDDEN", "PRECONDITION_FAILED", "NOT_FOUND"].includes(error.code)
+        ) {
+          continue;
+        }
+        throw error;
+      }
       if (args.event === "issues") {
         processed += await processIssueEvent({
           db: args.db,

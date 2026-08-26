@@ -1,9 +1,16 @@
 import "server-only";
-import type { PrismaClient } from "@prisma/client";
+import {
+  ConnectionStatus,
+  IntegrationCapability,
+  IntegrationGrantScope,
+  IntegrationPrincipalType,
+  type PrismaClient,
+} from "@prisma/client";
 import { logger } from "@/server/logger";
 import { GitHubRequestError } from "@/server/services/github/client";
 import { syncGitHubExternalResource } from "@/server/services/github/resource-sync";
 import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
+import { assertIntegrationAction } from "@/server/services/integration-authorization";
 
 const PROVIDER = "GITHUB";
 const RESOURCE_TYPE = "PULL_REQUEST";
@@ -173,6 +180,31 @@ export async function sweepGitHubStatusReconciliation(
         workspaceId: workspace.id,
         provider: PROVIDER,
         resourceType: RESOURCE_TYPE,
+        connectionMapping: {
+          is: {
+            status: "active",
+            connection: { status: ConnectionStatus.CONNECTED },
+            authorization: {
+              is: {
+                revokedAt: null,
+                capabilities: {
+                  hasEvery: [IntegrationCapability.READ, IntegrationCapability.SYNC],
+                },
+                grants: {
+                  some: {
+                    principalType: IntegrationPrincipalType.WORKSPACE_AUTOMATION,
+                    scope: IntegrationGrantScope.WORKSPACE,
+                    projectId: null,
+                    revokedAt: null,
+                    capabilities: {
+                      hasEvery: [IntegrationCapability.READ, IntegrationCapability.SYNC],
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
         OR: [
           {
             syncTerminalAt: null,
@@ -230,6 +262,18 @@ export async function sweepGitHubStatusReconciliation(
       }
 
       try {
+        if (!candidate.connectionMappingId) {
+          result.skipped += 1;
+          continue;
+        }
+        await assertIntegrationAction({
+          db,
+          workspaceId: workspace.id,
+          mappingId: candidate.connectionMappingId,
+          principal: { type: "WORKSPACE_AUTOMATION" },
+          action: "SYNC",
+          projectId: null,
+        });
         const resource = await syncResource({
           db,
           workspaceId: workspace.id,

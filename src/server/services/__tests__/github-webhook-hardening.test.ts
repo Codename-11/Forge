@@ -16,6 +16,8 @@ import {
   upsertExternalResource,
   upsertExternalResourceFromWebhook,
 } from "@/server/services/github/resource-sync";
+import { ensureMappingAuthorization } from "@/server/services/github/linkability";
+import { connectionAuthorizationDigest } from "@/server/services/integration-authorization";
 import {
   createIssue,
   createWorkspaceFixture,
@@ -78,7 +80,25 @@ async function setup(options: { syncComments?: boolean; autoCreateIssues?: boole
           : undefined,
     },
   });
+  await ensureMappingAuthorization({
+    db: prisma,
+    workspaceId: fixture.workspace.id,
+    mappingId: mapping.id,
+    userId: fixture.user.id,
+  });
   return { fixture, prisma, issue, mapping };
+}
+
+async function refreshMappingConsent(mappingId: string) {
+  const prisma = getPrisma();
+  const mapping = await prisma.connectionMapping.findUniqueOrThrow({ where: { id: mappingId } });
+  await prisma.connectionAuthorization.update({
+    where: { connectionMappingId: mapping.id },
+    data: {
+      authorizationDigest: connectionAuthorizationDigest(mapping),
+      authorizedAt: new Date(),
+    },
+  });
 }
 
 function pullRequest(overrides: Record<string, unknown> = {}) {
@@ -729,6 +749,7 @@ describe("GitHub webhook hardening", () => {
         config: { github: { statusRules: { checksFailedStatusId: failedStatus.id } } },
       },
     });
+    await refreshMappingConsent(mapping.id);
     const resource = await upsertExternalResource(prisma, {
       workspaceId: fixture.workspace.id,
       connectionMappingId: mapping.id,
@@ -809,6 +830,7 @@ describe("GitHub webhook hardening", () => {
         },
       },
     });
+    await refreshMappingConsent(mapping.id);
 
     await processGitHubWebhook({
       db: prisma,

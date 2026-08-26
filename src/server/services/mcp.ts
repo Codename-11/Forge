@@ -147,8 +147,15 @@ import {
 } from "@/server/services/github/resource-sync";
 import { searchGitHubIssuesAndPulls } from "@/server/services/github/client";
 import { listGitHubRepoMappings } from "@/server/services/github/linkability";
-import { githubInstallationId } from "@/server/services/github/mapping-policy";
+import {
+  githubInstallationId,
+  readGitHubMappingConfig,
+} from "@/server/services/github/mapping-policy";
 import { parseGitHubUrl } from "@/server/services/github/url";
+import {
+  assertIntegrationAction,
+  integrationPrincipalFromContext,
+} from "@/server/services/integration-authorization";
 import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
 import {
   EXTERNAL_LINK_KINDS,
@@ -8760,6 +8767,26 @@ export const mcpTools = {
       ctx: McpContext,
     ) {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
+      const issue = await db.issue.findFirst({
+        where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: { projectId: true },
+      });
+      if (!issue) throw new Error("Issue not found.");
+      const parsed = parseGitHubUrl(input.url);
+      const mapping = await resolveGitHubRepoMapping({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: input.mappingId,
+        repoFullName: parsed.repoFullName,
+      });
+      await assertIntegrationAction({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: integrationPrincipalFromContext(ctx),
+        action: "LINK",
+        projectId: issue.projectId,
+      });
       const actorId = await resolveActorId(ctx);
       return linkGitHubUrlToIssue({
         db,
@@ -8804,6 +8831,23 @@ export const mcpTools = {
       if (input.projectId) {
         await assertKeyScope(scopeCtx(ctx), { entity: "project", id: input.projectId });
       }
+      const parsed = input.url ? parseGitHubUrl(input.url) : null;
+      const mapping = await resolveGitHubRepoMapping({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: input.mappingId,
+        repoFullName: parsed?.repoFullName ?? input.repoFullName,
+      });
+      const projectId =
+        input.projectId ?? readGitHubMappingConfig(mapping.config).defaultProjectId ?? null;
+      await assertIntegrationAction({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: integrationPrincipalFromContext(ctx),
+        action: "IMPORT",
+        projectId,
+      });
       const actorId = await resolveActorId(ctx);
       const result = await importGitHubIssue({
         db,
@@ -8813,7 +8857,7 @@ export const mcpTools = {
         repoFullName: input.repoFullName,
         resourceType: input.resourceType,
         number: input.number,
-        projectId: input.projectId,
+        projectId,
         labelIds: input.labelIds,
         queue: input.queue,
         actor: {
@@ -8837,10 +8881,33 @@ export const mcpTools = {
           workspaceId: ctx.workspaceId,
           externalResourceId: input.externalResourceId,
         },
-        select: { issueId: true },
+        select: { issueId: true, issue: { select: { projectId: true } } },
       });
       for (const link of links) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: link.issueId });
+      }
+      const resource = await db.externalResource.findFirst({
+        where: {
+          id: input.externalResourceId,
+          workspaceId: ctx.workspaceId,
+          provider: "GITHUB",
+        },
+        select: { connectionMappingId: true },
+      });
+      if (!resource?.connectionMappingId) {
+        throw new Error("GitHub resource has no active credential mapping.");
+      }
+      const projectIds = new Set(links.map((link) => link.issue.projectId));
+      if (projectIds.size === 0) projectIds.add(null);
+      for (const projectId of projectIds) {
+        await assertIntegrationAction({
+          db,
+          workspaceId: ctx.workspaceId,
+          mappingId: resource.connectionMappingId,
+          principal: integrationPrincipalFromContext(ctx),
+          action: "SYNC",
+          projectId,
+        });
       }
       const actorId = await resolveActorId(ctx);
       return syncGitHubExternalResource({
@@ -8858,18 +8925,40 @@ export const mcpTools = {
   "github.listMappings": {
     scopes: ["READ_ISSUES"] as const,
     input: z
-      .object({ includePaused: z.boolean().default(false) })
+      .object({
+        includePaused: z.boolean().default(false),
+        projectId: z.string().cuid().nullable().optional(),
+      })
       .default({ includePaused: false }),
-    async run(input: { includePaused: boolean }, ctx: McpContext) {
+    async run(input: { includePaused: boolean; projectId?: string | null }, ctx: McpContext) {
       // Active repo mappings the agent can link/search against. Pair with
       // `github.search` (needs a mappingId) and `github.link` (resolves a
       // mapping by repo from the URL) so agents can discover which repos are
       // wired up before acting.
-      return listGitHubRepoMappings({
+      const mappings = await listGitHubRepoMappings({
         db,
         workspaceId: ctx.workspaceId,
         includePaused: input.includePaused,
       });
+      const authorized = [];
+      for (const mapping of mappings) {
+        try {
+          await assertIntegrationAction({
+            db,
+            workspaceId: ctx.workspaceId,
+            mappingId: mapping.id,
+            principal: integrationPrincipalFromContext(ctx),
+            action: "READ",
+            projectId: input.projectId ?? null,
+          });
+          authorized.push(mapping);
+        } catch (error) {
+          if (error instanceof TRPCError && error.code === "FORBIDDEN") continue;
+          if (error instanceof TRPCError && error.code === "PRECONDITION_FAILED") continue;
+          throw error;
+        }
+      }
+      return authorized;
     },
   },
 
@@ -8879,15 +8968,28 @@ export const mcpTools = {
       mappingId: z.string().cuid(),
       query: z.string().min(1).max(200),
       type: z.enum(["issue", "pr"]).optional(),
+      projectId: z.string().cuid().nullable().optional(),
     }),
-    async run(input: { mappingId: string; query: string; type?: "issue" | "pr" }, ctx: McpContext) {
+    async run(
+      input: { mappingId: string; query: string; type?: "issue" | "pr"; projectId?: string | null },
+      ctx: McpContext,
+    ) {
       const mapping = await resolveGitHubRepoMapping({
         db,
         workspaceId: ctx.workspaceId,
         mappingId: input.mappingId,
       });
+      await assertIntegrationAction({
+        db,
+        workspaceId: ctx.workspaceId,
+        mappingId: mapping.id,
+        principal: integrationPrincipalFromContext(ctx),
+        action: "READ",
+        projectId: input.projectId ?? null,
+      });
       return searchGitHubIssuesAndPulls({
         installationId: githubInstallationId(mapping.connection),
+        githubAppId: mapping.authorization?.githubAppId ?? null,
         repoFullName: mapping.target,
         query: input.query,
         type: input.type,
