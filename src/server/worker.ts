@@ -39,7 +39,7 @@ import { sweepScheduledTasks } from "@/server/services/scheduled-task";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
 import { sweepHermesConnectorRetries } from "@/server/services/hermes-connector-retry";
 import {
-  executeRuntimeDiagnostic,
+  executeQueuedRuntimeDiagnostic,
   type RuntimeDiagnosticJob,
 } from "@/server/services/runtime-diagnostics";
 import { webhookDeliveryJobId } from "@/server/services/webhook-delivery-job-id";
@@ -327,7 +327,7 @@ webhookWorker.on("failed", (job, err) => {
 // 45-second self-test from blocking the single-concurrency maintenance loop.
 export const runtimeDiagnosticWorker = new Worker(
   "runtime-diagnostics",
-  async (job) => executeRuntimeDiagnostic(job.data as RuntimeDiagnosticJob),
+  async (job) => executeQueuedRuntimeDiagnostic(job.data as RuntimeDiagnosticJob),
   { connection, concurrency: 2 },
 );
 

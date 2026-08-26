@@ -14506,3 +14506,21 @@ reasoning output. Added integration coverage for delegated runtime completion,
 durable final comments, wait-request deduplication/resolution, waiting-reason
 preservation, and webhook relation precedence, plus lifecycle Playwright
 coverage for collapsed/expanded progress detail.
+
+## 2026-08-25 — AXI-182 final hardening review
+
+Closed the final managed-runtime and helper-distribution review gaps before
+release. Unexpected diagnostic worker failures now finalize their provenance
+row with a sanitized terminal result instead of leaving an indefinite pending
+state. A separate-process regression proves that runtime verification reports
+worker-plane failure even when the web/test process can reach the endpoint.
+
+Hermes presence heartbeats now authorize strictly through the authenticated
+key's linked agent identity without requiring broad workspace-member read
+access. Release automation builds and checksum-validates the versioned Hermes
+helper archives before any version or tag push, including during dry runs, and
+publishes those prevalidated assets after tagging.
+
+Verification: focused runtime-diagnostic, MCP-execution, and helper-distribution
+tests passed (11/11); TypeScript passed; lint completed with only the existing
+repository warnings; helper tarballs and `SHA256SUMS` verified successfully.

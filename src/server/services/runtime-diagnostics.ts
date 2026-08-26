@@ -182,6 +182,53 @@ export async function executeRuntimeDiagnostic(
   return client.runtimeDiagnosticAttempt.findUniqueOrThrow({ where: { id: attempt.id } });
 }
 
+/**
+ * Worker boundary for queued diagnostics. Network probes and connector
+ * self-tests normally resolve failures as data, but an unexpected executor or
+ * persistence error must still close the request so operators do not get an
+ * eternal "waiting" row and web callers do not misdiagnose it as worker
+ * silence.
+ */
+export async function executeQueuedRuntimeDiagnostic(
+  job: RuntimeDiagnosticJob,
+  client: PrismaClient | Prisma.TransactionClient = db,
+  execute: (
+    job: RuntimeDiagnosticJob,
+    client: PrismaClient | Prisma.TransactionClient,
+  ) => Promise<unknown> = executeRuntimeDiagnostic,
+) {
+  try {
+    return await execute(job, client);
+  } catch (error) {
+    const attempt = await client.runtimeDiagnosticAttempt.findFirst({
+      where: {
+        requestId: job.requestId,
+        workspaceId: job.workspaceId,
+        runtimeId: job.runtimeId,
+        completedAt: null,
+      },
+      select: { id: true, kind: true },
+    });
+    if (attempt) {
+      const detail = sanitizeRuntimeProbeDetail(
+        `Worker diagnostic failed: ${error instanceof Error ? error.message : "unexpected executor error"}`,
+      );
+      await client.runtimeDiagnosticAttempt.update({
+        where: { id: attempt.id },
+        data: {
+          executor: RuntimeDiagnosticExecutor.WORKER,
+          attempted: true,
+          reachable: attempt.kind === RuntimeDiagnosticKind.PROBE ? false : undefined,
+          selfTestStatus: attempt.kind === RuntimeDiagnosticKind.SELF_TEST ? "FAILED" : undefined,
+          detail,
+          completedAt: new Date(),
+        },
+      });
+    }
+    throw error;
+  }
+}
+
 export async function runScheduledRuntimeProbe(
   input: { workspaceId: string; runtimeId: string },
   client: PrismaClient | Prisma.TransactionClient = db,

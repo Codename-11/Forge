@@ -33,5 +33,9 @@ describe("Hermes helper distribution", () => {
     expect(packager).toContain("SHA256SUMS");
     expect(release).toContain("package-hermes-helpers.sh");
     expect(release).toContain("dist/hermes-helpers/*");
+    expect(release).toContain("sha256sum --check SHA256SUMS");
+    expect(release.indexOf("package-hermes-helpers.sh")).toBeLessThan(
+      release.indexOf("git push origin main"),
+    );
   });
 });

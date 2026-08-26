@@ -81,7 +81,9 @@ at `integrations/hermes/forge-presence/` for source-based installations.
 - `FORGE_API_KEY` — an AGENT-kind API key with `linkedAgentId` set.
 
 The agent id is inferred from the key's `linkedAgentId`; no agent id needs to be
-hardcoded.
+hardcoded. Self-heartbeat does not require `READ_USERS` or another broad
+workspace scope: the linked agent identity is the complete authorization
+boundary for this endpoint.
 
 ### Setup for the default agent (Victor)
 

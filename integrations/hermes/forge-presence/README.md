@@ -14,4 +14,5 @@ bash bin/setup.sh victor
 For an installed profile, `setup.sh <profile>` uses
 `~/.hermes/profiles/<profile>/forge.env`. The API key must be an AGENT key with
 `linkedAgentId` set. Run `bin/heartbeat.sh` directly to diagnose a failure;
-successful calls remain silent.
+successful calls remain silent. The heartbeat endpoint is self-scoped by that
+linked agent identity and does not require broad `READ_USERS` access.
