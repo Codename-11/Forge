@@ -1,4 +1,11 @@
-import type { Role } from "@prisma/client";
+import {
+  IntegrationCapability,
+  ProjectAccessRole,
+  ProjectVisibility,
+  type Prisma,
+  type PrismaClient,
+  type Role,
+} from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 
 /**
@@ -44,8 +51,6 @@ export function assertWorkspaceAction(role: Role, action: WorkspaceAction): void
  * These string unions deliberately do not claim that persistence exists yet;
  * callers pass the resolved grant (or null) after loading it.
  */
-export type ProjectVisibility = "WORKSPACE" | "RESTRICTED";
-export type ProjectAccessRole = "VIEWER" | "CONTRIBUTOR" | "MANAGER";
 export type ProjectAction = "READ" | "CONTRIBUTE" | "MANAGE";
 
 const PROJECT_ROLE_RANK: Record<ProjectAccessRole, number> = {
@@ -82,12 +87,124 @@ export function canPerformProjectAction(params: {
   );
 }
 
+const PROJECT_ACCESS_ROLES: Record<ProjectAction, ProjectAccessRole[]> = {
+  READ: [ProjectAccessRole.VIEWER, ProjectAccessRole.CONTRIBUTOR, ProjectAccessRole.MANAGER],
+  CONTRIBUTE: [ProjectAccessRole.CONTRIBUTOR, ProjectAccessRole.MANAGER],
+  MANAGE: [ProjectAccessRole.MANAGER],
+};
+
+/**
+ * Tenant-scoped list predicate matching {@link canPerformProjectAction}.
+ * Callers must AND this fragment with any resource-specific filters.
+ */
+export function buildProjectAccessWhere(params: {
+  workspaceId: string;
+  membershipId: string;
+  membershipRole: Role;
+  action: ProjectAction;
+}): Prisma.ProjectWhereInput {
+  const tenant = { workspaceId: params.workspaceId };
+  if (isWorkspaceAdmin(params.membershipRole)) return tenant;
+
+  const explicit: Prisma.ProjectWhereInput = {
+    accessGrants: {
+      some: {
+        membershipId: params.membershipId,
+        role: { in: PROJECT_ACCESS_ROLES[params.action] },
+      },
+    },
+  };
+
+  if (params.membershipRole === "MEMBER" && params.action !== "MANAGE") {
+    return {
+      ...tenant,
+      OR: [{ visibility: ProjectVisibility.WORKSPACE }, explicit],
+    };
+  }
+
+  return { ...tenant, ...explicit };
+}
+
+type ProjectAuthorizationDb = Pick<PrismaClient, "project">;
+
+export interface ProjectDecision {
+  project: {
+    id: string;
+    workspaceId: string;
+    visibility: ProjectVisibility;
+  };
+  accessRole: ProjectAccessRole | null;
+  allowed: boolean;
+}
+
+/** Resolve one project decision without leaking a cross-tenant row. */
+export async function resolveProjectDecision(
+  db: ProjectAuthorizationDb,
+  params: {
+    workspaceId: string;
+    membershipId: string;
+    membershipRole: Role;
+    projectId: string;
+    action: ProjectAction;
+  },
+): Promise<ProjectDecision | null> {
+  const project = await db.project.findFirst({
+    where: { id: params.projectId, workspaceId: params.workspaceId, deletedAt: null },
+    select: {
+      id: true,
+      workspaceId: true,
+      visibility: true,
+      accessGrants: {
+        where: { membershipId: params.membershipId },
+        select: { role: true },
+        take: 1,
+      },
+    },
+  });
+  if (!project) return null;
+  const accessRole = project.accessGrants[0]?.role ?? null;
+  return {
+    project: {
+      id: project.id,
+      workspaceId: project.workspaceId,
+      visibility: project.visibility,
+    },
+    accessRole,
+    allowed: canPerformProjectAction({
+      membershipRole: params.membershipRole,
+      visibility: project.visibility,
+      accessRole,
+      action: params.action,
+    }),
+  };
+}
+
+/**
+ * Assert project authority. READ denials intentionally use NOT_FOUND so a
+ * restricted project's existence is not disclosed to an untrusted member.
+ */
+export async function assertProjectAction(
+  db: ProjectAuthorizationDb,
+  params: Parameters<typeof resolveProjectDecision>[1],
+): Promise<ProjectDecision> {
+  const decision = await resolveProjectDecision(db, params);
+  if (!decision || !decision.allowed) {
+    throw new TRPCError({
+      code: params.action === "READ" ? "NOT_FOUND" : "FORBIDDEN",
+      message:
+        params.action === "READ"
+          ? "Project not found."
+          : "You do not have permission to modify this project.",
+    });
+  }
+  return decision;
+}
+
 /**
  * External credentials are a separate authorization layer. A Forge role or
  * project grant never implies permission to use a GitHub/OAuth credential;
  * the resolved integration grant must explicitly contain the capability too.
  */
-export type IntegrationCapability = "READ" | "IMPORT" | "LINK" | "SYNC" | "WRITE" | "ADMIN";
 export type IntegrationAction = IntegrationCapability;
 
 const INTEGRATION_PROJECT_ACTION: Record<IntegrationAction, ProjectAction> = {
