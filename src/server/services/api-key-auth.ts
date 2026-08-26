@@ -184,7 +184,12 @@ export async function assertKeyScope(
       const scope = buildKeyScopeWhere(ctx, "project");
       if (!Object.keys(scope).length) return;
       const project = await ctx.db.project.findFirst({
-        where: { id: opts.id, workspaceId: key.workspaceId, deletedAt: null, ...scope },
+        // Keep the exact target and every live policy floor under AND. A
+        // spread is unsafe here because project-id narrowing also contains an
+        // `id` predicate and would overwrite the caller-supplied target id.
+        where: {
+          AND: [{ id: opts.id, workspaceId: key.workspaceId, deletedAt: null }, scope],
+        },
         select: { id: true },
       });
       if (!project) {
@@ -209,7 +214,9 @@ export async function assertKeyScope(
       const scope = buildKeyScopeWhere(ctx, "issue");
       if (!Object.keys(scope).length) return;
       const issue = await ctx.db.issue.findFirst({
-        where: { id: opts.id, workspaceId: key.workspaceId, deletedAt: null, ...scope },
+        where: {
+          AND: [{ id: opts.id, workspaceId: key.workspaceId, deletedAt: null }, scope],
+        },
         select: { id: true },
       });
       if (!issue) {

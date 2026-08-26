@@ -42,23 +42,35 @@ type PlanAuthContext = {
   membership: { id: string; role: Role };
 };
 
-async function assertPlanAccess(ctx: PlanAuthContext, id: string, action: ProjectAction) {
+async function assertPlanAccess(
+  ctx: PlanAuthContext,
+  id: string,
+  action: ProjectAction,
+  options: { includeArchived?: boolean } = {},
+) {
+  const accessWhere = buildExecutionPlanAccessWhere({
+    workspaceId: ctx.workspaceId,
+    membershipId: ctx.membership.id,
+    membershipRole: ctx.membership.role,
+    action,
+  });
+  if (options.includeArchived) delete accessWhere.archivedAt;
   const found = await ctx.db.executionPlan.findFirst({
     where: {
       id,
-      ...buildExecutionPlanAccessWhere({
-        workspaceId: ctx.workspaceId,
-        membershipId: ctx.membership.id,
-        membershipRole: ctx.membership.role,
-        action,
-      }),
+      ...accessWhere,
     },
     select: { id: true },
   });
   if (!found) {
+    const exists = await ctx.db.executionPlan.findFirst({
+      where: { id, workspaceId: ctx.workspaceId },
+      select: { id: true },
+    });
+    const notFound = action === "READ" || !exists;
     throw new TRPCError({
-      code: action === "READ" ? "NOT_FOUND" : "FORBIDDEN",
-      message: action === "READ" ? "Execution plan not found." : "Plan access required.",
+      code: notFound ? "NOT_FOUND" : "FORBIDDEN",
+      message: notFound ? "Execution plan not found." : "Plan access required.",
     });
   }
 }
@@ -80,9 +92,14 @@ async function assertStepAccess(ctx: PlanAuthContext, id: string, action: Projec
     select: { id: true },
   });
   if (!found) {
+    const exists = await ctx.db.executionStep.findFirst({
+      where: { id, workspaceId: ctx.workspaceId },
+      select: { id: true },
+    });
+    const notFound = action === "READ" || !exists;
     throw new TRPCError({
-      code: action === "READ" ? "NOT_FOUND" : "FORBIDDEN",
-      message: action === "READ" ? "Execution step not found." : "Plan access required.",
+      code: notFound ? "NOT_FOUND" : "FORBIDDEN",
+      message: notFound ? "Execution step not found." : "Plan access required.",
     });
   }
 }
@@ -579,7 +596,7 @@ export const executionPlanRouter = router({
   restore: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      await assertPlanAccess(ctx, input.id, "CONTRIBUTE");
+      await assertPlanAccess(ctx, input.id, "CONTRIBUTE", { includeArchived: true });
       const plan = await ctx.db.executionPlan.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         select: { id: true, title: true, status: true, archivedAt: true },
