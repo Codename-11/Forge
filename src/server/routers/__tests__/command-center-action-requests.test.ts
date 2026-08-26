@@ -27,10 +27,12 @@ describe("commandCenterRouter — action requests", () => {
     const fixture = await createWorkspaceFixture({ keyPrefix: "CA" });
     fixtures.push(fixture);
     const prisma = getPrisma();
-    const issues = await Promise.all([
-      createIssue(fixture, { title: "Quiet delivery" }),
-      createIssue(fixture, { title: "Stale delivery" }),
-    ]);
+    // createIssue allocates max(number) + 1 for a fixture. Keep these
+    // sequential so the test does not manufacture a duplicate issue number.
+    const issues = [
+      await createIssue(fixture, { title: "Quiet delivery" }),
+      await createIssue(fixture, { title: "Stale delivery" }),
+    ];
     const sessions = await Promise.all(
       ["quiet", "stale"].map((suffix, index) =>
         prisma.workSession.create({
