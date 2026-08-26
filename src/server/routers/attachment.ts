@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { EventKind } from "@prisma/client";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient, Role } from "@prisma/client";
 import {
   assertSafeExternalUrl,
   isSafeExternalUrl,
@@ -24,6 +24,11 @@ import {
 } from "@/server/services/storage";
 import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
 import { linkGitHubUrlToIssue } from "@/server/services/github/resource-sync";
+import {
+  assertProjectAction,
+  buildIssueAccessWhere,
+} from "@/server/services/authorization";
+import { artifactReadWhere } from "@/server/services/artifact-access";
 
 /**
  * Map an exception from the storage layer onto a tRPC error. We use a
@@ -394,6 +399,7 @@ async function assertTargetInWorkspace(
     db: PrismaClient;
     workspaceId: string;
     session?: { user?: { id?: string | null } } | null;
+    membership: { id: string; role: Role };
     apiKey?: { linkedAgentId?: string | null } | null;
   },
   targetType: string,
@@ -404,7 +410,15 @@ async function assertTargetInWorkspace(
     switch (targetType) {
       case "issue":
         return db.issue.findFirst({
-          where: { id: targetId, workspaceId, deletedAt: null },
+          where: {
+            id: targetId,
+            ...buildIssueAccessWhere({
+              workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              action: "READ",
+            }),
+          },
           select: { id: true },
         });
       case "comment":
@@ -413,10 +427,13 @@ async function assertTargetInWorkspace(
           select: { id: true },
         });
       case "project":
-        return db.project.findFirst({
-          where: { id: targetId, workspaceId, deletedAt: null },
-          select: { id: true },
-        });
+        return assertProjectAction(db, {
+          projectId: targetId,
+          workspaceId,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
+          action: "READ",
+        }).then((decision) => ({ id: decision.project.id }));
       case "initiative":
         return db.initiative.findFirst({
           where: { id: targetId, workspaceId },
@@ -450,14 +467,29 @@ async function assertTargetInWorkspace(
       }
       case "artifact":
         return db.artifact.findFirst({
-          where: { id: targetId, workspaceId, archivedAt: null },
+          where: {
+            id: targetId,
+            archivedAt: null,
+            ...artifactReadWhere({
+              workspaceId,
+              userId: ctx.session?.user?.id ?? "",
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+            }),
+          },
           select: { id: true },
         });
-      case "canvas":
-        return db.workspaceCanvas.findFirst({
+      case "canvas": {
+        const canvas = await db.workspaceCanvas.findFirst({
           where: { id: targetId, workspaceId, archivedAt: null },
-          select: { id: true },
+          select: { id: true, scopeType: true, scopeId: true },
         });
+        if (!canvas) return null;
+        if (canvas.scopeType && canvas.scopeId) {
+          await assertTargetInWorkspace(ctx, canvas.scopeType, canvas.scopeId);
+        }
+        return { id: canvas.id };
+      }
       default:
         return null;
     }

@@ -1,7 +1,7 @@
 import {
-  IntegrationCapability,
   ProjectAccessRole,
   ProjectVisibility,
+  type IntegrationCapability,
   type Prisma,
   type PrismaClient,
   type Role,
@@ -123,6 +123,50 @@ export function buildProjectAccessWhere(params: {
   }
 
   return { ...tenant, ...explicit };
+}
+
+/**
+ * Tenant-scoped issue predicate that preserves project visibility. Issues not
+ * assigned to a project remain workspace-visible; issues in a project inherit
+ * that project's access policy. Safe to compose into descendant relations.
+ */
+export function buildIssueAccessWhere(params: {
+  workspaceId: string;
+  membershipId: string;
+  membershipRole: Role;
+  action: ProjectAction;
+}): Prisma.IssueWhereInput {
+  return {
+    workspaceId: params.workspaceId,
+    deletedAt: null,
+    OR: [
+      { projectId: null },
+      {
+        project: {
+          is: buildProjectAccessWhere(params),
+        },
+      },
+    ],
+  };
+}
+
+/** A plan is readable only when every project-bearing parent is readable. */
+export function buildExecutionPlanAccessWhere(params: {
+  workspaceId: string;
+  membershipId: string;
+  membershipRole: Role;
+  action: ProjectAction;
+}): Prisma.ExecutionPlanWhereInput {
+  const project = buildProjectAccessWhere(params);
+  const issue = buildIssueAccessWhere(params);
+  return {
+    workspaceId: params.workspaceId,
+    archivedAt: null,
+    AND: [
+      { OR: [{ projectId: null }, { project: { is: project } }] },
+      { OR: [{ issueId: null }, { issue: { is: issue } }] },
+    ],
+  };
 }
 
 type ProjectAuthorizationDb = Pick<PrismaClient, "project">;

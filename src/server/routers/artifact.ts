@@ -107,6 +107,7 @@ export const artifactRouter = router({
             artifactReadWhere({
               workspaceId: ctx.workspaceId,
               userId: ctx.session.user.id,
+              membershipId: ctx.membership.id,
               membershipRole: ctx.membership.role,
             }),
             {
@@ -145,6 +146,7 @@ export const artifactRouter = router({
             artifactReadWhere({
               workspaceId: ctx.workspaceId,
               userId: ctx.session.user.id,
+              membershipId: ctx.membership.id,
               membershipRole: ctx.membership.role,
             }),
           ],
@@ -239,6 +241,7 @@ export const artifactRouter = router({
             artifactReadWhere({
               workspaceId: ctx.workspaceId,
               userId: ctx.session.user.id,
+              membershipId: ctx.membership.id,
               membershipRole: ctx.membership.role,
             }),
           ],
@@ -305,6 +308,7 @@ export const artifactRouter = router({
             artifactReadWhere({
               workspaceId: ctx.workspaceId,
               userId: ctx.session.user.id,
+              membershipId: ctx.membership.id,
               membershipRole: ctx.membership.role,
             }),
           ],
@@ -331,6 +335,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.VIEWER,
       });
@@ -412,6 +417,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.EDITOR,
       });
@@ -441,6 +447,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.EDITOR,
       });
@@ -460,6 +467,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.EDITOR,
       });
@@ -518,6 +526,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.VIEWER,
       });
@@ -624,6 +633,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.VIEWER,
       });
@@ -648,6 +658,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.VIEWER,
       });
@@ -707,6 +718,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.VIEWER,
       });
@@ -770,6 +782,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.EDITOR,
       });
@@ -789,6 +802,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -826,6 +840,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.EDITOR,
       });
@@ -843,6 +858,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -861,6 +877,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -887,6 +904,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -924,6 +942,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -947,6 +966,7 @@ export const artifactRouter = router({
         artifactId: input.id,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -972,6 +992,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.VIEWER,
       });
@@ -1017,6 +1038,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.COMMENTER,
       });
@@ -1080,6 +1102,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.EDITOR,
       });
@@ -1119,6 +1142,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -1151,6 +1175,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });
@@ -1220,6 +1245,7 @@ export const artifactRouter = router({
         artifactId: input.artifactId,
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
+        membershipId: ctx.membership.id,
         membershipRole: ctx.membership.role,
         minimum: ArtifactRole.OWNER,
       });

@@ -7,6 +7,7 @@ import {
   Prisma,
   type CanvasStyleKind,
   type PrismaClient,
+  type Role,
 } from "@prisma/client";
 import { nanoid } from "nanoid";
 import { router, workspaceProcedure } from "@/server/trpc";
@@ -84,13 +85,23 @@ const nodeInputSchema = z.object({
 });
 
 async function assertCanvasTarget(
-  ctx: { db: PrismaClient; workspaceId: string },
+  ctx: {
+    db: PrismaClient;
+    workspaceId: string;
+    membership: { id: string; role: Role };
+  },
   type: z.infer<typeof forgeEntityTypeSchema>,
   id: string,
 ) {
-  const [hydrated] = await hydrateEntityRefs({ db: ctx.db, workspaceId: ctx.workspaceId }, [
-    { type, id },
-  ]);
+  const [hydrated] = await hydrateEntityRefs(
+    {
+      db: ctx.db,
+      workspaceId: ctx.workspaceId,
+      membershipId: ctx.membership.id,
+      membershipRole: ctx.membership.role,
+    },
+    [{ type, id }],
+  );
   if (!hydrated || hydrated.missing) {
     throw new TRPCError({
       code: "BAD_REQUEST",
@@ -100,7 +111,11 @@ async function assertCanvasTarget(
 }
 
 async function validateCanvasScope(
-  ctx: { db: PrismaClient; workspaceId: string },
+  ctx: {
+    db: PrismaClient;
+    workspaceId: string;
+    membership: { id: string; role: Role };
+  },
   scopeType: string | null | undefined,
   scopeId: string | null | undefined,
 ): Promise<{ scopeType: z.infer<typeof forgeEntityTypeSchema> | null; scopeId: string | null }> {
@@ -264,6 +279,8 @@ export const canvasRouter = router({
           workspaceId: ctx.workspaceId,
           workspaceSlug: ctx.workspaceSlug ?? undefined,
           userId: ctx.session?.user?.id ?? null,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
         },
         refs,
       );
