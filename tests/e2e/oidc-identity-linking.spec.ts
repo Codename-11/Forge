@@ -97,7 +97,8 @@ test.describe("strict generic OIDC identity linking", () => {
     ).resolves.toEqual({ userId: ownerId });
 
     await page.getByRole("button", { name: "Unlink" }).click();
-    await page.getByRole("button", { name: "Unlink", exact: true }).last().click();
+    await expect(page.getByText("Unlink Strict OIDC?", { exact: true })).toBeVisible();
+    await page.locator('[role="alertdialog"] button[type="submit"]').click();
     await expect(page).toHaveURL(/\/signin/);
     await expect(prisma.account.count({ where: { provider: providerId } })).resolves.toBe(0);
 
