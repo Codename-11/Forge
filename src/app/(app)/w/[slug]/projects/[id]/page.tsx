@@ -11,6 +11,7 @@ import {
   FilePlus,
   Inbox,
   Link2,
+  LockKeyhole,
   MessageCircle,
   UserCheck,
 } from "lucide-react";
@@ -138,6 +139,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             />
             {project.icon && <span>{project.icon}</span>}
             {project.name}
+            {project.visibility === "RESTRICTED" && (
+              <Badge className="gap-1">
+                <LockKeyhole className="h-3 w-3" aria-hidden /> Restricted
+              </Badge>
+            )}
           </span>
         }
         subtitle={project.key}
@@ -155,6 +161,11 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="outline" size="sm" onClick={() => setEditOpen(true)}>
               Edit
             </Button>
+            <Link href={`/w/${slug}/projects/${project.id}/access`}>
+              <Button variant="outline" size="sm">
+                <LockKeyhole className="h-3.5 w-3.5" aria-hidden /> Access
+              </Button>
+            </Link>
             <Button
               variant="ghost"
               size="sm"
