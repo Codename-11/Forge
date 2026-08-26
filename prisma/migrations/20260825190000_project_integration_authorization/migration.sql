@@ -194,8 +194,6 @@ ALTER TABLE "IntegrationGrant" ADD CONSTRAINT "IntegrationGrant_connectionAuthor
   FOREIGN KEY ("connectionAuthorizationId", "workspaceId") REFERENCES "ConnectionAuthorization"("id", "workspaceId") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "IntegrationGrant" ADD CONSTRAINT "IntegrationGrant_principalUserId_fkey"
   FOREIGN KEY ("principalUserId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "IntegrationGrant" ADD CONSTRAINT "IntegrationGrant_principalUserId_workspaceId_fkey"
-  FOREIGN KEY ("principalUserId", "workspaceId") REFERENCES "Membership"("userId", "workspaceId") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "IntegrationGrant" ADD CONSTRAINT "IntegrationGrant_principalAgentId_workspaceId_fkey"
   FOREIGN KEY ("principalAgentId", "workspaceId") REFERENCES "Agent"("id", "workspaceId") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "IntegrationGrant" ADD CONSTRAINT "IntegrationGrant_principalApiKeyId_workspaceId_fkey"

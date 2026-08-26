@@ -1523,7 +1523,6 @@ model Membership {
   user              User               @relation(fields: [userId], references: [id], onDelete: Cascade)
   workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   projectAccesses   ProjectAccess[]    @relation("ProjectAccessMembership")
-  integrationGrants IntegrationGrant[] @relation("IntegrationGrantUserMembership")
 
   @@unique([userId, workspaceId])
   @@unique([id, workspaceId])
@@ -2875,7 +2874,6 @@ model IntegrationGrant {
   workspace               Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   connectionAuthorization ConnectionAuthorization @relation(fields: [connectionAuthorizationId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
   principalUser           User?                   @relation("IntegrationGrantUserPrincipal", fields: [principalUserId], references: [id], onDelete: Cascade)
-  principalMembership     Membership?             @relation("IntegrationGrantUserMembership", fields: [principalUserId, workspaceId], references: [userId, workspaceId], onDelete: Cascade)
   principalAgent          Agent?                  @relation("IntegrationGrantAgentPrincipal", fields: [principalAgentId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
   principalApiKey         ApiKey?                 @relation("IntegrationGrantApiKeyPrincipal", fields: [principalApiKeyId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
   project                 Project?                @relation(fields: [projectId, workspaceId], references: [id, workspaceId], onDelete: Cascade)
