@@ -2,6 +2,19 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-25 — v0.33.0 release preparation
+
+- Squash-merged AXI-180 / PR #96, AXI-181 / PR #97, and AXI-182 / PR #98 to
+  `main` after exact-head GitHub CI passed and actionable review findings were
+  resolved.
+- Prepared the `0.33.0` package bump and curated release notes for full local,
+  hybrid, and SSO identity management; restricted project and integration
+  authorization; standards-correct OIDC; worker-plane diagnostics; and
+  versioned Hermes runtime helpers.
+- The release PR owns the version and immutable tag. Production deployment and
+  live verification remain separate and are not authorized by this release
+  task.
+
 ## 2026-08-25 — Generic OIDC and recovery identity hardening
 
 - Required PKCE, state, and nonce checks explicitly for every generic OIDC
@@ -39,6 +52,7 @@
   accepts only a live BODY comment, and added one managed-runtime acceptance
   path spanning assignment, external dispatch, inbox acknowledgement, output
   start, final BODY comment, and terminal completion.
+
 ## 2026-08-25 — Restricted projects and explicit integration grants
 
 - Added workspace-visible and restricted projects with explicit Viewer,
@@ -68,6 +82,7 @@
   integration ceiling after defaults are resolved, and now revokes derived
   grants when credential source, exact app binding, or capability ceilings
   change.
+
 ## 2026-08-25 — Canonical local and external user identity foundation
 
 - Added a provider-neutral instance authentication policy for local-only,
