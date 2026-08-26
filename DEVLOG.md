@@ -26,6 +26,11 @@
   and management-flow coverage. Focused agent-owned suites and TypeScript
   checks passed; the coordinated local and exact-head CI gates are recorded on
   the implementation pull request.
+- Final authorization review aligned every issue-derived surface on the same
+  GUEST/unfiled policy, kept project/initiative/label API-key narrowing as an
+  integration ceiling after defaults are resolved, and now revokes derived
+  grants when credential source, exact app binding, or capability ceilings
+  change.
 
 ## 2026-08-25 — Canonical local and external user identity foundation
 

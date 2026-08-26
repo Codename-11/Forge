@@ -8769,7 +8769,7 @@ export const mcpTools = {
       await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: input.issueId });
       const issue = await db.issue.findFirst({
         where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-        select: { projectId: true },
+        select: { projectId: true, labels: { select: { labelId: true } } },
       });
       if (!issue) throw new Error("Issue not found.");
       const parsed = parseGitHubUrl(input.url);
@@ -8786,6 +8786,7 @@ export const mcpTools = {
         principal: integrationPrincipalFromContext(ctx),
         action: "LINK",
         projectId: issue.projectId,
+        labelIds: issue.labels.map((label) => label.labelId),
       });
       const actorId = await resolveActorId(ctx);
       return linkGitHubUrlToIssue({
@@ -8847,6 +8848,7 @@ export const mcpTools = {
         principal: integrationPrincipalFromContext(ctx),
         action: "IMPORT",
         projectId,
+        labelIds: [...mapping.labelIds, ...input.labelIds],
       });
       const actorId = await resolveActorId(ctx);
       const result = await importGitHubIssue({
@@ -8881,7 +8883,12 @@ export const mcpTools = {
           workspaceId: ctx.workspaceId,
           externalResourceId: input.externalResourceId,
         },
-        select: { issueId: true, issue: { select: { projectId: true } } },
+        select: {
+          issueId: true,
+          issue: {
+            select: { projectId: true, labels: { select: { labelId: true } } },
+          },
+        },
       });
       for (const link of links) {
         await assertKeyScope(scopeCtx(ctx), { entity: "issue", id: link.issueId });
@@ -8897,16 +8904,17 @@ export const mcpTools = {
       if (!resource?.connectionMappingId) {
         throw new Error("GitHub resource has no active credential mapping.");
       }
-      const projectIds = new Set(links.map((link) => link.issue.projectId));
-      if (projectIds.size === 0) projectIds.add(null);
-      for (const projectId of projectIds) {
+      const targets =
+        links.length > 0 ? links.map((link) => link.issue) : [{ projectId: null, labels: [] }];
+      for (const target of targets) {
         await assertIntegrationAction({
           db,
           workspaceId: ctx.workspaceId,
           mappingId: resource.connectionMappingId,
           principal: integrationPrincipalFromContext(ctx),
           action: "SYNC",
-          projectId,
+          projectId: target.projectId,
+          labelIds: target.labels.map((label) => label.labelId),
         });
       }
       const actorId = await resolveActorId(ctx);

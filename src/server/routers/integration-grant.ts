@@ -197,7 +197,18 @@ export const integrationGrantRouter = router({
               },
             });
 
-        if (prior && prior.authorizationDigest !== digest) {
+        const sourceBindingChanged = Boolean(
+          prior &&
+          (prior.credentialSource !== input.credentialSource || prior.githubAppId !== githubAppId),
+        );
+        const capabilityCeilingShrank = Boolean(
+          prior &&
+          prior.capabilities.some((capability) => !input.capabilities.includes(capability)),
+        );
+        if (
+          prior &&
+          (prior.authorizationDigest !== digest || sourceBindingChanged || capabilityCeilingShrank)
+        ) {
           await tx.integrationGrant.updateMany({
             where: { connectionAuthorizationId: prior.id, revokedAt: null },
             data: { revokedAt: now, revokedById: ctx.session.user.id },

@@ -217,6 +217,7 @@ export async function assertIntegrationAction(args: {
   principal: IntegrationPrincipal;
   action: IntegrationAction;
   projectId?: string | null;
+  labelIds?: readonly string[];
 }): Promise<IntegrationAuthorization> {
   const required = ACTION_CAPABILITIES[args.action];
   const mapping = await args.db.connectionMapping.findFirst({
@@ -312,13 +313,39 @@ export async function assertIntegrationAction(args: {
         revokedAt: null,
         OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
       },
-      select: { id: true, projectIds: true },
+      select: { id: true, projectIds: true, labelIds: true, initiativeIds: true },
     });
-    if (!key || (projectId && key.projectIds.length > 0 && !key.projectIds.includes(projectId))) {
+    if (!key) {
       throw new TRPCError({
         code: "FORBIDDEN",
         message: "API key scope does not permit this integration action.",
       });
+    }
+    const isNarrowed =
+      key.projectIds.length > 0 || key.labelIds.length > 0 || key.initiativeIds.length > 0;
+    if (isNarrowed) {
+      let targetAllowed = false;
+      if (projectId) {
+        if (key.projectIds.includes(projectId)) targetAllowed = true;
+        if (!targetAllowed && key.initiativeIds.length > 0) {
+          const project = await args.db.project.findFirst({
+            where: { id: projectId, workspaceId: args.workspaceId, deletedAt: null },
+            select: { initiativeId: true },
+          });
+          targetAllowed = Boolean(
+            project?.initiativeId && key.initiativeIds.includes(project.initiativeId),
+          );
+        }
+      }
+      if (!targetAllowed && args.labelIds?.some((labelId) => key.labelIds.includes(labelId))) {
+        targetAllowed = true;
+      }
+      if (!targetAllowed) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message: "API key scope does not permit this integration action.",
+        });
+      }
     }
   }
 

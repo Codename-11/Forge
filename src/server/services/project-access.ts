@@ -5,6 +5,7 @@ import { TRPCError } from "@trpc/server";
 import {
   assertProjectAction,
   buildProjectAccessWhere,
+  canUseUnfiledIssues,
   resolveProjectDecision,
   type ProjectAction,
 } from "@/server/services/authorization";
@@ -39,15 +40,12 @@ export function issueWhereForViewer(
   action: ProjectAction = "READ",
 ): Prisma.IssueWhereInput {
   const project = projectWhereForViewer(viewer, action);
-  const canUseUnfiled =
-    viewer.membership.role === "OWNER" ||
-    viewer.membership.role === "ADMIN" ||
-    (viewer.membership.role === "MEMBER" && action !== "MANAGE");
+  const canUseUnfiled = canUseUnfiledIssues(viewer.membership.role, action);
   return {
     workspaceId: viewer.workspaceId,
     OR: [
       ...(canUseUnfiled ? [{ projectId: null } satisfies Prisma.IssueWhereInput] : []),
-      { project: project },
+      { project },
     ],
   };
 }

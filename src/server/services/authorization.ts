@@ -136,11 +136,12 @@ export function buildIssueAccessWhere(params: {
   membershipRole: Role;
   action: ProjectAction;
 }): Prisma.IssueWhereInput {
+  const canUseUnfiled = canUseUnfiledIssues(params.membershipRole, params.action);
   return {
     workspaceId: params.workspaceId,
     deletedAt: null,
     OR: [
-      { projectId: null },
+      ...(canUseUnfiled ? [{ projectId: null } satisfies Prisma.IssueWhereInput] : []),
       {
         project: {
           is: buildProjectAccessWhere(params),
@@ -148,6 +149,10 @@ export function buildIssueAccessWhere(params: {
       },
     ],
   };
+}
+
+export function canUseUnfiledIssues(role: Role, action: ProjectAction): boolean {
+  return isWorkspaceAdmin(role) || (role === "MEMBER" && action !== "MANAGE");
 }
 
 /** A plan is readable only when every project-bearing parent is readable. */

@@ -1,6 +1,15 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { ProjectAccessRole, ProjectVisibility, RelationKind } from "@prisma/client";
+import {
+  AgentRunStatus,
+  EngagementMode,
+  ProjectAccessRole,
+  ProjectVisibility,
+  RelationKind,
+  Role,
+} from "@prisma/client";
+import { agentRunRouter } from "@/server/routers/agent-run";
 import { commentRouter } from "@/server/routers/comment";
+import { cycleRouter } from "@/server/routers/cycle";
 import { labelRouter } from "@/server/routers/label";
 import { relationRouter } from "@/server/routers/relation";
 import { timeEntryRouter } from "@/server/routers/timeEntry";
@@ -72,6 +81,92 @@ async function setup() {
 }
 
 describe("restricted project secondary surfaces", () => {
+  it("keeps guests from reading or mutating unfiled work across secondary surfaces", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "RPG" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    await prisma.membership.update({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+      data: { role: Role.GUEST },
+    });
+    const [issue, otherIssue] = await Promise.all([
+      createIssue(fixture, { title: "Unfiled private work" }),
+      createIssue(fixture, { title: "Other unfiled work" }),
+    ]);
+    const agent = await prisma.agent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Guest test agent",
+        profileKey: `guest-test-${Date.now()}`,
+        status: "ONLINE",
+      },
+    });
+    const run = await prisma.agentRun.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        issueId: issue.id,
+        agentId: agent.id,
+        status: AgentRunStatus.WAITING,
+        engagementMode: EngagementMode.RESEARCH,
+      },
+    });
+    const cycle = await prisma.cycle.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        name: "Guest test sprint",
+        startsAt: new Date(),
+        endsAt: new Date(Date.now() + 7 * 86_400_000),
+        lengthDays: 7,
+        cooldownDays: 0,
+        status: "PLANNED",
+      },
+    });
+    await prisma.issue.update({ where: { id: issue.id }, data: { cycleId: cycle.id } });
+    const time = await prisma.timeEntry.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        userId: fixture.secondUser.id,
+        issueId: issue.id,
+        startedAt: new Date(Date.now() - 60_000),
+        endedAt: new Date(),
+      },
+    });
+    const guestContext = await buildContext(fixture, { asUserId: fixture.secondUser.id });
+    const runs = agentRunRouter.createCaller(guestContext);
+    const relations = relationRouter.createCaller(guestContext);
+    const cycles = cycleRouter.createCaller(guestContext);
+    const times = timeEntryRouter.createCaller(guestContext);
+
+    await expect(runs.activeForIssue({ issueId: issue.id })).resolves.toBeNull();
+    await expect(
+      runs.setEngagementMode({ runId: run.id, mode: EngagementMode.EXECUTE }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    await expect(relations.listForIssue({ issueId: issue.id })).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    await expect(
+      relations.add({
+        fromIssueId: issue.id,
+        toIssueId: otherIssue.id,
+        kind: RelationKind.RELATES_TO,
+      }),
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    await expect(cycles.get({ id: cycle.id })).resolves.toMatchObject({ issues: [] });
+    await expect(cycles.plan({ cycleId: cycle.id, issueIds: [issue.id] })).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
+    await expect(times.list()).resolves.toEqual([]);
+    await prisma.timeEntry.delete({ where: { id: time.id } });
+    await expect(times.start({ issueId: issue.id })).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+  });
+
   it("hides comment reads and rejects comment and label writes without contribute access", async () => {
     const { fixture, memberCtx, restrictedIssue } = await setup();
     const prisma = getPrisma();
@@ -104,14 +199,8 @@ describe("restricted project secondary surfaces", () => {
   });
 
   it("requires access to both relation endpoints and omits inaccessible targets from reads", async () => {
-    const {
-      fixture,
-      member,
-      memberCtx,
-      restrictedProject,
-      restrictedIssue,
-      publicIssue,
-    } = await setup();
+    const { fixture, member, memberCtx, restrictedProject, restrictedIssue, publicIssue } =
+      await setup();
     const prisma = getPrisma();
     const relation = await prisma.issueRelation.create({
       data: {

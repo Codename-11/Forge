@@ -45,7 +45,9 @@ authority. Workspace administration does not bypass credential consent.
 Changing security-sensitive mapping fields invalidates the authorization
 digest; disconnecting or removing a personal credential pauses its mappings
 and revokes consent. Workspace-App authority is kept separate from the human
-who originally configured it.
+who originally configured it. Switching credential source or exact App binding,
+or shrinking the authorized capability ceiling, revokes every derived grant so
+principals must be reviewed against the new consent boundary.
 
 Capabilities are explicit: `READ`, `IMPORT`, `LINK`, `SYNC`, `WRITE`, and
 `ADMIN`. Callers must hold every capability required by an operation; `ADMIN`

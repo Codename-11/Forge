@@ -3,11 +3,8 @@ import { TRPCError } from "@trpc/server";
 import { EventKind, RelationKind, type Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
-import {
-  assertProjectAction,
-  buildProjectAccessWhere,
-  type ProjectAction,
-} from "@/server/services/authorization";
+import { buildIssueAccessWhere, type ProjectAction } from "@/server/services/authorization";
+import { assertIssueForViewer, assertIssuesForViewer } from "@/server/services/project-access";
 
 /**
  * Issue relations — directed, typed links between two issues.
@@ -51,24 +48,21 @@ export const graphForIssueInput = z.object({
 const GRAPH_MAX_NODES = 60;
 
 function issueAccessWhere(
-  ctx: { workspaceId: string; membership: { id: string; role: Parameters<typeof buildProjectAccessWhere>[0]["membershipRole"] } },
+  ctx: {
+    workspaceId: string;
+    membership: {
+      id: string;
+      role: Parameters<typeof buildIssueAccessWhere>[0]["membershipRole"];
+    };
+  },
   action: ProjectAction,
 ): Prisma.IssueWhereInput {
-  return {
-    OR: [
-      { projectId: null },
-      {
-        project: {
-          is: buildProjectAccessWhere({
-            workspaceId: ctx.workspaceId,
-            membershipId: ctx.membership.id,
-            membershipRole: ctx.membership.role,
-            action,
-          }),
-        },
-      },
-    ],
-  };
+  return buildIssueAccessWhere({
+    workspaceId: ctx.workspaceId,
+    membershipId: ctx.membership.id,
+    membershipRole: ctx.membership.role,
+    action,
+  });
 }
 
 export const relationRouter = router({
@@ -80,6 +74,7 @@ export const relationRouter = router({
       });
     }
 
+    await assertIssuesForViewer(ctx.db, ctx, [input.fromIssueId, input.toIssueId], "CONTRIBUTE");
     return ctx.db.$transaction(async (tx) => {
       // Both issues must live in the caller's workspace. We check both
       // explicitly because workspaceId isn't part of the IssueRelation
@@ -100,18 +95,6 @@ export const relationRouter = router({
           message: "Both issues must belong to this workspace.",
         });
       }
-      for (const issue of [from, to]) {
-        if (issue.projectId) {
-          await assertProjectAction(tx, {
-            workspaceId: ctx.workspaceId,
-            membershipId: ctx.membership.id,
-            membershipRole: ctx.membership.role,
-            projectId: issue.projectId,
-            action: "CONTRIBUTE",
-          });
-        }
-      }
-
       const existing = await tx.issueRelation.findUnique({
         where: {
           fromIssueId_toIssueId_kind: {
@@ -202,18 +185,12 @@ export const relationRouter = router({
           message: "Restore archived issues before changing their relationships.",
         });
       }
-      for (const issue of [relation.fromIssue, relation.toIssue]) {
-        if (issue.projectId) {
-          await assertProjectAction(tx, {
-            workspaceId: ctx.workspaceId,
-            membershipId: ctx.membership.id,
-            membershipRole: ctx.membership.role,
-            projectId: issue.projectId,
-            action: "CONTRIBUTE",
-          });
-        }
-      }
-
+      await assertIssuesForViewer(
+        tx,
+        ctx,
+        [relation.fromIssueId, relation.toIssueId],
+        "CONTRIBUTE",
+      );
       await tx.issueRelation.delete({ where: { id: relation.id } });
 
       const mirror = reciprocalKind(relation.kind);
@@ -255,20 +232,7 @@ export const relationRouter = router({
   listForIssue: workspaceProcedure.input(listForIssueInput).query(async ({ ctx, input }) => {
     // Confirm scope before we read relation rows (which don't filter by
     // workspaceId in their unique index).
-    const issue = await ctx.db.issue.findFirst({
-      where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-      select: { id: true, projectId: true },
-    });
-    if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
-    if (issue.projectId) {
-      await assertProjectAction(ctx.db, {
-        workspaceId: ctx.workspaceId,
-        membershipId: ctx.membership.id,
-        membershipRole: ctx.membership.role,
-        projectId: issue.projectId,
-        action: "READ",
-      });
-    }
+    await assertIssueForViewer(ctx.db, ctx, input.issueId, "READ");
 
     // We only look at outgoing edges. BLOCKS/BLOCKED_BY already have a
     // mirror row on the other side (written in `add`), so every
@@ -352,20 +316,7 @@ export const relationRouter = router({
    * to undiscovered nodes are dropped so the graph stays consistent.
    */
   graphForIssue: workspaceProcedure.input(graphForIssueInput).query(async ({ ctx, input }) => {
-    const root = await ctx.db.issue.findFirst({
-      where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-      select: { id: true, projectId: true },
-    });
-    if (!root) throw new TRPCError({ code: "NOT_FOUND" });
-    if (root.projectId) {
-      await assertProjectAction(ctx.db, {
-        workspaceId: ctx.workspaceId,
-        membershipId: ctx.membership.id,
-        membershipRole: ctx.membership.role,
-        projectId: root.projectId,
-        action: "READ",
-      });
-    }
+    const root = await assertIssueForViewer(ctx.db, ctx, input.issueId, "READ");
     const visibleIssueWhere = issueAccessWhere(ctx, "READ");
 
     type Edge = {
