@@ -13,9 +13,14 @@ import { getEnabledSsoRows } from "@/server/sso";
 export default async function LocalSignInPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string; callbackUrl?: string; notice?: string }>;
+  searchParams: Promise<{
+    error?: string;
+    callbackUrl?: string;
+    notice?: string;
+    breakGlass?: string;
+  }>;
 }) {
-  const { error, callbackUrl, notice } = await searchParams;
+  const { error, callbackUrl, notice, breakGlass } = await searchParams;
   const target = safeAuthCallbackUrl(callbackUrl);
   const [policy, providers] = await Promise.all([getInstanceAuthPolicy(), getEnabledSsoRows()]);
   const presentation = deriveAuthPresentation(policy, providers);
@@ -60,7 +65,9 @@ export default async function LocalSignInPage({
     );
   }
 
-  const isBreakGlass = !presentation.localCredentialsEnabled;
+  const isBreakGlass =
+    presentation.breakGlassCredentialsEnabled &&
+    (!presentation.localCredentialsEnabled || breakGlass === "1");
   return (
     <AuthCardShell
       eyebrow={isBreakGlass ? "Administrator recovery" : "Local sign-in"}

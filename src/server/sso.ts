@@ -20,22 +20,30 @@ import { encryptSecret } from "@/server/crypto";
 // going stale for long; mutations call `bustSsoCache()` for instant effect
 // within the same process.
 const TTL_MS = 30_000;
-let cache: { rows: SsoProvider[]; at: number } | null = null;
+const SSO_CACHE = Symbol.for("forge.sso-provider-cache");
+type SsoGlobal = typeof globalThis & {
+  [SSO_CACHE]?: { rows: SsoProvider[]; at: number } | null;
+};
+
+function cacheStore(): SsoGlobal {
+  return globalThis as SsoGlobal;
+}
 
 export function bustSsoCache() {
-  cache = null;
+  cacheStore()[SSO_CACHE] = null;
 }
 
 /** All *enabled* providers, cached. Includes the encrypted secret. */
 export async function getEnabledSsoRows(): Promise<SsoProvider[]> {
   await seedSsoFromEnvOnce();
   const now = Date.now();
+  const cache = cacheStore()[SSO_CACHE];
   if (cache && now - cache.at < TTL_MS) return cache.rows;
   const rows = await db.ssoProvider.findMany({
     where: { enabled: true, archivedAt: null },
     orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
   });
-  cache = { rows, at: now };
+  cacheStore()[SSO_CACHE] = { rows, at: now };
   return rows;
 }
 

@@ -896,6 +896,7 @@ model User {
   avatar                 UserAvatar?
   instanceAuditActions   InstanceAuditLog[]     @relation("InstanceAuditActor")
   instanceAuditTargets   InstanceAuditLog[]     @relation("InstanceAuditTarget")
+  breakGlassPolicies     InstanceAuthPolicy[]   @relation("InstanceBreakGlassUser")
   memberships            Membership[]
   invitationsSent        WorkspaceInvitation[]  @relation("InvitationSender")
   invitationsAccepted    WorkspaceInvitation[]  @relation("InvitationAcceptor")
@@ -1004,6 +1005,10 @@ model InstanceAuthPolicy {
   mode                         AuthenticationMode @default(HYBRID)
   registrationMode             RegistrationMode   @default(INVITE_ONLY)
   breakGlassCredentialsEnabled Boolean            @default(true)
+  /// Active instance administrator designated to receive the environment-
+  /// backed recovery credential. Keeping this separate from the human's OIDC
+  /// identity makes emergency access explicit and lifecycle-safe.
+  breakGlassUserId             String?
   autoRedirectProviderId       String?
   passwordMinLength            Int                @default(12)
   passwordResetTtlMinutes      Int                @default(30)
@@ -1013,6 +1018,7 @@ model InstanceAuthPolicy {
   updatedAt                    DateTime           @updatedAt
 
   autoRedirectProvider SsoProvider? @relation(fields: [autoRedirectProviderId], references: [id], onDelete: SetNull)
+  breakGlassUser       User?        @relation("InstanceBreakGlassUser", fields: [breakGlassUserId], references: [id], onDelete: Restrict)
 }
 
 /// Optional local sign-in method attached to the same canonical User used by

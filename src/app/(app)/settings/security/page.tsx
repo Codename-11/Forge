@@ -46,6 +46,7 @@ export default function SecuritySettingsPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [removeOpen, setRemoveOpen] = useState(false);
   const [removePassword, setRemovePassword] = useState("");
+  const [linkingProviderId, setLinkingProviderId] = useState<string | null>(null);
 
   function signedOut(message: string) {
     toast.success(message);
@@ -102,6 +103,29 @@ export default function SecuritySettingsPage() {
       ...(hasPassword ? { currentPassword } : {}),
       newPassword,
     });
+  }
+
+  async function linkProvider(provider: {
+    id: string;
+    type: string;
+    name: string;
+    allowLinking: boolean;
+  }) {
+    const approved = await confirm({
+      title: `Link ${provider.name} to this account?`,
+      description: `You are signed in as ${data?.user.email ?? "this Forge user"}. Continuing attaches the external identity to this same Forge account. It does not create an integration connection or grant repository access.`,
+      primaryLabel: `Continue to ${provider.name}`,
+    });
+    if (!approved) return;
+    const providerId = provider.type === "OIDC" ? provider.id : provider.type.toLowerCase();
+    const formData = new FormData();
+    formData.set("providerId", providerId);
+    setLinkingProviderId(providerId);
+    try {
+      await linkIdentityAction(formData);
+    } finally {
+      setLinkingProviderId(null);
+    }
   }
 
   if (security.isLoading) {
@@ -328,12 +352,26 @@ export default function SecuritySettingsPage() {
                   const providerId =
                     provider.type === "OIDC" ? provider.id : provider.type.toLowerCase();
                   return (
-                    <form key={provider.id} action={linkIdentityAction}>
-                      <input type="hidden" name="providerId" value={providerId} />
-                      <Button type="submit" size="sm" variant="outline">
-                        <Link2 className="h-3.5 w-3.5" /> Link {provider.name}
-                      </Button>
-                    </form>
+                    <Button
+                      key={provider.id}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={linkingProviderId !== null || !provider.allowLinking}
+                      onClick={() => void linkProvider(provider)}
+                      title={
+                        provider.allowLinking
+                          ? undefined
+                          : "An instance administrator must enable trusted account linking for this provider."
+                      }
+                    >
+                      <Link2 className="h-3.5 w-3.5" />
+                      {linkingProviderId === providerId
+                        ? "Redirecting…"
+                        : provider.allowLinking
+                          ? `Link ${provider.name}`
+                          : `${provider.name} linking disabled`}
+                    </Button>
                   );
                 })}
               </div>

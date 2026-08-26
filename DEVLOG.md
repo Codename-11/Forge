@@ -2,6 +2,21 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-25 — Generic OIDC and recovery identity hardening
+
+- Required PKCE, state, and nonce checks explicitly for every generic OIDC
+  provider and added a strict local provider fixture that rejects weak state,
+  requires S256 PKCE, and binds the returned ID token to the request nonce.
+- Made external identity linking an explicit, confirmed account-security flow,
+  clarified that login identities do not grant integration access, surfaced
+  provider-link collisions, and covered link, unlink, and relink behavior.
+- Added a designated break-glass administrator to instance policy. Recovery
+  now uses an explicit route, records an instance audit event, exposes readiness
+  in admin settings, and protects the designated principal from demotion,
+  suspension, or deletion until recovery is reassigned or disabled.
+- Documented reverse-proxy callback bypass, forwarded-origin, sealed-cookie
+  header-buffer, and sensitive callback logging requirements for OIDC.
+
 ## 2026-08-25 — Canonical local and external user identity foundation
 
 - Added a provider-neutral instance authentication policy for local-only,
