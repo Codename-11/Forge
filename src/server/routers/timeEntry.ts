@@ -4,6 +4,10 @@ import { EventKind } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import {
+  assertProjectAction,
+  buildProjectAccessWhere,
+} from "@/server/services/authorization";
 
 /**
  * Time tracking — per-user, workspace-scoped duration rows.
@@ -90,6 +94,38 @@ function csvEscape(value: string | number | null | undefined): string {
   return s;
 }
 
+function visibleIssueWhere(ctx: {
+  workspaceId: string;
+  membership: {
+    id: string;
+    role: Parameters<typeof buildProjectAccessWhere>[0]["membershipRole"];
+  };
+}): Prisma.IssueWhereInput {
+  return {
+    OR: [
+      { projectId: null },
+      {
+        project: {
+          is: buildProjectAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
+        },
+      },
+    ],
+  };
+}
+
+function visibleTimeEntryWhere(
+  ctx: Parameters<typeof visibleIssueWhere>[0],
+): Prisma.TimeEntryWhereInput {
+  return {
+    OR: [{ issueId: null }, { issue: { is: visibleIssueWhere(ctx) } }],
+  };
+}
+
 export const timeEntryRouter = router({
   start: workspaceProcedure.input(startInput).mutation(async ({ ctx, input }) => {
     return ctx.db.$transaction(async (tx) => {
@@ -110,10 +146,19 @@ export const timeEntryRouter = router({
       if (input.issueId) {
         const issue = await tx.issue.findFirst({
           where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, projectId: true },
         });
         if (!issue) {
           throw new TRPCError({ code: "BAD_REQUEST", message: "Issue not found in workspace." });
+        }
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
         }
       }
 
@@ -161,6 +206,22 @@ export const timeEntryRouter = router({
         },
       });
       if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+      if (entry.issueId) {
+        const issue = await tx.issue.findFirst({
+          where: { id: entry.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { projectId: true },
+        });
+        if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
+        }
+      }
       if (entry.endedAt) {
         throw new TRPCError({ code: "BAD_REQUEST", message: "Entry is already stopped." });
       }
@@ -203,6 +264,7 @@ export const timeEntryRouter = router({
         workspaceId: ctx.workspaceId,
         userId: ctx.session.user.id,
         endedAt: null,
+        ...visibleTimeEntryWhere(ctx),
       },
       include: {
         issue: {
@@ -217,6 +279,7 @@ export const timeEntryRouter = router({
     const where: Prisma.TimeEntryWhereInput = {
       workspaceId: ctx.workspaceId,
       userId,
+      ...visibleTimeEntryWhere(ctx),
       ...(input.issueId ? { issueId: input.issueId } : {}),
       ...(input.billable !== undefined ? { billable: input.billable } : {}),
       ...(input.from || input.to
@@ -257,6 +320,22 @@ export const timeEntryRouter = router({
         },
       });
       if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+      if (entry.issueId) {
+        const issue = await tx.issue.findFirst({
+          where: { id: entry.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { projectId: true },
+        });
+        if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
+        }
+      }
       return tx.timeEntry.update({ where: { id: entry.id }, data: patch });
     });
   }),
@@ -271,6 +350,22 @@ export const timeEntryRouter = router({
         },
       });
       if (!entry) throw new TRPCError({ code: "NOT_FOUND" });
+      if (entry.issueId) {
+        const issue = await tx.issue.findFirst({
+          where: { id: entry.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { projectId: true },
+        });
+        if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
+        }
+      }
       await tx.timeEntry.delete({ where: { id: entry.id } });
       return { ok: true };
     });
@@ -282,6 +377,7 @@ export const timeEntryRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         userId,
+        ...visibleTimeEntryWhere(ctx),
         startedAt: { gte: input.from, lte: input.to },
         endedAt: { not: null },
       },
@@ -335,6 +431,7 @@ export const timeEntryRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         userId,
+        ...visibleTimeEntryWhere(ctx),
         startedAt: { gte: input.from, lte: input.to },
       },
       include: {

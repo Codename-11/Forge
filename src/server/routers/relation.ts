@@ -1,8 +1,13 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { EventKind, RelationKind } from "@prisma/client";
+import { EventKind, RelationKind, type Prisma } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import {
+  assertProjectAction,
+  buildProjectAccessWhere,
+  type ProjectAction,
+} from "@/server/services/authorization";
 
 /**
  * Issue relations — directed, typed links between two issues.
@@ -45,6 +50,27 @@ export const graphForIssueInput = z.object({
 /** Hard cap so a pathological dependency web can't blow up the payload. */
 const GRAPH_MAX_NODES = 60;
 
+function issueAccessWhere(
+  ctx: { workspaceId: string; membership: { id: string; role: Parameters<typeof buildProjectAccessWhere>[0]["membershipRole"] } },
+  action: ProjectAction,
+): Prisma.IssueWhereInput {
+  return {
+    OR: [
+      { projectId: null },
+      {
+        project: {
+          is: buildProjectAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action,
+          }),
+        },
+      },
+    ],
+  };
+}
+
 export const relationRouter = router({
   add: workspaceProcedure.input(addInput).mutation(async ({ ctx, input }) => {
     if (input.fromIssueId === input.toIssueId) {
@@ -61,11 +87,11 @@ export const relationRouter = router({
       const [from, to] = await Promise.all([
         tx.issue.findFirst({
           where: { id: input.fromIssueId, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, projectId: true },
         }),
         tx.issue.findFirst({
           where: { id: input.toIssueId, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, projectId: true },
         }),
       ]);
       if (!from || !to) {
@@ -73,6 +99,17 @@ export const relationRouter = router({
           code: "BAD_REQUEST",
           message: "Both issues must belong to this workspace.",
         });
+      }
+      for (const issue of [from, to]) {
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
+        }
       }
 
       const existing = await tx.issueRelation.findUnique({
@@ -152,8 +189,8 @@ export const relationRouter = router({
       const relation = await tx.issueRelation.findFirst({
         where: { id: input.relationId, workspaceId: ctx.workspaceId },
         include: {
-          fromIssue: { select: { deletedAt: true } },
-          toIssue: { select: { deletedAt: true } },
+          fromIssue: { select: { deletedAt: true, projectId: true } },
+          toIssue: { select: { deletedAt: true, projectId: true } },
         },
       });
       if (!relation) {
@@ -164,6 +201,17 @@ export const relationRouter = router({
           code: "CONFLICT",
           message: "Restore archived issues before changing their relationships.",
         });
+      }
+      for (const issue of [relation.fromIssue, relation.toIssue]) {
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
+        }
       }
 
       await tx.issueRelation.delete({ where: { id: relation.id } });
@@ -209,9 +257,18 @@ export const relationRouter = router({
     // workspaceId in their unique index).
     const issue = await ctx.db.issue.findFirst({
       where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-      select: { id: true },
+      select: { id: true, projectId: true },
     });
     if (!issue) throw new TRPCError({ code: "NOT_FOUND" });
+    if (issue.projectId) {
+      await assertProjectAction(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        membershipId: ctx.membership.id,
+        membershipRole: ctx.membership.role,
+        projectId: issue.projectId,
+        action: "READ",
+      });
+    }
 
     // We only look at outgoing edges. BLOCKS/BLOCKED_BY already have a
     // mirror row on the other side (written in `add`), so every
@@ -221,7 +278,7 @@ export const relationRouter = router({
       where: {
         workspaceId: ctx.workspaceId,
         fromIssueId: input.issueId,
-        toIssue: { deletedAt: null },
+        toIssue: { deletedAt: null, ...issueAccessWhere(ctx, "READ") },
       },
       include: {
         toIssue: {
@@ -297,9 +354,19 @@ export const relationRouter = router({
   graphForIssue: workspaceProcedure.input(graphForIssueInput).query(async ({ ctx, input }) => {
     const root = await ctx.db.issue.findFirst({
       where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-      select: { id: true },
+      select: { id: true, projectId: true },
     });
     if (!root) throw new TRPCError({ code: "NOT_FOUND" });
+    if (root.projectId) {
+      await assertProjectAction(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        membershipId: ctx.membership.id,
+        membershipRole: ctx.membership.role,
+        projectId: root.projectId,
+        action: "READ",
+      });
+    }
+    const visibleIssueWhere = issueAccessWhere(ctx, "READ");
 
     type Edge = {
       id: string;
@@ -329,17 +396,29 @@ export const relationRouter = router({
             workspaceId: ctx.workspaceId,
             kind: RelationKind.BLOCKS,
             OR: [{ fromIssueId: { in: frontier } }, { toIssueId: { in: frontier } }],
+            fromIssue: visibleIssueWhere,
+            toIssue: visibleIssueWhere,
           },
           select: { fromIssueId: true, toIssueId: true },
         }),
         // The frontier issues' own parents (child → up to parent).
         ctx.db.issue.findMany({
-          where: { id: { in: frontier }, workspaceId: ctx.workspaceId, deletedAt: null },
+          where: {
+            id: { in: frontier },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+            ...visibleIssueWhere,
+          },
           select: { id: true, parentId: true },
         }),
         // The frontier issues' children (parent → down to child).
         ctx.db.issue.findMany({
-          where: { parentId: { in: frontier }, workspaceId: ctx.workspaceId, deletedAt: null },
+          where: {
+            parentId: { in: frontier },
+            workspaceId: ctx.workspaceId,
+            deletedAt: null,
+            ...visibleIssueWhere,
+          },
           select: { id: true, parentId: true },
         }),
         // A frontier issue can be the materialized form of a plan step.
@@ -379,7 +458,7 @@ export const relationRouter = router({
             workspaceId: ctx.workspaceId,
             planId: { in: planIds },
             issueId: { not: null },
-            issue: { is: { deletedAt: null } },
+            issue: { is: { deletedAt: null, ...visibleIssueWhere } },
           },
           select: { id: true, issueId: true, dependsOnStepIds: true },
         });
@@ -418,7 +497,12 @@ export const relationRouter = router({
     }
 
     const issues = await ctx.db.issue.findMany({
-      where: { id: { in: [...nodeIds] }, workspaceId: ctx.workspaceId, deletedAt: null },
+      where: {
+        id: { in: [...nodeIds] },
+        workspaceId: ctx.workspaceId,
+        deletedAt: null,
+        ...visibleIssueWhere,
+      },
       select: {
         id: true,
         number: true,

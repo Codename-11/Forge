@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { EventKind } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { assertProjectAction } from "@/server/services/authorization";
 
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
 
@@ -61,6 +62,15 @@ export const labelRouter = router({
           where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
           include: { labels: { select: { labelId: true } } },
         });
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
+        }
         const labelIds = Array.from(new Set(input.labelIds));
         if (labelIds.length > 0) {
           const labelCount = await tx.label.count({

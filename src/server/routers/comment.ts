@@ -25,6 +25,7 @@ import {
 } from "@/server/services/issue-watchers";
 import { createActionRequest } from "@/server/services/action-request-service";
 import { resolveAgentRequests, type ParsedAgentRequest } from "@/lib/agent-request-parser";
+import { assertProjectAction } from "@/server/services/authorization";
 
 const STATUS_REVISION_CAP = 50;
 /**
@@ -103,10 +104,19 @@ export const commentRouter = router({
     .query(async ({ ctx, input }) => {
       const issue = await ctx.db.issue.findFirst({
         where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-        select: { id: true },
+        select: { id: true, projectId: true },
       });
       if (!issue) {
         throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+      }
+      if (issue.projectId) {
+        await assertProjectAction(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          membershipId: ctx.membership.id,
+          membershipRole: ctx.membership.role,
+          projectId: issue.projectId,
+          action: "READ",
+        });
       }
 
       const where = {
@@ -199,11 +209,21 @@ export const commentRouter = router({
             number: true,
             title: true,
             assignedAgentId: true,
+            projectId: true,
             workspace: { select: { key: true } },
           },
         });
         if (!issue) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        }
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
         }
 
         const explicitAgentRequests: ParsedAgentRequest[] =
@@ -502,10 +522,19 @@ export const commentRouter = router({
       if (existing.issueId) {
         const issue = await ctx.db.issue.findFirst({
           where: { id: existing.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, projectId: true },
         });
         if (!issue) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        }
+        if (issue.projectId) {
+          await assertProjectAction(ctx.db, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
         }
       }
       // No-op when the body hasn't actually changed. Keeps the
@@ -672,6 +701,7 @@ export const commentRouter = router({
           updatedAt: true,
           revisions: true,
           kind: true,
+          issueId: true,
         },
       });
       if (!row) {
@@ -679,6 +709,22 @@ export const commentRouter = router({
           code: "NOT_FOUND",
           message: "Comment not found in this workspace.",
         });
+      }
+      if (row.issueId) {
+        const issue = await ctx.db.issue.findFirst({
+          where: { id: row.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
+          select: { projectId: true },
+        });
+        if (!issue) throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        if (issue.projectId) {
+          await assertProjectAction(ctx.db, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "READ",
+          });
+        }
       }
       const revisions = Array.isArray(row.revisions) ? (row.revisions as Prisma.JsonArray) : [];
       return {
@@ -708,10 +754,19 @@ export const commentRouter = router({
         if (existing.issueId) {
           const issue = await tx.issue.findFirst({
             where: { id: existing.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-            select: { id: true },
+            select: { id: true, projectId: true },
           });
           if (!issue) {
             throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+          }
+          if (issue.projectId) {
+            await assertProjectAction(tx, {
+              workspaceId: ctx.workspaceId,
+              membershipId: ctx.membership.id,
+              membershipRole: ctx.membership.role,
+              projectId: issue.projectId,
+              action: "CONTRIBUTE",
+            });
           }
         }
         const deleted = await tx.comment.update({
@@ -769,10 +824,19 @@ export const commentRouter = router({
       return ctx.db.$transaction(async (tx) => {
         const issue = await tx.issue.findFirst({
           where: { id: input.issueId, workspaceId: ctx.workspaceId, deletedAt: null },
-          select: { id: true },
+          select: { id: true, projectId: true },
         });
         if (!issue) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Issue not found." });
+        }
+        if (issue.projectId) {
+          await assertProjectAction(tx, {
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            projectId: issue.projectId,
+            action: "CONTRIBUTE",
+          });
         }
         // Open or touch the AgentRun first — every status upsert is also
         // a heartbeat for the run, so the freshness clock resets and the
