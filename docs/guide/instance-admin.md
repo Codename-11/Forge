@@ -51,10 +51,71 @@ so they can manage it immediately).
 
 ### Users (`/admin/users`)
 
-Every user on the instance, with their instance role, workspace count,
-and handle. Promote or demote a user's `instanceRole` inline, and
-invite a new user (optionally as an instance admin). This is the only
-place instance role is set.
+Every canonical user on the instance, including lifecycle status, attached
+login methods, instance role, workspace count, and handle. Administrators can:
+
+- create an invited user and email a single-use account-setup link;
+- resend setup for an invited user or send password reset for a user who has a
+  local password;
+- promote or demote `instanceRole` and revoke every active session;
+- suspend and later reactivate an account; or
+- soft-delete and anonymize an account while preserving authored work and
+  audit attribution.
+
+Suspension immediately invalidates sessions, revokes personal API keys,
+invalidates pending account tokens, disconnects user-owned integration
+credentials, and pauses their workspace mappings. Deletion additionally
+removes local and linked login credentials, memberships, and the global avatar,
+and replaces personal fields with a tombstone. Reactivation restores the Forge
+principal but does not restore revoked keys or external credential tokens.
+
+Safety guards refuse demotion, suspension, or deletion of the last active
+instance administrator. They also refuse suspension or deletion when the user
+is the last active owner of any workspace; transfer ownership first. This is
+the only place instance role and account lifecycle are administered.
+
+### Identity & sign-in (`/settings/auth`)
+
+Instance administrators own the singleton authentication policy and the
+global OIDC, GitHub, and Google provider registry. The modes are:
+
+| Mode            | Normal sign-in methods                                    |
+| --------------- | --------------------------------------------------------- |
+| `LOCAL_ONLY`    | Durable Forge passwords                                   |
+| `EXTERNAL_ONLY` | Enabled external providers; optional operator break glass |
+| `HYBRID`        | Durable passwords plus enabled external providers         |
+
+The policy also controls registration, optional automatic redirect, password
+minimum length, reset expiry, and lockout behavior. Provider/client secrets
+remain encrypted with `AUTH_SECRET`; the environment operator remains a
+separate recovery credential when break glass is enabled.
+
+All identity-policy and account-lifecycle mutations write the instance-wide
+security audit ledger with actor, target, request metadata, and timestamp.
+
+::: warning Authorization scope in this release
+The identity core enforces existing workspace roles and closes project mutation
+paths that previously treated every membership as equivalent. The schema and
+management UI for restricted-project grants and per-integration capabilities
+(for example GitHub repo read/link/sync/write) remain follow-up work. A login
+identity never implies permission to use an Integration Connection.
+:::
+
+## Migration and rollback compatibility
+
+The identity migration is additive. It backfills normalized email keys, creates
+the policy/credential/token/avatar/audit tables, adds provider archival state,
+and seeds `HYBRID + INVITE_ONLY + break glass` to preserve the
+pre-policy presentation. Migration aborts if case-insensitive duplicate user
+emails already exist, rather than merging people silently.
+
+Do not drop the new tables as a routine rollback. An older Forge binary can
+ignore the additive columns, but it cannot authenticate durable
+`LocalCredential` passwords or enforce the new lifecycle/policy state. Before
+an application rollback, ensure the environment bootstrap operator and a
+working external provider are available; local-only users otherwise cannot
+sign in until the new version is restored. Keep the migrated data intact and
+roll forward after diagnosis.
 
 ### Runtimes (`/admin/runtimes`)
 

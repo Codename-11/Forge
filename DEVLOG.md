@@ -2,6 +2,37 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-25 — Canonical local and external user identity foundation
+
+- Added a provider-neutral instance authentication policy for local-only,
+  external-only, and hybrid sign-in, including registration, safe provider
+  auto-redirect, protected environment-backed break glass, password/reset
+  policy, and lockout controls.
+- Added durable per-user scrypt credentials, single-use hashed account setup
+  and password-reset tokens, enumeration-safe reset requests, session
+  revocation generations, and audited invited/active/suspended/deleted account
+  lifecycle management with last-admin and last-workspace-owner guards.
+- Added atomic invite-based local registration: a pending workspace invitation
+  can create the canonical user, verified email, local credential, and
+  membership in one transaction, while existing accounts must authenticate
+  before the invitation can affect their login methods.
+- Kept local passwords and linked OIDC/OAuth login identities on one canonical
+  user while preserving Integration Connections as a separate authorization
+  boundary. Added self-service login-method management and global S3-backed
+  profile pictures with provider-image fallback.
+- Added workspace-role authorization enforcement for project mutations and
+  policy primitives for future restricted-project and integration capability
+  grants. Grant persistence and management UI remain intentionally deferred.
+- Kept the database migration additive and compatibility-first: existing users
+  are normalized, the prior hybrid behavior is seeded, and case-variant email
+  conflicts fail explicitly instead of silently merging accounts.
+- Verification: the migration applied from an empty v0.32-compatible database;
+  lint and typecheck passed; the serialized local suite passed 1,577 tests with
+  one intentional skip; focused identity/authorization coverage passed 58
+  tests; the complete Playwright run passed 59 tests with one scenario-only
+  skip; and the rebuilt focused identity suite passed all four local login,
+  enumeration-safe reset, password rotation, and invite-registration flows.
+
 ## 2026-07-30 — v0.32.0 release preparation
 
 - Squash-merged AXI-168 implementation PR #94 to `main` at

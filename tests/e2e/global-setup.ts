@@ -3,20 +3,18 @@ import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 /**
- * Sign in once as the seeded owner (credentials provider keyed off
- * ADMIN_EMAIL/ADMIN_PASSWORD, which `scripts/e2e-web.sh` sets to the seed's
- * owner) and persist the JWT session as a storageState the whole suite reuses.
- * Replaces the old "sign-in handled out-of-band" hand-wave.
+ * Sign in once as the seeded local owner and persist the JWT session as a
+ * storageState the whole suite reuses. Dedicated E2E variables win when set;
+ * ADMIN_* remains a compatibility fallback for older harnesses and the
+ * protected bootstrap credential.
  */
 const STORAGE = "tests/e2e/.auth/owner.json";
 
 export default async function globalSetup(config: FullConfig) {
   const baseURL =
-    config.projects[0]?.use?.baseURL ??
-    process.env.PLAYWRIGHT_BASE_URL ??
-    "http://localhost:3200";
-  const email = process.env.ADMIN_EMAIL ?? "owner@forge.local";
-  const password = process.env.ADMIN_PASSWORD ?? "forge-dev";
+    config.projects[0]?.use?.baseURL ?? process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3200";
+  const email = process.env.E2E_OWNER_EMAIL ?? process.env.ADMIN_EMAIL ?? "owner@forge.local";
+  const password = process.env.E2E_OWNER_PASSWORD ?? process.env.ADMIN_PASSWORD ?? "forge-dev";
 
   mkdirSync(dirname(STORAGE), { recursive: true });
 

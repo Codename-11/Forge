@@ -30,6 +30,7 @@ import {
   ConnectionProvider,
   ConnectionStatus,
 } from "@prisma/client";
+import { hashPassword } from "../src/server/services/local-credentials";
 
 const prisma = new PrismaClient();
 
@@ -37,11 +38,41 @@ const DAY = 86_400_000;
 
 async function main() {
   // ---- People --------------------------------------------------------
+  const isLocalOrE2e = process.env.NODE_ENV !== "production" || process.env.FORGE_E2E === "1";
+  const ownerEmail = (
+    process.env.FORGE_SEED_OWNER_EMAIL ??
+    (process.env.FORGE_E2E === "1" ? process.env.E2E_OWNER_EMAIL : undefined) ??
+    "owner@forge.local"
+  )
+    .trim()
+    .toLowerCase();
   const owner = await prisma.user.upsert({
-    where: { email: "owner@forge.local" },
-    update: { instanceRole: "INSTANCE_ADMIN" },
-    create: { email: "owner@forge.local", name: "Forge Owner", handle: "owner", instanceRole: "INSTANCE_ADMIN" },
+    where: { email: ownerEmail },
+    update: { instanceRole: "INSTANCE_ADMIN", normalizedEmail: ownerEmail },
+    create: {
+      email: ownerEmail,
+      normalizedEmail: ownerEmail,
+      name: "Forge Owner",
+      handle: "owner",
+      instanceRole: "INSTANCE_ADMIN",
+    },
   });
+  const seedOwnerPassword =
+    process.env.FORGE_SEED_OWNER_PASSWORD ??
+    (isLocalOrE2e
+      ? (process.env.E2E_OWNER_PASSWORD ?? process.env.ADMIN_PASSWORD ?? "forge-dev")
+      : undefined);
+  if (seedOwnerPassword) {
+    const credential = await prisma.localCredential.findUnique({
+      where: { userId: owner.id },
+      select: { userId: true },
+    });
+    if (!credential) {
+      await prisma.localCredential.create({
+        data: { userId: owner.id, passwordHash: await hashPassword(seedOwnerPassword) },
+      });
+    }
+  }
   const dev = await prisma.user.upsert({
     where: { email: "dev@forge.local" },
     update: {},

@@ -14,6 +14,7 @@ import {
   Send,
   Settings as SettingsIcon,
   Shield,
+  ShieldCheck,
   Tag,
   User as UserIcon,
   Users,
@@ -225,6 +226,12 @@ export const ACCOUNT_SETTINGS_GROUP: SettingsNavGroup = {
       label: "Profile & regional",
       icon: UserIcon,
       description: "Profile, timezone, locale, time format, theme.",
+    },
+    {
+      path: "/settings/security",
+      label: "Security & sign-in",
+      icon: ShieldCheck,
+      description: "Password, linked login methods, and active sessions.",
     },
     {
       path: "/settings/appearance",

@@ -82,6 +82,40 @@ enum SsoType {
   GOOGLE
 }
 
+/// Instance-wide policy for which authentication methods Forge presents and
+/// accepts. Method availability is derived from this mode plus configured
+/// providers; overlapping booleans are intentionally not persisted.
+enum AuthenticationMode {
+  LOCAL_ONLY
+  EXTERNAL_ONLY
+  HYBRID
+}
+
+/// Who may create a local Forge account. Workspace and instance invitations
+/// remain the authorization boundary when registration is INVITE_ONLY.
+enum RegistrationMode {
+  DISABLED
+  INVITE_ONLY
+  OPEN
+}
+
+/// Durable lifecycle of a human account. DELETED users are retained as
+/// anonymized tombstones so authorship and audit history remain referentially
+/// intact.
+enum UserStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+/// Purpose-bound, single-use bearer links for local identity workflows.
+enum UserActionTokenType {
+  ACCOUNT_SETUP
+  PASSWORD_RESET
+  EMAIL_VERIFICATION
+}
+
 enum WorkItemKind {
   EPIC
   ISSUE
@@ -764,6 +798,14 @@ enum AgentRunStatus {
 model User {
   id                       String       @id @default(cuid())
   email                    String       @unique
+  /// Canonical case-insensitive identity key. All account creation and lookup
+  /// paths write the trimmed lowercase form; the unique constraint prevents
+  /// case-variant duplicate people.
+  /// Nullable during the additive compatibility window because NextAuth and
+  /// existing fixtures still create User rows directly. Identity services
+  /// always populate it; the migration also adds a functional unique index on
+  /// lower(trim(email)) so null cannot reopen case-variant duplicates.
+  normalizedEmail          String?      @unique
   emailVerified            DateTime?
   name                     String?
   handle                   String?      @unique
@@ -837,11 +879,23 @@ model User {
   /// backfill script. Gates the /admin shell and global AgentProfile
   /// creation. See {@link InstanceRole}.
   instanceRole             InstanceRole @default(MEMBER)
+  /// Account lifecycle and JWT revocation generation. Security-sensitive
+  /// changes increment authVersion so previously issued JWTs stop authorizing.
+  status                   UserStatus   @default(ACTIVE)
+  authVersion              Int          @default(0)
+  lastLoginAt              DateTime?
+  disabledAt               DateTime?
+  deletedAt                DateTime?
   createdAt                DateTime     @default(now())
   updatedAt                DateTime     @updatedAt
 
   accounts               Account[]
   sessions               Session[]
+  localCredential        LocalCredential?
+  actionTokens           UserActionToken[]
+  avatar                 UserAvatar?
+  instanceAuditActions   InstanceAuditLog[]     @relation("InstanceAuditActor")
+  instanceAuditTargets   InstanceAuditLog[]     @relation("InstanceAuditTarget")
   memberships            Membership[]
   invitationsSent        WorkspaceInvitation[]  @relation("InvitationSender")
   invitationsAccepted    WorkspaceInvitation[]  @relation("InvitationAcceptor")
@@ -943,6 +997,95 @@ model VerificationToken {
   @@unique([identifier, token])
 }
 
+/// Singleton instance authentication policy. The fixed default id keeps reads
+/// deterministic while still allowing an additive, zero-downtime migration.
+model InstanceAuthPolicy {
+  id                           String             @id @default("default")
+  mode                         AuthenticationMode @default(HYBRID)
+  registrationMode             RegistrationMode   @default(INVITE_ONLY)
+  breakGlassCredentialsEnabled Boolean            @default(true)
+  autoRedirectProviderId       String?
+  passwordMinLength            Int                @default(12)
+  passwordResetTtlMinutes      Int                @default(30)
+  lockoutThreshold             Int                @default(10)
+  lockoutMinutes               Int                @default(15)
+  createdAt                    DateTime           @default(now())
+  updatedAt                    DateTime           @updatedAt
+
+  autoRedirectProvider SsoProvider? @relation(fields: [autoRedirectProviderId], references: [id], onDelete: SetNull)
+}
+
+/// Optional local sign-in method attached to the same canonical User used by
+/// every OAuth/OIDC identity.
+model LocalCredential {
+  userId             String    @id
+  passwordHash       String
+  passwordChangedAt  DateTime  @default(now())
+  mustChangePassword Boolean   @default(false)
+  failedAttempts     Int       @default(0)
+  lastFailedAt       DateTime?
+  lockedUntil        DateTime?
+  lastUsedAt         DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+/// Purpose-bound reset/setup/verification token. Only tokenHash is persisted;
+/// the raw 256-bit bearer value is returned once to the mail workflow.
+model UserActionToken {
+  id            String              @id @default(cuid())
+  userId        String
+  type          UserActionTokenType
+  tokenHash     String              @unique
+  emailSnapshot String
+  expiresAt     DateTime
+  usedAt        DateTime?
+  createdAt     DateTime            @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type, expiresAt])
+}
+
+/// Instance-scoped security audit. Workspace AuditLog remains tenant scoped;
+/// identity and policy mutations need a durable instance-wide ledger.
+model InstanceAuditLog {
+  id           String   @id @default(cuid())
+  actorId      String?
+  targetUserId String?
+  action       String
+  metadata     Json?
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  actor      User? @relation("InstanceAuditActor", fields: [actorId], references: [id], onDelete: SetNull)
+  targetUser User? @relation("InstanceAuditTarget", fields: [targetUserId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([targetUserId, createdAt])
+  @@index([action, createdAt])
+}
+
+/// Global user avatar metadata. Bytes live in object storage under a
+/// user-scoped key rather than the workspace-scoped Attachment model.
+model UserAvatar {
+  userId        String   @id
+  objectKey     String   @unique
+  contentType   String
+  sizeBytes     Int
+  etag          String?
+  /// Provider-supplied User.image captured before the first local upload so
+  /// removing the avatar can restore the prior identity picture.
+  fallbackImage String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
 /// Instance-global sign-in provider, configured from the admin UI rather
 /// than env vars. Auth is per *user* (not per workspace), so these rows are
 /// not tenant-scoped. The provider list is read at request time by the
@@ -953,13 +1096,13 @@ model VerificationToken {
 /// derived from AUTH_SECRET — see `src/server/crypto.ts`); it is never
 /// returned to the client.
 model SsoProvider {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   /// Doubles as the NextAuth provider id, so the OAuth callback URL is
   /// `/api/auth/callback/<id>`. Stable for the row's lifetime.
   type         SsoType
   /// Display name + button label, e.g. "Authelia", "Company SSO".
   name         String
-  enabled      Boolean  @default(false)
+  enabled      Boolean   @default(false)
   /// OIDC issuer base URL (discovery via `<issuer>/.well-known/
   /// openid-configuration`). Required for OIDC, null for GitHub/Google.
   issuer       String?
@@ -970,10 +1113,13 @@ model SsoProvider {
   scopes       String?
   /// Maps to NextAuth `allowDangerousEmailAccountLinking`. Off by default —
   /// only enable when you trust the IdP to assert verified emails.
-  allowLinking Boolean  @default(false)
-  sortOrder    Int      @default(0)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  allowLinking Boolean   @default(false)
+  sortOrder    Int       @default(0)
+  archivedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  autoRedirectPolicies InstanceAuthPolicy[]
 }
 
 // ----------------------------------------------------------------------------

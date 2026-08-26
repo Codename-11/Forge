@@ -11,6 +11,7 @@ import { Section } from "@/components/settings/section";
 import { Card } from "@/components/settings/card";
 import { EmptyState } from "@/components/settings/empty-state";
 import { trpc } from "@/lib/trpc";
+import { AuthPolicySettings } from "./auth-policy-settings";
 
 type SsoTypeT = "OIDC" | "GITHUB" | "GOOGLE";
 const SSO_TYPES: { value: SsoTypeT; label: string; hint: string }[] = [
@@ -202,9 +203,11 @@ export default function IdentitySettings() {
             </div>
           </div>
 
+          <AuthPolicySettings />
+
           <Section
             title="Providers"
-            hint="Email + password is always available. Add SSO providers below — OIDC covers any OpenID-Connect IdP, including self-hosted Authelia."
+            hint="External login methods available under the instance policy. OIDC covers any OpenID-Connect IdP, including self-hosted Authelia."
             actions={
               providers.length > 0 ? (
                 <span className="text-[0.6875rem] tabular-nums text-muted-foreground">

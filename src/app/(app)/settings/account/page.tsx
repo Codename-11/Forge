@@ -1,9 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { Trash2, Upload } from "lucide-react";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
 import { Topbar } from "@/components/topbar";
 import { Badge } from "@/components/ui/badge";
+import { Avatar } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section } from "@/components/settings/section";
@@ -50,6 +52,9 @@ export default function AccountPage() {
   const utils = trpc.useUtils();
   const { theme: currentTheme, setTheme } = useTheme();
   const isMac = useIsMac();
+  const avatarInputId = useId();
+  const avatar = trpc.avatar.me.useQuery();
+  const [avatarBusy, setAvatarBusy] = useState(false);
 
   const [name, setName] = useState("");
   const [handle, setHandle] = useState("");
@@ -109,6 +114,58 @@ export default function AccountPage() {
     onError: (e) => toast.error(e.message),
   });
 
+  async function refreshAvatarConsumers() {
+    await Promise.all([
+      utils.avatar.me.invalidate(),
+      utils.user.me.invalidate(),
+      utils.workspace.me.invalidate(),
+    ]);
+  }
+
+  const initAvatarUpload = trpc.avatar.initUpload.useMutation();
+  const finalizeAvatar = trpc.avatar.finalize.useMutation();
+  const removeAvatar = trpc.avatar.remove.useMutation({
+    onSuccess: async () => {
+      await refreshAvatarConsumers();
+      toast.success("Profile picture removed.");
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  async function uploadAvatar(file: File) {
+    const allowedTypes = ["image/png", "image/jpeg", "image/gif", "image/webp"] as const;
+    if (!allowedTypes.includes(file.type as (typeof allowedTypes)[number])) {
+      toast.error("Choose a PNG, JPEG, GIF, or WebP image.");
+      return;
+    }
+    if (file.size <= 0 || file.size > 5 * 1024 * 1024) {
+      toast.error("Profile pictures must be 5 MB or smaller.");
+      return;
+    }
+    setAvatarBusy(true);
+    try {
+      const initialized = await initAvatarUpload.mutateAsync({
+        contentType: file.type as (typeof allowedTypes)[number],
+        sizeBytes: file.size,
+      });
+      const response = await fetch(initialized.uploadUrl, {
+        method: "PUT",
+        headers: initialized.headers,
+        body: file,
+      });
+      if (!response.ok) throw new Error(`Upload failed (${response.status}).`);
+      await finalizeAvatar.mutateAsync({ objectKey: initialized.objectKey });
+      await refreshAvatarConsumers();
+      toast.success(
+        avatar.data?.hasLocalAvatar ? "Profile picture replaced." : "Profile picture added.",
+      );
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Profile picture upload failed.");
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   const dismissOnboarding = trpc.user.dismissOnboarding.useMutation({
     onSuccess: () => {
       utils.user.me.invalidate();
@@ -162,8 +219,55 @@ export default function AccountPage() {
         <div className="mx-auto max-w-2xl space-y-6 p-6">
           <Section
             title="Identity"
-            hint="How you appear to teammates. Email is read-only — it's set by your sign-in provider."
+            hint="How you appear to teammates. Your profile follows you across workspaces."
           >
+            <div className="mb-3 flex flex-wrap items-center gap-4 rounded-lg border border-border bg-card/40 p-4">
+              <Avatar
+                name={name || me?.user.email}
+                image={avatar.data?.resolvedImage ?? me?.user.image}
+                size={64}
+                className="shrink-0 border border-border"
+              />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">Profile picture</div>
+                <p className="mt-0.5 text-xs text-muted-foreground">
+                  PNG, JPEG, GIF, or WebP · up to 5 MB. Removing a custom picture restores your
+                  provider image or initials.
+                </p>
+              </div>
+              <input
+                id={avatarInputId}
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                className="sr-only"
+                disabled={avatarBusy}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (file) void uploadAvatar(file);
+                }}
+              />
+              <div className="flex gap-2">
+                <label
+                  htmlFor={avatarInputId}
+                  aria-disabled={avatarBusy}
+                  className={`focus-ring inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-border bg-transparent px-2 text-xs font-medium transition-colors hover:bg-subtle ${avatarBusy ? "pointer-events-none opacity-40" : "cursor-pointer"}`}
+                >
+                  <Upload className="h-3.5 w-3.5" />
+                  {avatarBusy ? "Uploading…" : avatar.data?.hasLocalAvatar ? "Replace" : "Upload"}
+                </label>
+                {avatar.data?.hasLocalAvatar && (
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={avatarBusy || removeAvatar.isPending}
+                    onClick={() => removeAvatar.mutate()}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Remove
+                  </Button>
+                )}
+              </div>
+            </div>
             <div className="grid grid-cols-1 gap-3 rounded-lg border border-border bg-card/40 p-4 sm:grid-cols-2">
               <Field label="Name">
                 <Input value={name} onChange={(e) => setName(e.target.value)} />
@@ -176,7 +280,7 @@ export default function AccountPage() {
                   className="font-mono"
                 />
               </Field>
-              <Field label="Email" hint="Tied to your login — managed by your sign-in provider.">
+              <Field label="Email" hint="Used by your linked login methods.">
                 <Input value={me?.user.email ?? ""} disabled className="font-mono" />
               </Field>
               <Field label="Platform">
@@ -350,9 +454,7 @@ export default function AccountPage() {
                           variant="ghost"
                           className="ml-auto"
                           disabled={unskipStep.isPending}
-                          onClick={() =>
-                            unskipStep.mutate({ stepId: stepId as "member" })
-                          }
+                          onClick={() => unskipStep.mutate({ stepId: stepId as "member" })}
                         >
                           Un-skip
                         </Button>
@@ -371,13 +473,11 @@ export default function AccountPage() {
             <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
               <label className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <div className="text-sm font-medium">
-                    Enable pomodoro break prompts
-                  </div>
+                  <div className="text-sm font-medium">Enable pomodoro break prompts</div>
                   <div className="text-xs text-muted-foreground">
                     When checked, the time-tracker fires a toast every
-                    {` ${pomodoroMinutes} `} minute{pomodoroMinutes === 1 ? "" : "s"}
-                    {" "}while a timer is running.
+                    {` ${pomodoroMinutes} `} minute{pomodoroMinutes === 1 ? "" : "s"} while a timer
+                    is running.
                   </div>
                 </div>
                 <input
@@ -395,9 +495,7 @@ export default function AccountPage() {
                     max={120}
                     value={pomodoroMinutes}
                     onChange={(e) =>
-                      setPomodoroMinutes(
-                        Math.max(1, Math.min(120, Number(e.target.value) || 1)),
-                      )
+                      setPomodoroMinutes(Math.max(1, Math.min(120, Number(e.target.value) || 1)))
                     }
                     disabled={!pomodoroEnabled}
                   />
@@ -459,9 +557,7 @@ function Field({
       <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
         {label}
       </div>
-      {hint && (
-        <p className="mb-1.5 -mt-0.5 text-[0.6875rem] text-muted-foreground/80">{hint}</p>
-      )}
+      {hint && <p className="-mt-0.5 mb-1.5 text-[0.6875rem] text-muted-foreground/80">{hint}</p>}
       {children}
     </div>
   );

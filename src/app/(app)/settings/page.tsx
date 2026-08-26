@@ -14,8 +14,8 @@ const RESOURCES = [
   },
   {
     href: "/settings/connections",
-    label: "Connected accounts",
-    hint: "OAuth identities that workspace integration mappings can use.",
+    label: "Integration accounts",
+    hint: "Operational OAuth credentials that workspace mappings can use. Separate from sign-in.",
     icon: PlugZap,
   },
 ] as const;

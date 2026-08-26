@@ -241,9 +241,9 @@ const GLOBAL_RAIL_ITEMS: RailItem[] = [
   },
   {
     href: "/settings/connections",
-    label: "Connected accounts",
+    label: "Integration accounts",
     icon: PlugZap,
-    hint: "OAuth identities",
+    hint: "Operational OAuth access",
     adminOnly: false,
   },
 ];

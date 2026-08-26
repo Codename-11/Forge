@@ -3,6 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { CompletionAutomation, EventKind, type StatusCategory } from "@prisma/client";
 import { router, workspaceProcedure } from "@/server/trpc";
 import { recordChange } from "@/server/audit";
+import { assertWorkspaceAction } from "@/server/services/authorization";
 
 const cursorSchema = z.string().optional();
 const projectKey = z
@@ -461,6 +462,7 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertWorkspaceAction(ctx.membership.role, "CREATE_PROJECT");
       if (
         input.startDate &&
         input.targetDate &&
@@ -514,6 +516,7 @@ export const projectRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      assertWorkspaceAction(ctx.membership.role, "MUTATE_PROJECT");
       const { id, ...patch } = input;
       return ctx.db.$transaction(async (tx) => {
         const before = await tx.project.findFirstOrThrow({
@@ -550,16 +553,22 @@ export const projectRouter = router({
 
   archive: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.project.update({
-        where: { id: input.id },
+    .mutation(async ({ ctx, input }) => {
+      assertWorkspaceAction(ctx.membership.role, "MUTATE_PROJECT");
+      const project = await ctx.db.project.findFirstOrThrow({
+        where: { id: input.id, workspaceId: ctx.workspaceId, deletedAt: null },
+        select: { id: true },
+      });
+      return ctx.db.project.update({
+        where: { id: project.id },
         data: { archived: true },
-      }),
-    ),
+      });
+    }),
 
   softDelete: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      assertWorkspaceAction(ctx.membership.role, "MUTATE_PROJECT");
       const p = await ctx.db.project.findFirstOrThrow({
         where: { id: input.id, workspaceId: ctx.workspaceId },
       });

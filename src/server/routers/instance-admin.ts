@@ -1,17 +1,54 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { CycleStatus, InstanceRole, Role } from "@prisma/client";
+import { CycleStatus, InstanceRole, Role, UserActionTokenType } from "@prisma/client";
 import { router, instanceAdminProcedure } from "@/server/trpc";
 import { ensureWorkspaceBucket } from "@/server/services/storage";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { summarizeRuntimeSelfTest } from "@/server/services/runtime-self-test";
 import { summarizeRuntimeInfo } from "@/server/services/runtime-info";
-import {
-  resolveSubjectLabels,
-  subjectKey,
-} from "@/server/services/subject-labels";
+import { resolveSubjectLabels, subjectKey } from "@/server/services/subject-labels";
 import { forgeBuildIdentity } from "@/server/build-info";
+import {
+  createInvitedUser,
+  issueUserActionToken,
+  reactivateUser,
+  revokeUserSessions,
+  setUserInstanceRole,
+  softDeleteUser,
+  suspendUser,
+} from "@/server/services/user-lifecycle";
+import { sendAccountSetupEmail, sendPasswordResetEmail } from "@/server/services/email";
+
+function identityActionUrl(path: string): string {
+  const configured = process.env.NEXT_PUBLIC_APP_URL?.trim() || process.env.AUTH_URL?.trim();
+  if (!configured) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Set NEXT_PUBLIC_APP_URL or AUTH_URL before sending account emails.",
+    });
+  }
+  let origin: URL;
+  try {
+    origin = new URL(configured);
+  } catch {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "NEXT_PUBLIC_APP_URL or AUTH_URL must be a valid absolute URL.",
+    });
+  }
+  if (
+    origin.protocol !== "https:" &&
+    origin.hostname !== "localhost" &&
+    origin.hostname !== "127.0.0.1"
+  ) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "Account email links require HTTPS outside local development.",
+    });
+  }
+  return new URL(path, `${origin.origin}/`).toString();
+}
 
 const slugSchema = z
   .string()
@@ -48,7 +85,11 @@ export const instanceAdminRouter = router({
         avatarUrl: true,
         createdAt: true,
         _count: { select: { memberships: true, issues: true } },
-        memberships: { where: { role: "OWNER" }, take: 1, select: { user: { select: { name: true, email: true } } } },
+        memberships: {
+          where: { role: "OWNER" },
+          take: 1,
+          select: { user: { select: { name: true, email: true } } },
+        },
       },
     });
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -63,7 +104,9 @@ export const instanceAdminRouter = router({
         members: w._count.memberships,
         issues: w._count.issues,
         owner: w.memberships[0]?.user ?? null,
-        runsLast24: await ctx.db.agentRun.count({ where: { workspaceId: w.id, startedAt: { gte: since } } }),
+        runsLast24: await ctx.db.agentRun.count({
+          where: { workspaceId: w.id, startedAt: { gte: since } },
+        }),
       })),
     );
   }),
@@ -79,30 +122,268 @@ export const instanceAdminRouter = router({
         handle: true,
         image: true,
         instanceRole: true,
+        status: true,
+        disabledAt: true,
+        deletedAt: true,
+        lastLoginAt: true,
         createdAt: true,
-        _count: { select: { memberships: true } },
+        localCredential: { select: { passwordChangedAt: true, mustChangePassword: true } },
+        accounts: { select: { provider: true } },
+        _count: { select: { memberships: true, sessions: true, apiKeys: true, connections: true } },
       },
     });
-    return users.map((u) => ({ ...u, workspaces: u._count.memberships }));
+    return users.map(({ _count, accounts, localCredential, ...user }) => ({
+      ...user,
+      workspaces: _count.memberships,
+      counts: {
+        sessions: _count.sessions,
+        apiKeys: _count.apiKeys,
+        connections: _count.connections,
+      },
+      loginMethods: {
+        password: Boolean(localCredential),
+        providers: [...new Set(accounts.map((account) => account.provider))],
+      },
+    }));
   }),
+
+  /** Full identity, access, and lifecycle detail for one user. */
+  userDetail: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid() }))
+    .query(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findUnique({
+        where: { id: input.userId },
+        select: {
+          id: true,
+          email: true,
+          normalizedEmail: true,
+          emailVerified: true,
+          name: true,
+          handle: true,
+          image: true,
+          instanceRole: true,
+          status: true,
+          authVersion: true,
+          lastLoginAt: true,
+          disabledAt: true,
+          deletedAt: true,
+          createdAt: true,
+          updatedAt: true,
+          localCredential: {
+            select: {
+              passwordChangedAt: true,
+              mustChangePassword: true,
+              failedAttempts: true,
+              lastFailedAt: true,
+              lockedUntil: true,
+            },
+          },
+          accounts: {
+            select: { id: true, provider: true, providerAccountId: true, type: true },
+            orderBy: { provider: "asc" },
+          },
+          memberships: {
+            select: {
+              id: true,
+              role: true,
+              createdAt: true,
+              workspace: { select: { id: true, slug: true, name: true, key: true } },
+            },
+            orderBy: { createdAt: "asc" },
+          },
+          connections: {
+            select: {
+              id: true,
+              provider: true,
+              label: true,
+              account: true,
+              status: true,
+              scopes: true,
+            },
+            orderBy: { createdAt: "asc" },
+          },
+          instanceAuditTargets: {
+            select: {
+              id: true,
+              action: true,
+              metadata: true,
+              ipAddress: true,
+              userAgent: true,
+              createdAt: true,
+              actor: { select: { id: true, name: true, email: true } },
+            },
+            orderBy: { createdAt: "desc" },
+            take: 50,
+          },
+          _count: { select: { sessions: true, apiKeys: true, actionTokens: true } },
+        },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+      return user;
+    }),
+
+  /** Instance-scoped identity and authentication security audit. */
+  identityAudit: instanceAdminProcedure
+    .input(
+      z.object({
+        limit: z.number().int().min(1).max(200).default(60),
+        cursor: z.string().cuid().optional(),
+        targetUserId: z.string().cuid().optional(),
+      }),
+    )
+    .query(async ({ ctx, input }) => {
+      const rows = await ctx.db.instanceAuditLog.findMany({
+        where: input.targetUserId ? { targetUserId: input.targetUserId } : undefined,
+        orderBy: { createdAt: "desc" },
+        take: input.limit + 1,
+        cursor: input.cursor ? { id: input.cursor } : undefined,
+        skip: input.cursor ? 1 : 0,
+        select: {
+          id: true,
+          action: true,
+          metadata: true,
+          ipAddress: true,
+          userAgent: true,
+          createdAt: true,
+          actor: { select: { id: true, name: true, email: true } },
+          targetUser: { select: { id: true, name: true, email: true, status: true } },
+        },
+      });
+      const nextCursor = rows.length > input.limit ? rows.pop()!.id : undefined;
+      return { items: rows, nextCursor };
+    }),
+
+  /** Create an invited principal and return its one-time account setup token. */
+  createUser: instanceAdminProcedure
+    .input(
+      z.object({
+        email: z.string().email(),
+        name: z.string().trim().min(1).max(80).optional(),
+        instanceRole: z.nativeEnum(InstanceRole).default(InstanceRole.MEMBER),
+      }),
+    )
+    .mutation(async ({ ctx, input }) => {
+      const created = await createInvitedUser(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      const messageId = await sendAccountSetupEmail({
+        to: created.user.email,
+        name: created.user.name,
+        url: identityActionUrl(`/activate/${encodeURIComponent(created.setupToken)}`),
+        expiresAt: created.expiresAt,
+      });
+      return {
+        user: created.user,
+        delivery: { messageId, expiresAt: created.expiresAt },
+      };
+    }),
+
+  issueSetupToken: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findUnique({
+        where: { id: input.userId },
+        select: { email: true, name: true },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+      const issued = await issueUserActionToken(ctx.db, {
+        ...input,
+        type: UserActionTokenType.ACCOUNT_SETUP,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      const messageId = await sendAccountSetupEmail({
+        to: user.email,
+        name: user.name,
+        url: identityActionUrl(`/activate/${encodeURIComponent(issued.token)}`),
+        expiresAt: issued.expiresAt,
+      });
+      return { delivery: { messageId, expiresAt: issued.expiresAt } };
+    }),
+
+  issuePasswordResetToken: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid() }))
+    .mutation(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findUnique({
+        where: { id: input.userId },
+        select: { email: true, name: true },
+      });
+      if (!user) throw new TRPCError({ code: "NOT_FOUND", message: "User not found." });
+      const issued = await issueUserActionToken(ctx.db, {
+        ...input,
+        type: UserActionTokenType.PASSWORD_RESET,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      });
+      const messageId = await sendPasswordResetEmail({
+        to: user.email,
+        name: user.name,
+        url: identityActionUrl(`/reset-password/${encodeURIComponent(issued.token)}`),
+        expiresAt: issued.expiresAt,
+      });
+      return { delivery: { messageId, expiresAt: issued.expiresAt } };
+    }),
+
+  suspendUser: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid(), reason: z.string().trim().max(500).optional() }))
+    .mutation(({ ctx, input }) =>
+      suspendUser(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      }),
+    ),
+
+  reactivateUser: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid() }))
+    .mutation(({ ctx, input }) =>
+      reactivateUser(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      }),
+    ),
+
+  revokeUserSessions: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid() }))
+    .mutation(({ ctx, input }) =>
+      revokeUserSessions(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      }),
+    ),
+
+  deleteUser: instanceAdminProcedure
+    .input(z.object({ userId: z.string().cuid(), reason: z.string().trim().max(500).optional() }))
+    .mutation(({ ctx, input }) =>
+      softDeleteUser(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      }),
+    ),
 
   /** Promote / demote a user's instance role. Cannot demote the last admin. */
   setInstanceRole: instanceAdminProcedure
     .input(z.object({ userId: z.string().cuid(), role: z.nativeEnum(InstanceRole) }))
-    .mutation(async ({ ctx, input }) => {
-      if (input.role !== "INSTANCE_ADMIN") {
-        const admins = await ctx.db.user.count({ where: { instanceRole: "INSTANCE_ADMIN" } });
-        const target = await ctx.db.user.findUnique({ where: { id: input.userId }, select: { instanceRole: true } });
-        if (target?.instanceRole === "INSTANCE_ADMIN" && admins <= 1) {
-          throw new TRPCError({ code: "BAD_REQUEST", message: "Can't demote the last instance admin." });
-        }
-      }
-      return ctx.db.user.update({
-        where: { id: input.userId },
-        data: { instanceRole: input.role },
-        select: { id: true, instanceRole: true },
-      });
-    }),
+    .mutation(({ ctx, input }) =>
+      setUserInstanceRole(ctx.db, {
+        ...input,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
+      }),
+    ),
 
   /** Every runtime across the instance (not just the caller's). */
   runtimes: instanceAdminProcedure.query(async ({ ctx }) => {
@@ -152,7 +433,12 @@ export const instanceAdminRouter = router({
 
   /** Cross-workspace audit feed for the instance audit page. */
   audit: instanceAdminProcedure
-    .input(z.object({ limit: z.number().int().min(1).max(200).default(60), cursor: z.string().optional() }))
+    .input(
+      z.object({
+        limit: z.number().int().min(1).max(200).default(60),
+        cursor: z.string().optional(),
+      }),
+    )
     .query(async ({ ctx, input }) => {
       const rows = await ctx.db.activityEvent.findMany({
         orderBy: { createdAt: "desc" },
@@ -285,11 +571,8 @@ export const instanceAdminRouter = router({
       return workspace;
     }),
 
-  /**
-   * Invite a user by email. Authelia owns identity at the edge, so this
-   * upserts a shell `User` row keyed by email — first login binds to it.
-   * Membership is intentionally NOT created here (instance-level invite);
-   * workspace owners add members via `workspace.addMember`. Idempotent.
+  /** Compatibility alias used by the existing invite dialog. New callers use
+   * `createUser`; both create an INVITED principal and deliver setup by email.
    */
   inviteUser: instanceAdminProcedure
     .input(
@@ -300,23 +583,25 @@ export const instanceAdminRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const email = input.email.trim().toLowerCase();
-      const role = input.instanceAdmin ? InstanceRole.INSTANCE_ADMIN : InstanceRole.MEMBER;
-      const existing = await ctx.db.user.findUnique({
-        where: { email },
-        select: { id: true },
+      const created = await createInvitedUser(ctx.db, {
+        email: input.email,
+        name: input.name,
+        instanceRole: input.instanceAdmin ? InstanceRole.INSTANCE_ADMIN : InstanceRole.MEMBER,
+        actorId: ctx.session.user.id,
+        ipAddress: ctx.ip,
+        userAgent: ctx.userAgent,
       });
-      const user = await ctx.db.user.upsert({
-        where: { email },
-        update: {
-          // Only fill name if not already set; never clobber an existing one.
-          ...(input.name ? { name: input.name } : {}),
-          ...(input.instanceAdmin ? { instanceRole: role } : {}),
-        },
-        create: { email, name: input.name, instanceRole: role },
-        select: { id: true, email: true, name: true, instanceRole: true },
+      const messageId = await sendAccountSetupEmail({
+        to: created.user.email,
+        name: created.user.name,
+        url: identityActionUrl(`/activate/${encodeURIComponent(created.setupToken)}`),
+        expiresAt: created.expiresAt,
       });
-      return { ...user, created: !existing };
+      return {
+        ...created.user,
+        created: true,
+        delivery: { messageId, expiresAt: created.expiresAt },
+      };
     }),
 
   /**

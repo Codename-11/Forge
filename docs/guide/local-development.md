@@ -26,13 +26,27 @@ Every command prints what it started, skipped, migrated, generated, seeded,
 or replaced plus the selected local database and endpoints. The TypeScript
 orchestrator works when invoked from Windows PowerShell or Git Bash.
 
-Sign in with the bootstrap credentials it prints:
+Sign in with the durable local owner account it prints:
 
 ```
 owner@forge.local / forge-dev
 ```
 
-(Override via `ADMIN_EMAIL` / `ADMIN_PASSWORD` env vars before running.)
+On an empty local database the seed creates a `LocalCredential` for this user.
+Override the owner address with `FORGE_SEED_OWNER_EMAIL` (or
+`E2E_OWNER_EMAIL` under E2E) and the seeded password with
+`FORGE_SEED_OWNER_PASSWORD`, `E2E_OWNER_PASSWORD`, or `ADMIN_PASSWORD` (in
+that precedence order). Existing credentials are never overwritten by a later
+seed.
+`ADMIN_EMAIL` / `ADMIN_PASSWORD` remain the separate bootstrap and break-glass
+operator path, so local development can exercise ordinary password login and
+recovery without conflating it with emergency access.
+
+Account setup and password reset send email through the configured local mail
+transport. For end-to-end tests, use the fixture-captured delivery/link rather
+than a real mailbox. Avatar uploads use the same local MinIO service as
+attachments but live in the instance-global `S3_GLOBAL_BUCKET` (default
+`forge-global`), not a workspace attachment bucket.
 
 The first visit to a route is slower than later refreshes because Next compiles
 that route on demand in development. Forge pins Turbopack to the repository

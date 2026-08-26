@@ -29,8 +29,8 @@ transaction mode, append `?pgbouncer=true&connection_limit=1` to
 | `AUTH_URL`                    | Yes      | Public app URL (e.g. `https://forge.example`).                                                                          |
 | `AUTH_SECRET`                 | Yes      | JWT secret. Generate with `openssl rand -base64 32`. Also keys the AES-256-GCM encryption of stored SSO client secrets. |
 | `AUTH_TRUST_HOST`             | No       | Set to `true` if proxied behind a load balancer.                                                                        |
-| `ADMIN_EMAIL`                 | Yes      | Bootstrap admin login **and** the instance admin who manages SSO providers (Settings → Authentication).                 |
-| `ADMIN_PASSWORD`              | Yes      | Password for the `ADMIN_EMAIL` credential login.                                                                        |
+| `ADMIN_EMAIL`                 | Yes      | Environment-backed bootstrap and break-glass instance administrator.                                                    |
+| `ADMIN_PASSWORD`              | Yes      | Password for the bootstrap/break-glass operator. It is not a normal user's durable local password.                      |
 | `ADMIN_NAME` / `ADMIN_HANDLE` | No       | Display name / handle for the bootstrap admin.                                                                          |
 
 ```bash
@@ -41,10 +41,23 @@ ADMIN_EMAIL="admin@forge.example"
 ADMIN_PASSWORD="..."
 ```
 
+Normal local accounts do not use environment variables. Forge stores a
+versioned scrypt password hash in `LocalCredential`, attached to the same
+canonical `User` as any linked OIDC, GitHub, or Google login. `ADMIN_EMAIL` and
+`ADMIN_PASSWORD` remain outside that account-managed credential set so an
+instance administrator can use `/signin/local` when external identity is
+unavailable. Keep them unique, protected, and available to the operator; do not
+reuse a person's normal password.
+
+Authentication mode, registration, automatic provider redirect, password
+minimum length, reset expiry, and lockout thresholds are runtime database
+settings under **Identity & sign-in**. They are intentionally not environment
+variables.
+
 ### SSO providers (optional bootstrap)
 
 Sign-in providers (OIDC / GitHub / Google) are configured at runtime in
-**Settings → Authentication** and stored in the `SsoProvider` table — not
+**Identity & sign-in** and stored in the `SsoProvider` table — not
 in env. The vars below are **optional one-time bootstrap**: if set and no
 provider row of that type exists yet, a row is seeded from them on first
 boot, then managed in the UI. Leave them blank to manage everything from
@@ -60,8 +73,26 @@ the UI.
 ::: warning
 Rotating `AUTH_SECRET` invalidates all active sessions (users are signed out
 on the next request) **and** the encrypted SSO client secrets — re-enter each
-provider's secret in Settings → Authentication after a rotation.
+provider's secret in Identity & sign-in after a rotation.
 :::
+
+### Account email delivery
+
+Account invitations/setup, password reset, password-change notices, and
+workspace invitations share the outbound email configuration below. Public
+password-reset requests return the same response for known and unknown email
+addresses. Production delivery fails closed when no transport is configured.
+
+| Var              | Required | Notes                                                                           |
+| ---------------- | -------- | ------------------------------------------------------------------------------- |
+| `EMAIL_FROM`     | Yes      | Sender used for account and workspace identity mail.                            |
+| `EMAIL_SERVER`   | No       | Compact SMTP URL. Use this or the expanded `SMTP_*` fields or `RESEND_API_KEY`. |
+| `SMTP_HOST`      | No       | SMTP hostname when not using `EMAIL_SERVER`.                                    |
+| `SMTP_PORT`      | No       | SMTP port; defaults to `587`.                                                   |
+| `SMTP_SECURE`    | No       | `true` for implicit TLS.                                                        |
+| `SMTP_USER`      | No       | SMTP username.                                                                  |
+| `SMTP_PASSWORD`  | No       | SMTP password.                                                                  |
+| `RESEND_API_KEY` | No       | Resend transport alternative to SMTP.                                           |
 
 ## GitHub App integration
 
@@ -127,14 +158,15 @@ docker bridge while the browser hits a public hostname for presigned URLs —
 this is the difference between "`PUT` works server-side" and "`PUT` works
 from the browser".
 
-| Var                   | Required | Notes                                              |
-| --------------------- | -------- | -------------------------------------------------- |
-| `S3_ENDPOINT`         | Yes      | Internal endpoint (e.g. docker bridge IP).         |
-| `S3_PUBLIC_ENDPOINT`  | Yes      | Public hostname presigned URLs are signed against. |
-| `S3_REGION`           | Yes      | Usually `us-east-1`.                               |
-| `S3_ACCESS_KEY`       | Yes      | Credentials.                                       |
-| `S3_SECRET_KEY`       | Yes      | Credentials.                                       |
-| `S3_FORCE_PATH_STYLE` | No       | `true` for MinIO; `false` for AWS S3.              |
+| Var                   | Required | Notes                                                             |
+| --------------------- | -------- | ----------------------------------------------------------------- |
+| `S3_ENDPOINT`         | Yes      | Internal endpoint (e.g. docker bridge IP).                        |
+| `S3_PUBLIC_ENDPOINT`  | Yes      | Public hostname presigned URLs are signed against.                |
+| `S3_REGION`           | Yes      | Usually `us-east-1`.                                              |
+| `S3_ACCESS_KEY`       | Yes      | Credentials.                                                      |
+| `S3_SECRET_KEY`       | Yes      | Credentials.                                                      |
+| `S3_FORCE_PATH_STYLE` | No       | `true` for MinIO; `false` for AWS S3.                             |
+| `S3_GLOBAL_BUCKET`    | No       | Instance-global account-media bucket; defaults to `forge-global`. |
 
 ```bash
 S3_ENDPOINT="http://minio:9000"
@@ -143,7 +175,16 @@ S3_REGION="us-east-1"
 S3_ACCESS_KEY="forge"
 S3_SECRET_KEY="..."
 S3_FORCE_PATH_STYLE="true"
+S3_GLOBAL_BUCKET="forge-global"
 ```
+
+Workspace attachments remain in workspace-scoped buckets. User-uploaded
+avatars are account-global and live in `S3_GLOBAL_BUCKET` under user-scoped
+keys, because the same profile follows a person across workspaces. Forge
+creates the bucket lazily, validates PNG, JPEG, GIF, or WebP content (maximum
+5 MiB), and serves it through the stable `/api/avatar/<user-id>` route. Removing
+a local avatar restores the last provider-supplied profile image when one was
+recorded.
 
 ## AI providers
 
