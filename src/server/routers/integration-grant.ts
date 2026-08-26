@@ -7,6 +7,7 @@ import {
   IntegrationGrantScope,
   IntegrationPrincipalType,
   Role,
+  type Prisma,
 } from "@prisma/client";
 import { TRPCError } from "@trpc/server";
 import { adminProcedure, router, workspaceProcedure } from "@/server/trpc";
@@ -28,26 +29,74 @@ function isSubset(values: IntegrationCapability[], ceiling: IntegrationCapabilit
   return values.every((value) => allowed.has(value));
 }
 
+const authorizationManagementInclude = {
+  connectionMapping: {
+    select: {
+      id: true,
+      kind: true,
+      target: true,
+      direction: true,
+      status: true,
+      connection: {
+        select: {
+          id: true,
+          provider: true,
+          label: true,
+          account: true,
+          ownerId: true,
+          owner: { select: { id: true, name: true, email: true, image: true } },
+        },
+      },
+    },
+  },
+  githubApp: { select: { id: true, name: true, installationId: true } },
+  authorizedBy: { select: { id: true, name: true, email: true, image: true } },
+  revokedBy: { select: { id: true, name: true, email: true, image: true } },
+  grants: {
+    orderBy: { createdAt: "asc" },
+    include: {
+      principalUser: { select: { id: true, name: true, email: true, image: true } },
+      principalAgent: { select: { id: true, name: true, profileKey: true, avatar: true } },
+      principalApiKey: {
+        select: {
+          id: true,
+          name: true,
+          prefix: true,
+          kind: true,
+          revokedAt: true,
+          expiresAt: true,
+        },
+      },
+      project: { select: { id: true, key: true, name: true, visibility: true } },
+      grantedBy: { select: { id: true, name: true, email: true } },
+      revokedBy: { select: { id: true, name: true, email: true } },
+    },
+  },
+} satisfies Prisma.ConnectionAuthorizationInclude;
+
 export const integrationGrantRouter = router({
   list: adminProcedure.query(({ ctx }) =>
     ctx.db.connectionAuthorization.findMany({
       where: { workspaceId: ctx.workspaceId },
-      include: {
-        connectionMapping: {
-          select: {
-            id: true,
-            kind: true,
-            target: true,
-            direction: true,
-            status: true,
-            connection: {
-              select: { id: true, provider: true, label: true, account: true, ownerId: true },
-            },
-          },
-        },
-        githubApp: { select: { id: true, name: true, installationId: true } },
-        grants: true,
+      include: authorizationManagementInclude,
+      orderBy: { createdAt: "asc" },
+    }),
+  ),
+
+  /**
+   * A credential owner may inspect consent and every grant derived from their
+   * personal connection without gaining workspace-wide integration inventory.
+   * Workspace App credentials remain admin-managed even when their legacy
+   * synthesized Connection row records a creating user.
+   */
+  listOwned: workspaceProcedure.query(({ ctx }) =>
+    ctx.db.connectionAuthorization.findMany({
+      where: {
+        workspaceId: ctx.workspaceId,
+        credentialSource: IntegrationCredentialSource.USER_CONNECTION,
+        connectionMapping: { connection: { ownerId: ctx.session.user.id } },
       },
+      include: authorizationManagementInclude,
       orderBy: { createdAt: "asc" },
     }),
   ),
