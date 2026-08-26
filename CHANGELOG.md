@@ -9,6 +9,28 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-08-25] — v0.33.0 · Identity and managed runtime control
+
+### Added
+
+- **Forge supports complete local, external, and hybrid identity lifecycles.** Instance policy controls credentials and provider presentation while one canonical user can manage local passwords, linked sign-in identities, profile pictures, recovery, invitations, and audited account state.
+- **Restricted projects have explicit human access roles.** Viewer, Contributor, and Manager grants stay tenant-scoped and flow through issues, resources, search, dashboards, analytics, notifications, realtime updates, and direct links without existence leaks.
+- **External credentials require owner consent and principal grants.** Users, agents, API keys, and workspace automation receive explicit workspace/project capabilities that remain bounded by current project access, key narrowing, mapping state, and provider authority.
+- **Managed runtime diagnostics preserve execution-plane truth.** Manual verification and self-tests run through the worker, retain bounded executor/trigger history, and include a reference worker-egress Compose topology.
+- **Hermes operators receive versioned runtime helpers.** Releases ship checksum-validated `forge-presence` and `forge-provision` artifacts; presence is a least-privilege, script-only heartbeat that stays silent on success.
+
+### Changed
+
+- **Generic OIDC explicitly enforces PKCE, state, and nonce.** Identity linking warns that the provider attaches to the signed-in user, and a separately designated break-glass administrator provides an audited recovery path.
+- **Personal and session API keys follow live human authorization.** Suspension, membership removal, role demotion, project-grant revocation, and key narrowing take effect on the next request while agent and plugin keys remain independent service principals.
+- **Runtime presentation uses adapter and transport identity.** Hermes managed runtimes show Runs API provenance instead of generic remote-webhook copy, and chat surfaces report one actionable reachability fault.
+
+### Fixed
+
+- **Credential and project grants cannot widen underlying access.** Artifact, attachment, canvas, context, plan, run, notification, realtime, GitHub, and derived surfaces share the same project privacy floor, including unfiled GUEST behavior.
+- **Runtime failures end diagnostics deterministically.** Worker exceptions record sanitized terminal evidence instead of leaving permanent pending rows, and BODY completion-comment requirements are enforced end to end.
+- **Hermes MCP requests are WAF-friendly and diagnosable.** The platform adapter sends a stable Forge User-Agent and records sanitized HTTP status/error classes without leaking response bodies or secrets.
+
 ## [2026-07-30] — v0.32.0 · Session-scoped MCP delivery
 
 ### Added
