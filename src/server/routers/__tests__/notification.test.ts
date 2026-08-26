@@ -1,5 +1,10 @@
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { EventKind, NotificationStatus } from "@prisma/client";
+import {
+  EventKind,
+  NotificationStatus,
+  ProjectAccessRole,
+  ProjectVisibility,
+} from "@prisma/client";
 import { notificationRouter } from "@/server/routers/notification";
 import {
   buildContext,
@@ -64,6 +69,66 @@ async function createStalledEvent(params: Awaited<ReturnType<typeof setup>>, cre
 }
 
 describe("notificationRouter", () => {
+  it("does not fan out restricted alerts and hides already-materialized rows after revocation", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "NPA" });
+    fixtures.push(fixture);
+    const prisma = getPrisma();
+    const membership = await prisma.membership.findUniqueOrThrow({
+      where: {
+        userId_workspaceId: {
+          userId: fixture.secondUser.id,
+          workspaceId: fixture.workspace.id,
+        },
+      },
+    });
+    const project = await prisma.project.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        key: "SECRET",
+        name: "Secret",
+        visibility: ProjectVisibility.RESTRICTED,
+        createdById: fixture.user.id,
+      },
+    });
+    const issue = await createIssue(fixture, { projectId: project.id, title: "Secret alert" });
+    const agent = await prisma.agent.create({
+      data: { workspaceId: fixture.workspace.id, name: "Private", profileKey: "private-alert" },
+    });
+    const event = await prisma.activityEvent.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        kind: EventKind.ISSUE_STALLED,
+        subjectType: "issue",
+        subjectId: issue.id,
+        payload: { issueId: issue.id, assignedAgentId: agent.id },
+      },
+    });
+    const caller = notificationRouter.createCaller(
+      await buildContext(fixture, { asUserId: fixture.secondUser.id }),
+    );
+
+    expect((await caller.list({ limit: 10 })).notifications).toEqual([]);
+    expect(
+      await prisma.notificationState.count({
+        where: { userId: fixture.secondUser.id, eventId: event.id },
+      }),
+    ).toBe(0);
+
+    const grant = await prisma.projectAccess.create({
+      data: {
+        workspaceId: fixture.workspace.id,
+        projectId: project.id,
+        membershipId: membership.id,
+        role: ProjectAccessRole.VIEWER,
+        grantedById: fixture.user.id,
+      },
+    });
+    expect((await caller.list({ limit: 10 })).notifications).toHaveLength(1);
+    await prisma.projectAccess.delete({ where: { id: grant.id } });
+    expect(await caller.unreadCount()).toEqual({ count: 0 });
+    expect((await caller.list({ limit: 10 })).notifications).toEqual([]);
+  });
+
   it("materializes alertable activity events into persisted notification state", async () => {
     const setupData = await setup();
     const event = await createStalledEvent(setupData, new Date("2026-04-26T12:00:00Z"));

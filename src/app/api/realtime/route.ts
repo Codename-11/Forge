@@ -8,6 +8,7 @@ import {
 } from "@/server/realtime-catchup";
 import { auth } from "@/server/auth";
 import { db } from "@/server/db";
+import { canReadProjectDerivedRecord } from "@/server/services/derived-project-access";
 
 /**
  * Browser SSE stream for the current workspace. Session-authed.
@@ -32,8 +33,7 @@ export async function GET(req: NextRequest) {
   // EventSource automatically sends Last-Event-ID on transport reconnects.
   // The query parameter preserves the same cursor across provider remounts /
   // workspace navigation (the client stores it in sessionStorage).
-  const rawCursor =
-    req.headers.get("last-event-id") ?? req.nextUrl.searchParams.get("cursor");
+  const rawCursor = req.headers.get("last-event-id") ?? req.nextUrl.searchParams.get("cursor");
   const cursor = decodeRealtimeCursor(rawCursor);
   const encoder = new TextEncoder();
   let unsubscribe: (() => Promise<void>) | undefined;
@@ -51,7 +51,8 @@ export async function GET(req: NextRequest) {
       let highWaterCursor = cursor;
       let replaying = true;
 
-      const sendLiveEvent = (evt: RealtimeEvent) => {
+      const sendLiveEvent = async (evt: RealtimeEvent) => {
+        if (!(await canReadProjectDerivedRecord(db, { workspaceId, membership }, evt))) return;
         const rawEventCursor = cursorForRealtimeEvent(evt);
         const eventCursor = decodeRealtimeCursor(rawEventCursor);
         // Redis publish is best-effort and may occur just before its enclosing
@@ -88,7 +89,9 @@ export async function GET(req: NextRequest) {
           }
           if (seen.has(evt.id)) return;
           seen.add(evt.id);
-          sendLiveEvent(evt);
+          void sendLiveEvent(evt).catch((error) => {
+            console.error("[realtime] live project authorization failed", error);
+          });
         });
         if (closed) {
           await unsubscribe();
@@ -99,7 +102,13 @@ export async function GET(req: NextRequest) {
         let needsReconcile = Boolean(rawCursor && !cursor);
         if (cursor) {
           try {
-            const catchup = await loadRealtimeCatchup(db, workspaceId, cursor);
+            const catchup = await loadRealtimeCatchup(
+              db,
+              workspaceId,
+              cursor,
+              undefined,
+              membership,
+            );
             for (const evt of catchup.events) {
               seen.add(evt.id);
               const eventCursor = decodeRealtimeCursor(evt.cursor);
@@ -120,17 +129,16 @@ export async function GET(req: NextRequest) {
         // Flush events that landed after the Redis subscription but before
         // replay completed. Duplicate durable rows are ignored by id.
         replaying = false;
-        liveBuffer
-          .sort((a, b) =>
-            a.createdAt === b.createdAt
-              ? a.id.localeCompare(b.id)
-              : a.createdAt.localeCompare(b.createdAt),
-          )
-          .forEach((evt) => {
-            if (seen.has(evt.id)) return;
-            seen.add(evt.id);
-            sendLiveEvent(evt);
-          });
+        const buffered = liveBuffer.sort((a, b) =>
+          a.createdAt === b.createdAt
+            ? a.id.localeCompare(b.id)
+            : a.createdAt.localeCompare(b.createdAt),
+        );
+        for (const evt of buffered) {
+          if (seen.has(evt.id)) continue;
+          seen.add(evt.id);
+          await sendLiveEvent(evt);
+        }
 
         if (needsReconcile) {
           send({ type: "reconcile", reason: cursor ? "catchup-limit" : "invalid-cursor" });

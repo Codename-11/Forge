@@ -19,6 +19,23 @@ import {
 import { enqueueGitHubResourceReconciliation } from "@/server/services/github/reconciliation-queue";
 import { IMPLEMENTATION_LINK_KINDS } from "@/server/services/github/types";
 import { actionRequestPresentation } from "@/server/routers/command-center";
+import { assertIssueForViewer, issueWhereForViewer } from "@/server/services/project-access";
+import { buildExecutionPlanAccessWhere } from "@/server/services/authorization";
+
+async function assertActionRequestForViewer(
+  ctx: Parameters<typeof issueWhereForViewer>[0] & {
+    db: Parameters<typeof assertIssueForViewer>[0];
+  },
+  requestId: string,
+  action: "READ" | "CONTRIBUTE",
+) {
+  const request = await ctx.db.actionRequest.findFirst({
+    where: { id: requestId, workspaceId: ctx.workspaceId },
+    select: { issueId: true },
+  });
+  if (!request) throw new TRPCError({ code: "NOT_FOUND", message: "Action request not found." });
+  if (request.issueId) await assertIssueForViewer(ctx.db, ctx, request.issueId, action);
+}
 
 /**
  * Zod-side mirror of `ActionRequestKind` so the router can accept the
@@ -54,6 +71,7 @@ export const actionRequestRouter = router({
         .default({}),
     )
     .query(async ({ ctx, input }) => {
+      const issueAccess = issueWhereForViewer(ctx);
       const rows = await ctx.db.actionRequest.findMany({
         where: {
           workspaceId: ctx.workspaceId,
@@ -61,6 +79,7 @@ export const actionRequestRouter = router({
           assignedUserId: input.assignedUserId,
           assignedAgentId: input.assignedAgentId,
           issueId: input.issueId,
+          AND: [{ OR: [{ issueId: null }, { issue: issueAccess }] }],
         },
         orderBy: { createdAt: "desc" },
         take: input.limit,
@@ -106,6 +125,7 @@ export const actionRequestRouter = router({
           workspaceId: ctx.workspaceId,
           assignedUserId: userId,
           status: input.status,
+          AND: [{ OR: [{ issueId: null }, { issue: issueWhereForViewer(ctx) }] }],
         },
         orderBy: { createdAt: "desc" },
         take: input.limit,
@@ -116,6 +136,7 @@ export const actionRequestRouter = router({
   get: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      await assertActionRequestForViewer(ctx, input.id, "READ");
       const row = await ctx.db.actionRequest.findFirst({
         where: { id: input.id, workspaceId: ctx.workspaceId },
         include: {
@@ -135,6 +156,7 @@ export const actionRequestRouter = router({
   refreshCompletionEvidence: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       const request = await ctx.db.actionRequest.findFirst({
         where: {
           id: input.id,
@@ -193,6 +215,7 @@ export const actionRequestRouter = router({
           workspaceId: ctx.workspaceId,
           sourceType: "comment",
           sourceId: input.commentId,
+          AND: [{ OR: [{ issueId: null }, { issue: issueWhereForViewer(ctx) }] }],
         },
         include: {
           requestedByUser: { select: { id: true, name: true, image: true, handle: true } },
@@ -215,6 +238,19 @@ export const actionRequestRouter = router({
   forPlan: workspaceProcedure
     .input(z.object({ planId: z.string().cuid() }))
     .query(async ({ ctx, input }) => {
+      const plan = await ctx.db.executionPlan.findFirst({
+        where: {
+          id: input.planId,
+          ...buildExecutionPlanAccessWhere({
+            workspaceId: ctx.workspaceId,
+            membershipId: ctx.membership.id,
+            membershipRole: ctx.membership.role,
+            action: "READ",
+          }),
+        },
+        select: { id: true },
+      });
+      if (!plan) throw new TRPCError({ code: "NOT_FOUND", message: "Execution plan not found." });
       const row = await ctx.db.actionRequest.findFirst({
         where: {
           workspaceId: ctx.workspaceId,
@@ -256,6 +292,7 @@ export const actionRequestRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.issueId) await assertIssueForViewer(ctx.db, ctx, input.issueId, "CONTRIBUTE");
       const result = await createActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -294,6 +331,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       return voteOnActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -314,6 +352,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "READ");
       return getActionRequestResults(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -334,6 +373,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       return closeActionRequestVoting(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -359,6 +399,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       return acceptActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -379,6 +420,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       return resolveDeliveryConnectionConflict(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -399,6 +441,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       return resolveWorkSessionAttention(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -424,6 +467,7 @@ export const actionRequestRouter = router({
       if (!userId) {
         throw new TRPCError({ code: "UNAUTHORIZED", message: "No session user." });
       }
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       return declineActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: userId,
@@ -440,6 +484,7 @@ export const actionRequestRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       await transitionActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -453,6 +498,7 @@ export const actionRequestRouter = router({
   dismiss: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       await transitionActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,
@@ -465,6 +511,7 @@ export const actionRequestRouter = router({
   snooze: workspaceProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
+      await assertActionRequestForViewer(ctx, input.id, "CONTRIBUTE");
       await transitionActionRequest(ctx.db, {
         workspaceId: ctx.workspaceId,
         actorId: ctx.session?.user?.id ?? null,

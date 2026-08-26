@@ -10,6 +10,8 @@ import {
 import { router, workspaceProcedure } from "@/server/trpc";
 import { presenceAvailability } from "@/lib/transport-display";
 import { listRunRecoveryItems } from "@/server/services/agent-run-recovery";
+import { filterProjectDerivedRecords } from "@/server/services/derived-project-access";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /**
  * Activity drawer feed.
@@ -184,10 +186,10 @@ export const eventRouter = router({
         where.OR = [{ kind: { in: RELEVANT_KINDS } }, ...(ownedChatWhere ? [ownedChatWhere] : [])];
       }
 
-      const rows = await ctx.db.activityEvent.findMany({
+      const candidates = await ctx.db.activityEvent.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: input.limit + 1,
+        take: Math.min(input.limit * 5 + 1, 501),
         include: {
           actor: { select: { id: true, name: true, image: true } },
           actorAgent: {
@@ -195,6 +197,7 @@ export const eventRouter = router({
           },
         },
       });
+      const rows = await filterProjectDerivedRecords(ctx.db, ctx, candidates);
 
       const hasMore = rows.length > input.limit;
       const page = hasMore ? rows.slice(0, input.limit) : rows;
@@ -334,7 +337,7 @@ export const eventRouter = router({
         where.OR = [{ kind: { in: TIMELINE_KINDS } }, ...(ownedChatWhere ? [ownedChatWhere] : [])];
       }
 
-      const rows = await ctx.db.activityEvent.findMany({
+      const candidates = await ctx.db.activityEvent.findMany({
         where,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         // Over-fetch so grouped watchdog signals do not leave a short pane.
@@ -346,6 +349,7 @@ export const eventRouter = router({
           },
         },
       });
+      const rows = await filterProjectDerivedRecords(ctx.db, ctx, candidates);
 
       const hydrated = await hydrateTimelineReferences(ctx.db, {
         workspaceId: ctx.workspaceId,
@@ -375,6 +379,7 @@ export const eventRouter = router({
         .default({ limit: 8, itemLimit: 4 }),
     )
     .query(async ({ ctx, input }) => {
+      const issueAccess = issueWhereForViewer(ctx);
       const workspace = await ctx.db.workspace.findUniqueOrThrow({
         where: { id: ctx.workspaceId },
         select: { slug: true, key: true },
@@ -402,6 +407,7 @@ export const eventRouter = router({
             workspaceId: ctx.workspaceId,
             status: ActionRequestStatus.OPEN,
             requestedByAgentId: { not: null },
+            OR: [{ issueId: null }, { issue: issueAccess }],
           },
           orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
           take: 100,
@@ -437,6 +443,7 @@ export const eventRouter = router({
           where: {
             workspaceId: ctx.workspaceId,
             status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            issue: issueAccess,
           },
           orderBy: [{ lastEventAt: "desc" }, { startedAt: "desc" }],
           take: 100,
@@ -457,6 +464,28 @@ export const eventRouter = router({
           limit: 50,
         }),
       ]);
+
+      const visibleRecoveryIssueIds = new Set(
+        (
+          await ctx.db.issue.findMany({
+            where: {
+              id: { in: recovery.items.map((item) => item.run.issueId) },
+              AND: [issueAccess],
+            },
+            select: { id: true },
+          })
+        ).map((issue) => issue.id),
+      );
+      recovery.items = recovery.items.filter((item) =>
+        visibleRecoveryIssueIds.has(item.run.issueId),
+      );
+      recovery.counts = {
+        total: recovery.items.length,
+        activeStale: recovery.items.filter((item) => item.reason === "active-stale").length,
+        terminalFailures: recovery.items.filter((item) => item.reason === "terminal-failure")
+          .length,
+        protocolFailed: recovery.items.filter((item) => item.reason === "protocol-failed").length,
+      };
 
       const rows = agents
         .map((agent) => {
@@ -612,7 +641,7 @@ export const eventRouter = router({
           select: { id: true },
         })
       ).map((thread) => thread.id);
-      const count = await ctx.db.activityEvent.count({
+      const candidates = await ctx.db.activityEvent.findMany({
         where: {
           workspaceId: ctx.workspaceId,
           createdAt: { gte: since },
@@ -629,7 +658,9 @@ export const eventRouter = router({
               : []),
           ],
         },
+        select: { id: true, subjectType: true, subjectId: true, payload: true },
       });
+      const count = (await filterProjectDerivedRecords(ctx.db, ctx, candidates)).length;
       return { count, since: since.toISOString() };
     }),
 });

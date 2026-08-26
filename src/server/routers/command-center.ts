@@ -10,6 +10,7 @@ import {
 import { router, workspaceProcedure } from "@/server/trpc";
 import { listRunRecoveryItems } from "@/server/services/agent-run-recovery";
 import { listReviewGatesWithContext } from "@/server/services/review-gate-context";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 /** Goal statuses that mean a goal is live and worth surfacing. */
 const LIVE_GOAL_STATUSES = [GoalStatus.PLANNING, GoalStatus.ACTIVE];
@@ -468,6 +469,13 @@ export const commandCenterRouter = router({
     )
     .query(async ({ ctx, input }) => {
       const userId = ctx.session?.user?.id ?? null;
+      const issueAccess = issueWhereForViewer(ctx);
+      const actionRequestAccess = {
+        AND: [
+          decisionAskWhere(ctx.workspaceId, userId ?? ""),
+          { OR: [{ issueId: null }, { issue: issueAccess }] },
+        ],
+      };
       const dueCutoff = new Date(Date.now() + input.dueWindowDays * 24 * 60 * 60 * 1000);
 
       const [
@@ -485,7 +493,7 @@ export const commandCenterRouter = router({
       ] = await Promise.all([
         userId
           ? ctx.db.actionRequest.findMany({
-              where: decisionAskWhere(ctx.workspaceId, userId),
+              where: actionRequestAccess,
               orderBy: [{ severity: "desc" }, { createdAt: "desc" }],
               take: input.limit,
               include: {
@@ -504,21 +512,24 @@ export const commandCenterRouter = router({
               },
             })
           : Promise.resolve([]),
-        userId
-          ? ctx.db.actionRequest.count({ where: decisionAskWhere(ctx.workspaceId, userId) })
-          : Promise.resolve(0),
+        userId ? ctx.db.actionRequest.count({ where: actionRequestAccess }) : Promise.resolve(0),
         listReviewGatesWithContext(ctx.db, {
           workspaceId: ctx.workspaceId,
           status: ReviewGateStatus.PENDING,
           limit: input.limit,
+          membership: ctx.membership,
         }),
-        ctx.db.reviewGate.count({
-          where: { workspaceId: ctx.workspaceId, status: ReviewGateStatus.PENDING },
-        }),
+        listReviewGatesWithContext(ctx.db, {
+          workspaceId: ctx.workspaceId,
+          status: ReviewGateStatus.PENDING,
+          limit: 1000,
+          membership: ctx.membership,
+        }).then((rows) => rows.length),
         ctx.db.agentRun.findMany({
           where: {
             workspaceId: ctx.workspaceId,
             status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
+            issue: issueAccess,
           },
           orderBy: [
             { awaitingApprovalAt: { sort: "desc", nulls: "last" } },
@@ -542,6 +553,7 @@ export const commandCenterRouter = router({
             workspaceId: ctx.workspaceId,
             status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
             awaitingApprovalAt: null,
+            issue: issueAccess,
           },
         }),
         ctx.db.agentRun.count({
@@ -549,6 +561,7 @@ export const commandCenterRouter = router({
             workspaceId: ctx.workspaceId,
             status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
             awaitingApprovalAt: { not: null },
+            issue: issueAccess,
           },
         }),
         listRunRecoveryItems(ctx.db, {
@@ -574,6 +587,7 @@ export const commandCenterRouter = router({
             deletedAt: null,
             dueDate: { not: null, lte: dueCutoff },
             status: { category: { notIn: ["DONE", "CANCELED"] } },
+            AND: [issueAccess],
           },
           orderBy: { dueDate: "asc" },
           take: input.limit,
@@ -593,6 +607,7 @@ export const commandCenterRouter = router({
                 workspaceId: ctx.workspaceId,
                 userId,
                 endedAt: null,
+                issue: issueAccess,
               },
               orderBy: { startedAt: "desc" },
               include: {
@@ -636,6 +651,29 @@ export const commandCenterRouter = router({
         const doneSteps = steps.filter((s) => s.status === "DONE").length;
         return { ...rest, doneSteps, totalSteps };
       });
+
+      const recoveryIssueIds = new Set(
+        (
+          await ctx.db.issue.findMany({
+            where: {
+              id: { in: runRecovery.items.map((item) => item.run.issueId) },
+              AND: [issueAccess],
+            },
+            select: { id: true },
+          })
+        ).map((issue) => issue.id),
+      );
+      runRecovery.items = runRecovery.items.filter((item) =>
+        recoveryIssueIds.has(item.run.issueId),
+      );
+      runRecovery.counts = {
+        total: runRecovery.items.length,
+        activeStale: runRecovery.items.filter((item) => item.reason === "active-stale").length,
+        terminalFailures: runRecovery.items.filter((item) => item.reason === "terminal-failure")
+          .length,
+        protocolFailed: runRecovery.items.filter((item) => item.reason === "protocol-failed")
+          .length,
+      };
 
       const stalledRuns = runRecovery.items.map((item) => ({
         ...item.run,
@@ -698,18 +736,30 @@ export const commandCenterRouter = router({
    */
   decisionsCount: workspaceProcedure.query(async ({ ctx }) => {
     const userId = ctx.session?.user?.id ?? null;
+    const issueAccess = issueWhereForViewer(ctx);
     const [actionRequests, reviewGates, runtimeApprovals] = await Promise.all([
       userId
-        ? ctx.db.actionRequest.count({ where: decisionAskWhere(ctx.workspaceId, userId) })
+        ? ctx.db.actionRequest.count({
+            where: {
+              AND: [
+                decisionAskWhere(ctx.workspaceId, userId),
+                { OR: [{ issueId: null }, { issue: issueAccess }] },
+              ],
+            },
+          })
         : Promise.resolve(0),
-      ctx.db.reviewGate.count({
-        where: { workspaceId: ctx.workspaceId, status: ReviewGateStatus.PENDING },
-      }),
+      listReviewGatesWithContext(ctx.db, {
+        workspaceId: ctx.workspaceId,
+        status: ReviewGateStatus.PENDING,
+        limit: 1000,
+        membership: ctx.membership,
+      }).then((rows) => rows.length),
       ctx.db.agentRun.count({
         where: {
           workspaceId: ctx.workspaceId,
           status: { in: [AgentRunStatus.ACTIVE, AgentRunStatus.WAITING] },
           awaitingApprovalAt: { not: null },
+          issue: issueAccess,
         },
       }),
     ]);

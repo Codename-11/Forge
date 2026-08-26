@@ -20,6 +20,7 @@
  */
 
 import type { PrismaClient, Prisma } from "@prisma/client";
+import { issueWhereForViewer } from "@/server/services/project-access";
 
 const TODAY_ZONE_X = 0;
 const TODAY_ZONE_Y = 0;
@@ -77,7 +78,11 @@ export async function refreshTodayZone(
         text: "Today",
         parentFrameId: frame.id,
         lockedAt: new Date(),
-        style: { fontSize: 13, fontWeight: 600, color: "var(--muted-foreground)" } as Prisma.InputJsonValue,
+        style: {
+          fontSize: 13,
+          fontWeight: 600,
+          color: "var(--muted-foreground)",
+        } as Prisma.InputJsonValue,
       },
     });
 
@@ -134,6 +139,11 @@ async function collectTodayItems(
   endOfDay.setDate(endOfDay.getDate() + 1);
   const sevenDaysAgo = new Date(now);
   sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  const membership = await db.membership.findUniqueOrThrow({
+    where: { userId_workspaceId: { userId, workspaceId } },
+    select: { id: true, role: true },
+  });
+  const accessWhere = issueWhereForViewer({ workspaceId, membership });
 
   const [assigned, dueToday, recentChats] = await Promise.all([
     db.issue.findMany({
@@ -142,6 +152,7 @@ async function collectTodayItems(
         deletedAt: null,
         status: { category: { in: ["TODO", "IN_PROGRESS", "IN_REVIEW"] } },
         assignees: { some: { userId } },
+        AND: [accessWhere],
       },
       orderBy: [{ priority: "desc" }, { updatedAt: "desc" }],
       take: 7,
@@ -154,6 +165,7 @@ async function collectTodayItems(
         dueDate: { gte: startOfDay, lt: endOfDay },
         status: { category: { notIn: ["DONE", "CANCELED"] } },
         OR: [{ assignees: { some: { userId } } }, { authorId: userId }],
+        AND: [accessWhere],
       },
       orderBy: { dueDate: "asc" },
       take: 4,
@@ -182,7 +194,11 @@ async function collectTodayItems(
   for (const i of dueToday) {
     if (seen.has(i.id)) continue;
     seen.add(i.id);
-    items.push({ targetType: "issue", targetId: i.id, sortKey: `d-${i.dueDate?.toISOString() ?? ""}` });
+    items.push({
+      targetType: "issue",
+      targetId: i.id,
+      sortKey: `d-${i.dueDate?.toISOString() ?? ""}`,
+    });
   }
   for (const c of recentChats) {
     items.push({
@@ -223,7 +239,11 @@ async function ensureTodayZoneFrame(
       width: TODAY_ZONE_WIDTH,
       height,
       lockedAt: new Date(),
-      backgroundFill: { kind: "today-zone", color: "var(--card)", opacity: 0.3 } as Prisma.InputJsonValue,
+      backgroundFill: {
+        kind: "today-zone",
+        color: "var(--card)",
+        opacity: 0.3,
+      } as Prisma.InputJsonValue,
     },
     select: { id: true, workspaceId: true, canvasId: true },
   });
