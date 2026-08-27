@@ -101,10 +101,26 @@ export function OperatorHome() {
   const { data: ws } = trpc.workspace.current.useQuery();
   const { data: me } = trpc.workspace.me.useQuery();
   const myWork = trpc.dashboard.myWork.useQuery();
+  const dependencyBlocked = trpc.issue.list.useQuery(
+    { blocked: true, includeDone: false, limit: 200 },
+    { refetchOnWindowFocus: true, staleTime: 30_000 },
+  );
+  const blockedIssueRows = useMemo(
+    () => dependencyBlocked.data?.items ?? [],
+    [dependencyBlocked.data?.items],
+  );
+  const blockedIssueIds = useMemo(
+    () => new Set(blockedIssueRows.map((issue) => issue.id)),
+    [blockedIssueRows],
+  );
 
   const lanes = useMemo(
-    () => buildOperatorLanes(myWork.data?.focus ?? [], myWork.data?.resume ?? []),
-    [myWork.data?.focus, myWork.data?.resume],
+    () =>
+      buildOperatorLanes(
+        (myWork.data?.focus ?? []).filter((issue) => !blockedIssueIds.has(issue.id)),
+        (myWork.data?.resume ?? []).filter((issue) => !blockedIssueIds.has(issue.id)),
+      ),
+    [blockedIssueIds, myWork.data?.focus, myWork.data?.resume],
   );
 
   const firstName = (me?.user.name ?? me?.user.email ?? "").split(/[\s@]/)[0] || "there";
@@ -138,7 +154,11 @@ export function OperatorHome() {
           aria-label="Live operations"
           data-testid="dashboard-live-operations"
         >
-          <AttentionRail slug={workspace.slug} />
+          <AttentionRail
+            slug={workspace.slug}
+            blockedIssues={blockedIssueRows}
+            blockedLoading={dependencyBlocked.isLoading}
+          />
           <AgentActivityTile slug={workspace.slug} />
           <TodayWidget slug={workspace.slug} workspaceKey={ws?.key ?? "—"} maxDueSoon={4} />
         </aside>
@@ -369,7 +389,15 @@ function WorkRow({
 
 type AttentionTab = "decisions" | "exceptions" | "blocked";
 
-function AttentionRail({ slug }: { slug: string }) {
+function AttentionRail({
+  slug,
+  blockedIssues,
+  blockedLoading,
+}: {
+  slug: string;
+  blockedIssues: Array<{ id: string; title: string }>;
+  blockedLoading: boolean;
+}) {
   const { data, isLoading } = trpc.commandCenter.summary.useQuery(
     { limit: 8 },
     { refetchOnWindowFocus: true, staleTime: 30_000 },
@@ -422,13 +450,12 @@ function AttentionRail({ slug }: { slug: string }) {
     ];
   }, [data, slug]);
 
-  const blocked =
-    data?.stalledRuns.map((run) => ({
-      id: `blocked-${run.id}`,
-      title: run.issue.title,
-      detail: run.recoveryDetail ?? "Work is blocked",
-      href: `/w/${slug}/issues/${run.issue.id}`,
-    })) ?? [];
+  const blocked = blockedIssues.map((issue) => ({
+    id: `blocked-${issue.id}`,
+    title: issue.title,
+    detail: "Blocked by an open issue dependency",
+    href: `/w/${slug}/issues/${issue.id}`,
+  }));
   const activeItems = tab === "decisions" ? decisions : tab === "exceptions" ? exceptions : blocked;
   const total = decisions.length + exceptions.length + blocked.length;
 
@@ -474,7 +501,7 @@ function AttentionRail({ slug }: { slug: string }) {
         </AttentionTabButton>
       </div>
       <div role="tabpanel" className="min-h-32 p-2">
-        {isLoading ? (
+        {isLoading || blockedLoading ? (
           <div className="h-24 animate-pulse rounded bg-subtle/40" />
         ) : activeItems.length === 0 ? (
           <div className="text-meta flex min-h-28 flex-col items-center justify-center text-center text-muted-foreground">

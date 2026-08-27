@@ -2,6 +2,19 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-27 — Explicit native issue blockers
+
+- Added a direct issue-detail blocker control backed by the existing
+  `BLOCKED_BY` relation model, with searchable blocker selection, a visible
+  active-blocker banner, navigation, removal, and automatic terminal-state
+  clearing without introducing a second blocked-state model.
+- Kept `/blocked <reason>` as a separate operator-attention request and made
+  that distinction explicit in the blocker picker.
+- Replaced the Dashboard Blocked tab's duplicate stalled-run rows with actual
+  dependency-blocked issues and removed those issues from ordinary work lanes.
+- Added focused unit and production-build Playwright coverage for set, display,
+  dashboard reconciliation, deduplication, and removal behavior.
+
 ## 2026-08-26 — v0.34.0 release preparation
 
 - Squash-merged AXI-107 / PR #100 after exact-head lint, typecheck, unit,
