@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-26 — v0.34.0 release preparation
+
+- Squash-merged AXI-107 / PR #100 after exact-head lint, typecheck, unit,
+  integration, and both Playwright shards passed.
+- Prepared the `0.34.0` version bump and curated release notes for the
+  deterministic dashboard operator home, bounded attention rail, responsive
+  semantic order, and persistent Workspace health drawer.
+- AXI-184 owns the serialized release PR, immutable tag, production deployment,
+  and live verification required by `RELEASE.md`.
+
 ## 2026-08-26 — Dashboard operator-home redesign
 
 - Replaced the team dashboard's independent masonry-style stacks with a

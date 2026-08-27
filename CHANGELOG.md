@@ -9,6 +9,23 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-08-26] — v0.34.0 · Dashboard operator home
+
+### Added
+
+- **The Dashboard now opens as a deterministic operator home.** One recommended action and mutually exclusive Now, Next, and Waiting lanes make the next useful step visible without duplicating work.
+- **Needs Attention separates actionable operational states.** Decisions, agent exceptions, and blocked work share one bounded rail alongside live agents and the current week.
+
+### Changed
+
+- **Workspace health is one persistent, collapsible drawer.** Pipeline, Throughput, Standup, and What's New remain visible together instead of flowing through independent widget stacks.
+- **Responsive layouts preserve the same priority order.** Desktop uses a stable work-and-operations split while tablet and mobile stack the same semantic regions without horizontal overflow.
+
+### Fixed
+
+- **Sparse dashboard content no longer leaves masonry-style holes.** Deterministic regions replace arbitrary half/full widget geometry and compact row skeletons avoid a large blank loading state.
+- **Clearing release notes no longer hides operational health.** What's New can be dismissed until the next release while Pipeline, Throughput, Standup, and drawer state remain independent.
+
 ## [2026-08-25] — v0.33.0 · Identity and managed runtime control
 
 ### Added
