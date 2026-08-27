@@ -2,6 +2,22 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-08-26 — Dashboard operator-home redesign
+
+- Replaced the team dashboard's independent masonry-style stacks with a
+  deterministic operator home: one recommended action and mutually exclusive
+  Now, Next, and Waiting lanes, plus a compact attention rail for decisions,
+  agent exceptions, and blocked work.
+- Consolidated Pipeline, Throughput, Standup, and What's New into one
+  collapsible Workspace health drawer. Only the current What's New release can
+  be cleared; operational health stays visible and the drawer preference
+  persists per user.
+- Preserved the personal dashboard and existing Forge design primitives,
+  limited agent-access onboarding to workspace admins, and added responsive
+  mobile rows plus compact loading feedback.
+- Added deterministic lane unit coverage and desktop/mobile visual QA evidence
+  under `docs/audits/2026-08-26-dashboard-operator-home/`.
+
 ## 2026-08-25 — v0.33.0 release preparation
 
 - Squash-merged AXI-180 / PR #96, AXI-181 / PR #97, and AXI-182 / PR #98 to
