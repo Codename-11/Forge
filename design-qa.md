@@ -73,3 +73,52 @@ No actionable P0, P1, or P2 differences remain.
 - [x] Same-state source/implementation comparison
 
 final result: passed
+
+---
+
+# Design QA — AXI-107 dashboard operator home
+
+## Reference
+
+`docs/audits/2026-08-26-dashboard-operator-home/selected-dashboard-operator-home.png`
+
+## Rendered evidence
+
+- Desktop, 1440 × 1024:
+  `docs/audits/2026-08-26-dashboard-operator-home/after-dashboard-desktop.png`
+- Mobile, 390 × 844:
+  `docs/audits/2026-08-26-dashboard-operator-home/after-dashboard-mobile.png`
+- Side-by-side:
+  `docs/audits/2026-08-26-dashboard-operator-home/source-vs-implementation.png`
+
+## Visual review
+
+- Layout follows the selected operator-home hierarchy: recommended work and
+  trace-linked lanes on the left, attention and live context on the right, and
+  one full-width health drawer below.
+- Independent masonry stacks and their dead-space failure mode are removed.
+- Existing Forge type, spacing, border, badge, and semantic color tokens are
+  preserved.
+- The responsive render has no horizontal overflow. Work remains first, then
+  attention and health context, with compact mobile issue rows.
+- Loading uses a compact row skeleton, avoiding the large blank placeholder
+  visible during the first render pass.
+
+## Interaction review
+
+- Attention tabs expose correct selected state.
+- Workspace-health collapse persists after the preference mutation settles.
+- Clearing What's New hides only the current release notes; operational metrics
+  and the drawer remain available.
+- Browser console review found no warnings or errors attributable to this view.
+
+## Verification
+
+- `pnpm lint` — passed with pre-existing repository warnings only.
+- `pnpm typecheck` — passed.
+- Focused Vitest dashboard suites — 9/9 passed.
+- Focused production-build Playwright dashboard suite — passed at desktop,
+  tablet, and mobile breakpoints.
+- Desktop and mobile in-app browser passes — passed.
+
+final result: passed

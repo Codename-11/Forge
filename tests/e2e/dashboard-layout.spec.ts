@@ -1,33 +1,12 @@
 import { expect, test } from "@playwright/test";
 
 const STATES = [
-  {
-    name: "desktop",
-    width: 1600,
-    height: 2600,
-    columns: 2,
-    priorityColumns: 2,
-    firstWidgets: ["pipeline", "whats-new", "suggestions", "quick-notes"],
-  },
-  {
-    name: "tablet",
-    width: 1024,
-    height: 2600,
-    columns: 2,
-    priorityColumns: 2,
-    firstWidgets: ["pipeline", "suggestions", "whats-new", "ideas"],
-  },
-  {
-    name: "mobile",
-    width: 390,
-    height: 3000,
-    columns: 1,
-    priorityColumns: 1,
-    firstWidgets: ["pipeline", "whats-new", "suggestions", "quick-notes"],
-  },
+  { name: "desktop", width: 1600, height: 1800, split: true },
+  { name: "tablet", width: 1024, height: 2200, split: false },
+  { name: "mobile", width: 390, height: 2600, split: false },
 ] as const;
 
-test("dashboard keeps priority work bounded and reflows secondary modules", async ({
+test("dashboard preserves operator-home hierarchy without gaps or duplicate work", async ({
   page,
 }, testInfo) => {
   await page.addInitScript(() => localStorage.setItem("theme", "dark"));
@@ -36,81 +15,55 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
     await page.setViewportSize({ width: state.width, height: state.height });
     await page.goto("/w/forge/dashboard");
 
-    const cockpit = page.getByTestId("dashboard-priority-cockpit");
-    const flow = page.getByTestId("dashboard-flow-board");
-    await expect(cockpit).toBeVisible();
-    await expect(flow).toBeVisible();
-    await expect(flow.getByText("Pipeline", { exact: true }).first()).toBeVisible();
+    const home = page.getByTestId("dashboard-operator-home");
+    const work = page.getByTestId("dashboard-work-lanes");
+    const operations = page.getByTestId("dashboard-live-operations");
+    const attention = page.getByTestId("dashboard-attention-rail");
+    const health = page.getByTestId("dashboard-health-drawer");
 
-    const priorityGrid = cockpit.locator(`[data-dashboard-columns]`).first();
-    await expect(priorityGrid).toBeVisible();
-    const configuredPriorityColumns = Number(
-      await priorityGrid.getAttribute("data-dashboard-columns"),
-    );
-    expect([1, 2]).toContain(configuredPriorityColumns);
-    await expect
-      .poll(() =>
-        priorityGrid
-          .locator(":scope > [data-widget-id]")
-          .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-widget-id"))),
-      )
-      .toEqual(["agent-attention", "delivery-work", "agent-activity", "standup", "pulse", "today"]);
-    const priorityColumns = await priorityGrid.evaluate((node) => {
-      const tracks = getComputedStyle(node).gridTemplateColumns;
-      return tracks === "none" ? 1 : tracks.split(" ").length;
-    });
-    expect(priorityColumns).toBe(
-      state.name === "desktop" ? configuredPriorityColumns : state.priorityColumns,
-    );
+    await expect(home).toBeVisible();
+    await expect(work).toBeVisible();
+    await expect(page.getByTestId("dashboard-recommended-next")).toBeVisible();
+    await expect(attention).toBeVisible();
+    await expect(health).toBeVisible();
+    await expect(health.getByText("Pipeline", { exact: true })).toBeVisible();
+    await expect(health.getByText("Throughput", { exact: true })).toBeVisible();
+    await expect(health.getByText("Standup", { exact: true })).toBeVisible();
+    await expect(health.getByText("What's new", { exact: true })).toBeVisible();
 
-    await expect(cockpit.getByTestId("dashboard-pulse")).toBeVisible();
-    await expect(cockpit.getByTestId("dashboard-schedule")).toBeVisible();
-    await expect(flow.locator('[data-widget-id="pulse"]')).toHaveCount(0);
-    await expect(flow.locator('[data-widget-id="today"]')).toHaveCount(0);
-    await expect(flow.getByTestId("dashboard-whats-new")).toBeVisible();
-    await expect(
-      page.getByTestId("dashboard-operations-column").locator('[data-widget-id="whats-new"]'),
-    ).toHaveCount(0);
+    const issueIds = await work
+      .locator("[data-dashboard-issue-id]")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-dashboard-issue-id")));
+    expect(issueIds).toEqual([...new Set(issueIds)]);
 
-    expect(await cockpit.locator("[data-schedule-due-item]").count()).toBeLessThanOrEqual(3);
-    expect(await flow.locator("[data-whats-new-item]").count()).toBeLessThanOrEqual(4);
-    expect(await flow.locator("[data-whats-new-history]").count()).toBeLessThanOrEqual(3);
+    const [workBox, operationsBox, healthBox, homeBox] = await Promise.all([
+      work.boundingBox(),
+      operations.boundingBox(),
+      health.boundingBox(),
+      home.boundingBox(),
+    ]);
+    expect(workBox).not.toBeNull();
+    expect(operationsBox).not.toBeNull();
+    expect(healthBox).not.toBeNull();
+    expect(homeBox).not.toBeNull();
 
-    const grid = flow.locator(`[data-dashboard-columns="2"]`);
-    await expect(grid).toBeVisible();
-    await expect
-      .poll(() =>
-        grid
-          .locator(":scope > [data-widget-id]")
-          .evaluateAll(
-            (nodes, count) =>
-              nodes.slice(0, count).map((node) => node.getAttribute("data-widget-id")),
-            state.firstWidgets.length,
-          ),
-      )
-      .toEqual(state.firstWidgets);
-    const renderedColumns = await grid.evaluate((node) => {
-      const tracks = getComputedStyle(node).gridTemplateColumns;
-      return tracks === "none" ? 1 : tracks.split(" ").length;
-    });
-    expect(renderedColumns).toBe(state.columns);
-
-    if (state.name === "desktop") {
-      const [boardBox, suggestionsBox, flowBox, operationsBox] = await Promise.all([
-        grid.boundingBox(),
-        grid.locator('[data-widget-id="suggestions"]').boundingBox(),
-        flow.boundingBox(),
-        page.getByTestId("dashboard-operations-column").boundingBox(),
-      ]);
-      expect(boardBox).not.toBeNull();
-      expect(suggestionsBox).not.toBeNull();
-      expect(flowBox).not.toBeNull();
-      expect(operationsBox).not.toBeNull();
-      expect(Math.abs((boardBox?.width ?? 0) - (suggestionsBox?.width ?? 0))).toBeLessThanOrEqual(
-        1,
-      );
-      expect(flowBox!.y).toBeLessThan(operationsBox!.y + operationsBox!.height);
+    if (state.split) {
+      expect(workBox!.x).toBeLessThan(operationsBox!.x);
+      expect(Math.abs(workBox!.y - operationsBox!.y)).toBeLessThanOrEqual(1);
+    } else {
+      expect(operationsBox!.y).toBeGreaterThan(workBox!.y + workBox!.height - 1);
     }
+    expect(healthBox!.y).toBeGreaterThan(
+      Math.max(workBox!.y + workBox!.height, operationsBox!.y + operationsBox!.height) - 1,
+    );
+    expect(Math.abs(healthBox!.width - homeBox!.width)).toBeLessThanOrEqual(1);
+
+    const drawerButton = health.getByRole("button", { name: /Workspace health/ });
+    await expect(drawerButton).toHaveAttribute("aria-expanded", "true");
+    await drawerButton.click();
+    await expect(drawerButton).toHaveAttribute("aria-expanded", "false");
+    await drawerButton.click();
+    await expect(drawerButton).toHaveAttribute("aria-expanded", "true");
 
     const overflow = await page.evaluate(() => {
       const doc = document.documentElement;
@@ -119,24 +72,10 @@ test("dashboard keeps priority work bounded and reflows secondary modules", asyn
     });
     expect(overflow).toBeLessThanOrEqual(1);
 
-    const overflowingWidgets = await page
-      .locator("[data-widget-id]")
-      .evaluateAll((nodes) =>
-        nodes
-          .filter(
-            (node) =>
-              getComputedStyle(node).display !== "none" && node.scrollWidth - node.clientWidth > 1,
-          )
-          .map((node) => node.getAttribute("data-widget-id")),
-      );
-    expect(overflowingWidgets).toEqual([]);
-
     await page.screenshot({
       path: testInfo.outputPath(`dashboard-${state.name}.png`),
       fullPage: true,
     });
-    await page.getByTestId("dashboard-layout").screenshot({
-      path: testInfo.outputPath(`dashboard-${state.name}-layout.png`),
-    });
+    await home.screenshot({ path: testInfo.outputPath(`dashboard-${state.name}-layout.png`) });
   }
 });
