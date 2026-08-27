@@ -43,12 +43,14 @@ describe("buildOperatorLanes", () => {
     const later = card("3");
 
     const lanes = buildOperatorLanes([active, waiting], [active, later], now);
-    const ids = [...lanes.now, ...lanes.next, ...lanes.waiting].map((item) => item.id);
+    const ids = [lanes.recommended, ...lanes.now, ...lanes.next, ...lanes.waiting]
+      .filter((item): item is DashboardWorkCard => Boolean(item))
+      .map((item) => item.id);
 
     expect(ids).toHaveLength(new Set(ids).size);
-    expect(lanes.now.map((item) => item.id)).toContain("1");
+    expect(lanes.now.map((item) => item.id)).toEqual(["3"]);
     expect(lanes.waiting.map((item) => item.id)).toEqual(["2"]);
-    expect(lanes.next.map((item) => item.id)).toEqual(["3"]);
+    expect(lanes.next).toEqual([]);
     expect(lanes.recommended?.id).toBe("1");
   });
 
@@ -60,7 +62,8 @@ describe("buildOperatorLanes", () => {
 
     const lanes = buildOperatorLanes([dueSoon, review], [], now);
 
-    expect(lanes.now.map((item) => item.id)).toEqual(["4"]);
+    expect(lanes.recommended?.id).toBe("4");
+    expect(lanes.now).toEqual([]);
     expect(lanes.waiting.map((item) => item.id)).toEqual(["5"]);
   });
 
@@ -74,7 +77,8 @@ describe("buildOperatorLanes", () => {
     const lanes = buildOperatorLanes(active, [], now);
 
     expect(lanes.now).toHaveLength(5);
-    expect(lanes.now.map((item) => item.id)).toEqual(["10", "11", "12", "13", "14"]);
-    expect(lanes.next.map((item) => item.id)).toEqual(["15", "16", "17"]);
+    expect(lanes.recommended?.id).toBe("10");
+    expect(lanes.now.map((item) => item.id)).toEqual(["11", "12", "13", "14", "15"]);
+    expect(lanes.next.map((item) => item.id)).toEqual(["16", "17"]);
   });
 });

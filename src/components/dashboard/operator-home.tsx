@@ -79,15 +79,19 @@ export function buildOperatorLanes(
   const available = cards.filter((card) => !waitingOnOthers(card));
   const urgent = available.filter((card) => belongsNow(card, nowMs));
   const ordinary = available.filter((card) => !belongsNow(card, nowMs));
-  const now = (urgent.length > 0 ? urgent : ordinary).slice(0, 5);
+  const ranked = urgent.length > 0 ? [...urgent, ...ordinary] : ordinary;
+  const recommended = ranked[0] ?? waiting[0] ?? null;
+  const recommendedId = recommended?.id ?? null;
+  const remainingRanked = ranked.filter((card) => card.id !== recommendedId);
+  const now = remainingRanked.slice(0, 5);
   const nowIds = new Set(now.map((card) => card.id));
-  const next = [...urgent, ...ordinary].filter((card) => !nowIds.has(card.id)).slice(0, 4);
+  const next = remainingRanked.filter((card) => !nowIds.has(card.id)).slice(0, 4);
 
   return {
-    recommended: now[0] ?? next[0] ?? waiting[0] ?? null,
+    recommended,
     now,
     next,
-    waiting: waiting.slice(0, 3),
+    waiting: waiting.filter((card) => card.id !== recommendedId).slice(0, 3),
   };
 }
 
@@ -129,7 +133,11 @@ export function OperatorHome() {
           />
         </main>
 
-        <aside className="min-w-0 space-y-4 xl:col-span-4" aria-label="Live operations">
+        <aside
+          className="min-w-0 space-y-4 xl:col-span-4"
+          aria-label="Live operations"
+          data-testid="dashboard-live-operations"
+        >
           <AttentionRail slug={workspace.slug} />
           <AgentActivityTile slug={workspace.slug} />
           <TodayWidget slug={workspace.slug} workspaceKey={ws?.key ?? "—"} maxDueSoon={4} />
@@ -187,7 +195,7 @@ function WorkLanes({
   }
 
   return (
-    <section aria-labelledby="dashboard-work-heading">
+    <section aria-labelledby="dashboard-work-heading" data-testid="dashboard-work-lanes">
       <div className="mb-3 flex items-center gap-2">
         <h2
           id="dashboard-work-heading"
@@ -202,6 +210,7 @@ function WorkLanes({
           href={`/w/${slug}/issues/${lanes.recommended.id}`}
           className="focus-ring group mb-4 grid min-w-0 grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-ember/50 bg-ember/5 px-4 py-3 hover:bg-ember/10 sm:grid-cols-[auto_auto_auto_minmax(0,1fr)_auto_auto]"
           data-testid="dashboard-recommended-next"
+          data-dashboard-issue-id={lanes.recommended.id}
         >
           <Sparkles className="h-4 w-4 shrink-0 text-ember" aria-hidden />
           <span className="shrink-0 text-xs font-semibold text-ember">Recommended next</span>
@@ -309,6 +318,7 @@ function WorkRow({
   return (
     <Link
       href={`/w/${slug}/issues/${card.id}`}
+      data-dashboard-issue-id={card.id}
       className="focus-ring group grid min-w-0 grid-cols-[1.75rem_4rem_minmax(0,1fr)_auto] items-center gap-2 rounded-sm px-1 py-2 hover:bg-subtle/35 md:grid-cols-[1.75rem_4rem_minmax(0,1fr)_auto_auto_auto]"
     >
       <span

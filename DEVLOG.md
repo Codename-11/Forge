@@ -16,7 +16,9 @@
   limited agent-access onboarding to workspace admins, and added responsive
   mobile rows plus compact loading feedback.
 - Added deterministic lane unit coverage and desktop/mobile visual QA evidence
-  under `docs/audits/2026-08-26-dashboard-operator-home/`.
+  under `docs/audits/2026-08-26-dashboard-operator-home/`, plus production-build
+  Playwright coverage for responsive hierarchy, deduplication, drawer behavior,
+  and overflow.
 
 ## 2026-08-25 — v0.33.0 release preparation
 

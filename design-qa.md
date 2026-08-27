@@ -117,6 +117,8 @@ final result: passed
 - `pnpm lint` — passed with pre-existing repository warnings only.
 - `pnpm typecheck` — passed.
 - Focused Vitest dashboard suites — 9/9 passed.
+- Focused production-build Playwright dashboard suite — passed at desktop,
+  tablet, and mobile breakpoints.
 - Desktop and mobile in-app browser passes — passed.
 
 final result: passed
