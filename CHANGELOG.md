@@ -9,6 +9,22 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-09-01] — v0.35.0 · Actionable issue blockers
+
+### Added
+
+- **Issue detail exposes native dependency blockers directly.** Operators can search for an open blocking issue, navigate to it, add more blockers, or remove a blocker without discovering the Relations tab first.
+- **Active blockers have a clear issue-level state.** A responsive banner lists each open dependency and explains that the issue clears automatically when every blocker is done or canceled.
+
+### Changed
+
+- **Dashboard Blocked uses the canonical dependency predicate.** The attention category now shows issues blocked by open `BLOCKED_BY` relations and removes them from ordinary work lanes.
+- **Human attention remains distinct from dependency state.** `/blocked <reason>` continues to open an operator-attention request instead of claiming that an issue dependency exists.
+
+### Fixed
+
+- **Stalled runs are no longer duplicated as blocked issues.** Agent exceptions and dependency blockers now retain separate meanings and counts.
+
 ## [2026-08-26] — v0.34.0 · Dashboard operator home
 
 ### Added

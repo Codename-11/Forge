@@ -2,6 +2,16 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-09-01 — v0.35.0 release preparation
+
+- Squash-merged AXI-186 / PR #102 after exact-head lint, typecheck, unit,
+  integration, and both Playwright shards passed.
+- Prepared the `0.35.0` version bump and curated release notes for native issue
+  blocker controls, dashboard dependency reconciliation, and the separation of
+  dependency blocking from operator-attention requests.
+- AXI-187 owns the serialized release PR, immutable tag, production deployment,
+  and live verification required by `RELEASE.md`.
+
 ## 2026-08-27 — Explicit native issue blockers
 
 - Added a direct issue-detail blocker control backed by the existing
