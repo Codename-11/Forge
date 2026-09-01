@@ -51,6 +51,10 @@ import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import { TerminalRunFailureBanner } from "@/components/issue-detail/run-failure-banner";
 import { IssueFollowThroughBanner } from "@/components/issue-detail/issue-follow-through-banner";
+import {
+  IssueBlockerBanner,
+  IssueBlockerControl,
+} from "@/components/issue-detail/issue-blocker-control";
 import { RuntimePreflightBanner } from "@/components/issue-detail/runtime-preflight-banner";
 import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
@@ -551,6 +555,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
             />
             <AgentChip current={issue.assignedAgent} onOpen={() => setAgentPickerOpen(true)} />
+            <IssueBlockerControl issueId={issue.id} />
           </div>
         }
         actions={siblingScope ? <IssueSiblingNav issueId={issue.id} scope={siblingScope} /> : null}
@@ -571,6 +576,8 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 updated {relativeTime(issue.updatedAt)}
               </span>
             </div>
+
+            <IssueBlockerBanner issueId={issue.id} />
 
             <AgentRunStrip
               issueId={issue.id}
