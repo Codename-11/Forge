@@ -36,6 +36,7 @@ import {
 } from "@/server/services/github/resource-sync";
 import type { GitHubResourceReconcileJob } from "@/server/services/github/reconciliation-queue";
 import { sweepScheduledTasks } from "@/server/services/scheduled-task";
+import { sweepIssueReminders } from "@/server/services/issue-reminder";
 import { sweepStaleWorkSessions } from "@/server/services/work-session";
 import { sweepHermesConnectorRetries } from "@/server/services/hermes-connector-retry";
 import {
@@ -413,7 +414,11 @@ export const maintenanceWorker = new Worker(
         });
       }
       case "scheduled-task-sweep": {
-        return sweepScheduledTasks();
+        const [tasks, reminders] = await Promise.all([
+          sweepScheduledTasks(),
+          sweepIssueReminders(db),
+        ]);
+        return { tasks, reminders };
       }
       case "work-session-stale-sweep": {
         return sweepStaleWorkSessions(db);

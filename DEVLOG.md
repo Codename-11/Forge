@@ -14733,3 +14733,29 @@ bare numbers such as `-20`. The desktop header uses equal side columns so pins
 stay centered independently of breadcrumb length, with responsive pin widths
 and compact actions at smaller sizes. Focused lint passed; the rendered header
 was checked at 1764, 1280, 1024, and 768px with centered pins and no overflow.
+## 2026-10-14 — AXI-204 personal issue reminders
+
+Added a private one-shot IssueReminder per user/item with an additive timestamped
+migration. The issue sidebar supports scheduling, rescheduling, presets, and
+cancellation. Due cards appear in workspace/global notifications and personal
+Today with issue key/title, open, snooze, and dismiss actions. Notification badges
+and mark-read behavior include reminders without removing their actionable cards.
+Due dates, issue snoozing, and recurring issue automation keep their existing
+meaning.
+
+Membership, account lifecycle, and project access are checked on reads and push
+claims. Completion and archival cancel reminders in the canonical audit path;
+hard deletion cascades. Personal mutations write audit records without creating
+workspace activity events, comments, decision requests, or LLM wakeups. The
+maintenance sweep atomically claims optional browser push once per schedule;
+in-app cards remain durable when workers or browser delivery are unavailable.
+
+Verification: migration applied to guarded local databases; focused lint and
+TypeScript passed; 52 issue/notification/reminder integration checks passed,
+including concurrent schedule/push claims, tenant/recipient/project isolation,
+read/snooze/dismiss, completion, archive, and suspended-user cases. Production
+build and three focused Playwright flows passed, including the new reminder
+lifecycle and mobile notification card. Screenshots were inspected under
+output/playwright. Actual external browser push was not exercised because local
+VAPID/subscriptions are not configured; that channel remains explicitly best
+effort. No production migration, deployment, or release was performed.

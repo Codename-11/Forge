@@ -1,4 +1,5 @@
 "use client";
+import { IssueReminderControl } from "@/components/reminders/issue-reminder-control";
 import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -709,6 +710,11 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                         className="font-mono text-xs"
                       />
                     </SidebarField>
+                    {issue.status.category !== "DONE" && issue.status.category !== "CANCELED" && (
+                      <SidebarField label="Reminder">
+                        <IssueReminderControl issueId={issue.id} />
+                      </SidebarField>
+                    )}
                     <SidebarField label="SLA target">
                       <SlaPickerField
                         value={issue.slaMinutes ?? null}

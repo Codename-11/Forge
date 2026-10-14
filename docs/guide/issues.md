@@ -231,6 +231,10 @@ limits.
 
 ## Snooze
 
+For a private notification at a chosen time, use **Reminder → Remind me** on
+the issue instead. See [Personal reminders](/guide/reminders.html) for scheduling,
+snoozing a reminder, optional browser delivery, and completion behavior.
+
 `Issue.snoozedUntil DateTime?` lets you mark an issue "intentionally on
 hold until later." While `snoozedUntil > now()`, the issue is filtered
 out of:

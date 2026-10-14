@@ -25,6 +25,7 @@ import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
+import { ReminderInbox } from "@/components/reminders/reminder-inbox";
 import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, formatIssueId, relativeTime } from "@/lib/utils";
@@ -186,6 +187,7 @@ export function PersonalDashboard() {
                 )}
               </header>
 
+              <ReminderInbox workspaceId={ws.id} />
               <section className="mb-8 rounded-xl border border-border bg-card/50 p-2 shadow-sm">
                 <div className="flex items-center gap-2">
                   <Plus className="ml-2 h-4 w-4 shrink-0 text-ember" />

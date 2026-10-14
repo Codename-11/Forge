@@ -868,6 +868,7 @@ enum AgentRunStatus {
 // ----------------------------------------------------------------------------
 
 model User {
+  issueReminders           IssueReminder[]
   id                       String       @id @default(cuid())
   email                    String       @unique
   /// Canonical case-insensitive identity key. All account creation and lookup
@@ -1221,6 +1222,7 @@ model SsoProvider {
 // ----------------------------------------------------------------------------
 
 model Workspace {
+  issueReminders                  IssueReminder[]
   id                              String                     @id @default(cuid())
   slug                            String                     @unique
   name                            String
@@ -1719,6 +1721,7 @@ model Label {
 }
 
 model Issue {
+  reminders             IssueReminder[]
   id                    String          @id @default(cuid())
   workspaceId           String
   projectId             String?
@@ -1861,6 +1864,31 @@ model ProjectTemplate {
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+}
+
+/// Private, one-shot reminder. A due date or issue snooze does not create one.
+model IssueReminder {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  issueId      String
+  userId       String
+  remindAt     DateTime
+  timezone     String
+  browserPush  Boolean  @default(false)
+  readAt       DateTime?
+  dismissedAt  DateTime?
+  notifiedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueId])
+  @@index([workspaceId, userId, remindAt])
+  @@index([browserPush, notifiedAt, remindAt])
+  @@index([issueId])
 }
 
 /// Reusable issue starting-points scoped to a workspace (or project).

@@ -163,7 +163,7 @@ describe("notificationRouter", () => {
     const setupData = await setup();
     const event = await createStalledEvent(setupData, new Date("2026-04-26T12:30:00Z"));
 
-    await expect(setupData.caller.globalUnreadCount()).resolves.toEqual({ count: 1 });
+    await expect(setupData.caller.globalUnreadCount()).resolves.toEqual({ count: 1, alerts: 1, reminders: 0 });
     const alerts = await setupData.caller.globalList();
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toMatchObject({
@@ -176,7 +176,7 @@ describe("notificationRouter", () => {
     });
 
     await expect(setupData.caller.globalMarkRead()).resolves.toMatchObject({ count: 1 });
-    await expect(setupData.caller.globalUnreadCount()).resolves.toEqual({ count: 0 });
+    await expect(setupData.caller.globalUnreadCount()).resolves.toEqual({ count: 0, alerts: 0, reminders: 0 });
     await expect(
       setupData.prisma.user.findUniqueOrThrow({
         where: { id: setupData.fixture.user.id },
