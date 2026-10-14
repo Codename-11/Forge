@@ -75,9 +75,12 @@ export function TopBar({
         <button
           type="button"
           data-quick-create
-          aria-label="New issue"
-          title="New issue (Shift+C)"
-          onClick={() => requestQuickCreate()}
+          data-quick-create-mode={ws?.experienceProfile === "PERSONAL" ? "task" : "issue"}
+          aria-label={ws?.experienceProfile === "PERSONAL" ? "New task" : "New issue"}
+          title={`${ws?.experienceProfile === "PERSONAL" ? "New task" : "New issue"} (Shift+C)`}
+          onClick={() =>
+            requestQuickCreate({ mode: ws?.experienceProfile === "PERSONAL" ? "task" : "issue" })
+          }
           className={cn(
             "focus-ring inline-flex h-10 items-center gap-1.5 rounded-md bg-ember px-2.5 text-[0.6875rem] font-medium text-ember-foreground hover:bg-ember/90 sm:h-7 sm:px-2",
             MOTION.fast,

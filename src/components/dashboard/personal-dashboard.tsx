@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import type { inferRouterOutputs } from "@trpc/server";
+import { WorkItemKind } from "@prisma/client";
 import {
   ArrowRight,
   Bot,
@@ -108,8 +109,9 @@ export function PersonalDashboard() {
       (b.dueDate?.getTime() ?? Number.MAX_SAFE_INTEGER);
     return {
       overdue: overdue.sort(byDue),
-      today: [...today.sort(byDue), ...unscheduled],
+      today: today.sort(byDue),
       upcoming: upcoming.sort(byDue),
+      someday: unscheduled,
     };
   }, [active.data?.items, endToday, startToday]);
 
@@ -127,6 +129,7 @@ export function PersonalDashboard() {
     if (duePreset === "TOMORROW") dueDate.setDate(dueDate.getDate() + 1);
     createTask.mutate({
       title,
+      kind: WorkItemKind.TASK,
       dueDate: duePreset === "SOMEDAY" ? undefined : dueDate,
     });
   }
@@ -171,8 +174,8 @@ export function PersonalDashboard() {
                   </h1>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {buckets.today.length === 0
-                      ? "Your day is clear. Capture what matters next."
-                      : `${buckets.today.length} ${buckets.today.length === 1 ? "task" : "tasks"} in view for today.`}
+                      ? "No tasks due today in this view. Capture what matters next."
+                      : `${buckets.today.length} ${buckets.today.length === 1 ? "task" : "tasks"} due today in this view.`}
                   </p>
                 </div>
                 {railCollapsed && (
@@ -208,7 +211,7 @@ export function PersonalDashboard() {
                       { value: "SOMEDAY", label: "Someday" },
                     ]}
                     ariaLabel="Task due date"
-                    className="hidden h-8 text-xs text-muted-foreground sm:inline-flex"
+                    className="h-8 text-xs text-muted-foreground"
                   />
                   <Button
                     variant="ember"
@@ -259,6 +262,28 @@ export function PersonalDashboard() {
                       empty="No upcoming deadlines."
                     />
                   </div>
+                  {buckets.someday.length > 0 && (
+                    <TaskGroup
+                      title="Someday"
+                      count={buckets.someday.length}
+                      issues={buckets.someday.slice(0, 6)}
+                      workspaceKey={ws.key}
+                      slug={ws.slug}
+                      onComplete={(id) => doneStatus && completeTask.mutate({ id, statusId: doneStatus.id })}
+                      canComplete={Boolean(doneStatus)}
+                    />
+                  )}
+                  <Link
+                    href={`/w/${ws.slug}/issues`}
+                    className="focus-ring inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-ember"
+                  >
+                    View all work <ArrowRight className="h-3 w-3" />
+                  </Link>
+                  {active.data?.nextCursor && (
+                    <p className="text-meta text-muted-foreground">
+                      Showing the 100 most recently updated open items. View all work for the full list.
+                    </p>
+                  )}
                 </div>
               )}
 

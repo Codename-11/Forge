@@ -36,12 +36,14 @@ export function NewProjectDialog({
   open,
   onClose,
   onCreated,
+  initialName = "",
 }: {
   open: boolean;
   onClose: () => void;
   onCreated?: (project: { id: string; name: string; key: string }) => void;
+  initialName?: string;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [key, setKey] = useState("");
   const [description, setDescription] = useState("");
   const [color, setColor] = useState(DEFAULT_COLORS[0]);

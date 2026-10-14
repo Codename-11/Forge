@@ -8,7 +8,7 @@
  * Kinds (see CLAUDE.md "Primitives"):
  *   EPIC — a parent issue whose children are its scope (ember, layers icon)
  *   ISSUE — the default unit of work
- *   TASK — a sub-task / child checklist item (surfaced as "Sub-task")
+ *   TASK — lightweight work, standalone or nested through parentId
  *
  * Tones come from the warm-earthy tokens (no hardcoded colors).
  */
@@ -32,13 +32,13 @@ const TONE: Record<WorkItemKindValue, string> = {
 export const KIND_LABEL: Record<WorkItemKindValue, string> = {
   EPIC: "Epic",
   ISSUE: "Issue",
-  TASK: "Sub-task",
+  TASK: "Task",
 };
 
 export const KIND_SUBTITLE: Record<WorkItemKindValue, string> = {
   EPIC: "A parent that groups child issues",
   ISSUE: "The standard unit of work",
-  TASK: "A sub-task under a parent issue",
+  TASK: "A lightweight task, standalone or under a parent",
 };
 
 /** Canonical ordering for pickers / segmented controls. */

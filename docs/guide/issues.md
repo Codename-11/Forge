@@ -11,7 +11,7 @@ queue concept, bulk operations, and how relations link issues together.
 | ----------------- | -------- | ----------------------------------------------------------------------------- |
 | `id`              | uuid     | Internal identifier                                                           |
 | `key`             | string   | Public key, e.g. `WRK-42`. Workspace-prefixed and unique within the workspace |
-| `kind`            | enum     | `ISSUE` or `TASK`. Tasks are lighter-weight; defaults are typically tighter   |
+| `kind`            | enum     | `EPIC`, `ISSUE`, or `TASK`. Tasks can stand alone or belong to a parent.      |
 | `title`           | string   | Required, single line                                                         |
 | `description`     | markdown | Optional, free-form                                                           |
 | `statusId`        | fk       | Status row in this workspace's status set                                     |
@@ -141,10 +141,13 @@ re-route.
 Two paths.
 
 **Quick create.** Press <kbd>⇧C</kbd> from anywhere. The dialog covers title,
-description, priority, project, and kind. <kbd>⌘ Enter</kbd> submits. Creating
+optional description, priority, project, assignee, labels, and due date.
+<kbd>Enter</kbd> creates; <kbd>⌘ Enter</kbd> creates and opens. Creating
 from a board column or status group also preserves that originating status;
-creating from the command palette always opens issue mode, even while viewing
-an existing issue. This is the primary creation path.
+explicit **New issue** actions always open issue mode, even while viewing an
+existing issue. On an issue detail page, <kbd>⇧C</kbd> opens contextual comment
+capture. A personal workspace's **New task** creates `TASK` work items rather
+than `ISSUE` items.
 
 The QuickCreate input also recognises [slash commands](/guide/slash-commands.html)
 at the start of the line:

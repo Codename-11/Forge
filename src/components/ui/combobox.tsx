@@ -145,13 +145,11 @@ export function Combobox({
         aria-expanded={open}
         aria-controls={listboxId}
         aria-label={ariaLabel}
-        onClick={() =>
-          setOpen((value) => {
-            const next = !value;
-            onOpenChange?.(next);
-            return next;
-          })
-        }
+        onClick={() => {
+          const next = !open;
+          setOpen(next);
+          onOpenChange?.(next);
+        }}
         className={cn(
           "focus-ring inline-flex items-center gap-1.5 rounded-md border border-input bg-background/40 px-2 py-1 text-sm disabled:opacity-50",
           className,

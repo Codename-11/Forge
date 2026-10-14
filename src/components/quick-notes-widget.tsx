@@ -139,6 +139,7 @@ export function QuickNotesWidget() {
       window.dispatchEvent(
         new CustomEvent("forge:quick-create", {
           detail: {
+            mode: "issue",
             title: seedTitle,
             body: note.body,
             archiveNoteId: note.id,

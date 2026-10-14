@@ -2,7 +2,7 @@
 
 import { lazy, Suspense, useEffect, useLayoutEffect, useState } from "react";
 import type { QuickCreateOverride } from "@/components/quick-create";
-import { requestQuickCreate, subscribeQuickCreate } from "@/lib/workspace-surface-requests";
+import { requestQuickCreate, subscribeQuickCreate, quickCreateRequestFromDataset } from "@/lib/workspace-surface-requests";
 
 const LazyCommandPalette = lazy(() =>
   import("@/components/command-palette").then((module) => ({ default: module.CommandPalette })),
@@ -87,11 +87,7 @@ export function WorkspaceLazySurfaces() {
       if (!quickCreateRequest) {
         const trigger = target?.closest<HTMLElement>("[data-quick-create]");
         if (trigger) {
-          requestQuickCreate(
-            trigger.dataset.quickCreateProject
-              ? { projectId: trigger.dataset.quickCreateProject }
-              : {},
-          );
+          requestQuickCreate(quickCreateRequestFromDataset(trigger.dataset));
         }
       }
     };

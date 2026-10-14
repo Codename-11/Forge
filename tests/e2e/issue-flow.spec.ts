@@ -7,6 +7,51 @@ import { test, expect } from "@playwright/test";
  */
 
 test.describe("Issue flow", () => {
+  test("capture preserves task drafts and saves visible fields", async ({ page }) => {
+    await page.goto("/w/forge/issues");
+    await page.getByRole("button", { name: "New issue ⇧C", exact: true }).click();
+    const type = page.getByRole("combobox", { name: "Item type", exact: true });
+    await type.click();
+    await page.getByRole("option", { name: "Task", exact: true }).click();
+    const title = `E2E task capture ${Date.now()}`;
+    await page.getByRole("textbox", { name: "Quick-create Task", exact: true }).fill(title);
+    await page
+      .getByRole("textbox", { name: "Description optional", exact: true })
+      .fill("Keep this context when restoring the draft.");
+    await page.getByRole("combobox", { name: "New item priority", exact: true }).click();
+    await page.getByRole("option", { name: "High", exact: true }).click();
+    await page.getByRole("textbox", { name: "New item due date", exact: true }).fill("2027-01-20");
+    await expect(page.getByRole("textbox", { name: "Quick-create Task", exact: true })).toHaveValue(
+      title,
+    );
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "New issue ⇧C", exact: true }).click();
+    await type.click();
+    await page.getByRole("option", { name: "Task", exact: true }).click();
+    await expect(
+      page.getByRole("textbox", { name: "Description optional", exact: true }),
+    ).toHaveValue("Keep this context when restoring the draft.");
+    await expect(
+      page.getByRole("combobox", { name: "New item priority", exact: true }),
+    ).toContainText("High");
+    await expect(page.getByRole("textbox", { name: "New item due date", exact: true })).toHaveValue(
+      "2027-01-20",
+    );
+    const createdResponse = page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/trpc/issue.create") && response.request().method() === "POST",
+    );
+    await page.getByRole("button", { name: /Create & open/ }).click();
+    const response = await (await createdResponse).json();
+    const created = response[0].result.data.json;
+    expect(created.kind).toBe("TASK");
+    expect(created.priority).toBe("HIGH");
+    expect(created.dueDate).toMatch(/^2027-01-20T/);
+    expect(created.description).toBe("Keep this context when restoring the draft.");
+    await expect(page).toHaveURL(/\/w\/forge\/issues\//);
+    await expect(page.getByText(title, { exact: true }).first()).toBeVisible();
+  });
+
   test("create and transition an issue", async ({ page, context }) => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"]);
     await page.goto("/w/forge/inbox");
@@ -28,6 +73,17 @@ test.describe("Issue flow", () => {
 
     await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
     await expect(page.getByText(title).first()).toBeVisible();
+
+    // Explicit New issue actions must not inherit the issue-detail page's
+    // contextual Comment mode. Tab should still move through the form.
+    await page.locator("header [data-quick-create-mode='issue']").click();
+    const createDialog = page.getByRole("dialog", { name: "Quick-create Issue" });
+    await expect(createDialog).toBeVisible();
+    const nextTitle = createDialog.getByRole("textbox", { name: "Quick-create Issue" });
+    await nextTitle.focus();
+    await nextTitle.press("Tab");
+    await expect(createDialog.getByRole("textbox", { name: "Description optional" })).toBeFocused();
+    await page.keyboard.press("Escape");
 
     await page.getByRole("button", { name: "Copy local-agent handoff" }).click();
     await expect(page.getByText("Local-agent handoff copied.")).toBeVisible();

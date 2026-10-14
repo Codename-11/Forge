@@ -29,7 +29,9 @@ test("creates a personal workspace and supports the Today flow", async ({ page }
 
   await expect(page).toHaveURL(new RegExp(`/w/${slug}/inbox$`));
   await page.goto(`/w/${slug}/dashboard`);
-  await expect(page.getByRole("heading", { name: /Good (morning|afternoon|evening)/ })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: /Good (morning|afternoon|evening)/ }),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Agent companion" })).toBeVisible();
   await expect(page.getByText("New task", { exact: true })).toBeVisible();
   // Route changes intentionally abort in-flight tRPC requests from the prior
@@ -42,6 +44,29 @@ test("creates a personal workspace and supports the Today flow", async ({ page }
 
   await page.getByLabel("Complete Book dentist appointment").click();
   await expect(page.getByText("Book dentist appointment", { exact: true })).toBeHidden();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("combobox", { name: "Task due date", exact: true }).click();
+  await page.getByRole("option", { name: "Someday", exact: true }).click();
+  await page.getByLabel("Task title").fill("Plan the garden");
+  const createdTask = page.waitForResponse(
+    (response) =>
+      response.url().includes("/api/trpc/issue.create") && response.request().method() === "POST",
+  );
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  const taskPayload = await (await createdTask).json();
+  expect(taskPayload[0].result.data.json.kind).toBe("TASK");
+  const someday = page.locator("section", {
+    has: page.getByRole("heading", { name: "Someday", exact: true }),
+  });
+  await expect(someday.getByText("Plan the garden", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/^No tasks due today.*Capture what matters next\.$/),
+  ).toBeVisible();
+  await expect(page.getByText("Task added.", { exact: true })).toHaveCount(0);
+  await someday.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: "output/playwright/axi-203-personal-mobile.png", fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 720 });
 
   await page.getByPlaceholder("Capture a note…").fill("Ask about weekend availability");
   await page.getByRole("button", { name: "Save", exact: true }).click();

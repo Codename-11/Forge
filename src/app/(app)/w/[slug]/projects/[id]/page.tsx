@@ -154,6 +154,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
               variant="ember"
               size="sm"
               data-quick-create
+              data-quick-create-mode="issue"
               data-quick-create-project={project.id}
             >
               New issue

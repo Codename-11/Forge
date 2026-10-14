@@ -10,23 +10,17 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, usePathname } from "next/navigation";
-import {
-  AlertCircle,
-  Calendar,
-  ChevronDown,
-  CornerDownLeft,
-  Github,
-  GitPullRequest,
-  Loader2,
-  Plus,
-  X,
-} from "lucide-react";
+import { AlertCircle, Calendar, Github, GitPullRequest, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
-import { ArtifactType, NotificationSeverity } from "@prisma/client";
+import { ArtifactType, NotificationSeverity, WorkItemKind } from "@prisma/client";
 import { cn } from "@/lib/utils";
 import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
 import { MOTION } from "@/lib/motion";
 import { Kbd } from "@/components/ui/kbd";
+import { Combobox } from "@/components/ui/combobox";
+import { Button } from "@/components/ui/button";
+import { useModKeyLabel } from "@/lib/platform";
+import { quickCreateRequestFromDataset } from "@/lib/workspace-surface-requests";
 import { useHotkey } from "@/lib/keyboard";
 import { trpc } from "@/lib/trpc";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
@@ -224,15 +218,25 @@ export type QuickCreateOverride = {
   body?: string;
   archiveNoteId?: string;
   /** Bypass pathname-aware capture when the caller promises a new issue. */
-  mode?: "issue";
+  mode?: Exclude<Mode["kind"], "issue-context"> | "task";
 };
+
+export function resolveWorkItemKind(
+  experienceProfile: string | null | undefined,
+  override?: QuickCreateOverride,
+): WorkItemKind {
+  if (override?.mode === "task") return WorkItemKind.TASK;
+  if (override?.mode === "issue") return WorkItemKind.ISSUE;
+  return experienceProfile === "PERSONAL" ? WorkItemKind.TASK : WorkItemKind.ISSUE;
+}
 
 /** Resolve the initial capture mode from the current route and caller intent. */
 export function resolveQuickCreateMode(path: string | null, override?: QuickCreateOverride): Mode {
   // Explicit issue actions (for example the command palette) must stay
   // issues even on an issue-detail route, where contextual capture defaults
   // to a comment. Seeded note conversions have the same one-shot intent.
-  if (override?.mode === "issue" || override?.title || override?.body) {
+  if (override?.mode) return { kind: override.mode === "task" ? "issue" : override.mode };
+  if (override?.title || override?.body) {
     return { kind: "issue" };
   }
   if (!path) return { kind: "issue" };
@@ -258,7 +262,7 @@ export function resolveQuickCreateMode(path: string | null, override?: QuickCrea
 
 const DRAFT_KEY = "quickCreate";
 
-// Cyclable mode order for Tab / Shift+Tab / ⌘1..⌘7 mode jumping.
+// Mode order for ⌘1..⌘7 shortcuts.
 // Ordered by how often operators reach for each capture target —
 // issue first, then notes, then the planning surfaces, then artifacts
 // and action-requests. `issue-context` is excluded because it's
@@ -280,53 +284,28 @@ const CYCLABLE_MODES: readonly CyclableMode[] = [
   "artifact",
   "action-request",
 ] as const;
-const CYCLABLE_MODE_LABEL: Record<CyclableMode, string> = {
-  issue: "issue",
-  note: "note",
-  project: "project",
-  initiative: "initiative",
-  cycle: "sprint",
-  artifact: "artifact",
-  "action-request": "ask",
-};
 
 type DraftShape = {
   text: string;
   mode?: Mode["kind"];
+  issueKind?: WorkItemKind;
+  description?: string;
+  priority?: Priority;
+  projectId?: string;
+  statusId?: string;
+  assigneeId?: string;
+  artifactType?: ArtifactType;
+  severity?: NotificationSeverity;
+  commands?: Array<Exclude<SlashCommand, { kind: "due" }> | { kind: "due"; date: string }>;
 };
 
 /**
- * Context-aware capture. `⇧C` opens a Linear-style floating input at the
- * top of the viewport — single line, fast, keyboard-first. The container
- * is NOT a modal: it doesn't dim the page, and clicking outside simply
- * closes. The mode dropdown spans the full agentic-work-OS surface so any
- * intent (issue / sprint / project / initiative / note / artifact /
- * action request) can be captured without navigating first.
- *
- * For issue capture the title field is a TOKENIZED bar: type a `/`
- * command and the value autocomplete surfaces real projects / agents /
- * labels / priorities / due dates. Tab (or Enter / click) "catches" the
- * pick as a coloured badge inside the box and strips the `/command arg`
- * text from the title. Backspace at the start of an empty caret removes
- * the last badge. The autocomplete popover is PORTALED to `document.body`
- * so it's never clipped by the card.
- *
- * Pathname determines the *initial* mode (set when the overlay opens):
- *
- *   /w/*\/cycles           → "cycle"          (⏎ create · ⌘⏎ full form)
- *   /w/*\/initiatives      → "initiative"     (⏎ create · ⌘⏎ full form)
- *   /w/*\/projects         → "project"        (⏎ create · ⌘⏎ full form)
- *   /w/*\/artifacts        → "artifact"       (⏎ create · ⌘⏎ create + open)
- *   /w/*\/issues/:id       → "issue-context"  (comment | sub-issue tabs)
- *   anywhere else          → "issue"          (⏎ create · ⌘⏎ create + open)
- *
- * Draft behavior: if the user has typed anything and dismisses with `⎋`,
- * the text is persisted under `forge.draft.quickCreate` for 24h. The next
- * `⇧C` open restores it with a small "Restored" pill.
- *
- * For modes where a single line isn't enough (initiative wants slug +
- * description + color, project wants key + color), `⌘⏎` escalates to the
- * existing full-form dialog with the typed value pre-filled as the name.
+ * Workspace capture with visible fields and an explicit item-type selector.
+ * Named creation actions preserve their caller's intent; Shift+C can use the
+ * current route for contextual comments or planning items. Slash commands
+ * remain an optional title shortcut. Drafts retain content and fields, scoped
+ * to the workspace and issue context. Planning items can open their full form
+ * with the entered name preserved.
  */
 export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride }) {
   // A lazy-mounted first request must render the dialog in its initial
@@ -334,11 +313,15 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
   // data through openFor, but does not leave the first click waiting on it.
   const [open, setOpen] = useState(Boolean(initialOpen));
   const [mode, setMode] = useState<Mode>({ kind: "issue" });
+  const [issueKind, setIssueKind] = useState<WorkItemKind>(WorkItemKind.ISSUE);
   const [text, setText] = useState("");
   const [priority, setPriority] = useState<Priority>("NONE");
   const [projectId, setProjectId] = useState<string>("");
   // Contextual board/list adds pin the new issue to the originating status.
   const [statusId, setStatusId] = useState<string>("");
+  const [assigneeId, setAssigneeId] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
   // Slash commands the operator has "committed" into chips: assign / due /
   // label / watch / unwatch (and any /project whose key didn't resolve to a
   // loaded project). Priority + a resolved project sync onto the native
@@ -380,6 +363,8 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
   const router = useRouter();
   const pathname = usePathname();
   const ws = useMaybeWorkspace();
+  const mod = useModKeyLabel();
+  const draftKey = `${DRAFT_KEY}.${ws?.id ?? "global"}.${pathname?.match(/\/issues\/([^/?#]+)/)?.[1] ?? "new"}`;
   const utils = trpc.useUtils();
 
   const invalidateIssueViews = async () => {
@@ -401,6 +386,12 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
     enabled: open && isIssueLike,
   });
   const { data: labels } = trpc.label.list.useQuery(undefined, {
+    enabled: open && isIssueLike,
+  });
+  const { data: statuses } = trpc.status.list.useQuery(undefined, {
+    enabled: open && isIssueLike,
+  });
+  const { data: members } = trpc.workspace.members.useQuery(undefined, {
     enabled: open && isIssueLike,
   });
 
@@ -514,14 +505,30 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       // Don't persist the draft when we were seeded from an external
       // event (note convert) — the user's intent was a one-shot, and
       // restoring "From note: …" later would be confusing.
-      if (persistDraft && text.trim().length > 0 && !archiveNoteId) {
-        saveDraft<DraftShape>(DRAFT_KEY, { text, mode: mode.kind });
+      if (persistDraft && (text.trim() || seedDescription.trim()) && !archiveNoteId) {
+        saveDraft<DraftShape>(draftKey, {
+          text,
+          mode: mode.kind,
+          issueKind,
+          description: seedDescription,
+          priority,
+          projectId,
+          statusId,
+          assigneeId,
+          artifactType,
+          severity,
+          commands: committed.map((command) =>
+            command.kind === "due" ? { kind: "due", date: command.date.toISOString() } : command,
+          ),
+        });
       }
       setOpen(false);
       setText("");
       setPriority("NONE");
       setProjectId("");
       setStatusId("");
+      setAssigneeId("");
+      setPickerOpen(false);
       setCommitted([]);
       setRestored(false);
       setAcActive(0);
@@ -533,12 +540,34 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       setArtifactType(ArtifactType.DOCUMENT);
       setSeverity(NotificationSeverity.INFO);
     },
-    [text, mode.kind, archiveNoteId],
+    [
+      text,
+      mode.kind,
+      archiveNoteId,
+      seedDescription,
+      issueKind,
+      priority,
+      projectId,
+      statusId,
+      assigneeId,
+      committed,
+      draftKey,
+      artifactType,
+      severity,
+    ],
   );
 
   const openFor = useCallback(
     (override?: QuickCreateOverride) => {
       const effectiveMode = resolveQuickCreateMode(pathname, override);
+      setSubmissionError(null);
+      setIssueKind(resolveWorkItemKind(ws?.experienceProfile, override));
+      setShowDescription(
+        effectiveMode.kind === "issue" ||
+          effectiveMode.kind === "note" ||
+          effectiveMode.kind === "artifact" ||
+          effectiveMode.kind === "action-request",
+      );
       const seeded = !!(override?.title || override?.body);
       setMode(effectiveMode);
       if (override?.projectId) setProjectId(override.projectId);
@@ -553,10 +582,28 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
         setRestored(false);
       } else {
         // Hydrate a draft if present + mode matches.
-        const draft = readDraft<DraftShape>(DRAFT_KEY);
-        if (draft && draft.text) {
-          if (!draft.mode || draft.mode === effectiveMode.kind) {
+        const draft = readDraft<DraftShape>(draftKey);
+        if (draft && (draft.text || draft.description)) {
+          if (
+            (!draft.mode || draft.mode === effectiveMode.kind) &&
+            (!draft.issueKind ||
+              draft.issueKind === resolveWorkItemKind(ws?.experienceProfile, override))
+          ) {
             setText(draft.text);
+            setSeedDescription(draft.description ?? "");
+            setPriority(draft.priority ?? "NONE");
+            setProjectId(override?.projectId ?? draft.projectId ?? "");
+            setStatusId(override?.statusId ?? draft.statusId ?? "");
+            setAssigneeId(draft.assigneeId ?? "");
+            setArtifactType(draft.artifactType ?? ArtifactType.DOCUMENT);
+            setSeverity(draft.severity ?? NotificationSeverity.INFO);
+            setCommitted(
+              (draft.commands ?? []).flatMap((command): SlashCommand[] => {
+                if (command.kind !== "due") return [command];
+                const date = new Date(command.date);
+                return Number.isNaN(date.getTime()) ? [] : [{ kind: "due", date }];
+              }),
+            );
             setRestored(true);
           } else {
             setRestored(false);
@@ -567,7 +614,7 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       }
       setOpen(true);
     },
-    [pathname],
+    [pathname, ws?.experienceProfile, draftKey],
   );
 
   const initialOpenRef = useRef(initialOpen);
@@ -588,8 +635,7 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
     const clickHandler = (e: MouseEvent) => {
       const el = (e.target as HTMLElement).closest("[data-quick-create]") as HTMLElement | null;
       if (!el) return;
-      const pid = el.dataset.quickCreateProject;
-      openFor(pid ? { projectId: pid } : undefined);
+      openFor(quickCreateRequestFromDataset(el.dataset));
     };
     document.addEventListener("click", clickHandler);
     const evtHandler = (e: Event) => {
@@ -611,12 +657,14 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
+        if (pickerOpen) return;
         e.preventDefault();
         close(true);
       }
     };
     const onDocClick = (e: MouseEvent) => {
       const target = e.target as Node;
+      if (pickerOpen) return;
       if (containerRef.current?.contains(target)) return;
       if (acPopoverRef.current?.contains(target)) return;
       close(true);
@@ -627,7 +675,7 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       window.removeEventListener("keydown", onKey);
       document.removeEventListener("mousedown", onDocClick);
     };
-  }, [open, close]);
+  }, [open, close, pickerOpen]);
 
   // Autofocus input when we open.
   useEffect(() => {
@@ -639,7 +687,7 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
   const modeLabel = useMemo(() => {
     switch (mode.kind) {
       case "issue":
-        return "Issue";
+        return issueKind === WorkItemKind.TASK ? "Task" : "Issue";
       case "cycle":
         return "Sprint";
       case "initiative":
@@ -655,12 +703,12 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       case "issue-context":
         return mode.intent === "comment" ? "Comment" : "Sub-issue";
     }
-  }, [mode]);
+  }, [mode, issueKind]);
 
   const placeholder = useMemo(() => {
     switch (mode.kind) {
       case "issue":
-        return "Issue title… (⌘⏎ create + open)";
+        return `${issueKind === WorkItemKind.TASK ? "Task" : "Issue"} title… (⌘⏎ create + open)`;
       case "cycle":
         return "Sprint name… (⌘⏎ more options)";
       case "initiative":
@@ -668,7 +716,7 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       case "project":
         return "Project name… (⌘⏎ more options)";
       case "note":
-        return "Note (one-liner; ⌘⏎ to add description)";
+        return "Note title or quick note…";
       case "artifact":
         return "Artifact title… (⌘⏎ create + open)";
       case "action-request":
@@ -678,18 +726,11 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
           ? "Write a comment… (⏎ post)"
           : "Sub-issue title… (⏎ create)";
     }
-  }, [mode]);
+  }, [mode, issueKind]);
 
   // Some modes escalate on ⌘⏎; others have a real secondary action.
   const hasEscalation =
     mode.kind === "cycle" || mode.kind === "initiative" || mode.kind === "project";
-  const secondaryHint = hasEscalation
-    ? "⌘⏎ more options"
-    : mode.kind === "issue" || mode.kind === "artifact"
-      ? "⌘⏎ create + open"
-      : mode.kind === "note" || mode.kind === "action-request"
-        ? "⌘⏎ add description"
-        : null;
 
   // Compose the final issue input from the raw title + committed chips +
   // any command still trailing in the title. Returns the cleaned title,
@@ -736,11 +777,12 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
     const value = text.trim();
     if (!value) return;
     if (busy) return;
+    setSubmissionError(null);
 
     // Shared success: toast + close + clear draft + invalidate.
     const done = (msg: string) => {
       toast.success(msg);
-      clearDraft(DRAFT_KEY);
+      clearDraft(draftKey);
       close(false);
     };
 
@@ -806,12 +848,15 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
           const archiveTargetNoteId = archiveNoteId && archiveOnCreate ? archiveNoteId : null;
           const issue = await createIssue.mutateAsync({
             title: finalTitle,
+            kind: issueKind,
+            assigneeIds: assigneeId ? [assigneeId] : [],
             description: seededDesc,
             projectId: projectIdValue || undefined,
             statusId: statusId || undefined,
             priority: priorityValue,
             labelIds: [],
-            applyCommands,
+            dueDate: applyCommands?.find((command) => command.kind === "due")?.date,
+            applyCommands: applyCommands?.filter((command) => command.kind !== "due"),
           });
           await invalidateIssueViews();
           if (archiveTargetNoteId) {
@@ -882,8 +927,8 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
             setShowDescription(true);
             return;
           }
-          const titleVal = showDescription ? value : null;
-          const bodyVal = showDescription ? seedDescription.trim() : value;
+          const titleVal = seedDescription.trim() ? value : null;
+          const bodyVal = seedDescription.trim() || value;
           if (!bodyVal) {
             toast.error("Note body required.");
             return;
@@ -941,6 +986,10 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
             }
             const issue = await createIssue.mutateAsync({
               title: resolved.finalTitle,
+              description: seedDescription.trim() || undefined,
+              kind: contextIssue?.kind ?? issueKind,
+              assigneeIds: assigneeId ? [assigneeId] : [],
+              statusId: statusId || undefined,
               // Sub-issues inherit the parent's project; a resolved
               // /project on the sub-issue is ignored, but an unresolved one
               // still rides along in applyCommands for the server to apply.
@@ -948,7 +997,8 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
               parentId: mode.issueId,
               priority: resolved.priorityValue,
               labelIds: [],
-              applyCommands: resolved.applyCommands,
+              dueDate: resolved.applyCommands?.find((command) => command.kind === "due")?.date,
+              applyCommands: resolved.applyCommands?.filter((command) => command.kind !== "due"),
             });
             await invalidateIssueViews();
             done(`Created sub-issue #${issue.number}`);
@@ -956,8 +1006,12 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
           return;
         }
       }
-    } catch {
-      // mutation's onError already surfaced a toast
+    } catch (error) {
+      setSubmissionError(
+        error instanceof Error
+          ? error.message
+          : "Could not create this item. Your draft is preserved.",
+      );
     }
   }
 
@@ -1130,18 +1184,6 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
     [text, applyCommand, focusInputEnd],
   );
 
-  // Click an "add" pill: prime the matching slash stub + reopen the
-  // popover so mouse users get the same value picker as `/`.
-  const primeSlash = useCallback(
-    (keyword: string) => {
-      const base = text.replace(/\s+$/, "");
-      setText((base ? base + " " : "") + "/" + keyword + " ");
-      setAcDismissed(false);
-      focusInputEnd();
-    },
-    [text, focusInputEnd],
-  );
-
   // Commit a trailing `/command arg` in the title into a chip, stripping
   // it (and the whitespace before it) from the title. Returns true when a
   // command was committed. Bound to Enter in the title input.
@@ -1163,43 +1205,63 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
     setCommitted((prev) => prev.map((c) => (c.kind === "assign" ? { ...c, mode: assignMode } : c)));
   }, []);
 
-  const hasBadges = priority !== "NONE" || !!projectId || committed.length > 0;
-
-  // Backspace at caret-start pops the most-recent badge (committed →
-  // project → priority).
-  const removeLastBadge = useCallback(() => {
-    if (committed.length > 0) {
-      setCommitted((prev) => prev.slice(0, -1));
-      return;
-    }
-    if (projectId) {
-      setProjectId("");
-      return;
-    }
-    if (priority !== "NONE") setPriority("NONE");
-  }, [committed.length, projectId, priority]);
-
-  const switchMode = useCallback((kind: CyclableMode) => {
-    setMode({ kind } as Mode);
-    setPriority("NONE");
-    setProjectId("");
-    setCommitted([]);
-    setAcActive(0);
-    setAcDismissed(false);
-    inputRef.current?.focus();
-  }, []);
+  const switchMode = useCallback(
+    (kind: CyclableMode, requestedKind?: WorkItemKind) => {
+      const nextIssueKind = requestedKind ?? resolveWorkItemKind(ws?.experienceProfile);
+      setMode({ kind } as Mode);
+      setShowDescription(["issue", "note", "artifact", "action-request"].includes(kind));
+      if (kind === "issue") {
+        setIssueKind(nextIssueKind);
+      }
+      if (kind !== mode.kind) {
+        setPriority("NONE");
+        setProjectId("");
+        setStatusId("");
+        setAssigneeId("");
+        setCommitted([]);
+      }
+      const draft = readDraft<DraftShape>(draftKey);
+      if (
+        !text.trim() &&
+        !seedDescription.trim() &&
+        draft?.mode === kind &&
+        (kind !== "issue" || !draft.issueKind || draft.issueKind === nextIssueKind)
+      ) {
+        setText(draft.text);
+        setSeedDescription(draft.description ?? "");
+        setPriority(draft.priority ?? "NONE");
+        setProjectId(draft.projectId ?? "");
+        setStatusId(draft.statusId ?? "");
+        setAssigneeId(draft.assigneeId ?? "");
+        setArtifactType(draft.artifactType ?? ArtifactType.DOCUMENT);
+        setSeverity(draft.severity ?? NotificationSeverity.INFO);
+        setCommitted(
+          (draft.commands ?? []).flatMap((command): SlashCommand[] => {
+            if (command.kind !== "due") return [command];
+            const date = new Date(command.date);
+            return Number.isNaN(date.getTime()) ? [] : [{ kind: "due", date }];
+          }),
+        );
+        setRestored(true);
+      }
+      setAcActive(0);
+      setAcDismissed(false);
+      inputRef.current?.focus();
+    },
+    [ws?.experienceProfile, mode.kind, draftKey, text, seedDescription],
+  );
 
   // Live "this tail is a valid command" detection — drives the inline
   // "↵ apply …" hint so the operator sees the command is recognised
   // before committing it. Suppressed while the autocomplete is open
-  // (the popover already shows what ⏎/Tab will do).
+  // (the popover already shows what ⏎ will do).
   const pendingCommand = useMemo(
     () => (isIssueLike && !acVisible ? matchTrailingCommand(text) : null),
     [isIssueLike, acVisible, text],
   );
 
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
-    // Autocomplete owns Arrow / Enter / Tab / Esc while it's open.
+    // Autocomplete owns Arrow / Enter / Esc while it's open. Tab exits it.
     if (acVisible) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -1211,7 +1273,12 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
         setAcActive((a) => (a - 1 + suggestions.length) % suggestions.length);
         return;
       }
-      if (e.key === "Enter" || e.key === "Tab") {
+      if (e.key === "Tab") {
+        // Tab moves focus through the form; Enter accepts a suggestion.
+        setAcDismissed(true);
+        return;
+      }
+      if (e.key === "Enter") {
         e.preventDefault();
         const s = suggestions[acActive];
         if (s) applySuggestion(s);
@@ -1237,27 +1304,6 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
       return;
     }
 
-    // Backspace at the very start of an empty caret removes the last badge.
-    if (e.key === "Backspace" && hasBadges) {
-      const el = inputRef.current;
-      if (el && el.selectionStart === 0 && el.selectionEnd === 0) {
-        e.preventDefault();
-        removeLastBadge();
-        return;
-      }
-    }
-
-    // Tab / Shift+Tab cycles modes — only when the title is empty, so it
-    // never fights tokenization mid-type. issue-context is sticky.
-    if (e.key === "Tab" && mode.kind !== "issue-context" && text.trim() === "") {
-      e.preventDefault();
-      const dir = e.shiftKey ? -1 : 1;
-      const idx = CYCLABLE_MODES.indexOf(mode.kind as CyclableMode);
-      const next = CYCLABLE_MODES[(idx + dir + CYCLABLE_MODES.length) % CYCLABLE_MODES.length];
-      switchMode(next);
-      return;
-    }
-
     // ⌘1..⌘7 jump straight to a mode without dragging through the
     // dropdown — fastest path for muscle memory.
     if ((e.metaKey || e.ctrlKey) && /^[1-7]$/.test(e.key) && mode.kind !== "issue-context") {
@@ -1275,321 +1321,405 @@ export function QuickCreate({ initialOpen }: { initialOpen?: QuickCreateOverride
   // Full-form escalation takes over when open.
   if (fullForm) {
     if (fullForm.kind === "cycle") {
-      return <NewCycleDialog open={true} onClose={() => setFullForm(null)} />;
+      return (
+        <NewCycleDialog open={true} initialName={fullForm.name} onClose={() => setFullForm(null)} />
+      );
     }
     if (fullForm.kind === "initiative") {
-      return <NewInitiativeDialog open={true} onClose={() => setFullForm(null)} />;
+      return (
+        <NewInitiativeDialog
+          open={true}
+          initialName={fullForm.name}
+          onClose={() => setFullForm(null)}
+        />
+      );
     }
     if (fullForm.kind === "project") {
-      return <NewProjectDialog open={true} onClose={() => setFullForm(null)} />;
+      return (
+        <NewProjectDialog
+          open={true}
+          initialName={fullForm.name}
+          onClose={() => setFullForm(null)}
+        />
+      );
     }
   }
 
   if (!open) return null;
 
-  const isEmpty = text.trim() === "";
-  const showModesLegend = mode.kind !== "issue-context" && isEmpty;
+  const selectedAgent = committed.find((command) => command.kind === "assign");
+  const selectedDue = committed.find((command) => command.kind === "due");
+  const dueValue =
+    selectedDue?.kind === "due"
+      ? [
+          selectedDue.date.getFullYear(),
+          String(selectedDue.date.getMonth() + 1).padStart(2, "0"),
+          String(selectedDue.date.getDate()).padStart(2, "0"),
+        ].join("-")
+      : "";
+  const typeValue = mode.kind === "issue" && issueKind === WorkItemKind.TASK ? "task" : mode.kind;
 
   return (
-    <div
-      // Wrap the floating bar so it anchors to the top of the viewport
-      // without capturing clicks on the surrounding page (the bar itself
-      // handles outside-click close via the mousedown listener above).
-      className="pointer-events-none fixed inset-x-0 top-3 z-40 flex justify-center px-3 sm:top-[18vh] sm:px-4"
-    >
+    <div className="pointer-events-none fixed inset-x-0 top-3 z-40 flex justify-center px-3 sm:top-[10vh] sm:px-4">
       <div
         ref={containerRef}
         role="dialog"
         aria-label={`Quick-create ${modeLabel}`}
         className={cn(
-          "pointer-events-auto flex max-h-[calc(100vh-1.5rem)] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-border bg-card/95 shadow-xl backdrop-blur",
+          "pointer-events-auto flex max-h-[calc(90dvh-1.5rem)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-xl",
           MOTION.slideInTop,
         )}
       >
-        <div className="flex items-start justify-between gap-3 border-b border-border/60 bg-card/60 px-4 py-3">
-          <div className="min-w-0">
-            <div className="text-sm font-semibold text-foreground">
-              Create {modeLabel.toLowerCase()}
-            </div>
-            <p className="text-meta mt-0.5 text-muted-foreground">
-              Pick the target, add context, then press Enter to create.
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            {restored && (
-              <span className="hidden shrink-0 rounded-md border border-ember/30 bg-ember/10 px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider text-ember sm:inline">
-                Restored
-              </span>
+        <div className="flex items-center justify-between gap-3 border-b border-border/60 px-5 py-3">
+          <div className="flex min-w-0 items-center gap-2">
+            {mode.kind === "issue-context" ? (
+              <div className="flex gap-1">
+                <Button
+                  size="sm"
+                  variant={mode.intent === "comment" ? "subtle" : "ghost"}
+                  onClick={() => {
+                    setMode({ ...mode, intent: "comment" });
+                    setShowDescription(false);
+                  }}
+                >
+                  Comment
+                </Button>
+                <Button
+                  size="sm"
+                  variant={mode.intent === "sub-issue" ? "subtle" : "ghost"}
+                  onClick={() => {
+                    setMode({ ...mode, intent: "sub-issue" });
+                    setShowDescription(true);
+                  }}
+                >
+                  Sub-issue
+                </Button>
+              </div>
+            ) : (
+              <Combobox
+                value={typeValue}
+                ariaLabel="Item type"
+                options={[
+                  { value: "issue", label: "Issue" },
+                  { value: "task", label: "Task" },
+                  ...SWITCHABLE_MODES.filter((item) => item.kind !== "issue").map((item) => ({
+                    value: item.kind,
+                    label: item.label,
+                  })),
+                ]}
+                onChange={(value) => {
+                  if (!value) return;
+                  switchMode(
+                    (value === "task" ? "issue" : value) as CyclableMode,
+                    value === "task"
+                      ? WorkItemKind.TASK
+                      : value === "issue"
+                        ? WorkItemKind.ISSUE
+                        : undefined,
+                  );
+                }}
+                onOpenChange={setPickerOpen}
+                className="h-8 text-sm font-medium"
+              />
             )}
-            <button
-              type="button"
-              onClick={() => close(true)}
-              aria-label="Close quick create"
-              className="focus-ring -mr-1 rounded-md p-1 text-muted-foreground hover:bg-subtle hover:text-foreground"
-            >
-              <X className="h-4 w-4" aria-hidden />
-            </button>
-          </div>
-        </div>
-
-        {/* Capture row: the tokenized box + Create button */}
-        <div className="flex items-start gap-2 px-4 py-3.5">
-          <div className="min-w-0 flex-1">
-            <div
-              ref={boxRef}
-              onClick={() => inputRef.current?.focus()}
-              className="flex flex-wrap items-center gap-1.5 rounded-lg border border-input bg-background/40 px-2 py-1.5 transition-colors focus-within:border-ember/60"
-            >
-              <ModeChip
-                mode={mode}
-                onToggleIntent={() => {
-                  if (mode.kind !== "issue-context") return;
-                  setMode({
-                    ...mode,
-                    intent: mode.intent === "comment" ? "sub-issue" : "comment",
-                  });
-                }}
-                onSwitch={(kind) => {
-                  if (mode.kind === "issue-context") return;
-                  switchMode(kind as CyclableMode);
-                }}
-              />
-              {isIssueLike && (
-                <TokenBadges
-                  priority={priority}
-                  projectId={projectId}
-                  projects={projects?.items}
-                  committed={committed}
-                  agentByHandle={agentByHandle}
-                  labelColorByName={labelColorByName}
-                  onRemovePriority={() => setPriority("NONE")}
-                  onRemoveProject={() => setProjectId("")}
-                  onRemoveCommitted={removeCommitted}
-                  onSetAssignMode={setAssignMode}
-                />
-              )}
-              <input
-                ref={inputRef}
-                value={text}
-                onChange={(e) => {
-                  setText(e.target.value);
-                  setAcDismissed(false);
-                }}
-                onKeyDown={onKeyDown}
-                placeholder={placeholder}
-                aria-label={`Quick-create ${modeLabel}`}
-                autoComplete="off"
-                className="min-w-[10rem] flex-1 bg-transparent px-1 py-0.5 text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
-              />
-              {pendingCommand && (
-                <span className="hidden shrink-0 items-center gap-1 rounded-md border border-ember/40 bg-ember/10 px-1.5 py-0.5 text-[0.6875rem] text-ember sm:inline-flex">
-                  <CornerDownLeft className="h-3 w-3" aria-hidden />
-                  <span>apply</span>
-                  <span className="font-mono">{commandChipLabel(pendingCommand.command)}</span>
-                </span>
-              )}
-            </div>
+            <span className="text-meta truncate text-muted-foreground">{ws?.name}</span>
+            {restored && <span className="text-meta text-muted-foreground">Draft restored</span>}
           </div>
           <button
             type="button"
-            onClick={() => submit(false)}
-            disabled={!text.trim() || busy}
-            className={cn(
-              "focus-ring mt-0.5 inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-md bg-ember px-3 py-2 text-xs font-medium text-ember-foreground hover:bg-ember/90 disabled:pointer-events-none disabled:opacity-40",
-              MOTION.fast,
-            )}
+            onClick={() => close(true)}
+            aria-label="Close quick create"
+            className="focus-ring rounded-md p-2 text-muted-foreground hover:bg-subtle hover:text-foreground"
           >
-            {busy ? "…" : githubImportRef ? "Import" : "Create"}
-            <Kbd className="border-ember-foreground/30 bg-ember-foreground/10 text-ember-foreground/80">
-              ⏎
-            </Kbd>
+            <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
 
-        {githubImportRef && (
-          <GitHubImportStatus
-            checking={githubLinkability.isLoading}
-            linkabilityError={githubLinkability.error?.message ?? null}
-            linkabilityStatus={githubLinkability.data?.status ?? null}
-            previewLoading={githubPreview.isLoading}
-            previewError={githubPreview.error?.message ?? null}
-            snapshot={githubPreview.data ?? null}
-            fallbackRepo={githubImportRef.repoFullName}
-            fallbackNumber={githubImportRef.number}
-          />
-        )}
-
-        {/* Add pills (mouse path) — issue / sub-issue only. Each primes
-            the matching slash so it shares the keyboard value picker. */}
-        {isIssueLike && (
-          <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-card/40 px-4 py-1.5 text-[0.6875rem] text-muted-foreground">
-            <span className="mr-0.5 font-mono uppercase tracking-wider opacity-60">add</span>
-            <AddPill label="Priority" onClick={() => primeSlash("priority")} />
-            <AddPill label="Project" onClick={() => primeSlash("project")} />
-            <AddPill label="Assignee" onClick={() => primeSlash("assign")} />
-            <AddPill label="Label" onClick={() => primeSlash("label")} />
-            <AddPill label="Due" onClick={() => primeSlash("due")} />
-            <button
-              type="button"
-              onClick={() => setShowDescription((v) => !v)}
-              aria-pressed={showDescription}
-              className={cn(
-                "focus-ring rounded px-1.5 py-0.5 transition-colors",
-                showDescription
-                  ? "bg-ember/15 text-ember"
-                  : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-              )}
-            >
-              Description
-            </button>
-            <span className="ml-auto inline-flex items-center gap-1 opacity-70">
-              <Kbd>/</Kbd>
-              <span>or</span>
-              <Kbd>Tab</Kbd>
-              <span>to add</span>
-            </span>
+        <div className="min-h-0 space-y-4 overflow-y-auto px-5 py-4">
+          {contextIssue && (
+            <p className="text-meta text-muted-foreground">On {contextIssue.title}</p>
+          )}
+          <div ref={boxRef}>
+            <label className="mb-1.5 block text-xs font-medium" htmlFor="quick-create-title">
+              {mode.kind === "issue-context" && mode.intent === "comment" ? "Comment" : "Title"}
+            </label>
+            <input
+              id="quick-create-title"
+              ref={inputRef}
+              value={text}
+              onChange={(event) => {
+                setText(event.target.value);
+                setAcDismissed(false);
+              }}
+              onKeyDown={onKeyDown}
+              placeholder={placeholder.replace(/….*$/, "…")}
+              aria-label={`Quick-create ${modeLabel}`}
+              autoComplete="off"
+              maxLength={300}
+              className="focus-ring w-full rounded-md border border-input bg-background/40 px-3 py-2.5 text-base placeholder:text-muted-foreground"
+            />
+            {pendingCommand && (
+              <p className="text-meta mt-1 text-muted-foreground">
+                Enter to apply {commandChipLabel(pendingCommand.command)}
+              </p>
+            )}
           </div>
-        )}
 
-        {/* Mode pill row — only while the title is empty (teach, then get
-            out of the way). Tab / Shift+Tab cycle, ⌘1..⌘7 jump. */}
-        {showModesLegend && (
-          <div className="flex flex-wrap items-center gap-1 border-t border-border/60 bg-card/40 px-3 py-1.5 text-[0.6875rem] text-muted-foreground">
-            <span className="font-mono uppercase tracking-wider opacity-70">modes</span>
-            {CYCLABLE_MODES.map((m, idx) => (
-              <button
-                key={m}
-                type="button"
-                onClick={() => switchMode(m)}
-                className={cn(
-                  "focus-ring inline-flex items-center gap-1 rounded px-1.5 py-0.5 transition-colors",
-                  mode.kind === m
-                    ? "bg-card text-foreground"
-                    : "text-muted-foreground hover:bg-subtle/50 hover:text-foreground",
-                )}
-              >
-                <span className="capitalize">{CYCLABLE_MODE_LABEL[m]}</span>
-                <Kbd className="opacity-60">⌘{idx + 1}</Kbd>
-              </button>
-            ))}
-            <span className="ml-auto inline-flex items-center gap-1 opacity-70">
-              <Kbd>Tab</Kbd>
-              <span>cycle</span>
-            </span>
-          </div>
-        )}
-
-        {/* Body / description textarea — for issue (seeded from "Convert
-            to issue") and for note/artifact/action-request when expanded. */}
-        {showDescription &&
-          (mode.kind === "issue" ||
-            mode.kind === "note" ||
-            mode.kind === "artifact" ||
-            mode.kind === "action-request") && (
-            <div className="border-t border-border/60 bg-card/30 px-3 py-2">
-              <label className="block">
-                <span className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                  Description
-                </span>
-                <textarea
-                  value={seedDescription}
-                  onChange={(e) => setSeedDescription(e.target.value)}
-                  onKeyDown={(e) => {
-                    // Match the title input's keymap: ⌘/Ctrl+⏎ submits
-                    // secondary (create + open). Plain ⏎ inserts newlines.
-                    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                      e.preventDefault();
-                      void submit(true);
-                    } else if (e.key === "Escape") {
-                      e.preventDefault();
-                      close(true);
-                    }
-                  }}
-                  rows={4}
-                  className="focus-ring mt-1 w-full resize-y rounded-md border border-input bg-background/40 p-2 text-[0.8125rem] placeholder:text-muted-foreground/60 focus:outline-none"
-                  placeholder="Description (markdown ok)…"
-                />
-              </label>
-              {archiveNoteId && (
-                <label className="mt-1.5 inline-flex items-center gap-2 text-[0.6875rem] text-muted-foreground">
-                  <input
-                    type="checkbox"
-                    checked={archiveOnCreate}
-                    onChange={(e) => setArchiveOnCreate(e.target.checked)}
-                    className="h-3 w-3 rounded border-border"
-                  />
-                  <span>Archive source note after creating issue</span>
-                </label>
-              )}
-            </div>
+          {showDescription && (
+            <label className="block">
+              <span className="mb-1.5 block text-xs font-medium">
+                Description <span className="font-normal text-muted-foreground">optional</span>
+              </span>
+              <textarea
+                value={seedDescription}
+                onChange={(event) => setSeedDescription(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    void submit(true);
+                  }
+                }}
+                rows={3}
+                maxLength={50000}
+                className="focus-ring block w-full resize-y rounded-md border border-input bg-background/40 px-3 py-2 text-sm placeholder:text-muted-foreground"
+                placeholder="Add context, requirements, or a checklist…"
+              />
+            </label>
           )}
 
-        {/* Per-mode secondary row: issue-context intent tabs, artifact
-            type, action-request severity. */}
-        {(mode.kind === "issue-context" ||
-          mode.kind === "artifact" ||
-          mode.kind === "action-request") && (
-          <div className="flex flex-wrap items-center gap-1.5 border-t border-border/60 bg-card/50 px-3 py-2 text-[0.6875rem]">
-            {mode.kind === "issue-context" && (
-              <>
-                <IntentChip
-                  selected={mode.intent === "comment"}
-                  onClick={() => setMode({ ...mode, intent: "comment" })}
-                  label="Comment"
-                />
-                <IntentChip
-                  selected={mode.intent === "sub-issue"}
-                  onClick={() => setMode({ ...mode, intent: "sub-issue" })}
-                  label="Sub-issue"
-                />
-                {mode.intent === "sub-issue" && contextIssue && (
-                  <span className="ml-1 truncate text-muted-foreground">
-                    parent: <span className="font-mono text-foreground">{contextIssue.title}</span>
-                  </span>
-                )}
-              </>
-            )}
-
-            {mode.kind === "artifact" && (
-              <>
-                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">type</span>
-                {Object.values(ArtifactType).map((t) => (
-                  <PriorityChip
-                    key={t}
-                    selected={artifactType === t}
-                    label={t}
-                    onClick={() => setArtifactType(t)}
+          {isIssueLike && !githubImportRef && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <label className="min-w-0 text-xs font-medium">
+                  Status
+                  <Combobox
+                    value={statusId || statuses?.find((status) => status.isDefault)?.id || null}
+                    onChange={(value) => setStatusId(value ?? "")}
+                    options={(statuses ?? []).map((status) => ({
+                      value: status.id,
+                      label: status.name,
+                      color: status.color,
+                    }))}
+                    placeholder="Default status"
+                    ariaLabel="New item status"
+                    onOpenChange={setPickerOpen}
+                    className="mt-1.5 w-full"
                   />
-                ))}
-              </>
-            )}
-
-            {mode.kind === "action-request" && (
-              <>
-                <span className="mr-1 font-mono uppercase tracking-wider opacity-70">severity</span>
-                {SEVERITIES.map((s) => (
-                  <PriorityChip
-                    key={s}
-                    selected={severity === s}
-                    label={s}
-                    onClick={() => setSeverity(s)}
+                </label>
+                <label className="min-w-0 text-xs font-medium">
+                  Priority
+                  <Combobox
+                    value={priority}
+                    onChange={(value) => setPriority((value ?? "NONE") as Priority)}
+                    options={PRIORITIES.map((value) => ({ value, label: PRIORITY_LABEL[value] }))}
+                    ariaLabel="New item priority"
+                    onOpenChange={setPickerOpen}
+                    className="mt-1.5 w-full"
                   />
-                ))}
-              </>
-            )}
-
-            <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
-              {secondaryHint && (
-                <>
-                  <Kbd>⌘⏎</Kbd>
-                  <span>{secondaryHint.replace("⌘⏎ ", "")}</span>
-                  <span className="mx-1 opacity-40">·</span>
-                </>
+                </label>
+                <label className="min-w-0 text-xs font-medium">
+                  Project
+                  <Combobox
+                    value={
+                      (mode.kind === "issue-context" ? contextIssue?.projectId : projectId) || null
+                    }
+                    onChange={(value) => setProjectId(value ?? "")}
+                    options={(projects?.items ?? []).map((project) => ({
+                      value: project.id,
+                      label: project.name,
+                      secondary: project.key,
+                    }))}
+                    allowNone
+                    noneLabel="No project"
+                    placeholder="No project"
+                    searchable
+                    ariaLabel="New item project"
+                    onOpenChange={setPickerOpen}
+                    className="mt-1.5 w-full"
+                    disabled={mode.kind === "issue-context"}
+                  />
+                </label>
+                <label className="min-w-0 text-xs font-medium">
+                  Assignee
+                  <Combobox
+                    value={assigneeId || null}
+                    onChange={(value) => setAssigneeId(value ?? "")}
+                    options={(members ?? []).map((member) => ({
+                      value: member.user.id,
+                      label: member.user.name ?? member.user.email,
+                    }))}
+                    allowNone
+                    noneLabel="Unassigned"
+                    placeholder="Unassigned"
+                    searchable
+                    ariaLabel="New item assignee"
+                    onOpenChange={setPickerOpen}
+                    className="mt-1.5 w-full"
+                  />
+                </label>
+              </div>
+              <label className="block text-xs font-medium">
+                Due date{" "}
+                <span className="font-normal text-muted-foreground">
+                  optional · does not send a reminder
+                </span>
+                <input
+                  type="date"
+                  value={dueValue}
+                  aria-label="New item due date"
+                  onChange={(event) => {
+                    const date = event.target.value
+                      ? new Date(`${event.target.value}T00:00:00`)
+                      : null;
+                    setCommitted((previous) => [
+                      ...previous.filter((command) => command.kind !== "due"),
+                      ...(date ? [{ kind: "due" as const, date }] : []),
+                    ]);
+                  }}
+                  className="focus-ring mt-1.5 block w-full rounded-md border border-input bg-background/40 px-3 py-2 text-sm"
+                />
+              </label>
+              <details className="group rounded-md border border-border">
+                <summary className="focus-ring cursor-pointer px-3 py-2 text-xs text-muted-foreground hover:text-foreground">
+                  More options · agent and labels
+                </summary>
+                <div className="space-y-3 border-t border-border p-3">
+                  <Combobox
+                    value={selectedAgent?.kind === "assign" ? selectedAgent.handle : null}
+                    onChange={(value) => {
+                      if (value) applyCommand({ kind: "assign", handle: value });
+                      else
+                        setCommitted((previous) =>
+                          previous.filter((command) => command.kind !== "assign"),
+                        );
+                    }}
+                    options={(agents ?? [])
+                      .filter((agent) => agent.profileKey)
+                      .map((agent) => ({
+                        value: agent.profileKey!,
+                        label: agent.name ?? agent.profileKey!,
+                        secondary: `@${agent.profileKey}`,
+                        avatar: agent,
+                      }))}
+                    allowNone
+                    noneLabel="No agent"
+                    searchable
+                    ariaLabel="New item agent"
+                    onOpenChange={setPickerOpen}
+                    className="w-full"
+                  />
+                  <Combobox
+                    value={null}
+                    onChange={(value) => value && applyCommand({ kind: "label", name: value })}
+                    options={(labels ?? []).map((label) => ({
+                      value: label.name,
+                      label: label.name,
+                      color: label.color,
+                    }))}
+                    placeholder="Add a label…"
+                    searchable
+                    ariaLabel="New item labels"
+                    onOpenChange={setPickerOpen}
+                    className="w-full"
+                  />
+                </div>
+              </details>
+              {committed.some((command) => command.kind !== "due") && (
+                <div className="flex flex-wrap gap-1.5">
+                  <TokenBadges
+                    priority="NONE"
+                    projectId=""
+                    projects={projects?.items}
+                    committed={committed.filter((command) => command.kind !== "due")}
+                    agentByHandle={agentByHandle}
+                    labelColorByName={labelColorByName}
+                    onRemovePriority={() => setPriority("NONE")}
+                    onRemoveProject={() => setProjectId("")}
+                    onRemoveCommitted={removeCommitted}
+                    onSetAssignMode={setAssignMode}
+                  />
+                </div>
               )}
-              <Kbd>⎋</Kbd> close
-            </span>
-          </div>
+            </>
+          )}
+
+          {githubImportRef && (
+            <GitHubImportStatus
+              checking={githubLinkability.isLoading}
+              linkabilityError={githubLinkability.error?.message ?? null}
+              linkabilityStatus={githubLinkability.data?.status ?? null}
+              previewLoading={githubPreview.isLoading}
+              previewError={githubPreview.error?.message ?? null}
+              snapshot={githubPreview.data ?? null}
+              fallbackRepo={githubImportRef.repoFullName}
+              fallbackNumber={githubImportRef.number}
+            />
+          )}
+          {mode.kind === "artifact" && (
+            <Combobox
+              value={artifactType}
+              onChange={(value) => value && setArtifactType(value as ArtifactType)}
+              options={Object.values(ArtifactType).map((value) => ({ value, label: value }))}
+              ariaLabel="Artifact type"
+              onOpenChange={setPickerOpen}
+            />
+          )}
+          {mode.kind === "action-request" && (
+            <Combobox
+              value={severity}
+              onChange={(value) => value && setSeverity(value as NotificationSeverity)}
+              options={SEVERITIES.map((value) => ({ value, label: value }))}
+              ariaLabel="Request severity"
+              onOpenChange={setPickerOpen}
+            />
+          )}
+          {archiveNoteId && (
+            <label className="text-meta flex items-center gap-2 text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={archiveOnCreate}
+                onChange={(event) => setArchiveOnCreate(event.target.checked)}
+              />
+              Archive source note after creating issue
+            </label>
+          )}
+        </div>
+
+        {submissionError && (
+          <p role="alert" className="px-5 pb-3 text-sm text-danger">
+            {submissionError}
+          </p>
         )}
+        <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border bg-card/60 px-5 py-3">
+          <span className="text-meta mr-auto w-full text-muted-foreground sm:w-auto">
+            Esc saves draft{isIssueLike ? " · / for shortcuts" : ""}
+          </span>
+          {(hasEscalation || mode.kind === "issue" || mode.kind === "artifact") && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => submit(true)}
+              disabled={!text.trim() || busy}
+            >
+              {hasEscalation ? "More options" : "Create & open"} <Kbd>{mod}↵</Kbd>
+            </Button>
+          )}
+          <Button
+            variant="ember"
+            size="sm"
+            onClick={() => submit(false)}
+            disabled={!text.trim() || busy}
+          >
+            {busy
+              ? "Creating…"
+              : githubImportRef
+                ? "Import"
+                : mode.kind === "issue-context" && mode.intent === "comment"
+                  ? "Post comment"
+                  : `Create ${modeLabel.toLowerCase()}`}
+            <Kbd>↵</Kbd>
+          </Button>
+        </div>
       </div>
 
       {/* Portaled value autocomplete — anchored to the box, never clipped. */}
@@ -1743,191 +1873,8 @@ export const SWITCHABLE_MODES: { kind: SwitchableMode; label: string }[] = [
   { kind: "initiative", label: "Initiative" },
   { kind: "note", label: "Note" },
   { kind: "artifact", label: "Artifact" },
-  { kind: "action-request", label: "Action req." },
+  { kind: "action-request", label: "Action request" },
 ];
-
-function ModeChip({
-  mode,
-  onToggleIntent,
-  onSwitch,
-}: {
-  mode: Mode;
-  onToggleIntent: () => void;
-  onSwitch: (kind: SwitchableMode) => void;
-}) {
-  const label =
-    mode.kind === "issue"
-      ? "Issue"
-      : mode.kind === "cycle"
-        ? "Sprint"
-        : mode.kind === "initiative"
-          ? "Initiative"
-          : mode.kind === "project"
-            ? "Project"
-            : mode.kind === "note"
-              ? "Note"
-              : mode.kind === "artifact"
-                ? "Artifact"
-                : mode.kind === "action-request"
-                  ? "Action req."
-                  : mode.intent === "comment"
-                    ? "Comment"
-                    : "Sub-issue";
-
-  const isIssueContext = mode.kind === "issue-context";
-  const [open, setOpen] = useState(false);
-  const wrapRef = useRef<HTMLDivElement | null>(null);
-
-  // Close on outside click. The parent's outside-click handler closes the
-  // overlay entirely; stopping propagation on dropdown clicks keeps that
-  // behavior from firing while the dropdown is open.
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (e: MouseEvent) => {
-      if (!wrapRef.current) return;
-      if (!wrapRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
-  }, [open]);
-
-  // Issue-context mode: chip toggles comment ↔ sub-issue (legacy behavior).
-  if (isIssueContext) {
-    return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          onToggleIntent();
-        }}
-        aria-label="Toggle comment / sub-issue"
-        className="focus-ring shrink-0 cursor-pointer rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
-      >
-        {label}
-      </button>
-    );
-  }
-
-  // Switchable: real dropdown listing the creation modes.
-  return (
-    <div ref={wrapRef} className="relative shrink-0">
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        title="Switch what to create"
-        className="focus-ring inline-flex shrink-0 cursor-pointer items-center gap-1 rounded-md border border-border/70 bg-subtle/70 px-2 py-1 font-mono text-[0.6875rem] uppercase tracking-wider text-muted-foreground hover:bg-subtle"
-      >
-        <span>{label}</span>
-        <ChevronDown className="h-2.5 w-2.5 opacity-70" aria-hidden />
-      </button>
-      {open && (
-        <div
-          // Stop the parent's mousedown-outside from closing the overlay
-          // when the user clicks an item in the popover.
-          onMouseDown={(e) => e.stopPropagation()}
-          className="absolute left-0 top-[calc(100%+4px)] z-50 min-w-[160px] overflow-hidden rounded-md border border-border bg-popover shadow-sm"
-        >
-          <ul role="listbox" className="py-1">
-            {SWITCHABLE_MODES.map((opt) => {
-              const selected = mode.kind === opt.kind;
-              return (
-                <li key={opt.kind}>
-                  <button
-                    type="button"
-                    role="option"
-                    aria-selected={selected}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setOpen(false);
-                      if (!selected) onSwitch(opt.kind);
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-subtle",
-                      selected && "bg-subtle/60 text-foreground",
-                    )}
-                  >
-                    <span className="flex-1 truncate">{opt.label}</span>
-                    {selected && <span className="text-ember">✓</span>}
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PriorityChip({
-  selected,
-  label,
-  onClick,
-}: {
-  selected: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={selected}
-      className={cn(
-        "focus-ring rounded px-1.5 py-0.5 font-mono text-[0.6875rem] uppercase tracking-wider transition-colors",
-        selected
-          ? "bg-ember/15 text-ember"
-          : "text-muted-foreground hover:bg-subtle hover:text-foreground",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
-function IntentChip({
-  selected,
-  label,
-  onClick,
-}: {
-  selected: boolean;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      role="tab"
-      aria-selected={selected}
-      onClick={onClick}
-      className={cn(
-        "focus-ring rounded px-2 py-0.5 transition-colors",
-        selected ? "bg-subtle text-foreground" : "text-muted-foreground hover:text-foreground",
-      )}
-    >
-      {label}
-    </button>
-  );
-}
-
-// A small "+ field" button below the box — primes the matching slash.
-function AddPill({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="focus-ring inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
-    >
-      <Plus className="h-2.5 w-2.5 opacity-70" aria-hidden />
-      <span>{label}</span>
-    </button>
-  );
-}
 
 // Dynamic colour swatch for project / label badges + suggestions.
 function ColorDot({ color }: { color?: string | null }) {

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { resolveQuickCreateMode, SWITCHABLE_MODES } from "@/components/quick-create";
+import {
+  resolveQuickCreateMode,
+  resolveWorkItemKind,
+  SWITCHABLE_MODES,
+} from "@/components/quick-create";
+import { WorkItemKind } from "@prisma/client";
 import { parseGitHubIssueOrPrRef } from "@/lib/github-ref";
+import { quickCreateRequestFromDataset } from "@/lib/workspace-surface-requests";
 
 describe("CaptureSheet (QuickCreate) switchable modes", () => {
   it("exposes the seven agentic-OS destinations", () => {
@@ -23,6 +29,21 @@ describe("CaptureSheet (QuickCreate) switchable modes", () => {
 });
 
 describe("CaptureSheet route and caller intent", () => {
+  it("preserves named planning actions on detail pages before and after hydration", () => {
+    const request = quickCreateRequestFromDataset({ quickCreateMode: "project" });
+    expect(resolveQuickCreateMode("/w/forge/projects/cproject123", request)).toEqual({
+      kind: "project",
+    });
+    expect(resolveQuickCreateMode("/w/forge/issues/cissue123", { mode: "cycle" })).toEqual({
+      kind: "cycle",
+    });
+    expect(
+      quickCreateRequestFromDataset({
+        quickCreateMode: "invalid",
+        quickCreateProject: "project-id",
+      }),
+    ).toEqual({ projectId: "project-id" });
+  });
   it("defaults issue-detail capture to a comment", () => {
     expect(resolveQuickCreateMode("/w/forge/issues/cissue123")).toEqual({
       kind: "issue-context",
@@ -37,6 +58,19 @@ describe("CaptureSheet route and caller intent", () => {
         mode: "issue",
       }),
     ).toEqual({ kind: "issue" });
+  });
+
+  it("lets an explicit create-task action bypass issue-detail comment context", () => {
+    expect(resolveQuickCreateMode("/w/forge/issues/cissue123", { mode: "task" })).toEqual({
+      kind: "issue",
+    });
+  });
+
+  it("creates tasks in personal workspaces without changing explicit issue actions", () => {
+    expect(resolveWorkItemKind("PERSONAL")).toBe(WorkItemKind.TASK);
+    expect(resolveWorkItemKind("TEAM")).toBe(WorkItemKind.ISSUE);
+    expect(resolveWorkItemKind("PERSONAL", { mode: "issue" })).toBe(WorkItemKind.ISSUE);
+    expect(resolveWorkItemKind("TEAM", { mode: "task" })).toBe(WorkItemKind.TASK);
   });
 });
 

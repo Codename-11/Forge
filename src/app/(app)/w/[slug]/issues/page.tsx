@@ -515,7 +515,7 @@ export default function IssuesPage() {
                 </span>
               }
               action={
-                <Button data-quick-create variant="ember" size="sm">
+                <Button data-quick-create data-quick-create-mode="issue" variant="ember" size="sm">
                   New issue
                 </Button>
               }

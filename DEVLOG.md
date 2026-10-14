@@ -14678,3 +14678,48 @@ publishes those prevalidated assets after tagging.
 Verification: focused runtime-diagnostic, MCP-execution, and helper-distribution
 tests passed (11/11); TypeScript passed; lint completed with only the existing
 repository warnings; helper tarballs and `SHA256SUMS` verified successfully.
+
+## 2026-09-25 — AXI-203 New Item and personal-task capture (in progress)
+
+Explicit New issue/New task controls now carry their destination into quick
+create, so an issue-detail route cannot silently turn them into a comment.
+Personal workspace capture and the Today composer persist `TASK` work items;
+note-to-issue conversion remains an explicit issue. Quick create preserves Tab
+focus navigation while Enter accepts autocomplete suggestions. Today separates
+due-today items from unscheduled Someday work, exposes the due preset on mobile,
+and links to the full Issues list instead of presenting its summary as the
+entire task inventory. Quickstart and Issues guidance now describe the actual
+capture behavior.
+
+First-class per-user reminders need a separate model and worker path rather
+than the existing ScheduledTask create-issue automation; tracked in AXI-204.
+Focused quick-create unit tests, TypeScript, and lint passed. The local Docker
+engine and production browser sign-in were unavailable, so local Playwright,
+integration checks, and rendered desktop/mobile UX review remain pending.
+
+## 2026-10-14 — AXI-203 local creation-flow review and verification
+
+Replaced the dense capture bar with one item-type selector, visible title and
+description, direct status/priority/project/human-assignee/date controls, and
+expandable agent/label options. Keyboard slash shortcuts remain available.
+Explicit named creation controls preserve their intent through lazy loading,
+including project actions on detail pages. Task creation uses the existing
+TASK kind, now labeled Task whether standalone or nested. Draft restoration
+retains content and selected fields within the workspace/issue context, and
+planning-item full forms preserve the entered name. Date selection persists
+atomically with creation. Fixed a shared Combobox callback that updated its
+parent from inside a state updater.
+
+Personal Today keeps undated work in Someday, exposes date presets on mobile,
+and makes its bounded recent-work summary explicit. The full reminders feature
+remains AXI-204; due dates and issue snoozing do not imply reminders.
+
+Verification: focused lint and 12 quick-create unit checks passed. A production
+build and three focused Playwright flows passed against disposable forge_e2e,
+covering draft restore, saved TASK fields, named issue creation, keyboard focus,
+status transitions, and mobile Today/Someday behavior. Captured and inspected
+desktop, dark, and mobile UI evidence under output/playwright. The local preview
+uses Node 20 with the standard Next compiler: Turbopack reproduced an existing
+recordChange import failure on creation, and the workstation's Node 24 also
+failed loading the Tailwind TypeScript config through the alternate compiler.
+No production deployment or release was performed.

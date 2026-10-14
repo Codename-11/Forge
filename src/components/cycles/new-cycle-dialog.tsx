@@ -23,14 +23,16 @@ export function NewCycleDialog({
   onCreated,
   defaultLengthDays,
   activeCycleName,
+  initialName = "",
 }: {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
   defaultLengthDays?: number;
   activeCycleName?: string | null;
+  initialName?: string;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [startsAt, setStartsAt] = useState("");
   const [lengthDays, setLengthDays] = useState("");
   const [status, setStatus] = useState<CycleStatus>(CycleStatus.PLANNED);
