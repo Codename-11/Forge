@@ -63,23 +63,30 @@ accidentally triggering navigation.
 
 ## 4. Create your first issue
 
-From the Issues page, press <kbd>⇧C</kbd> to open the quick-create dialog.
+From the Issues page, press <kbd>⇧C</kbd> to open quick create. You can also use
+**New issue** in the sidebar or top bar. Those explicit actions create an issue
+even while you are viewing another issue; <kbd>⇧C</kbd> on an issue detail page
+opens a contextual comment instead.
 
 Fill in:
 
 - **Title** — required. Keep it short and verb-led ("Wire up onboarding
   email").
-- **Description** — optional. Markdown supported.
-- **Status** — defaults to the workspace's default status.
-- **Priority** — `NONE`, `LOW`, `MEDIUM`, `HIGH`, or `URGENT`.
-- **Project** — optional. Skip for now.
+- **Description** — optional and visible below the title.
+- **Status**, **Priority**, **Project**, **Assignee**, and **Due date** — direct
+  field controls. Agent assignment and labels are under **More options**.
 
-Press <kbd>⌘ Enter</kbd> to create. The issue lands in the list with a fresh
-key (e.g. `WRK-1`).
+The item-type selector also offers **Task**, **Note**, and planning items.
+Escape saves the content and selected fields as a workspace-scoped draft.
+Tab moves through fields; slash commands remain optional keyboard shortcuts.
 
-For richer creation (sub-issues, attachments, relations), use the full-page
-form at `/w/<slug>/issues/new`. The quick-create dialog covers ~95% of
-day-to-day creation.
+Press <kbd>Enter</kbd> to create, or <kbd>⌘ Enter</kbd> to create and open. The
+issue gets a fresh key (e.g. `WRK-1`).
+
+Add sub-issues, attachments, relations, and sprint membership on the issue
+detail page after capture. In a personal workspace, **New task** and the Today
+composer create lighter-weight tasks; a due date makes a task appear in Today
+or Upcoming, but does not itself send a reminder.
 
 ## 5. Drop it into a project
 

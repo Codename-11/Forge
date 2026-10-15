@@ -338,7 +338,9 @@ async function main() {
         kind: RuntimeKind.REMOTE_HTTP,
         adapterKey: "mock-runs",
         endpoint: "mock://e2e",
+        ownerType: "PERSONAL",
         ownerId: owner.id,
+        createdById: owner.id,
         heartbeatAt: e2eNow,
         connectedAt: e2eNow,
       },
@@ -378,7 +380,9 @@ async function main() {
         adapterKey: "codex-app-server",
         endpoint: "ws://127.0.0.1:4505",
         config: {},
+        ownerType: "PERSONAL",
         ownerId: owner.id,
+        createdById: owner.id,
       },
     });
   }

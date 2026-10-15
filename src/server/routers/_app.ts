@@ -1,4 +1,5 @@
 import { router } from "@/server/trpc";
+import { reminderRouter } from "./reminder";
 import { actionRequestRouter } from "./action-request";
 import { agentRouter } from "./agent";
 import { agentProfileRouter } from "./agent-profile";
@@ -112,6 +113,7 @@ export const appRouter = router({
   projectAccess: projectAccessRouter,
   projectTemplate: projectTemplateRouter,
   recurring: recurringRouter,
+  reminder: reminderRouter,
   scheduledTask: scheduledTaskRouter,
   relation: relationRouter,
   runtime: runtimeRouter,

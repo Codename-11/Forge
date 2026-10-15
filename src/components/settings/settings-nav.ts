@@ -132,7 +132,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
         label: "Agent policy",
         icon: Bot,
         description:
-          "Set capacity, engagement, routing eligibility, and approval policy for agents bound from Mission Control.",
+          "Set this workspace's capacity, engagement, routing, and approval rules. Manage agent identities and connections in Agents.",
       },
       {
         path: "/dispatch-rules",
@@ -143,7 +143,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
       },
       {
         path: "/access",
-        label: "Agent access",
+        label: "MCP & API access",
         icon: Key,
         badge: "admin only",
         description:
@@ -154,7 +154,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
   {
     id: "connections",
     label: "Connections",
-    hint: "Inbound + outbound I/O. For agents and their runtimes, see Automation → Agents.",
+    hint: "Workspace integrations. Manage agent identities and execution in Agents.",
     items: [
       {
         path: "/connections",
@@ -218,7 +218,7 @@ export const WORKSPACE_SETTINGS_GROUPS: readonly SettingsNavGroup[] = [
  */
 export const ACCOUNT_SETTINGS_GROUP: SettingsNavGroup = {
   id: "personal",
-  label: "Personal",
+  label: "My account",
   hint: "Follows you across every workspace.",
   items: [
     {
@@ -238,12 +238,6 @@ export const ACCOUNT_SETTINGS_GROUP: SettingsNavGroup = {
       label: "Appearance",
       icon: Palette,
       description: "Density, text size, and motion. Saved per user.",
-    },
-    {
-      path: "/settings/workspaces",
-      label: "Workspaces",
-      icon: Layers,
-      description: "Create, rename, archive, or switch workspaces you belong to.",
     },
   ],
 };

@@ -3,13 +3,15 @@ import { GlobalShell } from "@/components/global-shell/global-shell";
 import { getGlobalShellData } from "@/components/global-shell/data";
 import { AgentDetailContent } from "@/app/(app)/settings/agents/[id]/agent-detail-content";
 
-/** Mission Control profile detail and binding control surface. */
+/** Agent identity, workspace access, and connection detail. */
 export default async function AgentFleetDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ workspace?: string; setup?: string }>;
 }) {
-  const [data, { id }] = await Promise.all([getGlobalShellData(), params]);
+  const [data, { id }, query] = await Promise.all([getGlobalShellData(), params, searchParams]);
   if (!data) redirect("/signin");
 
   return (
@@ -18,8 +20,7 @@ export default async function AgentFleetDetailPage({
       workspaces={data.workspaces}
       activePath="/agents"
       crumbs={[
-        { label: "Forge", href: "/" },
-        { label: "Mission Control", href: "/" },
+        { label: "Home", href: "/" },
         { label: "Agents", href: "/agents" },
         { label: "Profile" },
       ]}
@@ -30,6 +31,10 @@ export default async function AgentFleetDetailPage({
         id={id}
         isInstanceAdmin={data.user.instanceRole === "INSTANCE_ADMIN"}
         workspaces={data.workspaces}
+        initialWorkspaceId={query.workspace}
+        setupMode={
+          query.setup === "external" || query.setup === "managed" ? query.setup : undefined
+        }
       />
     </GlobalShell>
   );

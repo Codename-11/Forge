@@ -88,6 +88,9 @@ describe("safe local dev command decisions", () => {
 
   it("resolves pnpm and Corepack JavaScript entries from Windows shims", () => {
     expect(parseWindowsPnpmEntry('node "%~dp0\\pnpm.mjs" %*')).toBe("pnpm.mjs");
+    expect(parseWindowsPnpmEntry('"%_prog%" "%dp0%\\..\\pnpm\\bin\\pnpm.cjs" %*')).toBe(
+      "..\\pnpm\\bin\\pnpm.cjs",
+    );
     expect(parseWindowsPnpmEntry('node "%~dp0\\node_modules\\corepack\\dist\\pnpm.js" %*')).toBe(
       "node_modules\\corepack\\dist\\pnpm.js",
     );

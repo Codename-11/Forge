@@ -8,7 +8,14 @@ import {
   type Runtime,
   type PrismaClient,
 } from "@prisma/client";
-import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
+import { router, workspaceProcedure, adminProcedure, instanceAdminProcedure } from "@/server/trpc";
+import {
+  runtimeLifecycleImpact,
+  transferRuntime,
+  removeRuntime,
+  lockManagedRuntime,
+  prepareRuntimeLifecycle,
+} from "@/server/services/runtime-lifecycle";
 import { encryptSecret } from "@/server/crypto";
 import { getRuntimeAdapter, managedAdapters, PLANNED_ADAPTERS } from "@/server/runtimes/adapters";
 import { recordRuntimeHeartbeatPresence } from "@/server/services/heartbeat";
@@ -130,6 +137,14 @@ function withRuntimeHealth<T extends Partial<Runtime> & RuntimeForHealth & Runti
  */
 
 const runtimeId = z.string().min(1).max(40);
+const lifecycleExpected = {
+  id: runtimeId,
+  expectedWorkspaceId: z.string().cuid(),
+  expectedOwnerType: z.enum(["PERSONAL", "SERVICE", "UNASSIGNED"]),
+  expectedOwnerId: z.string().cuid().nullable(),
+  expectedUpdatedAt: z.date(),
+  confirmName: z.string().min(1).max(120),
+};
 
 /** Confirm a runtime belongs to the caller's workspace, or 404. */
 async function assertRuntimeInWorkspace(
@@ -173,7 +188,72 @@ const baseFields = {
   providersAvailable: z.array(z.nativeEnum(AgentProvider)).max(16).default([]),
 };
 
+async function queueScopedDiagnostic(
+  db: PrismaClient,
+  workspaceId: string,
+  id: string,
+  userId: string,
+  kind: RuntimeDiagnosticKind,
+) {
+  return db.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT "id" FROM "Runtime" WHERE "id" = ${id} FOR UPDATE`;
+    const runtime = await tx.runtime.findFirst({
+      where: { id, workspaceId },
+      select: { id: true, archivedAt: true, disabledAt: true },
+    });
+    if (!runtime)
+      throw new TRPCError({
+        code: "NOT_FOUND",
+        message: "Runtime no longer belongs to this workspace.",
+      });
+    if (runtime.archivedAt || runtime.disabledAt)
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Restore and enable the runtime before testing it.",
+      });
+    return requestRuntimeDiagnostic(
+      {
+        workspaceId,
+        runtimeId: id,
+        kind,
+        trigger: RuntimeDiagnosticTrigger.MANUAL_RUNTIME,
+        requestedById: userId,
+      },
+      tx,
+    );
+  });
+}
+
 export const runtimeRouter = router({
+  lifecycleImpact: instanceAdminProcedure
+    .input(z.object({ id: runtimeId, targetWorkspaceId: z.string().cuid().optional() }))
+    .query(({ ctx, input }) => runtimeLifecycleImpact(ctx.db, input.id, input.targetWorkspaceId)),
+
+  lifecycleTransfer: instanceAdminProcedure
+    .input(
+      z.object({
+        ...lifecycleExpected,
+        targetWorkspaceId: z.string().cuid(),
+        ownerType: z.enum(["PERSONAL", "SERVICE"]),
+        ownerId: z.string().cuid().nullable(),
+      }),
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) => transferRuntime(tx, input, ctx.session.user.id)),
+    ),
+
+  lifecycleRemove: instanceAdminProcedure
+    .input(z.object(lifecycleExpected))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) => removeRuntime(tx, input, ctx.session.user.id)),
+    ),
+
+  lifecyclePrepare: instanceAdminProcedure
+    .input(z.object(lifecycleExpected))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) => prepareRuntimeLifecycle(tx, input, ctx.session.user.id)),
+    ),
+
   list: workspaceProcedure
     .input(
       z.object({ includeArchived: z.boolean().default(false) }).default({ includeArchived: false }),
@@ -217,7 +297,14 @@ export const runtimeRouter = router({
       },
     });
     if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
-    return withRuntimeHealth(runtime);
+    const actor = await ctx.db.user.findUnique({
+      where: { id: ctx.session.user.id },
+      select: { instanceRole: true },
+    });
+    return {
+      ...withRuntimeHealth(runtime),
+      canManageLifecycle: actor?.instanceRole === "INSTANCE_ADMIN",
+    };
   }),
 
   register: workspaceProcedure.input(z.object(baseFields)).mutation(async ({ ctx, input }) => {
@@ -235,38 +322,49 @@ export const runtimeRouter = router({
     // cached runtime id (fresh clone / config wipe), so a plain create would
     // stack a duplicate row for the same host every re-register. Reuse a
     // non-archived match instead.
-    const existing = await ctx.db.runtime.findFirst({
-      where: {
-        workspaceId: ctx.workspaceId,
-        name: input.name,
-        kind: input.kind,
-        archivedAt: null,
-      },
-      select: { id: true },
-    });
-    if (existing) {
-      return ctx.db.runtime.update({
-        where: { id: existing.id },
-        data: {
-          endpoint: input.endpoint || null,
-          providersAvailable: input.providersAvailable,
-          ...liveTimes,
+    return ctx.db.$transaction(async (tx) => {
+      // Serialize same-home registrations and deletion, then lock any match.
+      await tx.$queryRaw`SELECT "id" FROM "Workspace" WHERE "id" = ${ctx.workspaceId} FOR UPDATE`;
+      const existing = await tx.runtime.findFirst({
+        where: {
+          workspaceId: ctx.workspaceId,
+          name: input.name,
+          kind: input.kind,
+          archivedAt: null,
         },
+        select: { id: true },
       });
-    }
-    // For LOCAL_DAEMON the daemon registers itself and owns the row;
-    // for REMOTE_HTTP an admin typically registers it but the same
-    // attribution holds. ownerId is set from the calling user.
-    return ctx.db.runtime.create({
-      data: {
-        workspaceId: ctx.workspaceId,
-        name: input.name,
-        kind: input.kind,
-        endpoint: input.endpoint || null,
-        providersAvailable: input.providersAvailable,
-        ownerId: ctx.session.user.id,
-        ...liveTimes,
-      },
+      if (existing) {
+        await lockManagedRuntime(tx, existing.id, ctx.workspaceId, ctx.session.user.id);
+        return withRuntimeHealth(
+          await tx.runtime.update({
+            where: { id: existing.id },
+            data: {
+              endpoint: input.endpoint || null,
+              providersAvailable: input.providersAvailable,
+              ...liveTimes,
+            },
+          }),
+        );
+      }
+      // For LOCAL_DAEMON the daemon registers itself and owns the row;
+      // for REMOTE_HTTP an admin typically registers it but the same
+      // attribution holds. ownerId is set from the calling user.
+      return withRuntimeHealth(
+        await tx.runtime.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            name: input.name,
+            kind: input.kind,
+            endpoint: input.endpoint || null,
+            providersAvailable: input.providersAvailable,
+            ownerId: ctx.session.user.id,
+            ownerType: "PERSONAL",
+            createdById: ctx.session.user.id,
+            ...liveTimes,
+          },
+        }),
+      );
     });
   }),
 
@@ -286,7 +384,7 @@ export const runtimeRouter = router({
       }
       const now = new Date();
       const updated = await ctx.db.runtime.update({
-        where: { id: row.id },
+        where: { id: row.id, workspaceId: ctx.workspaceId, archivedAt: null, disabledAt: null },
         data: { heartbeatAt: now },
         select: { id: true, heartbeatAt: true },
       });
@@ -305,14 +403,14 @@ export const runtimeRouter = router({
   archive: workspaceProcedure
     .input(z.object({ id: runtimeId }))
     .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.runtime.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true },
-      });
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      return ctx.db.runtime.update({
-        where: { id: row.id },
-        data: { archivedAt: new Date() },
+      return ctx.db.$transaction(async (tx) => {
+        const row = await lockManagedRuntime(tx, input.id, ctx.workspaceId, ctx.session.user.id);
+        return withRuntimeHealth(
+          await tx.runtime.update({
+            where: { id: row.id },
+            data: { archivedAt: new Date() },
+          }),
+        );
       });
     }),
 
@@ -324,19 +422,19 @@ export const runtimeRouter = router({
   unarchive: workspaceProcedure
     .input(z.object({ id: runtimeId }))
     .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.runtime.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true, archivedAt: true },
-      });
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      if (!row.archivedAt) {
-        // Already active — nothing to do, but return the row so the
-        // caller can refresh its cached copy uniformly.
-        return ctx.db.runtime.findUniqueOrThrow({ where: { id: row.id } });
-      }
-      return ctx.db.runtime.update({
-        where: { id: row.id },
-        data: { archivedAt: null },
+      return ctx.db.$transaction(async (tx) => {
+        const row = await lockManagedRuntime(tx, input.id, ctx.workspaceId, ctx.session.user.id);
+        if (!row.archivedAt) {
+          // Already active — nothing to do, but return the row so the
+          // caller can refresh its cached copy uniformly.
+          return withRuntimeHealth(row);
+        }
+        return withRuntimeHealth(
+          await tx.runtime.update({
+            where: { id: row.id },
+            data: { archivedAt: null },
+          }),
+        );
       });
     }),
 
@@ -384,6 +482,8 @@ export const runtimeRouter = router({
           providersAvailable: input.providersAvailable ?? adapter.providers,
           config,
           ownerId: ctx.session.user.id,
+          ownerType: "PERSONAL",
+          createdById: ctx.session.user.id,
         },
       });
       return withRuntimeHealth(row);
@@ -404,53 +504,41 @@ export const runtimeRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, secret, endpoint, adapterKey, config, ...rest } = input;
-      const row = await ctx.db.runtime.findFirst({
-        where: { id, workspaceId: ctx.workspaceId },
-        select: { id: true, adapterKey: true },
+      return ctx.db.$transaction(async (tx) => {
+        const row = await lockManagedRuntime(tx, id, ctx.workspaceId, ctx.session.user.id);
+        if (adapterKey !== undefined && !getRuntimeAdapter(adapterKey)) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown adapter key." });
+        }
+        if (endpoint) assertEndpointTransport(endpoint);
+        // Validate against the effective adapter (incoming override or stored).
+        const effectiveAdapter = adapterKey ?? row.adapterKey;
+        const validatedConfig =
+          config !== undefined ? validateRuntimeConfig(effectiveAdapter, config) : undefined;
+        const updated = await tx.runtime.update({
+          where: { id: row.id },
+          data: {
+            ...rest,
+            ...(adapterKey !== undefined ? { adapterKey } : {}),
+            ...(endpoint !== undefined ? { endpoint: endpoint || null } : {}),
+            // "" → keep; null → clear; non-empty → set.
+            ...(secret === undefined ? {} : { secret: secret || null }),
+            ...(validatedConfig !== undefined ? { config: validatedConfig } : {}),
+          },
+        });
+        return withRuntimeHealth(updated);
       });
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      if (adapterKey !== undefined && !getRuntimeAdapter(adapterKey)) {
-        throw new TRPCError({ code: "BAD_REQUEST", message: "Unknown adapter key." });
-      }
-      if (endpoint) assertEndpointTransport(endpoint);
-      // Validate against the effective adapter (incoming override or stored).
-      const effectiveAdapter = adapterKey ?? row.adapterKey;
-      const validatedConfig =
-        config !== undefined ? validateRuntimeConfig(effectiveAdapter, config) : undefined;
-      const updated = await ctx.db.runtime.update({
-        where: { id: row.id },
-        data: {
-          ...rest,
-          ...(adapterKey !== undefined ? { adapterKey } : {}),
-          ...(endpoint !== undefined ? { endpoint: endpoint || null } : {}),
-          // "" → keep; null → clear; non-empty → set.
-          ...(secret === undefined ? {} : { secret: secret || null }),
-          ...(validatedConfig !== undefined ? { config: validatedConfig } : {}),
-        },
-      });
-      return withRuntimeHealth(updated);
     }),
 
   verifyConnection: workspaceProcedure
     .input(z.object({ id: runtimeId }))
     .mutation(async ({ ctx, input }) => {
-      const runtime = await ctx.db.runtime.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-      });
-      if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
-      if (runtime.archivedAt) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Runtime is archived; restore it before testing.",
-        });
-      }
-      const requestId = await requestRuntimeDiagnostic({
-        workspaceId: ctx.workspaceId,
-        runtimeId: runtime.id,
-        kind: RuntimeDiagnosticKind.PROBE,
-        trigger: RuntimeDiagnosticTrigger.MANUAL_RUNTIME,
-        requestedById: ctx.session.user.id,
-      });
+      const requestId = await queueScopedDiagnostic(
+        ctx.db,
+        ctx.workspaceId,
+        input.id,
+        ctx.session.user.id,
+        RuntimeDiagnosticKind.PROBE,
+      );
       let attempt;
       try {
         attempt = await waitForRuntimeDiagnostic(requestId, { timeoutMs: 15_000 });
@@ -460,7 +548,7 @@ export const runtimeRouter = router({
           message: error instanceof Error ? error.message : "Runtime diagnostic timed out.",
         });
       }
-      const updated = await ctx.db.runtime.findUniqueOrThrow({ where: { id: runtime.id } });
+      const updated = await ctx.db.runtime.findUniqueOrThrow({ where: { id: input.id } });
       const health = deriveRuntimeHealthStatus(updated);
       return {
         runtime: withRuntimeHealth(updated),
@@ -472,24 +560,13 @@ export const runtimeRouter = router({
   runSelfTest: workspaceProcedure
     .input(z.object({ id: runtimeId }))
     .mutation(async ({ ctx, input }) => {
-      const runtime = await ctx.db.runtime.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-      });
-      if (!runtime) throw new TRPCError({ code: "NOT_FOUND" });
-      if (runtime.archivedAt) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Runtime is archived; restore it before running a self-test.",
-        });
-      }
-
-      const requestId = await requestRuntimeDiagnostic({
-        workspaceId: ctx.workspaceId,
-        runtimeId: runtime.id,
-        kind: RuntimeDiagnosticKind.SELF_TEST,
-        trigger: RuntimeDiagnosticTrigger.MANUAL_RUNTIME,
-        requestedById: ctx.session.user.id,
-      });
+      const requestId = await queueScopedDiagnostic(
+        ctx.db,
+        ctx.workspaceId,
+        input.id,
+        ctx.session.user.id,
+        RuntimeDiagnosticKind.SELF_TEST,
+      );
       let attempt;
       try {
         attempt = await waitForRuntimeDiagnostic(requestId, { timeoutMs: 55_000 });
@@ -499,7 +576,7 @@ export const runtimeRouter = router({
           message: error instanceof Error ? error.message : "Runtime self-test timed out.",
         });
       }
-      const updated = await ctx.db.runtime.findUniqueOrThrow({ where: { id: runtime.id } });
+      const updated = await ctx.db.runtime.findUniqueOrThrow({ where: { id: input.id } });
       const result = diagnosticResult(attempt);
       return {
         runtime: withRuntimeHealth(updated),
@@ -517,16 +594,14 @@ export const runtimeRouter = router({
   setEnabled: workspaceProcedure
     .input(z.object({ id: runtimeId, enabled: z.boolean() }))
     .mutation(async ({ ctx, input }) => {
-      const row = await ctx.db.runtime.findFirst({
-        where: { id: input.id, workspaceId: ctx.workspaceId },
-        select: { id: true },
+      return ctx.db.$transaction(async (tx) => {
+        const row = await lockManagedRuntime(tx, input.id, ctx.workspaceId, ctx.session.user.id);
+        const updated = await tx.runtime.update({
+          where: { id: row.id },
+          data: { disabledAt: input.enabled ? null : new Date() },
+        });
+        return withRuntimeHealth(updated);
       });
-      if (!row) throw new TRPCError({ code: "NOT_FOUND" });
-      const updated = await ctx.db.runtime.update({
-        where: { id: row.id },
-        data: { disabledAt: input.enabled ? null : new Date() },
-      });
-      return withRuntimeHealth(updated);
     }),
 
   /** Adapter catalog for the UI (managed runtimes are creatable). */
@@ -586,30 +661,39 @@ export const runtimeRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const rt = await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      const valueEnc = encryptSecret(input.value);
-      return ctx.db.runtimeSecret.upsert({
-        where: { runtimeId_key: { runtimeId: rt.id, key: input.key } },
-        create: {
-          runtimeId: rt.id,
-          workspaceId: ctx.workspaceId,
-          key: input.key,
-          valueEnc,
-          description: input.description ?? null,
-        },
-        update: { valueEnc, description: input.description ?? null },
-        select: { id: true, key: true, description: true, createdAt: true, updatedAt: true },
+      return ctx.db.$transaction(async (tx) => {
+        const rt = await lockManagedRuntime(
+          tx,
+          input.runtimeId,
+          ctx.workspaceId,
+          ctx.session.user.id,
+        );
+        const valueEnc = encryptSecret(input.value);
+        return tx.runtimeSecret.upsert({
+          where: { runtimeId_key: { runtimeId: rt.id, key: input.key } },
+          create: {
+            runtimeId: rt.id,
+            workspaceId: ctx.workspaceId,
+            key: input.key,
+            valueEnc,
+            description: input.description ?? null,
+          },
+          update: { valueEnc, description: input.description ?? null },
+          select: { id: true, key: true, description: true, createdAt: true, updatedAt: true },
+        });
       });
     }),
 
   deleteSecret: adminProcedure
     .input(z.object({ runtimeId, key: envVarKey }))
     .mutation(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      await ctx.db.runtimeSecret.deleteMany({
-        where: { runtimeId: input.runtimeId, key: input.key },
+      return ctx.db.$transaction(async (tx) => {
+        await lockManagedRuntime(tx, input.runtimeId, ctx.workspaceId, ctx.session.user.id);
+        await tx.runtimeSecret.deleteMany({
+          where: { runtimeId: input.runtimeId, key: input.key },
+        });
+        return { ok: true };
       });
-      return { ok: true };
     }),
 
   // ── Runtime repos ────────────────────────────────────────────────────
@@ -635,29 +719,45 @@ export const runtimeRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const rt = await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      return ctx.db.runtimeRepo.upsert({
-        where: { runtimeId_path: { runtimeId: rt.id, path: input.path } },
-        create: {
-          runtimeId: rt.id,
-          workspaceId: ctx.workspaceId,
-          url: input.url,
-          branch: input.branch || null,
-          path: input.path,
-        },
-        update: { url: input.url, branch: input.branch || null },
-        select: { id: true, url: true, branch: true, path: true, createdAt: true, updatedAt: true },
+      return ctx.db.$transaction(async (tx) => {
+        const rt = await lockManagedRuntime(
+          tx,
+          input.runtimeId,
+          ctx.workspaceId,
+          ctx.session.user.id,
+        );
+        return tx.runtimeRepo.upsert({
+          where: { runtimeId_path: { runtimeId: rt.id, path: input.path } },
+          create: {
+            runtimeId: rt.id,
+            workspaceId: ctx.workspaceId,
+            url: input.url,
+            branch: input.branch || null,
+            path: input.path,
+          },
+          update: { url: input.url, branch: input.branch || null },
+          select: {
+            id: true,
+            url: true,
+            branch: true,
+            path: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        });
       });
     }),
 
   deleteRepo: adminProcedure
     .input(z.object({ runtimeId, id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      await ctx.db.runtimeRepo.deleteMany({
-        where: { id: input.id, runtimeId: input.runtimeId },
+      return ctx.db.$transaction(async (tx) => {
+        await lockManagedRuntime(tx, input.runtimeId, ctx.workspaceId, ctx.session.user.id);
+        await tx.runtimeRepo.deleteMany({
+          where: { id: input.id, runtimeId: input.runtimeId },
+        });
+        return { ok: true };
       });
-      return { ok: true };
     }),
 
   // ── Runtime GitHub App ───────────────────────────────────────────────
@@ -697,24 +797,31 @@ export const runtimeRouter = router({
   linkGithubApp: adminProcedure
     .input(z.object({ runtimeId, githubAppId: z.string().min(1).max(40).nullable() }))
     .mutation(async ({ ctx, input }) => {
-      const rt = await assertRuntimeInWorkspace(ctx.db, ctx.workspaceId, input.runtimeId);
-      if (input.githubAppId) {
-        // Must be an app in the same workspace.
-        const app = await ctx.db.githubApp.findFirst({
-          where: { id: input.githubAppId, workspaceId: ctx.workspaceId },
-          select: { id: true },
-        });
-        if (!app) {
-          throw new TRPCError({
-            code: "NOT_FOUND",
-            message: "GitHub App not found in this workspace.",
+      return ctx.db.$transaction(async (tx) => {
+        const rt = await lockManagedRuntime(
+          tx,
+          input.runtimeId,
+          ctx.workspaceId,
+          ctx.session.user.id,
+        );
+        if (input.githubAppId) {
+          // Must be an app in the same workspace.
+          const app = await tx.githubApp.findFirst({
+            where: { id: input.githubAppId, workspaceId: ctx.workspaceId },
+            select: { id: true },
           });
+          if (!app) {
+            throw new TRPCError({
+              code: "NOT_FOUND",
+              message: "GitHub App not found in this workspace.",
+            });
+          }
         }
-      }
-      await ctx.db.runtime.update({
-        where: { id: rt.id },
-        data: { githubAppId: input.githubAppId },
+        await tx.runtime.update({
+          where: { id: rt.id },
+          data: { githubAppId: input.githubAppId },
+        });
+        return { ok: true };
       });
-      return { ok: true };
     }),
 });

@@ -20,11 +20,14 @@ test.describe.serial("Agent Studio audit evidence", () => {
 
     await page.goto("/settings/agents", { waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(/\/agents$/);
-    await expect(page.getByRole("heading", { name: "Agent fleet" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
     await expect(page.getByText("Victor").first()).toBeVisible();
     await capture(page, "01-global-agent-profiles.png");
 
-    await page.getByRole("button", { name: "New profile" }).click();
+    await page.getByRole("button", { name: "Connect via MCP", exact: true }).click();
+    await page.getByRole("combobox", { name: "Setup workspace" }).click();
+    await page.getByRole("option", { name: /Forge\s+FRG/ }).click();
+    await page.getByRole("button", { name: "Create a new agent", exact: true }).click();
     await expect(page.getByRole("dialog", { name: "Create agent profile" })).toBeVisible();
     await capture(page, "02-create-agent-profile.png");
     await page.keyboard.press("Escape");
@@ -52,7 +55,7 @@ test.describe.serial("Agent Studio audit evidence", () => {
     await capture(page, "06-global-runtimes.png");
 
     await page.goto("/w/forge/settings/agents", { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Bound agents", { exact: true })).toBeVisible();
+    await expect(page.getByText("Workspace agents", { exact: true })).toBeVisible();
     await expect(page.getByText("Victor", { exact: true }).first()).toBeVisible();
     await capture(page, "07-workspace-agent-bindings.png");
 
@@ -72,7 +75,7 @@ test.describe.serial("Agent Studio audit evidence", () => {
     await expect(page.getByText("Victor", { exact: true }).first()).toBeVisible();
     await capture(page, "10-instance-agent-policy.png");
 
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/mission-control", { waitUntil: "domcontentloaded" });
     await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
     await expect(page.getByText("Checking operations…", { exact: true })).toBeHidden();
     await expect(page.getByText("Loading workspace queues…", { exact: true })).toBeHidden();
@@ -93,7 +96,7 @@ test.describe.serial("Agent Studio audit evidence", () => {
     await capture(page, "13-mobile-agent-profile-detail.png");
 
     await page.goto("/w/forge/settings/agents", { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Bound agents", { exact: true })).toBeVisible();
+    await expect(page.getByText("Workspace agents", { exact: true })).toBeVisible();
     await expect(page.getByText("Victor", { exact: true }).first()).toBeVisible();
     await capture(page, "14-mobile-workspace-agent-bindings.png");
   });

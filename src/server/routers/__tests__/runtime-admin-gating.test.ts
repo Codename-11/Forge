@@ -32,6 +32,7 @@ async function seedRuntime(fixture: TestFixture) {
     data: {
       workspaceId: fixture.workspace.id,
       ownerId: fixture.user.id,
+      ownerType: "PERSONAL",
       name: "seed runtime",
       kind: RuntimeKind.REMOTE_HTTP,
       adapterKey: "codex-app-server",

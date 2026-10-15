@@ -52,6 +52,7 @@ describe("Hermes connector retry worker", () => {
     const runtime = await prisma.runtime.create({
       data: {
         workspaceId: f.workspace.id,
+        ownerType: "PERSONAL",
         ownerId: f.user.id,
         name: "Retry runtime",
         kind: "REMOTE_HTTP",

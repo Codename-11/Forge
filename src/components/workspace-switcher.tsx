@@ -139,8 +139,8 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
                 <Sparkles className="h-3.5 w-3.5 text-ember" />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="truncate text-foreground">Mission Control</div>
-                <div className="truncate text-[0.6875rem]">All workspaces · home</div>
+                <div className="truncate text-foreground">Home</div>
+                <div className="truncate text-[0.6875rem]">My work across workspaces</div>
               </div>
             </button>
           </li>
@@ -192,7 +192,7 @@ export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }
               type="button"
               onClick={() => {
                 setOpen(false);
-                router.push(`/w/${ws.slug}/settings/workspaces`);
+                router.push("/workspaces");
               }}
               className="flex w-full items-center gap-2.5 px-3 py-2 text-left text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
             >

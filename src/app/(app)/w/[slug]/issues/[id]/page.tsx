@@ -1,4 +1,5 @@
 "use client";
+import { IssueReminderControl } from "@/components/reminders/issue-reminder-control";
 import { use, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
@@ -45,8 +46,10 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { PinButton } from "@/components/pins/pin-button";
 import { WatchButton } from "@/components/watch-button";
 import { IssueDetailTopbar } from "@/components/issue-detail/issue-topbar";
-import { WorkCoordinationPanel } from "@/components/issue-detail/work-coordination-panel";
-import { IssueMain } from "@/components/issue-detail/issue-main";
+import { IssueAutomationPanel } from "@/components/issue-detail/issue-automation-panel";
+import { IssueMain, dispatchQuickReply } from "@/components/issue-detail/issue-main";
+import { IssueAttachmentsPanel } from "@/components/attachments/issue-attachments-panel";
+import { IssueRelationsPanel } from "@/components/relations/issue-relations-panel";
 import { IssueRail } from "@/components/issue-detail/issue-rail";
 import { AgentRunStrip } from "@/components/issue-detail/agent-run-strip";
 import { TerminalRunFailureBanner } from "@/components/issue-detail/run-failure-banner";
@@ -56,7 +59,6 @@ import {
   IssueBlockerControl,
 } from "@/components/issue-detail/issue-blocker-control";
 import { RuntimePreflightBanner } from "@/components/issue-detail/runtime-preflight-banner";
-import { GitHubLinksPanel } from "@/components/issue-detail/github-links-panel";
 import { AiTriageCard } from "@/components/ai-triage-card";
 import { CreateLabelModal } from "@/components/inline-create/create-label-modal";
 import { Combobox } from "@/components/ui/combobox";
@@ -77,7 +79,7 @@ const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
  * Issue detail page. Two-column layout above `md`:
  *
  *   [ main column (flex-1, lg:max-w-4xl xl:max-w-5xl) | right rail ]
- *     description + comments                           Properties + tabs
+ *     description + files + subtasks + timeline          Properties + context
  *
  * The outer scrollable area is capped at `max-w-[1600px] mx-auto` so
  * ultra-wide monitors don't leave gigantic gutters. The main column
@@ -85,10 +87,9 @@ const PRIORITIES = ["NONE", "LOW", "MEDIUM", "HIGH", "URGENT"] as const;
  * comments get more breathing room without becoming uncomfortable to
  * scan. Padding scales `p-5 md:p-6 xl:p-8`.
  *
- * The right rail hosts everything that isn't the description / comments:
- * a "Properties" header (project / labels / due / agent queue) plus the
- * existing tabs (Attachments / Relations / Activity). Tab state lives in
- * `?tab=…` so deep-links work. A secondary header ("IssueDetailTopbar")
+ * The rail keeps properties, related work and automation summaries visible.
+ * Legacy `?tab=…` links jump to the corresponding visible section. The
+ * secondary header ("IssueDetailTopbar")
  * below the shell <Topbar /> hosts the inline editors (title, status,
  * priority, assignees) — keeps the description above the fold without a
  * separate metadata column below it.
@@ -211,6 +212,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
   const [archiveOpen, setArchiveOpen] = useState(false);
   const [releaseOpen, setReleaseOpen] = useState(false);
   const [agentPickerOpen, setAgentPickerOpen] = useState(false);
+  const [agentPickerIntent, setAgentPickerIntent] = useState<"assign" | "request">("assign");
 
   useEffect(() => {
     if (issue && !editingTitle) setTitleDraft(issue.title);
@@ -218,7 +220,14 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
 
   // Capital A opens the agent picker. Lowercase `a` is intentionally left
   // free for the user-assignee picker + as the `g a` nav leader second key.
-  useHotkey("shift+a", () => setAgentPickerOpen(true), []);
+  useHotkey(
+    "shift+a",
+    () => {
+      setAgentPickerIntent("assign");
+      setAgentPickerOpen(true);
+    },
+    [],
+  );
 
   // Phase 1C — record this visit so it surfaces in the command palette's
   // Recents rail. Server-side debounced 5s; the keyed effect re-fires
@@ -431,11 +440,9 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                 <button
                   type="button"
                   onClick={() => {
-                    // Jump to the right rail's Attachments tab. Activity is
-                    // the bare-URL default, so Attachments is explicit.
-                    const url = new URL(window.location.href);
-                    url.searchParams.set("tab", "attachments");
-                    router.replace(`${url.pathname}${url.search}${url.hash}`);
+                    const target = document.getElementById("issue-attachments");
+                    target?.scrollIntoView({ block: "start", behavior: "auto" });
+                    target?.focus({ preventScroll: true });
                   }}
                   title={`${issue.attachments.length} attachment${issue.attachments.length === 1 ? "" : "s"}`}
                   className="focus-ring inline-flex shrink-0 items-center gap-0.5 rounded-md px-1 py-0.5 text-muted-foreground hover:bg-subtle/60 hover:text-foreground"
@@ -521,16 +528,20 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                       setEditingTitle(false);
                     }
                   }}
-                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-sm font-semibold"
+                  aria-label="Item title"
+                  className="focus-ring w-full rounded-md border border-input bg-background px-2 py-1 text-lg font-semibold"
                 />
               </form>
             ) : (
-              <h1
-                className="min-w-0 cursor-text break-words rounded-md px-1 py-0.5 text-sm font-semibold tracking-tight hover:bg-subtle/60"
-                onClick={() => setEditingTitle(true)}
-                title="Click to edit"
-              >
-                {issue.title}
+              <h1 className="min-w-0 break-words text-lg font-semibold tracking-tight sm:text-xl">
+                <button
+                  type="button"
+                  onClick={() => setEditingTitle(true)}
+                  title="Edit title"
+                  className="focus-ring w-full rounded-md px-1 py-0.5 text-left hover:bg-subtle/60"
+                >
+                  {issue.title}
+                </button>
               </h1>
             )}
           </div>
@@ -554,15 +565,50 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               }))}
               onChange={(userIds) => assign.mutate({ id: issue.id, userIds })}
             />
-            <AgentChip current={issue.assignedAgent} onOpen={() => setAgentPickerOpen(true)} />
+            <div className="w-40 max-w-full">
+              <DatePicker
+                value={issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""}
+                onChange={(value) =>
+                  update.mutate({ id: issue.id, dueDate: value ? new Date(value) : null })
+                }
+                placeholder="Set due date"
+                ariaLabel="Due date"
+                className="text-xs"
+              />
+            </div>
+            {issue.status.category !== "DONE" && issue.status.category !== "CANCELED" && (
+              <IssueReminderControl issueId={issue.id} />
+            )}
+            {issue.assignedAgent && (
+              <AgentChip
+                current={issue.assignedAgent}
+                onOpen={() => {
+                  setAgentPickerIntent("assign");
+                  setAgentPickerOpen(true);
+                }}
+              />
+            )}
             <IssueBlockerControl issueId={issue.id} />
+            <a
+              href="#issue-relations"
+              className="focus-ring rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground md:hidden"
+            >
+              Related work
+            </a>
+            <a
+              href="#issue-automation"
+              className="focus-ring rounded px-2 py-1 text-xs text-muted-foreground hover:text-foreground md:hidden"
+            >
+              Automation
+            </a>
           </div>
         }
         actions={siblingScope ? <IssueSiblingNav issueId={issue.id} scope={siblingScope} /> : null}
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-3 sm:p-5 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
+        {/* Leave scroll clearance for the fixed mobile navigation and activity dock. */}
+        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-3 pb-40 sm:p-5 sm:pb-40 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
           <div className="min-w-0 flex-1 md:max-w-3xl lg:max-w-4xl xl:max-w-5xl">
             <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Avatar name={issue.author.name} image={issue.author.image} size={16} />
@@ -578,13 +624,6 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             </div>
 
             <IssueBlockerBanner issueId={issue.id} />
-
-            <AgentRunStrip
-              issueId={issue.id}
-              assignedAgent={issue.assignedAgent ?? null}
-              latestRun={issue.agentRuns?.[0] ?? null}
-              activityHref={`/w/${slug}/issues/${issue.id}?tab=activity`}
-            />
 
             <AiTriageCard issue={issue} slug={slug} />
 
@@ -623,6 +662,7 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
               projectId={issue.projectId ?? null}
               parent={issue.parent ?? null}
               executionSteps={issue.executionSteps}
+              afterDescription={<IssueAttachmentsPanel issueId={issue.id} />}
               onDescriptionSave={(next) => update.mutate({ id: issue.id, description: next })}
               canResolveActions={(() => {
                 if (!me?.id) return false;
@@ -643,13 +683,15 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
             aria-label="Issue detail rail"
             className="min-w-0 shrink-0 md:w-[22rem] md:self-start xl:w-[26rem]"
           >
-            <div className="rounded-lg border border-border bg-card/30">
+            <div className="space-y-4">
               <IssueRail
                 issueId={issue.id}
                 header={
-                  <div className="space-y-2">
-                    <WorkCoordinationPanel issueId={issue.id} issueKey={issueKey} />
-                    <GitHubLinksPanel issueId={issue.id} />
+                  <section
+                    aria-label="Item properties"
+                    className="space-y-2 rounded-lg border border-border bg-card/30 p-3"
+                  >
+                    <h2 className="pb-1 text-sm font-semibold">Properties</h2>
                     <SidebarField label="Project">
                       <ProjectPickerField
                         value={issue.projectId ?? null}
@@ -693,28 +735,47 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                         onChange={(labelIds) => setLabels.mutate({ issueId: issue.id, labelIds })}
                       />
                     </SidebarField>
-                    <SidebarField label="Due">
-                      <DatePicker
-                        value={
-                          issue.dueDate ? new Date(issue.dueDate).toISOString().slice(0, 10) : ""
-                        }
-                        onChange={(v) =>
-                          update.mutate({
-                            id: issue.id,
-                            dueDate: v ? new Date(v) : null,
-                          })
-                        }
-                        placeholder="No due date"
-                        ariaLabel="Due date"
-                        className="font-mono text-xs"
-                      />
-                    </SidebarField>
-                    <SidebarField label="SLA target">
-                      <SlaPickerField
-                        value={issue.slaMinutes ?? null}
-                        onChange={(slaMinutes) => update.mutate({ id: issue.id, slaMinutes })}
-                      />
-                    </SidebarField>
+                    <details
+                      open={Boolean(issue.slaMinutes)}
+                      className="border-t border-border pt-2"
+                    >
+                      <summary className="focus-ring text-meta cursor-pointer rounded text-muted-foreground">
+                        Service target{issue.slaMinutes ? " · configured" : " · optional"}
+                      </summary>
+                      <SidebarField label="SLA target">
+                        <SlaPickerField
+                          value={issue.slaMinutes ?? null}
+                          onChange={(slaMinutes) => update.mutate({ id: issue.id, slaMinutes })}
+                        />
+                      </SidebarField>
+                    </details>
+                  </section>
+                }
+              >
+                <IssueRelationsPanel
+                  issueId={issue.id}
+                  parentIssue={issue.parent ?? null}
+                  subtaskCount={issue.children.length}
+                />
+                <IssueAutomationPanel
+                  issueId={issue.id}
+                  issueKey={issueKey}
+                  onAssignAgent={() => {
+                    setAgentPickerIntent("assign");
+                    setAgentPickerOpen(true);
+                  }}
+                  onAskAgent={() => {
+                    setAgentPickerIntent("request");
+                    setAgentPickerOpen(true);
+                  }}
+                >
+                  <AgentRunStrip
+                    issueId={issue.id}
+                    assignedAgent={issue.assignedAgent ?? null}
+                    latestRun={issue.agentRuns?.[0] ?? null}
+                    activityHref={`/w/${slug}/issues/${issue.id}?tab=activity`}
+                  />
+                  {(issue.assignedAgent || issue.queued || issue.claimedAt) && (
                     <SidebarField label="Agent queue">
                       <label
                         className="flex w-full flex-wrap items-center gap-2 rounded-md border border-input bg-background px-2 py-1 text-[0.6875rem]"
@@ -745,20 +806,20 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
                         </span>
                       </label>
                     </SidebarField>
-                    {issue.claimedAt && (
-                      <SidebarField label="Claimed by">
-                        <ClaimHolderCard
-                          claimedBy={issue.claimedBy ?? null}
-                          claimedByAgent={issue.claimedByAgent ?? null}
-                          claimedById={issue.claimedById ?? null}
-                          claimExpiresAt={issue.claimExpiresAt ?? null}
-                          onRelease={() => setReleaseOpen(true)}
-                        />
-                      </SidebarField>
-                    )}
-                  </div>
-                }
-              />
+                  )}
+                  {issue.claimedAt && (
+                    <SidebarField label="Claimed by">
+                      <ClaimHolderCard
+                        claimedBy={issue.claimedBy ?? null}
+                        claimedByAgent={issue.claimedByAgent ?? null}
+                        claimedById={issue.claimedById ?? null}
+                        claimExpiresAt={issue.claimExpiresAt ?? null}
+                        onRelease={() => setReleaseOpen(true)}
+                      />
+                    </SidebarField>
+                  )}
+                </IssueAutomationPanel>
+              </IssueRail>
             </div>
           </aside>
         </div>
@@ -786,13 +847,21 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       <AgentPickerModal
         open={agentPickerOpen}
         onOpenChange={setAgentPickerOpen}
+        intent={agentPickerIntent}
         currentAgentId={issue.assignedAgent?.id ?? null}
         defaultMode={
-          (issue.assignedAgent?.engagementMode as EngagementModeValue | null) ??
-          (workspace.assignmentEngagementMode as EngagementModeValue) ??
-          "EXECUTE"
+          agentPickerIntent === "request"
+            ? "DISCUSS"
+            : ((issue.assignedAgent?.engagementMode as EngagementModeValue | null) ??
+              (workspace.assignmentEngagementMode as EngagementModeValue) ??
+              "EXECUTE")
         }
         onSelect={(agentId, mode, selectedAgent) => {
+          if (agentPickerIntent === "request") {
+            if (selectedAgent) dispatchQuickReply(issue.id, "", selectedAgent.profileKey, mode);
+            setAgentPickerOpen(false);
+            return;
+          }
           // Reassignment-confirmation toast: when the assigned agent
           // *changes* (not on the initial assign), reassure the
           // operator that context is preserved. The standard
@@ -1678,6 +1747,7 @@ function AgentPickerModal({
   onOpenChange,
   currentAgentId,
   defaultMode,
+  intent = "assign",
   onSelect,
 }: {
   open: boolean;
@@ -1685,6 +1755,7 @@ function AgentPickerModal({
   currentAgentId: string | null;
   /** Workspace `assignmentEngagementMode` — the picker's starting mode. */
   defaultMode: EngagementModeValue;
+  intent?: "assign" | "request";
   onSelect: (
     agentId: string | null,
     mode: EngagementModeValue,
@@ -1720,7 +1791,7 @@ function AgentPickerModal({
   });
 
   const items: PickerRow[] = [
-    { kind: "unassign", key: "__unassign" },
+    ...(intent === "assign" ? [{ kind: "unassign" as const, key: "__unassign" }] : []),
     ...filteredAgents.map((a) => ({
       kind: "agent" as const,
       key: a.id,
@@ -1738,7 +1809,11 @@ function AgentPickerModal({
     <Picker<PickerRow>
       open={open}
       onOpenChange={onOpenChange}
-      placeholder="Assign agent… (name, @profileKey, capability)"
+      placeholder={
+        intent === "request"
+          ? "Ask an agent… (name, @profileKey, capability)"
+          : "Assign agent… (name, @profileKey, capability)"
+      }
       items={items}
       getKey={(it) => it.key}
       onQueryChange={setQuery}
@@ -1750,6 +1825,11 @@ function AgentPickerModal({
       }}
       footer={
         <div className="flex flex-col gap-1.5">
+          {intent === "request" && (
+            <p className="text-meta text-muted-foreground">
+              Choose a mode and agent to prepare a comment. Nothing runs until you send it.
+            </p>
+          )}
           <span className="text-[0.625rem] uppercase tracking-wider text-muted-foreground">
             Engagement mode
           </span>

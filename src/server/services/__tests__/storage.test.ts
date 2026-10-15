@@ -2,9 +2,11 @@ import { it, expect, afterAll, afterEach, beforeAll } from "vitest";
 import {
   createWorkspaceFixture,
   createIssue,
+  buildContext,
   disconnectPrisma,
   type TestFixture,
 } from "@/server/routers/__tests__/helpers";
+import { workspaceRouter } from "@/server/routers/workspace";
 import { describeIfMinio } from "@/server/routers/__tests__/minio-probe";
 import {
   ALLOWED_MIME_TYPES,
@@ -209,5 +211,33 @@ describe("storage service", () => {
         }),
       ),
     ).rejects.toThrow();
+  });
+
+  it("workspace deletion preserves the storage bucket when a runtime blocks deletion", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "SRG" });
+    fixtures.push(fixture);
+    const context = await buildContext(fixture);
+    const bucket = await ensureWorkspaceBucket(fixture.workspace.id);
+    await context.db.runtime.create({
+      data: { workspaceId: fixture.workspace.id, name: "Retained host", kind: "LOCAL_DAEMON" },
+    });
+    await expect(workspaceRouter.createCaller(context).delete({
+      confirmName: fixture.workspace.name,
+    })).rejects.toMatchObject({ code: "CONFLICT" });
+    const { HeadBucketCommand } = await import("@aws-sdk/client-s3");
+    await expect(getS3Client().send(new HeadBucketCommand({ Bucket: bucket }))).resolves.toBeDefined();
+  });
+
+  it("workspace deletion cleans up the bucket and removes the database row", async () => {
+    const fixture = await createWorkspaceFixture({ keyPrefix: "SPD" });
+    fixtures.push(fixture);
+    const context = await buildContext(fixture);
+    const bucket = await ensureWorkspaceBucket(fixture.workspace.id);
+    await workspaceRouter.createCaller(context).delete({ confirmName: fixture.workspace.name });
+    expect(await context.db.workspace.findUnique({ where: { id: fixture.workspace.id } })).toBeNull();
+    const { HeadBucketCommand } = await import("@aws-sdk/client-s3");
+    await expect(getS3Client().send(new HeadBucketCommand({ Bucket: bucket }))).rejects.toMatchObject({
+      $metadata: expect.objectContaining({ httpStatusCode: 404 }),
+    });
   });
 });

@@ -650,6 +650,25 @@ export async function recordChange(
     userAgent?: string | null;
   },
 ): Promise<void> {
+  if (
+    params.subjectType === "issue" &&
+    (params.eventKind === EventKind.ISSUE_STATUS_CHANGED || params.eventKind === EventKind.ISSUE_DELETED)
+  ) {
+    await tx.issueReminder.updateMany({
+      where: {
+        workspaceId: params.workspaceId,
+        issueId: params.subjectId,
+        dismissedAt: null,
+        issue: {
+          OR: [
+            { deletedAt: { not: null } },
+            { status: { category: { in: ["DONE", "CANCELED"] } } },
+          ],
+        },
+      },
+      data: { dismissedAt: new Date() },
+    });
+  }
   await tx.auditLog.create({
     data: {
       workspaceId: params.workspaceId,

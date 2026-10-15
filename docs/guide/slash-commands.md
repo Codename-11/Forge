@@ -68,22 +68,22 @@ without posting a comment:
 
 ## Autocomplete
 
-Both the QuickCreate input (issue / sub-issue modes) and the comment
-composer surface a small dropdown when the cursor sits on a
-top-of-body line that starts with `/`. The dropdown lists the seven
-command keywords + a one-line example for each.
+QuickCreate offers optional slash shortcuts at the end of the title (after a
+space). Its visible field controls work without typing commands. The comment
+composer offers its dropdown in a top-of-body line that starts with `/`.
 
 Keys:
 
 | Key | Effect |
 |---|---|
 | <kbd>↓</kbd> / <kbd>↑</kbd> | Move the active selection |
-| <kbd>Enter</kbd> / <kbd>Tab</kbd> | Insert the active command's stub (e.g. `/assign `) |
+| <kbd>Enter</kbd> | Insert the active command's stub (e.g. `/assign `) |
+| <kbd>Tab</kbd> | Move to the next field in QuickCreate; insert the suggestion in the comment composer |
 | <kbd>Esc</kbd> | Dismiss without inserting |
 | Click | Inserts as if Enter were pressed |
 
-So typing `/a` then <kbd>Tab</kbd> expands to `/assign ` with the
-caret right after the trailing space — ready for the argument. The
+So typing `/a` then <kbd>Enter</kbd> expands to `/assign ` with the
+caret right after the trailing space — ready for the argument. In comments, the
 dropdown only opens when the line is in the contiguous top-of-body
 slash block; once you've typed prose below, it stops auto-opening
 on later slashes.

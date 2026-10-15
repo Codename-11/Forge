@@ -1,5 +1,8 @@
 # Instance Admin
 
+For the distinction between Home, Mission Control, Agents, My account and
+Administration, see [Navigation and agent setup](./navigation-and-agent-setup.md).
+
 `/admin` is the instance-operator surface — the controls that span
 _every_ tenant on a Forge instance, rather than one workspace. It renders
 in its own graphite shell (distinct from the warm-paper workspace shell)

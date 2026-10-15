@@ -95,6 +95,8 @@ describe("agent runtime profile isolation", () => {
       data: {
         workspaceId: fixture.workspace.id,
         name: "Hermes Victor",
+        ownerType: "PERSONAL",
+        ownerId: fixture.user.id,
         kind: RuntimeKind.REMOTE_HTTP,
         adapterKey: "hermes",
         endpoint: "http://127.0.0.1:8649/v1",

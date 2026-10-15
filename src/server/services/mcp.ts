@@ -110,6 +110,7 @@ import { assertSafeExternalUrl, isSafeExternalUrl, safeExternalUrlMessage } from
 import { hydrateEntityRefs } from "@/server/services/entity-hydration";
 import { computeAlignment, type AlignItem } from "@/server/services/canvas-alignment";
 import { validateRuntimeConfig } from "@/server/services/runtime-config";
+import { lockManagedRuntime } from "@/server/services/runtime-lifecycle";
 import {
   runtimeInfoCreateData,
   runtimeInfoUpdateData,
@@ -205,6 +206,16 @@ export interface McpContext {
   apiKey: ApiKeyContext | null;
   /** Concrete MCP client instance negotiated by the HTTP transport. */
   connectionId?: string | null;
+}
+
+/** Service keys never inherit management authority from their issuing human. */
+function runtimeManagementUser(ctx: McpContext): string | null {
+  if (!ctx.apiKey) return ctx.userId;
+  return ctx.apiKey.principalType === "USER" ||
+    ctx.apiKey.kind === "PERSONAL" ||
+    ctx.apiKey.kind === "SESSION"
+    ? ctx.apiKey.userId
+    : null;
 }
 
 /**
@@ -6560,40 +6571,59 @@ export const mcpTools = {
       },
       ctx: McpContext,
     ) {
-      // ownerId attribution: prefer the user the API key belongs to,
-      // otherwise fall back to null. AGENT-kind keys often have no
-      // userId; treating that as "owned by the workspace" is correct.
-      const ownerId = ctx.apiKey?.userId ?? ctx.userId ?? null;
+      // A service credential's issuing human is provenance, not its owner.
+      // Ownerless registrations require explicit administrator adoption.
+      const ownerId = runtimeManagementUser(ctx);
       const now = new Date();
-      return db.runtime.create({
-        data: {
-          workspaceId: ctx.workspaceId,
-          name: input.name,
-          kind: input.kind,
-          endpoint: input.endpoint || null,
-          providersAvailable: input.providersAvailable,
-          ownerId,
-          // ownerKeyPrefix is left null from MCP — set later via the
-          // tRPC `runtime.update` path or backfilled from `ApiKey.prefix`
-          // by a follow-up sweep when we wire the daemon's auth flow.
-          ownerKeyPrefix: null,
-          connectedAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
-          heartbeatAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
-          ...(input.info ? runtimeInfoCreateData(input.info, now) : {}),
-        },
-        select: {
-          id: true,
-          name: true,
-          kind: true,
-          endpoint: true,
-          providersAvailable: true,
-          ownerId: true,
-          connectedAt: true,
-          heartbeatAt: true,
-          runtimeInfo: true,
-          lastInfoAt: true,
-          createdAt: true,
-        },
+      return db.$transaction(async (tx) => {
+        const runtime = await tx.runtime.create({
+          data: {
+            workspaceId: ctx.workspaceId,
+            name: input.name,
+            kind: input.kind,
+            endpoint: input.endpoint || null,
+            providersAvailable: input.providersAvailable,
+            ownerId,
+            ownerType: ownerId ? "PERSONAL" : "UNASSIGNED",
+            createdById: ctx.userId ?? ctx.apiKey?.userId ?? null,
+            // ownerKeyPrefix is left null from MCP — set later via the
+            // tRPC `runtime.update` path or backfilled from `ApiKey.prefix`
+            // by a follow-up sweep when we wire the daemon's auth flow.
+            ownerKeyPrefix: null,
+            connectedAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
+            heartbeatAt: input.kind === RuntimeKind.LOCAL_DAEMON ? now : null,
+            ...(input.info ? runtimeInfoCreateData(input.info, now) : {}),
+          },
+          select: {
+            id: true,
+            name: true,
+            kind: true,
+            endpoint: true,
+            providersAvailable: true,
+            ownerId: true,
+            ownerType: true,
+            createdById: true,
+            connectedAt: true,
+            heartbeatAt: true,
+            runtimeInfo: true,
+            lastInfoAt: true,
+            createdAt: true,
+          },
+        });
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: ctx.userId ?? ctx.apiKey?.userId ?? null,
+            action: "runtime.registered",
+            metadata: {
+              runtimeId: runtime.id,
+              workspaceId: ctx.workspaceId,
+              ownerType: runtime.ownerType,
+              ownerId: runtime.ownerId,
+              source: "MCP",
+            },
+          },
+        });
+        return runtime;
       });
     },
   },
@@ -6616,7 +6646,7 @@ export const mcpTools = {
       if (row.archivedAt) throw new Error("Runtime is archived; cannot heartbeat.");
       const now = new Date();
       return db.runtime.update({
-        where: { id: row.id },
+        where: { id: row.id, workspaceId: ctx.workspaceId, archivedAt: null },
         data: {
           heartbeatAt: now,
           ...(input.info ? runtimeInfoUpdateData(input.info, now) : {}),
@@ -6676,7 +6706,7 @@ export const mcpTools = {
       }
       const now = new Date();
       const updated = await db.runtime.update({
-        where: { id: runtime.id },
+        where: { id: runtime.id, workspaceId: ctx.workspaceId, archivedAt: null },
         data: { runtimeInfo: sanitized, lastInfoAt: now },
         select: { id: true, runtimeInfo: true, lastInfoAt: true },
       });
@@ -6707,34 +6737,39 @@ export const mcpTools = {
       input: { runtimeId: string; config: Record<string, unknown>; merge: boolean },
       ctx: McpContext,
     ) {
-      const row = await db.runtime.findFirst({
-        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
-        select: {
-          id: true,
-          name: true,
-          adapterKey: true,
-          config: true,
-          archivedAt: true,
-        },
-      });
-      if (!row) throw new Error("Runtime not found in this workspace.");
-      if (row.archivedAt) throw new Error("Runtime is archived; restore it before configuring.");
-      const current =
-        row.config && typeof row.config === "object" && !Array.isArray(row.config)
-          ? (row.config as Record<string, unknown>)
-          : {};
-      const next = input.merge ? { ...current, ...input.config } : input.config;
-      const validated = validateRuntimeConfig(row.adapterKey, next);
-      return db.runtime.update({
-        where: { id: row.id },
-        data: { config: validated },
-        select: {
-          id: true,
-          name: true,
-          adapterKey: true,
-          config: true,
-          updatedAt: true,
-        },
+      return db.$transaction(async (tx) => {
+        const row = await lockManagedRuntime(
+          tx,
+          input.runtimeId,
+          ctx.workspaceId,
+          runtimeManagementUser(ctx),
+        );
+        if (row.archivedAt) throw new Error("Runtime is archived; restore it before configuring.");
+        const current =
+          row.config && typeof row.config === "object" && !Array.isArray(row.config)
+            ? (row.config as Record<string, unknown>)
+            : {};
+        const next = input.merge ? { ...current, ...input.config } : input.config;
+        const validated = validateRuntimeConfig(row.adapterKey, next);
+        const updated = await tx.runtime.update({
+          where: { id: row.id },
+          data: { config: validated },
+          select: {
+            id: true,
+            name: true,
+            adapterKey: true,
+            config: true,
+            updatedAt: true,
+          },
+        });
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: runtimeManagementUser(ctx),
+            action: "runtime.configured",
+            metadata: { runtimeId: row.id, workspaceId: ctx.workspaceId, source: "MCP" },
+          },
+        });
+        return updated;
       });
     },
   },
@@ -6750,19 +6785,29 @@ export const mcpTools = {
       runtimeId: z.string().min(1).max(40).describe("Runtime.id to archive (deregister)."),
     }),
     async run(input: { runtimeId: string }, ctx: McpContext) {
-      const row = await db.runtime.findFirst({
-        where: { id: input.runtimeId, workspaceId: ctx.workspaceId },
-        select: { id: true, name: true, archivedAt: true },
+      return db.$transaction(async (tx) => {
+        const row = await lockManagedRuntime(
+          tx,
+          input.runtimeId,
+          ctx.workspaceId,
+          runtimeManagementUser(ctx),
+        );
+        if (row.archivedAt) {
+          return { id: row.id, name: row.name, alreadyArchived: true };
+        }
+        await tx.runtime.update({
+          where: { id: row.id },
+          data: { archivedAt: new Date() },
+        });
+        await tx.instanceAuditLog.create({
+          data: {
+            actorId: runtimeManagementUser(ctx),
+            action: "runtime.archived",
+            metadata: { runtimeId: row.id, workspaceId: ctx.workspaceId, source: "MCP" },
+          },
+        });
+        return { id: row.id, name: row.name, alreadyArchived: false };
       });
-      if (!row) throw new Error("Runtime not found in this workspace.");
-      if (row.archivedAt) {
-        return { id: row.id, name: row.name, alreadyArchived: true };
-      }
-      await db.runtime.update({
-        where: { id: row.id },
-        data: { archivedAt: new Date() },
-      });
-      return { id: row.id, name: row.name, alreadyArchived: false };
     },
   },
 

@@ -1,14 +1,13 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { notFound, useParams } from "next/navigation";
+import { notFound, useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Bot, ChevronLeft, Cloud, Globe, HardDrive, Server } from "lucide-react";
 import type { RuntimeKind } from "@prisma/client";
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar } from "@/components/ui/avatar";
 import { Confirm, QuickForm } from "@/components/ui/modal";
 import { Card } from "@/components/settings/card";
 import { Section, SkeletonList } from "@/components/ui";
@@ -16,6 +15,8 @@ import { CodeBlock } from "@/components/mcp-integration-blocks";
 import { RuntimeToolSurfacePanel } from "@/components/runtime-tool-surface";
 import { RuntimeCredentials } from "@/components/settings/runtime-credentials";
 import { RuntimeProvisioning } from "@/components/settings/runtime-provisioning";
+import { RuntimeLifecycleActions } from "@/components/settings/runtime-lifecycle";
+import { runtimeOwnershipLabel } from "@/lib/runtime-ownership";
 import {
   RuntimeSelfTestBadge,
   RuntimeSelfTestLine,
@@ -46,6 +47,7 @@ function agentPresenceText(input: Date | string | null | undefined): string {
  */
 export default function RuntimeDetailPage() {
   const ws = useWorkspace();
+  const router = useRouter();
   const params = useParams<{ id: string }>();
   const id = params?.id ?? "";
   const utils = trpc.useUtils();
@@ -255,19 +257,8 @@ export default function RuntimeDetailPage() {
                           <span>connected {relativeTime(runtime.connectedAt)} ago</span>
                         </>
                       )}
-                      {runtime.owner && (
-                        <>
-                          <span>·</span>
-                          <span className="inline-flex items-center gap-1.5">
-                            <Avatar
-                              name={runtime.owner.name}
-                              image={runtime.owner.image}
-                              size={16}
-                            />
-                            <span>{runtime.owner.name ?? "unknown"}</span>
-                          </span>
-                        </>
-                      )}
+                      <span>·</span>
+                      <span>{runtimeOwnershipLabel(runtime)}</span>
                     </div>
                     <div className="text-meta grid gap-2 rounded-md border border-border/60 bg-background/40 p-3 text-muted-foreground sm:grid-cols-2">
                       <div>
@@ -333,6 +324,17 @@ export default function RuntimeDetailPage() {
                   </div>
                 </div>
               </Card>
+
+              <Section title="Ownership & registration" hint="Ownership, registration home, and workspace access are separate.">
+                <Card as="div" className="space-y-3 p-4">
+                  <dl className="grid gap-2 text-meta sm:grid-cols-2">
+                    <div><dt className="text-muted-foreground">Owner</dt><dd className="mt-1">{runtimeOwnershipLabel(runtime)}</dd></div>
+                    <div><dt className="text-muted-foreground">Registration home</dt><dd className="mt-1">{ws.name}</dd></div>
+                  </dl>
+                  <p className="text-meta text-muted-foreground">The registration home stores this runtime&apos;s configuration. It does not define who owns the host or grant access to other workspaces.</p>
+                  {runtime.canManageLifecycle ? <RuntimeLifecycleActions id={runtime.id} canManage onChanged={(mode) => { if (mode !== "prepare") router.push("/admin/runtimes"); }} /> : <p className="text-meta text-muted-foreground">Instance administrators can transfer ownership or remove an unused registration after reviewing its dependencies.</p>}
+                </Card>
+              </Section>
 
               <RuntimeEnvironmentSection
                 summary={runtime.runtimeInfoSummary}

@@ -122,6 +122,7 @@ export default defineConfig({
             { text: "Today Widget", link: "/guide/today-widget.html" },
             { text: "What's New", link: "/guide/whats-new.html" },
             { text: "Issues", link: "/guide/issues.html" },
+            { text: "Personal reminders", link: "/guide/reminders.html" },
             { text: "Slash Commands", link: "/guide/slash-commands.html" },
             { text: "Watching", link: "/guide/watching.html" },
             { text: "Quick Notes", link: "/guide/quick-notes.html" },

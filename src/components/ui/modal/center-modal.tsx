@@ -83,7 +83,7 @@ export function CenterModal({
         aria-labelledby="center-modal-title"
         aria-describedby={description ? "center-modal-desc" : undefined}
         className={cn(
-          "flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-xl md:h-auto md:max-h-[88vh] md:rounded-lg md:border",
+          "flex h-full w-full flex-col overflow-hidden border-border bg-card text-foreground shadow-xl md:h-auto md:max-h-[88vh] md:rounded-lg md:border",
           maxWidth,
           MOTION.slideUp,
         )}

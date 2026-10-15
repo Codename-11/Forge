@@ -12,7 +12,6 @@ import {
   RuntimeDiagnosticKind,
   RuntimeDiagnosticTrigger,
   type Prisma,
-  type PrismaClient,
 } from "@prisma/client";
 import { router, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { resolveEngagementMode } from "@/server/services/engagement-mode";
@@ -102,19 +101,20 @@ function redactWebhookSecret<T extends { webhookSecret?: string | null }>(value:
  * passed `undefined`).
  */
 async function resolveRuntimeId(
-  db: PrismaClient,
+  db: Prisma.TransactionClient,
   workspaceId: string,
   raw: string | null | undefined,
   excludeAgentId?: string,
 ): Promise<string | null> {
   const id = raw || null; // "" and null both clear the attachment
   if (!id) return null;
+  await db.$queryRaw`SELECT "id" FROM "Runtime" WHERE "id" = ${id} FOR UPDATE`;
   const rt = await db.runtime.findFirst({
-    where: { id, workspaceId },
+    where: { id, workspaceId, archivedAt: null, disabledAt: null, ownerType: { not: "UNASSIGNED" } },
     select: { id: true, adapterKey: true },
   });
   if (!rt)
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Runtime not found in this workspace." });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an available, owned runtime in this workspace. Adopt unassigned runtimes first; archived, disabled, or moved runtimes cannot be attached." });
   const adapter = getRuntimeAdapter(rt.adapterKey);
   if (adapter && !adapter.multiAgent) {
     const attached = await db.agent.count({
@@ -699,8 +699,8 @@ export const agentRouter = router({
     if (existing) {
       throw new TRPCError({ code: "CONFLICT", message: "profileKey already used." });
     }
-    const runtimeId = await resolveRuntimeId(ctx.db, ctx.workspaceId, input.runtimeId);
     return ctx.db.$transaction(async (tx) => {
+      const runtimeId = await resolveRuntimeId(tx, ctx.workspaceId, input.runtimeId);
       const agent = await tx.agent.create({
         data: {
           workspaceId: ctx.workspaceId,
@@ -769,12 +769,12 @@ export const agentRouter = router({
       const before = await ctx.db.agent.findFirstOrThrow({
         where: { id, workspaceId: ctx.workspaceId },
       });
-      // Only touch the attachment when the caller sent the field at all.
-      const runtimePatch =
-        runtimeId === undefined
-          ? {}
-          : { runtimeId: await resolveRuntimeId(ctx.db, ctx.workspaceId, runtimeId, id) };
       return ctx.db.$transaction(async (tx) => {
+        // Resolve under the same runtime lock/transaction as the write so
+        // lifecycle transfer cannot invalidate the old-home authorization.
+        const runtimePatch = runtimeId === undefined ? {} : {
+          runtimeId: await resolveRuntimeId(tx, ctx.workspaceId, runtimeId, id),
+        };
         const after = await tx.agent.update({ where: { id }, data: { ...patch, ...runtimePatch } });
         await recordChange(tx, {
           workspaceId: ctx.workspaceId,

@@ -78,7 +78,7 @@ export function SettingsRail(props: SettingsRailProps) {
             Scope
           </div>
           <div className="truncate text-xs font-medium text-foreground">
-            {props.scope === "workspace" ? `Workspace · ${props.name}` : "Account & identity"}
+            {props.scope === "workspace" ? `Workspace · ${props.name}` : "My account"}
           </div>
         </div>
         <button
@@ -234,16 +234,16 @@ function workspaceGroups(slug: string): RailGroup[] {
 const GLOBAL_RAIL_ITEMS: RailItem[] = [
   {
     href: "/settings/runtimes",
-    label: "Runtime inventory",
+    label: "My runtimes",
     icon: Server,
-    hint: "Hosts I've registered",
+    hint: "Execution hosts I own",
     adminOnly: false,
   },
   {
     href: "/settings/connections",
-    label: "Integration accounts",
+    label: "Connected accounts",
     icon: PlugZap,
-    hint: "Operational OAuth access",
+    hint: "My integration credentials, separate from sign-in",
     adminOnly: false,
   },
 ];
@@ -265,8 +265,8 @@ function accountGroups(): RailGroup[] {
     },
     {
       id: "resources",
-      label: "Resources",
-      hint: "Execution resources and connected identities you own.",
+      label: "My resources",
+      hint: "Ownership does not grant workspace access.",
       items: GLOBAL_RAIL_ITEMS,
     },
   ];

@@ -1,4 +1,5 @@
 "use client";
+import { ReminderInbox } from "@/components/reminders/reminder-inbox";
 
 import {
   useCallback,
@@ -237,6 +238,7 @@ export function useActivityDrawer(): {
     enabled: Boolean(ws),
     refetchOnWindowFocus: true,
     staleTime: 30_000,
+    refetchInterval: 30_000,
   });
 
   const utils = trpc.useUtils();
@@ -1111,6 +1113,7 @@ export default function ActivityDrawer() {
 
   const [tab, setTab] = useState<Tab>("mine");
   const [hasOpenedOnce, setHasOpenedOnce] = useState(false);
+  const [reminderCount, setReminderCount] = useState(0);
   const [mineOnly, setMineOnly] = useState(false);
   const [cursor, setCursor] = useState<string | undefined>(undefined);
   const [pages, setPages] = useState<TimelineEvent[]>([]);
@@ -1345,7 +1348,8 @@ export default function ActivityDrawer() {
       ? mineData.counts.assignedUnblocked + mineData.counts.mentions + mineData.counts.stalled
       : 0) +
     attentionRows.length +
-    needsInputCount;
+    needsInputCount +
+    reminderCount;
 
   return (
     <div
@@ -1454,8 +1458,17 @@ export default function ActivityDrawer() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
+          {tab === "mine" && (
+            <ReminderInbox
+              workspaceId={ws?.id}
+              onNavigate={close}
+              enabled={open}
+              onCountChange={setReminderCount}
+            />
+          )}
           {tab === "mine" ? (
             <MinePanel
+              hasReminders={reminderCount > 0}
               ws={ws}
               data={mineData}
               isLoading={mineLoading}
@@ -1596,6 +1609,7 @@ type ActionRequestItem =
   inferRouterOutputs<AppRouter>["inbox"]["actionRequestsForMe"]["items"][number];
 
 function MinePanel({
+  hasReminders = false,
   ws,
   data,
   isLoading,
@@ -1612,6 +1626,7 @@ function MinePanel({
   alertsMutatingId,
   onNavigate,
 }: {
+  hasReminders?: boolean;
   ws: { slug: string };
   data: InboxData | undefined;
   isLoading: boolean;
@@ -1666,6 +1681,7 @@ function MinePanel({
     );
   }
   if (!data && actionRequests.length === 0 && waitingOnMe.length === 0 && alertRows.length === 0) {
+    if (hasReminders) return null;
     return (
       <div className="px-4 py-6">
         <EmptyState
@@ -1687,6 +1703,7 @@ function MinePanel({
     alertRows.length;
 
   if (totalCount === 0) {
+    if (hasReminders) return null;
     return (
       <div className="px-4 py-6">
         <EmptyState

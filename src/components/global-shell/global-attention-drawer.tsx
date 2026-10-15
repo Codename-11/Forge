@@ -8,6 +8,7 @@ import { EmptyState, Spinner } from "@/components/ui";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { WsChip } from "./mission-control-home";
+import { ReminderInbox } from "@/components/reminders/reminder-inbox";
 
 /** Cross-workspace counterpart to the workspace ActivityDrawer. */
 export function GlobalAttentionBell() {
@@ -85,6 +86,7 @@ export function GlobalAttentionBell() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto p-3">
+            <ReminderInbox enabled={open} onNavigate={() => setOpen(false)} />
             {work.isLoading || activity.isLoading || alerts.isLoading ? (
               <div className="flex items-center justify-center py-12">
                 <Spinner />
@@ -97,7 +99,7 @@ export function GlobalAttentionBell() {
                       <Bell className="h-3.5 w-3.5 text-ember" />
                       <h3 className="text-xs font-semibold">Operational alerts</h3>
                       <span className="text-meta ml-auto text-muted-foreground">
-                        {alertCount.data?.count ?? 0} unread
+                        {alertCount.data?.alerts ?? 0} unread
                       </span>
                     </header>
                     <div className="divide-y divide-border/60">

@@ -29,9 +29,9 @@ import { VersionChip } from "@/components/global-shell/version-chip";
 
 const ADMIN_NAV: { href: string; icon: LucideIcon; label: string; hint: string }[] = [
   { href: "/admin", icon: LayoutDashboard, label: "Overview", hint: "Health & license" },
-  { href: "/admin/tenants", icon: Layers, label: "Workspaces", hint: "All tenants" },
+  { href: "/admin/tenants", icon: Layers, label: "Workspaces", hint: "Instance directory" },
   { href: "/admin/move-issues", icon: MoveRight, label: "Move issues", hint: "Between workspaces" },
-  { href: "/admin/users", icon: Users, label: "Users", hint: "Across instance" },
+  { href: "/admin/users", icon: Users, label: "People", hint: "Accounts & instance roles" },
   {
     href: "/admin/auth",
     icon: KeyRound,
@@ -72,7 +72,7 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
               className="truncate text-sm font-semibold tracking-tight"
               style={{ color: "hsl(var(--admin-text))" }}
             >
-              Instance admin
+              Administration
             </div>
             <div className="truncate text-[10px]" style={{ color: "hsl(var(--admin-text-muted))" }}>
               {instanceUrl}
@@ -118,7 +118,7 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
           style={{ color: "hsl(var(--admin-text-soft))" }}
         >
           <ChevronLeft size={13} />
-          <span className="flex-1">Back to Mission Control</span>
+          <span className="flex-1">Back to Home</span>
         </Link>
         <VersionChip tone="admin" className="mt-0.5" />
       </div>
@@ -192,7 +192,7 @@ export function AdminPage({
             style={{ background: "rgba(217,119,87,0.16)", color: "hsl(var(--ember))" }}
           >
             <Shield size={10} />
-            <span className="hidden sm:inline">Instance scope · writes affect every tenant</span>
+            <span className="hidden sm:inline">Instance administration · review the scope of each change</span>
             <span className="sm:hidden">Instance scope</span>
           </span>
           <div className="ml-auto flex items-center gap-2">

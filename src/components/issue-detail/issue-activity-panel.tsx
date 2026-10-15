@@ -13,6 +13,9 @@ import { issueUpdateCopy } from "@/lib/activity-update-summary";
 import { groupConsecutive } from "@/lib/activity-grouping";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
+import { activityCommentId } from "@/lib/issue-timeline";
+import type { inferRouterOutputs } from "@trpc/server";
+import type { AppRouter } from "@/server/routers/_app";
 
 const COLLAPSED_GROUP_LIMIT = 8;
 
@@ -269,6 +272,56 @@ function activityCopy(
       kind.startsWith("AGENT_RUN_") || kind === "AGENT_RUN_BLOCKED" ? payloadDetail(payload) : null,
     phase: fallback.phase,
   };
+}
+
+type IssueActivityEvent = inferRouterOutputs<AppRouter>["issue"]["activity"][number];
+
+/** Shared full-width timeline row, with expandable evidence instead of clipped text. */
+export function IssueActivityEventRow({ event }: { event: IssueActivityEvent }) {
+  const copy = activityCopy(event.kind, event.payload, event.actorAgent?.profileKey);
+  const actor = activityActorName(event);
+  const actorKind = activityActorKind(event);
+  const commentId = activityCommentId(event);
+  return (
+    <div id={`activity-${event.id}`} className="flex min-w-0 items-start gap-2 py-2">
+      {event.actorAgent ? (
+        <AgentAvatar agent={event.actorAgent} size="xs" />
+      ) : (
+        <Avatar name={actor} image={event.actor?.image ?? null} size={18} />
+      )}
+      <div className="min-w-0 flex-1">
+        <div className="text-meta flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <span className="font-medium" title={activityActorOwnerTitle(event)}>
+            {actor}
+          </span>
+          {actorKind !== "human" && <span className="text-muted-foreground">{actorKind}</span>}
+          <span className="text-muted-foreground">{copy.label}</span>
+          <time
+            dateTime={new Date(event.createdAt).toISOString()}
+            className="text-muted-foreground"
+          >
+            {relativeTime(event.createdAt)}
+          </time>
+          {commentId && (
+            <a
+              className="focus-ring rounded text-ember hover:underline"
+              href={`#comment-${commentId}`}
+            >
+              Read comment
+            </a>
+          )}
+        </div>
+        {copy.detail && (
+          <details className="text-meta group mt-1 text-muted-foreground">
+            <summary className="focus-ring cursor-pointer rounded hover:text-foreground">
+              View update details
+            </summary>
+            <p className="mt-2 whitespace-pre-wrap break-words text-foreground/80">{copy.detail}</p>
+          </details>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export function IssueActivityPanel({ issueId }: { issueId: string }) {

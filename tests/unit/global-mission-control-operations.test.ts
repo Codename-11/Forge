@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { deriveGlobalOperationsPosture } from "@/components/global-shell/global-operations-model";
 
 describe("deriveGlobalOperationsPosture", () => {
-  it("prioritizes missing runtime setup over idle queue state", () => {
+  it("does not require managed runtime setup for external MCP work", () => {
     expect(
       deriveGlobalOperationsPosture({
         activeRuns: 0,
@@ -11,10 +11,16 @@ describe("deriveGlobalOperationsPosture", () => {
         runtimesOnline: 0,
       }),
     ).toMatchObject({
-      tone: "warning",
-      label: "Setup required",
-      actionLabel: "Register a runtime",
+      tone: "neutral",
+      label: "Managed execution optional",
+      actionLabel: "Set up an agent",
+      actionHref: "/agents",
     });
+  });
+
+  it("keeps active external work visible without a managed runtime", () => {
+    expect(deriveGlobalOperationsPosture({ activeRuns: 1, agentsOnline: 1, runtimeCount: 0, runtimesOnline: 0 }))
+      .toMatchObject({ tone: "success", label: "Work in motion" });
   });
 
   it("surfaces degraded runtime coverage before active execution", () => {

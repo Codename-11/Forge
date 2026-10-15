@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
 import { RelationKind } from "@prisma/client";
-import { List, Workflow } from "lucide-react";
+import { ChevronDown, ChevronUp, Link2, Workflow, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Combobox } from "@/components/ui/combobox";
@@ -24,8 +24,8 @@ import { IssueRelationsGraph } from "./issue-relations-graph";
 type Kind = (typeof ORDER)[number];
 
 const ORDER = [
-  RelationKind.BLOCKS,
   RelationKind.BLOCKED_BY,
+  RelationKind.BLOCKS,
   RelationKind.DUPLICATES,
   RelationKind.RELATES_TO,
 ] as const;
@@ -41,16 +41,38 @@ const STATUS_DOT: Record<string, string> = {
   BACKLOG: "bg-muted",
   TODO: "bg-subtle",
   IN_PROGRESS: "bg-ember",
+  IN_REVIEW: "bg-warning",
+  BLOCKED: "bg-danger",
   DONE: "bg-success",
   CANCELED: "bg-danger/60",
 };
 
-export function IssueRelationsPanel({ issueId }: { issueId: string }) {
+const STATUS_LABEL: Record<string, string> = {
+  BACKLOG: "Backlog",
+  TODO: "To do",
+  IN_PROGRESS: "In progress",
+  IN_REVIEW: "In review",
+  BLOCKED: "Blocked",
+  DONE: "Done",
+  CANCELED: "Canceled",
+};
+
+export function IssueRelationsPanel({
+  issueId,
+  parentIssue,
+  subtaskCount,
+}: {
+  issueId: string;
+  parentIssue?: { id: string; number: number; title: string } | null;
+  subtaskCount?: number;
+}) {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
-  const { data, isLoading } = trpc.relation.listForIssue.useQuery({ issueId });
+  const listQuery = trpc.relation.listForIssue.useQuery({ issueId });
+  const { data, isLoading } = listQuery;
   const [adding, setAdding] = useState(false);
-  const [view, setView] = useState<"list" | "graph">("list");
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Kind[]>([]);
 
   const remove = trpc.relation.remove.useMutation({
     onSuccess: () => {
@@ -66,120 +88,203 @@ export function IssueRelationsPanel({ issueId }: { issueId: string }) {
   }, [data]);
 
   return (
-    <section className="rounded-lg border border-border bg-card/40">
-      <header className="flex h-9 items-center gap-2 border-b border-border px-3">
+    <section
+      id="issue-relations"
+      tabIndex={-1}
+      aria-label="Related work"
+      className="focus-ring min-w-0 scroll-mt-20 rounded-lg border border-border bg-card/40"
+    >
+      <header className="flex min-h-9 flex-wrap items-center gap-2 border-b border-border px-3 py-1">
+        <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
         <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
-          Relations
+          Related work
         </h2>
-        <span className="font-mono text-[0.6875rem] text-muted-foreground">{totalCount}</span>
-        {/* List / Graph view toggle — the graph maps the issue's place in
-            its blocks + sub-issue dependency path; the list stays the
-            editing surface. */}
-        <div className="ml-auto flex items-center rounded-md border border-border p-0.5">
-          {[
-            { id: "list" as const, label: "List", Icon: List },
-            { id: "graph" as const, label: "Graph", Icon: Workflow },
-          ].map(({ id, label, Icon }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => setView(id)}
-              aria-pressed={view === id}
-              title={`${label} view`}
-              className={cn(
-                "inline-flex h-5 items-center gap-1 rounded px-1.5 text-[0.625rem] font-medium transition-colors",
-                view === id
-                  ? "bg-ember/15 text-ember"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="h-3 w-3" />
-              {label}
-            </button>
-          ))}
-        </div>
-        {view === "list" && (
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="h-6 px-2 text-[0.6875rem]"
-            onClick={() => setAdding((v) => !v)}
-          >
-            {adding ? "Cancel" : "Add relation"}
-          </Button>
-        )}
+        <span className="font-mono text-[0.6875rem] text-muted-foreground" title="Issue relations">
+          {totalCount}
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="ml-auto h-7 px-2 text-[0.6875rem]"
+          aria-expanded={adding}
+          aria-controls={`add-relation-${issueId}`}
+          onClick={() => setAdding((value) => !value)}
+        >
+          {adding ? "Cancel" : "Add relation"}
+        </Button>
       </header>
 
-      {view === "graph" ? (
-        <div className="p-3">
-          <IssueRelationsGraph issueId={issueId} />
+      {adding && (
+        <div id={`add-relation-${issueId}`}>
+          <AddRelationForm issueId={issueId} onDone={() => setAdding(false)} />
         </div>
-      ) : (
-        <>
-          {adding && <AddRelationForm issueId={issueId} onDone={() => setAdding(false)} />}
-
-          <div className="divide-y divide-border">
-            {isLoading && <div className="text-meta px-3 py-3 text-muted-foreground">Loading…</div>}
-            {!isLoading &&
-              ORDER.map((kind) => {
-                const rows = data?.[kind] ?? [];
-                if (rows.length === 0) return null;
-                return (
-                  <div key={kind} className="px-3 py-2">
-                    <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-                      {LABELS[kind]}
-                    </div>
-                    <ul className="space-y-1">
-                      {rows.map((r) => (
-                        <li key={r.relationId} className="group flex items-center gap-2">
-                          <span
-                            className={cn(
-                              "inline-block h-2 w-2 shrink-0 rounded-full",
-                              STATUS_DOT[r.target.statusCategory] ?? "bg-muted",
-                            )}
-                            title={r.target.statusCategory}
-                          />
-                          <Link
-                            href={`/w/${ws.slug}/issues/${r.target.id}`}
-                            className="flex min-w-0 flex-1 items-center gap-2 hover:text-ember"
-                          >
-                            <span className="text-id text-muted-foreground">
-                              {formatIssueId(ws.key, r.target.number)}
-                            </span>
-                            <span className="truncate text-xs">{r.target.title}</span>
-                          </Link>
-                          <button
-                            type="button"
-                            onClick={() => remove.mutate({ relationId: r.relationId })}
-                            aria-label="Remove relation"
-                            title="Remove"
-                            className="opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
-                          >
-                            <span className="text-xs">×</span>
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                );
-              })}
-            {!isLoading && totalCount === 0 && !adding && (
-              <div className="text-meta px-3 py-4 text-center text-muted-foreground">
-                No relations. Use{" "}
-                <button
-                  type="button"
-                  className="text-ember hover:underline"
-                  onClick={() => setAdding(true)}
-                >
-                  Add relation
-                </button>{" "}
-                to link blockers, duplicates, or related work.
-              </div>
-            )}
-          </div>
-        </>
       )}
+
+      <div className="divide-y divide-border">
+        {parentIssue && (
+          <div className="px-3 py-2">
+            <div className="mb-1 text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
+              Parent
+            </div>
+            <Link
+              href={`/w/${ws.slug}/issues/${parentIssue.id}`}
+              className="focus-ring block rounded py-1 hover:text-ember"
+            >
+              <span className="text-id text-muted-foreground">
+                {formatIssueId(ws.key, parentIssue.number)}
+              </span>
+              <span className="mt-0.5 block break-words text-xs">{parentIssue.title}</span>
+            </Link>
+          </div>
+        )}
+        <a
+          href="#issue-subtasks"
+          className="focus-ring text-meta flex items-center justify-between gap-2 rounded px-3 py-2 hover:bg-subtle"
+        >
+          <span>Subtasks</span>
+          <span className="text-muted-foreground">
+            {subtaskCount === undefined ? "View or add" : `${subtaskCount} · View or add`}
+          </span>
+        </a>
+        {isLoading && <div className="text-meta px-3 py-3 text-muted-foreground">Loading…</div>}
+        {listQuery.isError && (
+          <div role="status" className="text-meta space-y-1 px-3 py-3 text-muted-foreground">
+            <p>Related work could not be loaded.</p>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void listQuery.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
+        )}
+        {!isLoading &&
+          !listQuery.isError &&
+          ORDER.map((kind) => {
+            const rows = data?.[kind] ?? [];
+            if (rows.length === 0) return null;
+            const expanded = expandedGroups.includes(kind);
+            const visibleRows = expanded ? rows : rows.slice(0, 3);
+            return (
+              <div key={kind} className="px-3 py-2">
+                <div
+                  className={cn(
+                    "mb-1 text-[0.6875rem] uppercase tracking-wider",
+                    kind === RelationKind.BLOCKED_BY ? "text-warning" : "text-muted-foreground",
+                  )}
+                >
+                  {LABELS[kind]} <span className="ml-1 tabular-nums">{rows.length}</span>
+                </div>
+                <ul id={`relations-${issueId}-${kind}`} className="space-y-1">
+                  {visibleRows.map((r) => (
+                    <li key={r.relationId} className="group flex items-start gap-1">
+                      <Link
+                        href={`/w/${ws.slug}/issues/${r.target.id}`}
+                        className="focus-ring block min-w-0 flex-1 rounded px-1 py-1 hover:bg-subtle"
+                      >
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                          <span className="text-id text-muted-foreground">
+                            {formatIssueId(ws.key, r.target.number)}
+                          </span>
+                          <span className="text-meta inline-flex items-center gap-1 text-muted-foreground">
+                            <span
+                              aria-hidden
+                              className={cn(
+                                "h-1.5 w-1.5 shrink-0 rounded-full",
+                                STATUS_DOT[r.target.statusCategory] ?? "bg-muted",
+                              )}
+                            />
+                            {STATUS_LABEL[r.target.statusCategory] ?? r.target.statusCategory}
+                          </span>
+                        </span>
+                        <span
+                          className="mt-0.5 line-clamp-2 block break-words text-xs"
+                          title={r.target.title}
+                        >
+                          {r.target.title}
+                        </span>
+                      </Link>
+                      <button
+                        type="button"
+                        onClick={() => remove.mutate({ relationId: r.relationId })}
+                        disabled={remove.isPending}
+                        aria-label={`Remove ${LABELS[kind].toLowerCase()} relation: ${formatIssueId(ws.key, r.target.number)} ${r.target.title}`}
+                        title="Remove relation"
+                        className="focus-ring mt-1 grid h-7 w-7 shrink-0 place-items-center rounded text-muted-foreground hover:bg-subtle hover:text-danger disabled:opacity-40"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+                {rows.length > 3 && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="mt-1 w-full text-muted-foreground"
+                    aria-expanded={expanded}
+                    aria-controls={`relations-${issueId}-${kind}`}
+                    onClick={() =>
+                      setExpandedGroups((current) =>
+                        expanded ? current.filter((value) => value !== kind) : [...current, kind],
+                      )
+                    }
+                  >
+                    {expanded ? (
+                      <ChevronUp className="h-3 w-3" />
+                    ) : (
+                      <ChevronDown className="h-3 w-3" />
+                    )}
+                    {expanded
+                      ? `Show fewer ${LABELS[kind].toLowerCase()} links`
+                      : `View all ${LABELS[kind].toLowerCase()} (${rows.length})`}
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+        {!isLoading && !listQuery.isError && totalCount === 0 && !adding && (
+          <div className="text-meta px-3 py-3 text-muted-foreground">
+            No linked issues. Use{" "}
+            <button
+              type="button"
+              className="text-ember hover:underline"
+              onClick={() => setAdding(true)}
+            >
+              Add relation
+            </button>{" "}
+            to link blockers, duplicates, or related work.
+          </div>
+        )}
+      </div>
+      <div className="border-t border-border p-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="w-full justify-start text-muted-foreground"
+          aria-expanded={graphOpen}
+          aria-controls={`relation-graph-${issueId}`}
+          onClick={() => setGraphOpen((value) => !value)}
+        >
+          <Workflow className="h-3.5 w-3.5" />
+          {graphOpen ? "Hide dependency map" : "Explore dependency map"}
+          {graphOpen ? (
+            <ChevronUp className="ml-auto h-3 w-3" />
+          ) : (
+            <ChevronDown className="ml-auto h-3 w-3" />
+          )}
+        </Button>
+        {graphOpen && (
+          <div id={`relation-graph-${issueId}`} className="mt-2 overflow-x-auto">
+            <IssueRelationsGraph issueId={issueId} />
+          </div>
+        )}
+      </div>
     </section>
   );
 }

@@ -111,9 +111,8 @@ export function Sidebar({
     setMobileNavOpen(false);
   }, [pathname]);
 
-  // Pathname-aware quick-create label. The button itself doesn't change which
-  // mode the overlay opens — that's keyed off the pathname inside the
-  // overlay — but matching the visible label here keeps the surface honest.
+  // Planning sections keep their pathname-aware mode; explicit New issue/task
+  // buttons carry their intent so issue-detail context cannot turn them into comments.
   const quickCreateLabel = useMemo(() => {
     const tail = pathname?.replace(/^\/w\/[^/]+/, "") ?? "";
     if (tail.startsWith("/projects")) return "New project";
@@ -121,6 +120,16 @@ export function Sidebar({
     if (tail.startsWith("/initiatives")) return "New initiative";
     return isPersonal ? "New task" : "New issue";
   }, [isPersonal, pathname]);
+  const quickCreateMode =
+    quickCreateLabel === "New task"
+      ? "task"
+      : quickCreateLabel === "New issue"
+        ? "issue"
+        : quickCreateLabel === "New project"
+          ? "project"
+          : quickCreateLabel === "New sprint"
+            ? "cycle"
+            : "initiative";
 
   const sections = useMemo(
     () =>
@@ -252,6 +261,7 @@ export function Sidebar({
 
       <button
         data-quick-create
+        data-quick-create-mode={quickCreateMode}
         title={quickCreateLabel}
         data-tooltip-kbd="⇧ C"
         className={cn(
@@ -340,7 +350,7 @@ export function Sidebar({
         {/* Escape hatch back to the cross-workspace home. The switcher also
             offers it, but this is the always-visible affordance. */}
         <Link
-          href="/"
+          href="/mission-control"
           title="Mission Control · across all workspaces"
           className={cn(
             "flex h-8 items-center gap-2 rounded-md text-[0.8125rem] text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground",
@@ -404,6 +414,7 @@ export function Sidebar({
         inboxCount={inboxBadge?.count ?? 0}
         decisionsCount={decisions?.total ?? 0}
         quickCreateLabel={quickCreateLabel}
+        quickCreateMode={quickCreateMode}
         workspaceId={workspace?.id}
         workspaceSlug={workspace?.slug}
         hasPins={hasPins}
@@ -509,6 +520,7 @@ function MobileWorkspaceNav({
   inboxCount,
   decisionsCount,
   quickCreateLabel,
+  quickCreateMode,
   workspaceId,
   workspaceSlug,
   hasPins,
@@ -523,6 +535,7 @@ function MobileWorkspaceNav({
   inboxCount: number;
   decisionsCount: number;
   quickCreateLabel: string;
+  quickCreateMode?: "issue" | "task" | "project" | "cycle" | "initiative";
   workspaceId?: string;
   workspaceSlug?: string;
   hasPins: boolean;
@@ -571,7 +584,7 @@ function MobileWorkspaceNav({
           <div className="flex items-center justify-between gap-3">
             <WorkspaceSwitcher />
             <Link
-              href="/"
+              href="/mission-control"
               onClick={() => onOpenChange(false)}
               className="focus-ring inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
             >
@@ -593,6 +606,7 @@ function MobileWorkspaceNav({
             <button
               type="button"
               data-quick-create
+              data-quick-create-mode={quickCreateMode}
               onClick={() => onOpenChange(false)}
               className="focus-ring inline-flex h-11 items-center justify-center gap-2 rounded-md bg-ember px-3 text-xs font-medium text-ember-foreground hover:bg-ember/90"
             >

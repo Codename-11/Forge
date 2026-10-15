@@ -8,13 +8,13 @@ import { ACCOUNT_SETTINGS_GROUP } from "@/components/settings/settings-nav";
 const RESOURCES = [
   {
     href: "/settings/runtimes",
-    label: "Runtime inventory",
-    hint: "Hosts you own, their health, and their authoritative home workspace.",
+    label: "My runtimes",
+    hint: "Execution hosts you own and the workspace where each was registered. Agent access is managed separately in Agents.",
     icon: Server,
   },
   {
     href: "/settings/connections",
-    label: "Integration accounts",
+    label: "Connected accounts",
     hint: "Operational OAuth credentials that workspace mappings can use. Separate from sign-in.",
     icon: PlugZap,
   },
@@ -53,10 +53,10 @@ function OverviewLink({
 export default function PersonalSettingsOverview() {
   return (
     <>
-      <Topbar title="Settings" subtitle="Personal · follows you across every workspace" />
+      <Topbar title="My account" subtitle="Your profile, sign-in, preferences, and personal resources." />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl space-y-6 p-4 sm:p-6">
-          <Section title="Personal" hint="Preferences and workspace directory tied to your login.">
+          <Section title="Personal" hint="Preferences and security tied to your login.">
             <Card>
               {ACCOUNT_SETTINGS_GROUP.items.map((item) => (
                 <OverviewLink
@@ -70,8 +70,8 @@ export default function PersonalSettingsOverview() {
             </Card>
           </Section>
           <Section
-            title="Resources"
-            hint="Runtime hosts and connected accounts tied to your login."
+            title="My resources"
+            hint="Resources you own. Workspace access and agent permissions are managed separately."
           >
             <Card>
               {RESOURCES.map((item) => (

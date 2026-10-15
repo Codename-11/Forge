@@ -2,6 +2,134 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-10-15 — AXI-206 release preparation
+
+- Operator approved publication and deployment of the integrated AXI-203,
+  AXI-204 and AXI-206 work as v0.36.0. The separate AXI-191 architecture work
+  remains outside this release. Stopped all three local preview servers.
+- Fixed Windows local-runner parsing for npm-generated pnpm launchers using
+  `%dp0%`; the launcher regression suite passed all seven tests.
+- Added MinIO and explicit local S3 endpoints to each CI browser-test shard
+  because daily-workflow acceptance now uploads and previews real files.
+- Updated navigation/setup browser regressions for Home, Agents and workspace
+  access. Kept an explicit Assign an agent action in the automation menu so
+  unassigned issues still support touch-based assignment, not only a shortcut.
+- Production remains unchanged until exact-head CI and the coordinated
+  app/worker ownership-migration rollout complete.
+- First release-candidate CI passed lint, typecheck, all 1,786 tests (one
+  intentionally skipped), and browser shard 1. Shard 2 exposed two assertions
+  selecting hidden responsive copies rather than the visible issue heading
+  and desktop admin scope label; corrected those selectors without weakening
+  the workflow assertions. Windows Compose text checks now normalize CRLF.
+- Local full quality passed lint/typecheck and 1,784 tests, with two failures:
+  the corrected CRLF assertion and a diagnostic-worker readiness timeout that
+  does not reproduce in Linux CI. The final source typecheck/focused lint and
+  automation/Compose focused checks passed; final-head hosted CI remains the
+  release gate.
+- The final mobile assignment flow exposed actual activity-dock overlap at the
+  end of short issue pages. Added mobile scroll clearance using the existing
+  spacing scale; the browser regression retains ordinary pointer clicks and
+  captures the expanded automation menu as rendered evidence. The diagnostic
+  worker suite subsequently passed locally unchanged (3/3); no readiness
+  timeout was increased.
+
+## 2026-10-15 — AXI-206 integrated daily workflow and issue context
+
+- Preserved local ownership/navigation work in checkpoint dc5c5c4 and integrated
+  AXI-203 capture + breadcrumb/centered pins and AXI-204 private reminders through
+  local cherry-picks (a8a3b99, 7b7a70a, 653dfe4). Only the development-log merge
+  needed manual reconciliation; both histories were retained. Main and origin
+  are untouched; no older release/recovery branches were included.
+- Promoted issue title, due date and reminder to the header. Attachments now
+  appear below the description with visible filenames/thumbnails, Add file,
+  preview and bounded expansion. Related work stays visible with typed links,
+  statuses, parent/subtask context and expandable dependency graph.
+- Added permanent Automation & delivery entry with explicit Ask, native
+  implementation PR linking, and delivery claim controls. Existing summaries
+  and warnings stay visible; evidence expands separately. Ask drafts a comment
+  with the selected mode and never dispatches or assigns just by opening it.
+  Existing draft modes/overrides for that agent are reconciled explicitly.
+- Moved activity into the main column with Discussion, Updates and All filters,
+  ID-based comment/event deduplication and expandable routine-change groups.
+  Open decisions remain above the description independent of filters. Legacy
+  section links and 1/2/3 shortcuts focus the visible sections; mobile header
+  links keep automation and related work reachable above long timelines.
+- Integrated due reminders into Home as well as Today and notification drawers.
+  Fixed the workspace experience-save baseline/race exposed by fast Personal →
+  Team → Personal switching. Realtime relation refresh covers reciprocal edges
+  and linked-title/status updates without creating extra activity or agent runs.
+- Local validation uses the isolated forge_206_dev preview on port 3002 plus
+  guarded forge_test/Redis/MinIO for integration tests. Full release gates and
+  production deployment remain deferred pending operator iteration.
+- Verification: 59 focused unit tests, 13 real reminder/notification integration
+  tests, TypeScript and focused ESLint passed (existing workspace native-select
+  warnings remain). A final single browser run passed all six scenarios:
+  capture/draft fields, status+manual delivery, private reminders, populated
+  files/relations/timeline, Ask mode reconciliation without dispatch, and
+  Personal/Team daily flow. Desktop/390px screenshots were inspected. Local
+  storage-backed browser checks allow bounded extra time for dev compilation;
+  this is functional proof, not a production performance certification.
+
+## 2026-10-15 — AXI-206 explicit ownership and runtime lifecycle
+
+- Added PERSONAL/SERVICE ownership for agent definitions and runtimes, separate
+  immutable creator provenance, explicit UNASSIGNED legacy runtimes, owner-shape
+  checks and service-key uniqueness. Personal owner deletion is restricted;
+  deleting a service resource's creator does not delete the service identity.
+- Added audited personal creation policy (disabled / approval required /
+  self-service), defaulting to approval required. Self-service creates only a
+  private personal identity; workspace access and credentials remain separate.
+- Added admin ownership transfer with optimistic snapshots and runtime consent,
+  plus runtime impact/prepare/transfer/removal workflows. Active work, unsafe
+  configuration and historical tenant references are protected; external hosts
+  are never stopped by removal. Archived registrations remain discoverable.
+- Unified browser/MCP management checks and locked attachment, binding,
+  diagnostic and child-config mutations against stale ownership/home races.
+  An issuing human does not lend authority to a service key. New runtime
+  attachment requires explicit adoption of UNASSIGNED registrations; existing
+  legacy bindings remain operational pending deliberate operator action.
+- Applied migration only to guarded local test DB and a separate AXI-206
+  preview database copied from existing local data. Earlier previews and
+  production were not migrated. Verified real Postgres/Redis tests for policy,
+  transfer races, ownership constraints, scope isolation and compatibility;
+  focused UI tests and TypeScript/lint also passed. Shared-dispatcher suites
+  require sequential execution to avoid cross-suite pending-run interference.
+- Browser-verified ordinary member self-service creation, admin service-agent
+  creation and transfer, and runtime service ownership/home relocation followed
+  by removal of a disposable unused registration. Mobile confirmation has no
+  horizontal overflow. Fixed modal foreground inheritance from admin chrome and
+  removed a stale impact-query refetch after successful registration deletion.
+- No commit/push/PR/release/deploy. Full release gates remain deferred. Documented
+  the coordinated migration/code rollout required before future production use.
+
+## 2026-10-14 — AXI-206 navigation and agent setup local iteration
+
+- Split personal Home/My Work from Mission Control operations; added a global
+  Workspaces directory with a compatibility redirect from account settings.
+  Clarified My account, Administration and workspace scope labels.
+- Added intent-first external MCP versus managed-execution setup with workspace
+  and acting-identity continuity. Agent pages distinguish owner, catalog
+  availability, workspace access, configured runtime and valid client keys.
+  New profiles default owner-only; new keys default Standard scopes. Existing
+  records and the instance-admin approval requirement remain unchanged.
+- Unified agent availability gates and removed ownership-based cross-workspace
+  run/client visibility. Project restrictions apply to recent activity. Public
+  profile/binding results redact dispatch secrets, including mutation results.
+- Guarded permanent workspace deletion while runtime registrations exist,
+  including archived/unbound hosts, with real database locking. Bucket cleanup
+  retains the existing slug reservation until deletion; its pre-existing
+  non-atomic storage/database limitation is documented.
+- Verified 20 agent-access integration tests, 18 runtime/storage integration
+  tests, 18 focused UI/setup/operations unit tests, TypeScript and focused lint.
+  Real-browser walkthroughs on localhost:3002 covered Home, agent setup and
+  credential-form context, workspace redirect and operations; desktop and
+  390px mobile Home/Agents layouts have no horizontal overflow. No real external
+  runtime was dispatched or credential issued during browser checks.
+- Local iteration only: no commit, push, PR, release, schema migration or deploy.
+  Service-owned identities, explicit runtime relocation/removal and configurable
+  personal-agent creation remain follow-up model work. Full release gates are
+  deferred until the operator accepts the local iteration.
+
 ## 2026-09-01 — v0.35.0 release preparation
 
 - Squash-merged AXI-186 / PR #102 after exact-head lint, typecheck, unit,
@@ -14618,3 +14746,84 @@ publishes those prevalidated assets after tagging.
 Verification: focused runtime-diagnostic, MCP-execution, and helper-distribution
 tests passed (11/11); TypeScript passed; lint completed with only the existing
 repository warnings; helper tarballs and `SHA256SUMS` verified successfully.
+
+## 2026-09-25 — AXI-203 New Item and personal-task capture (in progress)
+
+Explicit New issue/New task controls now carry their destination into quick
+create, so an issue-detail route cannot silently turn them into a comment.
+Personal workspace capture and the Today composer persist `TASK` work items;
+note-to-issue conversion remains an explicit issue. Quick create preserves Tab
+focus navigation while Enter accepts autocomplete suggestions. Today separates
+due-today items from unscheduled Someday work, exposes the due preset on mobile,
+and links to the full Issues list instead of presenting its summary as the
+entire task inventory. Quickstart and Issues guidance now describe the actual
+capture behavior.
+
+First-class per-user reminders need a separate model and worker path rather
+than the existing ScheduledTask create-issue automation; tracked in AXI-204.
+Focused quick-create unit tests, TypeScript, and lint passed. The local Docker
+engine and production browser sign-in were unavailable, so local Playwright,
+integration checks, and rendered desktop/mobile UX review remain pending.
+
+## 2026-10-14 — AXI-203 local creation-flow review and verification
+
+Replaced the dense capture bar with one item-type selector, visible title and
+description, direct status/priority/project/human-assignee/date controls, and
+expandable agent/label options. Keyboard slash shortcuts remain available.
+Explicit named creation controls preserve their intent through lazy loading,
+including project actions on detail pages. Task creation uses the existing
+TASK kind, now labeled Task whether standalone or nested. Draft restoration
+retains content and selected fields within the workspace/issue context, and
+planning-item full forms preserve the entered name. Date selection persists
+atomically with creation. Fixed a shared Combobox callback that updated its
+parent from inside a state updater.
+
+Personal Today keeps undated work in Someday, exposes date presets on mobile,
+and makes its bounded recent-work summary explicit. The full reminders feature
+remains AXI-204; due dates and issue snoozing do not imply reminders.
+
+Verification: focused lint and 12 quick-create unit checks passed. A production
+build and three focused Playwright flows passed against disposable forge_e2e,
+covering draft restore, saved TASK fields, named issue creation, keyboard focus,
+status transitions, and mobile Today/Someday behavior. Captured and inspected
+desktop, dark, and mobile UI evidence under output/playwright. The local preview
+uses Node 20 with the standard Next compiler: Turbopack reproduced an existing
+recordChange import failure on creation, and the workstation's Node 24 also
+failed loading the Tailwind TypeScript config through the alternate compiler.
+No production deployment or release was performed.
+
+### AXI-203 header follow-up
+
+Issue breadcrumbs now use the workspace context key and show the issue title;
+the full identity remains available through the tooltip/accessibility label
+when the title truncates. Removed the unused route-parser key that produced
+bare numbers such as `-20`. The desktop header uses equal side columns so pins
+stay centered independently of breadcrumb length, with responsive pin widths
+and compact actions at smaller sizes. Focused lint passed; the rendered header
+was checked at 1764, 1280, 1024, and 768px with centered pins and no overflow.
+## 2026-10-14 — AXI-204 personal issue reminders
+
+Added a private one-shot IssueReminder per user/item with an additive timestamped
+migration. The issue sidebar supports scheduling, rescheduling, presets, and
+cancellation. Due cards appear in workspace/global notifications and personal
+Today with issue key/title, open, snooze, and dismiss actions. Notification badges
+and mark-read behavior include reminders without removing their actionable cards.
+Due dates, issue snoozing, and recurring issue automation keep their existing
+meaning.
+
+Membership, account lifecycle, and project access are checked on reads and push
+claims. Completion and archival cancel reminders in the canonical audit path;
+hard deletion cascades. Personal mutations write audit records without creating
+workspace activity events, comments, decision requests, or LLM wakeups. The
+maintenance sweep atomically claims optional browser push once per schedule;
+in-app cards remain durable when workers or browser delivery are unavailable.
+
+Verification: migration applied to guarded local databases; focused lint and
+TypeScript passed; 52 issue/notification/reminder integration checks passed,
+including concurrent schedule/push claims, tenant/recipient/project isolation,
+read/snooze/dismiss, completion, archive, and suspended-user cases. Production
+build and three focused Playwright flows passed, including the new reminder
+lifecycle and mobile notification card. Screenshots were inspected under
+output/playwright. Actual external browser push was not exercised because local
+VAPID/subscriptions are not configured; that channel remains explicitly best
+effort. No production migration, deployment, or release was performed.

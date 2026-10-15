@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { countDueReminders, markDueRemindersRead } from "@/server/services/issue-reminder";
 import { TRPCError } from "@trpc/server";
 import {
   EventKind,
@@ -193,14 +194,18 @@ export const notificationRouter = router({
       },
       include: notificationStateInclude(),
     });
-    return { count: (await buildNotificationListItems(ctx.db, ctx.workspaceId, rows)).length };
+    return {
+      count:
+        (await buildNotificationListItems(ctx.db, ctx.workspaceId, rows)).length +
+        (await countDueReminders(ctx.db, ctx.session.user.id, ctx.workspaceId)),
+    };
   }),
 
   /** Shared unread alert count for Mission Control's cross-workspace bell. */
   globalUnreadCount: protectedProcedure.query(async ({ ctx }) => {
     const userId = ctx.session.user.id;
     const workspaces = await memberWorkspaces(ctx.db, userId);
-    if (workspaces.length === 0) return { count: 0 };
+    if (workspaces.length === 0) return { count: 0, alerts: 0, reminders: 0 };
     await materializeGlobalNotifications(ctx.db, userId, workspaces);
     const rows = await ctx.db.notificationState.findMany({
       where: {
@@ -221,7 +226,9 @@ export const notificationRouter = router({
         buildNotificationListItems(ctx.db, workspaceId, group),
       ),
     );
-    return { count: visible.reduce((sum, group) => sum + group.length, 0) };
+    const alerts = visible.reduce((sum, group) => sum + group.length, 0);
+    const reminders = await countDueReminders(ctx.db, userId);
+    return { count: alerts + reminders, alerts, reminders };
   }),
 
   /** Recent actionable alerts across every workspace the caller belongs to. */
@@ -290,21 +297,23 @@ export const notificationRouter = router({
         }),
       )
     ).flat();
-    const [result] = await ctx.db.$transaction([
-      ctx.db.notificationState.updateMany({
+    const count = await ctx.db.$transaction(async (tx) => {
+      const remindersRead = await markDueRemindersRead(tx, userId, undefined, visitedAt);
+      const result = await tx.notificationState.updateMany({
         where: {
           id: { in: visibleIds },
           userId,
           status: NotificationStatus.UNREAD,
         },
         data: { status: NotificationStatus.READ, readAt: visitedAt },
-      }),
-      ctx.db.user.update({
+      });
+      await tx.user.update({
         where: { id: userId },
         data: { lastInboxVisitAt: visitedAt },
-      }),
-    ]);
-    return { count: result.count, visitedAt };
+      });
+      return result.count + remindersRead.count;
+    });
+    return { count, visitedAt };
   }),
 
   upsert: workspaceProcedure
@@ -347,14 +356,23 @@ export const notificationRouter = router({
       const visibleIds = (
         await buildNotificationListItems(ctx.db, ctx.workspaceId, candidates)
       ).map((row) => row.id);
-      const result = await ctx.db.notificationState.updateMany({
-        where: { id: { in: visibleIds }, userId: ctx.session.user.id },
-        data: {
-          status: NotificationStatus.READ,
-          readAt: now,
-        },
+      const count = await ctx.db.$transaction(async (tx) => {
+        const remindersRead = await markDueRemindersRead(
+          tx,
+          ctx.session.user.id,
+          ctx.workspaceId,
+          now,
+        );
+        const result = await tx.notificationState.updateMany({
+          where: { id: { in: visibleIds }, userId: ctx.session.user.id },
+          data: {
+            status: NotificationStatus.READ,
+            readAt: now,
+          },
+        });
+        return result.count + remindersRead.count;
       });
-      return { count: result.count };
+      return { count };
     }
 
     const item = await updateNotificationState(ctx, input.id!, {

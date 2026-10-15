@@ -27,12 +27,14 @@ export function NewInitiativeDialog({
   open,
   onClose,
   onCreated,
+  initialName = "",
 }: {
   open: boolean;
   onClose: () => void;
   onCreated?: () => void;
+  initialName?: string;
 }) {
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [slug, setSlug] = useState("");
   const [description, setDescription] = useState("");
   const [targetDate, setTargetDate] = useState("");

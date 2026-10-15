@@ -9,9 +9,9 @@ export default function AdminUsersPage() {
   return (
     <AdminPage
       activePath="/admin/users"
-      crumbs={["Instance", "Users"]}
+      crumbs={["Administration", "People"]}
       eyebrow="Instance"
-      title="Users"
+      title="People"
       subtitle="Everyone with access · manage instance-admin role"
     >
       <AdminUsers />

@@ -21,7 +21,7 @@ export type DevOptions = {
 };
 
 export function parseWindowsPnpmEntry(shim: string): string | undefined {
-  return shim.match(/%~dp0\\([^"\r\n]*pnpm\.(?:mjs|cjs|js))/i)?.[1];
+  return shim.match(/(?:%~dp0|%dp0%)\\([^"\r\n]*pnpm\.(?:mjs|cjs|js))/i)?.[1];
 }
 
 export function parseDevOptions(argv: string[]): DevOptions {

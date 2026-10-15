@@ -44,21 +44,37 @@ const STATUS_COPY: Record<string, { label: string; tone: string }> = {
 export function WorkCoordinationPanel({
   issueId,
   issueKey,
+  embedded = false,
+  createOpen,
+  onCreateOpenChange,
 }: {
   issueId: string;
   issueKey: string;
+  embedded?: boolean;
+  createOpen?: boolean;
+  onCreateOpenChange?: (open: boolean) => void;
 }) {
   const workspace = useWorkspace();
   const canRelease = workspace.role === "OWNER" || workspace.role === "ADMIN";
   const utils = trpc.useUtils();
-  const [creating, setCreating] = useState(false);
+  const [localCreating, setLocalCreating] = useState(false);
+  const creating = createOpen ?? localCreating;
+  const setCreating = (open: boolean) => {
+    setLocalCreating(open);
+    onCreateOpenChange?.(open);
+  };
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState(`codex/${issueKey.toLowerCase()}-work`);
   const [baseBranch, setBaseBranch] = useState("main");
   const [worktreePath, setWorktreePath] = useState("");
   const [releaseVersion, setReleaseVersion] = useState("");
 
-  const { data: sessions, isLoading } = trpc.workSession.listForIssue.useQuery(
+  const {
+    data: sessions,
+    isLoading,
+    isError,
+    refetch,
+  } = trpc.workSession.listForIssue.useQuery(
     { issueId },
     { staleTime: 10_000, refetchOnWindowFocus: true },
   );
@@ -120,17 +136,19 @@ export function WorkCoordinationPanel({
   const ownershipMismatch = connectionMismatch || observedMismatch;
   const observedConnection = latest?.observedImplementation?.run.connection ?? null;
 
+  if (embedded && !isLoading && !isError && !latest && !creating) return null;
+
   return (
     <section
-      className="rounded-md border border-border bg-card/40"
+      className={embedded ? "min-w-0" : "rounded-md border border-border bg-card/40"}
       aria-label="Code work coordination"
     >
       <div className="flex items-center gap-2 border-b border-border/60 px-2.5 py-2">
         <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
         <span className="text-[0.6875rem] uppercase tracking-wider text-muted-foreground">
-          Delivery
+          {creating && !active ? "Start delivery session" : "Delivery"}
         </span>
-        {status && (
+        {status && (!creating || active) && (
           <span className={cn("ml-auto text-[0.6875rem] font-medium", status.tone)}>
             {status.label}
           </span>
@@ -139,7 +157,14 @@ export function WorkCoordinationPanel({
 
       {isLoading ? (
         <div className="text-meta p-2.5 text-muted-foreground">Checking ownership…</div>
-      ) : latest ? (
+      ) : isError ? (
+        <div role="status" className="text-meta p-2.5 text-warning">
+          Delivery could not be loaded. Existing ownership may still apply.
+          <Button type="button" size="sm" variant="ghost" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      ) : latest && (!creating || active) ? (
         <div className="space-y-2.5 p-2.5">
           <div className="rounded-md border border-border bg-background/70 p-2.5">
             <div className="flex items-start gap-2">
@@ -182,18 +207,16 @@ export function WorkCoordinationPanel({
                     </Tooltip>
                   </div>
                 )}
-                <div
-                  className="mt-1 truncate font-mono text-[0.6875rem] text-muted-foreground"
-                  title={latest.branch}
-                >
-                  {latest.repoFullName}:{latest.branch}
-                </div>
                 <details className="group mt-2 text-muted-foreground">
                   <summary className="focus-ring flex cursor-pointer list-none items-center justify-between rounded border border-border/70 bg-subtle/30 px-2 py-1 text-[0.6875rem] font-medium transition-colors hover:border-border hover:bg-subtle/70 hover:text-foreground group-open:border-border group-open:bg-subtle/60 [&::-webkit-details-marker]:hidden">
                     <span>Delivery evidence</span>
                     <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
                   </summary>
                   <dl className="mt-1.5 grid grid-cols-[5.5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-[0.6875rem]">
+                    <dt>Repository</dt>
+                    <dd className="min-w-0 break-all font-mono">{latest.repoFullName}</dd>
+                    <dt>Branch</dt>
+                    <dd className="min-w-0 break-all font-mono">{latest.branch}</dd>
                     <dt>Agent</dt>
                     <dd className="min-w-0 truncate text-foreground">
                       {identity?.agentLabel ?? "none recorded"}
@@ -279,10 +302,10 @@ export function WorkCoordinationPanel({
           )}
 
           {latest.participants.length > 1 && (
-            <div className="rounded-md border border-border/70 bg-background/40 p-2.5">
-              <div className="text-[0.625rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                Delivery participants
-              </div>
+            <details className="rounded-md border border-border/70 bg-background/40 p-2.5">
+              <summary className="focus-ring text-meta cursor-pointer font-medium text-muted-foreground">
+                Delivery participants ({latest.participants.length})
+              </summary>
               <ul className="mt-1.5 space-y-1">
                 {latest.participants.map((participant) => (
                   <li key={participant.id} className="text-meta flex items-center gap-2">
@@ -296,7 +319,7 @@ export function WorkCoordinationPanel({
                   </li>
                 ))}
               </ul>
-            </div>
+            </details>
           )}
 
           {latest.pullRequest ? (
@@ -442,6 +465,7 @@ export function WorkCoordinationPanel({
               value={branch}
               onChange={(e) => setBranch(e.target.value)}
               className="h-8 font-mono"
+              autoFocus
             />
           </label>
           <div className="grid grid-cols-2 gap-2">

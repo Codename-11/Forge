@@ -20,6 +20,7 @@ import {
 import { router, protectedProcedure, workspaceProcedure, adminProcedure } from "@/server/trpc";
 import { rateLimit } from "@/server/rate-limit";
 import { recordChange } from "@/server/audit";
+import { deleteWorkspacePreservingRuntimes } from "@/server/services/workspace-deletion";
 import {
   deliverWorkspaceInvitation,
   expireWorkspaceInvitations,
@@ -645,25 +646,19 @@ export const workspaceRouter = router({
       if (ctx.membership.role !== Role.OWNER) {
         throw new TRPCError({ code: "FORBIDDEN", message: "Only owners can delete a workspace." });
       }
-      const ws = await ctx.db.workspace.findUniqueOrThrow({
-        where: { id: ctx.workspaceId },
-        select: { id: true, name: true },
-      });
-      if (input.confirmName !== ws.name) {
-        throw new TRPCError({
-          code: "BAD_REQUEST",
-          message: "Confirmation name does not match workspace name.",
-        });
-      }
-      // Drop the bucket + objects first while we still have the slug.
-      // Swallow failures so a dead MinIO doesn't block a workspace delete.
-      await deleteWorkspaceBucket(ctx.workspaceId).catch((err) => {
-        console.warn(
-          `[workspace.delete] bucket cleanup failed for ${ctx.workspaceId}:`,
-          (err as Error).message,
-        );
-      });
-      return ctx.db.workspace.delete({ where: { id: ctx.workspaceId } });
+      return ctx.db.$transaction((tx) =>
+        deleteWorkspacePreservingRuntimes(tx, ctx.workspaceId, input.confirmName, async () => {
+          // Guards have passed and the row still reserves this bucket's slug.
+          // Preserve best-effort cleanup before deletion; storage and DB
+          // changes are not atomic if the later database delete fails.
+          await deleteWorkspaceBucket(ctx.workspaceId).catch((err) => {
+            console.warn(
+              `[workspace.delete] bucket cleanup failed for ${ctx.workspaceId}:`,
+              (err as Error).message,
+            );
+          });
+        }),
+      );
     }),
 
   /**

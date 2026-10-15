@@ -27,6 +27,8 @@ import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
+import { agentOwnerLabel } from "@/lib/agent-ownership-ui";
+import { TransferAgentOwnershipDialog } from "../transfer-agent-ownership-dialog";
 
 /**
  * Client body for the agent profile detail page. Reads
@@ -107,20 +109,28 @@ function ReadinessCard({
   label: string;
   value: string;
   detail: string;
-  ready: boolean;
+  ready: boolean | null;
 }) {
   const StateIcon = ready ? CheckCircle2 : TriangleAlert;
   return (
     <div
       className={
         "rounded-lg border p-3 " +
-        (ready ? "border-success/25 bg-success/5" : "border-warning/30 bg-warning/5")
+        (ready === null
+          ? "border-border bg-card/40"
+          : ready
+            ? "border-success/25 bg-success/5"
+            : "border-warning/30 bg-warning/5")
       }
     >
       <div className="text-meta flex items-center gap-2 text-muted-foreground">
         <Icon className="h-3.5 w-3.5" />
         <span className="font-medium uppercase tracking-wide">{label}</span>
-        <StateIcon className={"ml-auto h-3.5 w-3.5 " + (ready ? "text-success" : "text-warning")} />
+        {ready !== null && (
+          <StateIcon
+            className={"ml-auto h-3.5 w-3.5 " + (ready ? "text-success" : "text-warning")}
+          />
+        )}
       </div>
       <div className="mt-2 truncate text-sm font-semibold text-foreground">{value}</div>
       <p className="text-meta mt-1 leading-relaxed text-muted-foreground">{detail}</p>
@@ -140,10 +150,14 @@ export function AgentDetailContent({
   id,
   isInstanceAdmin,
   workspaces,
+  initialWorkspaceId,
+  setupMode,
 }: {
   id: string;
   isInstanceAdmin: boolean;
   workspaces: ProfileWorkspace[];
+  initialWorkspaceId?: string;
+  setupMode?: "external" | "managed";
 }) {
   const router = useRouter();
   const utils = trpc.useUtils();
@@ -157,15 +171,30 @@ export function AgentDetailContent({
     runtimeId: string;
     capabilities: string;
   } | null>(null);
-  const [bindWorkspaceId, setBindWorkspaceId] = useState("");
+  const [bindWorkspaceId, setBindWorkspaceId] = useState(
+    workspaces.some(
+      (workspace) =>
+        workspace.id === initialWorkspaceId &&
+        (workspace.role === "OWNER" || workspace.role === "ADMIN"),
+    )
+      ? initialWorkspaceId!
+      : "",
+  );
   const [unbindTarget, setUnbindTarget] = useState<{
     agentId: string;
     workspaceId: string;
     workspaceName: string;
   } | null>(null);
   const [dangerOpen, setDangerOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
   const { data: a, isLoading, error } = trpc.agents.profiles.get.useQuery({ id });
-  const { data: runtimes } = trpc.global.runtimes.useQuery();
+  const { data: runtimes } = trpc.global.runtimeOptions.useQuery(
+    {
+      ownerType: a?.ownerType === "SERVICE" ? "SERVICE" : "PERSONAL",
+      ownerId: a?.ownerType === "PERSONAL" ? (a.ownerId ?? undefined) : undefined,
+    },
+    { enabled: !!a?.canEdit },
+  );
   const updateProfile = trpc.agents.profiles.update.useMutation({
     onSuccess: async () => {
       toast.success("Agent profile saved");
@@ -178,7 +207,7 @@ export function AgentDetailContent({
   });
   const bindProfile = trpc.agents.bindings.bindFromMissionControl.useMutation({
     onSuccess: async () => {
-      toast.success("Agent bound to the workspace.");
+      toast.success("Agent added to the workspace.");
       setBindWorkspaceId("");
       await Promise.all([
         utils.agents.profiles.get.invalidate({ id }),
@@ -189,7 +218,7 @@ export function AgentDetailContent({
   });
   const unbindProfile = trpc.agents.bindings.unbindFromMissionControl.useMutation({
     onSuccess: async () => {
-      toast.success("Agent unbound. Runs, chats, and history are preserved.");
+      toast.success("Workspace access removed. Runs, chats, and history are preserved.");
       setUnbindTarget(null);
       await Promise.all([
         utils.agents.profiles.get.invalidate({ id }),
@@ -210,7 +239,7 @@ export function AgentDetailContent({
       toast.success(
         result.action === "deleted"
           ? `Deleted ${result.name}.`
-          : `Archived ${result.name}; ${result.boundAgents} workspace binding${result.boundAgents === 1 ? "" : "s"} still reference it.`,
+          : `Archived ${result.name}; ${result.boundAgents} workspace${result.boundAgents === 1 ? "" : "s"} retain its history.`,
       );
       router.push("/agents");
     },
@@ -268,14 +297,17 @@ export function AgentDetailContent({
     (client) =>
       !client.revokedAt && (!client.expiresAt || new Date(client.expiresAt).getTime() > Date.now()),
   );
-  const executionReady = !!a.runtime;
   const profile = a;
   const boundWorkspaceIds = new Set(a.bindings.map((binding) => binding.workspace.id));
   const bindableWorkspaces = workspaces.filter(
     (workspace) =>
+      a.availability.state === "AVAILABLE" &&
+      (isInstanceAdmin || a.ownedByMe || a.instanceShared) &&
       (workspace.role === "OWNER" || workspace.role === "ADMIN") &&
       !boundWorkspaceIds.has(workspace.id),
   );
+  const setupWorkspace = workspaces.find((workspace) => workspace.id === initialWorkspaceId);
+  const setupBinding = a.bindings.find((binding) => binding.workspace.id === initialWorkspaceId);
 
   function beginDefinitionEdit() {
     setDefinitionDraft({
@@ -338,42 +370,126 @@ export function AgentDetailContent({
               <ArrowLeft className="h-3.5 w-3.5" /> All agents
             </Link>
             <span className="ml-2 inline-flex rounded border border-border/70 bg-card/40 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-              Global profile
+              Agent identity
             </span>
           </div>
 
+          {setupMode && setupWorkspace && (
+            <div className="space-y-2 rounded-lg border border-ember/30 bg-ember/5 p-4">
+              <h2 className="text-sm font-semibold">
+                {setupMode === "external" ? "Connect an MCP client" : "Configure managed execution"}{" "}
+                · {setupWorkspace.name}
+              </h2>
+              <p className="text-meta text-muted-foreground">
+                {!setupBinding
+                  ? "Add workspace access below to continue. This requires a workspace owner or admin."
+                  : setupMode === "external"
+                    ? "Issue a scoped client credential for this workspace. The client executes externally; the runtime configuration below does not describe its execution."
+                    : "Review the identity’s managed runtime, then configure routing and approvals for this workspace. A configured host alone does not prove that a run executed."}
+              </p>
+              <div className="flex flex-wrap gap-3 text-sm">
+                {!setupBinding ? (
+                  <a className="focus-ring text-ember hover:underline" href="#workspace-access">
+                    Review workspace access →
+                  </a>
+                ) : setupMode === "external" && setupBinding.canManage ? (
+                  <Link
+                    className="focus-ring text-ember hover:underline"
+                    href={`/w/${encodeURIComponent(setupWorkspace.slug)}/settings/access?create=agent&agentId=${encodeURIComponent(setupBinding.id)}`}
+                  >
+                    Add MCP client →
+                  </Link>
+                ) : (
+                  <Link
+                    className="focus-ring text-ember hover:underline"
+                    href={`/w/${encodeURIComponent(setupWorkspace.slug)}/settings/agents`}
+                  >
+                    Workspace agent policy →
+                  </Link>
+                )}
+                {setupMode === "managed" && (
+                  <>
+                    <a className="focus-ring text-ember hover:underline" href="#agent-definition">
+                      Review runtime assignment →
+                    </a>
+                    <Link
+                      className="focus-ring text-ember hover:underline"
+                      href={`/w/${encodeURIComponent(setupWorkspace.slug)}/settings/runtimes`}
+                    >
+                      Manage workspace runtimes →
+                    </Link>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          <div className="grid gap-3 rounded-lg border border-border bg-card/40 p-4 sm:grid-cols-2">
+            <Def label="Owner">
+              {agentOwnerLabel(a)}
+              {isInstanceAdmin && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-2"
+                  onClick={() => setTransferOpen(true)}
+                >
+                  Transfer ownership
+                </Button>
+              )}
+            </Def>
+            <Def label="Catalog availability">
+              {a.instanceShared
+                ? "Instance catalog"
+                : a.ownerType === "SERVICE"
+                  ? "Instance-admin setup only"
+                  : "Owner-only catalog"}{" "}
+              · {a.availability.state.toLowerCase().replaceAll("_", " ")}
+            </Def>
+            <Def label="Created by">
+              {a.createdBy?.name ?? "Historical creator not recorded"}
+              <p className="text-meta mt-1 text-muted-foreground">
+                Creation provenance is preserved independently of ownership.
+              </p>
+            </Def>
+            <p className="text-meta text-muted-foreground sm:col-span-2">
+              Catalog availability allows an administrator to add an identity. Actual access is
+              granted per workspace below; ownership does not grant access to another workspace’s
+              data.
+            </p>
+          </div>
           <div className="grid gap-3 sm:grid-cols-3">
             <ReadinessCard
               icon={Server}
-              label="Primary execution runtime"
-              value={a.runtime?.name ?? "Not assigned"}
+              label="Managed execution"
+              value={a.runtime?.name ?? "Not configured · optional"}
               detail={
                 a.runtime
-                  ? "Forge starts this identity through one execution host."
-                  : "Assign one runtime before automatic execution."
+                  ? "Configured host for Forge-dispatched runs. MCP clients execute independently."
+                  : "Only needed when Forge dispatches work. External MCP clients do not need a runtime."
               }
-              ready={executionReady}
+              ready={null}
             />
             <ReadinessCard
               icon={Link2}
-              label="Workspace bindings"
-              value={`${a.bindings.length} active`}
+              label="Workspace access"
+              value={`${a.bindings.length} visible`}
               detail="Each workspace owns capacity, routing, and approval policy."
-              ready={a.bindings.length > 0}
+              ready={null}
             />
             <ReadinessCard
               icon={KeyRound}
               label="MCP clients"
-              value={`${activeClients.length} active`}
-              detail="An identity can hold multiple client keys across its bindings."
-              ready={activeClients.length > 0}
+              value={`${activeClients.length} valid credentials`}
+              detail="Valid keys do not prove that a client or delivery session is currently active."
+              ready={null}
             />
           </div>
 
           {/* Definition */}
+          <div id="agent-definition" />
           <Section
             title="Identity & execution"
-            hint="Global definition — the identity and primary runtime apply to every workspace binding."
+            hint="Identity defaults apply wherever this agent is allowed. Managed execution is optional and separate from MCP connections."
             actions={
               a.canEdit ? (
                 definitionDraft ? (
@@ -422,64 +538,65 @@ export function AgentDetailContent({
                   />
                 </EditorField>
                 <EditorField label="Provider">
-                  <select
-                    aria-label="Agent provider"
+                  <Combobox
+                    ariaLabel="Agent provider"
                     value={definitionDraft.provider}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setDefinitionDraft({
                         ...definitionDraft,
-                        provider: event.target.value as AgentProvider,
+                        provider: (value ?? definitionDraft.provider) as AgentProvider,
                       })
                     }
-                    className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                  >
-                    {Object.values(AgentProvider).map((provider) => (
-                      <option key={provider} value={provider}>
-                        {provider.toLowerCase()}
-                      </option>
-                    ))}
-                  </select>
+                    options={Object.values(AgentProvider).map((value) => ({
+                      value,
+                      label: value.toLowerCase(),
+                    }))}
+                    className="h-9 w-full"
+                  />
                 </EditorField>
                 <EditorField label="Run engine" hint="Default follows the provider">
-                  <select
-                    aria-label="Agent run engine"
+                  <Combobox
+                    ariaLabel="Agent run engine"
                     value={definitionDraft.runEngine}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setDefinitionDraft({
                         ...definitionDraft,
-                        runEngine: event.target.value as "DEFAULT" | RunEngine,
+                        runEngine: (value ?? "DEFAULT") as "DEFAULT" | RunEngine,
                       })
                     }
-                    className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                  >
-                    <option value="DEFAULT">Default</option>
-                    {Object.values(RunEngine).map((engine) => (
-                      <option key={engine} value={engine}>
-                        {engine.toLowerCase()}
-                      </option>
-                    ))}
-                  </select>
+                    options={[
+                      { value: "DEFAULT", label: "Default" },
+                      ...Object.values(RunEngine).map((value) => ({
+                        value,
+                        label: value.toLowerCase(),
+                      })),
+                    ]}
+                    className="h-9 w-full"
+                  />
                 </EditorField>
                 <EditorField label="Primary execution runtime" hint="One runtime per identity">
-                  <select
-                    aria-label="Primary execution runtime"
-                    value={definitionDraft.runtimeId}
-                    onChange={(event) =>
-                      setDefinitionDraft({ ...definitionDraft, runtimeId: event.target.value })
+                  <Combobox
+                    ariaLabel="Primary execution runtime"
+                    value={definitionDraft.runtimeId || null}
+                    onChange={(value) =>
+                      setDefinitionDraft({ ...definitionDraft, runtimeId: value ?? "" })
                     }
-                    className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-                  >
-                    <option value="">Not assigned</option>
-                    {a.runtime &&
-                      !(runtimes ?? []).some((runtime) => runtime.id === a.runtime!.id) && (
-                        <option value={a.runtime.id}>{a.runtime.name} · assigned</option>
-                      )}
-                    {(runtimes ?? []).map((runtime) => (
-                      <option key={runtime.id} value={runtime.id}>
-                        {runtime.name} · {runtime.health.label}
-                      </option>
-                    ))}
-                  </select>
+                    allowNone
+                    noneLabel="Not configured"
+                    placeholder="Not configured"
+                    options={[
+                      ...(a.runtime &&
+                      !(runtimes ?? []).some((runtime) => runtime.id === a.runtime!.id)
+                        ? [{ value: a.runtime.id, label: a.runtime.name, secondary: "Assigned" }]
+                        : []),
+                      ...(runtimes ?? []).map((runtime) => ({
+                        value: runtime.id,
+                        label: runtime.name,
+                        secondary: runtime.kind.toLowerCase().replaceAll("_", " "),
+                      })),
+                    ]}
+                    className="h-9 w-full"
+                  />
                 </EditorField>
                 <EditorField label="Capabilities" hint="Comma-separated">
                   <Input
@@ -516,7 +633,7 @@ export function AgentDetailContent({
                     </span>
                   )}
                 </Def>
-                <Def label="Runtime">
+                <Def label="Configured managed runtime">
                   {a.runtime ? (
                     <span className="inline-flex items-center gap-1.5">
                       <Server size={11} className="text-muted-foreground" />
@@ -526,14 +643,20 @@ export function AgentDetailContent({
                       </span>
                     </span>
                   ) : (
-                    <span className="italic text-muted-foreground">unassigned</span>
+                    <span className="text-muted-foreground">
+                      Not configured · not required for MCP
+                    </span>
                   )}
                 </Def>
-                <Def label="Sharing">
+                <Def label="Catalog availability">
                   {a.instanceShared ? (
-                    <span className="text-success">Shared with the whole instance</span>
+                    <span>Available for workspace admins to add</span>
                   ) : (
-                    <span className="text-muted-foreground">Private to you</span>
+                    <span className="text-muted-foreground">
+                      {a.ownerType === "SERVICE"
+                        ? "Instance-admin setup only"
+                        : "Owner or instance-admin setup only"}
+                    </span>
                   )}
                 </Def>
                 <div className="col-span-2">
@@ -559,14 +682,14 @@ export function AgentDetailContent({
 
           <Section
             title="MCP clients"
-            hint="Credential connections are workspace-scoped. One identity can have multiple clients without changing its primary execution runtime."
+            hint="Credentials are workspace-scoped. A client executes externally; a valid key does not prove live presence or an active run."
           >
             <div className="overflow-hidden rounded-lg border border-border bg-card/40">
               {a.bindings.length === 0 ? (
                 <EmptyState
                   variant="card"
-                  title="Bind this identity first"
-                  description="MCP client keys attach to a workspace binding so scopes and access remain tenant-safe."
+                  title="Add workspace access first"
+                  description="MCP client credentials attach to the agent in a specific workspace so scopes and access stay isolated."
                 />
               ) : (
                 a.bindings.map((binding) => {
@@ -585,7 +708,7 @@ export function AgentDetailContent({
                           <WsChipDense ws={binding.workspace} />
                           <span>{binding.workspace.name}</span>
                           <span className="text-meta text-muted-foreground">
-                            {bindingActive.length} active
+                            {bindingActive.length} valid credentials
                           </span>
                         </div>
                         <div className="mt-2 flex flex-wrap gap-1.5">
@@ -628,14 +751,14 @@ export function AgentDetailContent({
 
           <Section
             title="Prompt & system context"
-            hint="Profile-level prompt used by chat and active workspace bindings."
+            hint="Identity-level prompt used by chat and workspaces where this agent is enabled."
           >
             <div className="space-y-3 rounded-lg border border-border bg-card/40 p-4">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <div className="text-sm font-medium text-foreground">Template markdown</div>
                   <div className="text-meta text-muted-foreground">
-                    {a.bindings.length} active binding{a.bindings.length === 1 ? "" : "s"}
+                    {a.bindings.length} enabled workspace{a.bindings.length === 1 ? "" : "s"}
                   </div>
                 </div>
                 {a.canEdit && (
@@ -706,14 +829,15 @@ export function AgentDetailContent({
           </Section>
 
           {/* Workspace bindings */}
+          <div id="workspace-access" />
           <Section
-            title="Workspace bindings"
-            hint="Bind here in Mission Control. Workspace policy remains in that workspace's settings."
+            title="Workspace access"
+            hint="Workspace owners and admins add agents here. Permissions, capacity, routing, and approvals remain scoped to each workspace."
             actions={
               bindableWorkspaces.length > 0 ? (
                 <div className="flex items-center gap-2">
                   <Combobox
-                    ariaLabel="Workspace to bind"
+                    ariaLabel="Workspace to add"
                     value={bindWorkspaceId || null}
                     onChange={(value) => setBindWorkspaceId(value ?? "")}
                     options={bindableWorkspaces.map((workspace) => ({
@@ -734,7 +858,7 @@ export function AgentDetailContent({
                       bindProfile.mutate({ workspaceId: bindWorkspaceId, profileId: a.id })
                     }
                   >
-                    <Plus className="h-3.5 w-3.5" /> Bind
+                    <Plus className="h-3.5 w-3.5" /> Add access
                   </Button>
                 </div>
               ) : undefined
@@ -752,7 +876,7 @@ export function AgentDetailContent({
               {a.bindings.length === 0 ? (
                 <EmptyState
                   variant="card"
-                  title="Not bound to any workspace"
+                  title="No visible workspace access"
                   description="Choose a workspace above. Only workspaces where you're an owner or admin are available."
                 />
               ) : (
@@ -829,7 +953,7 @@ export function AgentDetailContent({
                             })
                           }
                         >
-                          <X className="h-3.5 w-3.5" /> Unbind
+                          <X className="h-3.5 w-3.5" /> Remove access
                         </Button>
                       )}
                     </span>
@@ -840,7 +964,10 @@ export function AgentDetailContent({
           </Section>
 
           {/* Recent runs */}
-          <Section title="Recent runs" hint="Across all workspaces — most recent first.">
+          <Section
+            title="Recent runs"
+            hint="Work you can access across workspaces — most recent first."
+          >
             <div className="rounded-lg border border-border bg-card/40 p-2">
               {a.recentRuns.length === 0 ? (
                 <EmptyState variant="card" title="No runs yet" />
@@ -887,8 +1014,8 @@ export function AgentDetailContent({
                   </div>
                   <p className="text-meta mt-1 leading-relaxed text-muted-foreground">
                     {isInstanceAdmin
-                      ? "Unused profiles are deleted permanently. Profiles with workspace bindings are archived so runs, chats, and history remain intact."
-                      : "Archiving hides the profile from Mission Control and binding catalogs while preserving workspace history."}
+                      ? "Unused profiles are deleted permanently. Profiles used in workspaces are archived so runs, chats, and history remain intact."
+                      : "Archiving hides the identity from Agents and setup catalogs while preserving workspace history."}
                   </p>
                 </div>
                 <Button
@@ -910,12 +1037,15 @@ export function AgentDetailContent({
         </div>
       </div>
 
+      {transferOpen && isInstanceAdmin && (
+        <TransferAgentOwnershipDialog profile={a} onClose={() => setTransferOpen(false)} />
+      )}
       <Confirm
         open={!!unbindTarget}
         onOpenChange={(open) => !open && setUnbindTarget(null)}
         variant="destructive"
         title={`Unbind from ${unbindTarget?.workspaceName}?`}
-        description="The agent stops being available in this workspace. Runs, chats, and history are preserved, and re-binding restores the same binding."
+        description="The agent stops being available in this workspace. Runs, chats, and history are preserved. Adding access again restores the same workspace identity."
         primaryLabel="Unbind"
         loading={unbindProfile.isPending}
         onConfirm={async () => {
@@ -934,8 +1064,8 @@ export function AgentDetailContent({
         title={`${isInstanceAdmin ? "Remove" : "Archive"} ${a.name}?`}
         description={
           isInstanceAdmin
-            ? "If the profile has never been bound, it is permanently deleted. Otherwise it is archived and all workspace history stays intact."
-            : "The profile is hidden from the fleet and binding catalogs. Existing workspace history is preserved."
+            ? "If the identity has never been used in a workspace, it is permanently deleted. Otherwise it is archived and all workspace history stays intact."
+            : "The identity is hidden from Agents and setup catalogs. Existing workspace history is preserved."
         }
         primaryLabel={isInstanceAdmin ? "Remove profile" : "Archive profile"}
         loading={isInstanceAdmin ? removeProfile.isPending : archiveProfile.isPending}

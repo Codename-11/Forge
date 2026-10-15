@@ -79,7 +79,7 @@ export function Breadcrumbs() {
       case "issue-id": {
         const d = issueByIdQ.data;
         if (!d) return "…";
-        return formatIssueId(parsed.workspaceKey ?? "", d.number);
+        return ws ? formatIssueId(ws.key, d.number) : "…";
       }
       case "issue-key":
         return parsed.entityKey;
@@ -105,6 +105,8 @@ export function Breadcrumbs() {
   if (!parsed || !slug) return null;
 
   const sectionHref = parsed.sectionHref ? `/w/${slug}${parsed.sectionHref}` : null;
+  const issueTitle = parsed.entityKind === "issue-id" ? issueByIdQ.data?.title : null;
+  const fullLabel = issueTitle ? `${entityLabel} · ${issueTitle}` : entityLabel;
 
   return (
     <nav
@@ -114,7 +116,7 @@ export function Breadcrumbs() {
       {sectionHref ? (
         <Link
           href={sectionHref}
-          className="focus-ring truncate rounded px-1 py-0.5 hover:bg-subtle hover:text-foreground"
+          className="focus-ring shrink-0 rounded px-1 py-0.5 hover:bg-subtle hover:text-foreground"
         >
           {parsed.sectionLabel}
         </Link>
@@ -125,13 +127,21 @@ export function Breadcrumbs() {
         <>
           <ChevronRight className="h-3 w-3 shrink-0 opacity-50" aria-hidden />
           <span
+            aria-current="page"
+            aria-label={fullLabel ?? undefined}
             className={cn(
-              "truncate px-1 py-0.5 text-foreground",
+              "flex min-w-0 items-center gap-2 px-1 py-0.5 text-foreground",
               entityLabel === "…" && "text-muted-foreground",
             )}
-            title={entityLabel}
+            title={fullLabel ?? undefined}
           >
-            {entityLabel}
+            <span className={issueTitle ? "text-id shrink-0" : "truncate"}>{entityLabel}</span>
+            {issueTitle && (
+              <>
+                <span className="shrink-0 text-muted-foreground" aria-hidden>·</span>
+                <span className="min-w-0 truncate">{issueTitle}</span>
+              </>
+            )}
           </span>
         </>
       )}
@@ -213,7 +223,6 @@ type ParsedRoute = {
   entityId: string;
   entityKey: string;
   entitySlug: string;
-  workspaceKey: string | null;
 };
 
 function parsePath(pathname: string, slug: string | null): ParsedRoute | null {
@@ -237,7 +246,6 @@ function parsePath(pathname: string, slug: string | null): ParsedRoute | null {
       entityId: "",
       entityKey: parts[1],
       entitySlug: "",
-      workspaceKey: null,
     };
   }
 
@@ -251,7 +259,6 @@ function parsePath(pathname: string, slug: string | null): ParsedRoute | null {
       entityId: "",
       entityKey: "",
       entitySlug: "",
-      workspaceKey: null,
     };
   }
 
@@ -281,7 +288,6 @@ function parsePath(pathname: string, slug: string | null): ParsedRoute | null {
     entityId: entityKind === "artifact" ? "" : id ?? "",
     entityKey: "",
     entitySlug: entityKind === "artifact" ? id ?? "" : "",
-    workspaceKey: null,
   };
 }
 

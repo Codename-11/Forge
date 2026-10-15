@@ -11,6 +11,8 @@ import {
   Trash2,
   Loader2,
   AlertTriangle,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Confirm } from "@/components/ui/modal";
@@ -127,17 +129,21 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
   // because `attachment.list` itself only hits the DB and can't surface
   // the misconfig — only S3-touching endpoints can.
   const [tileStorageMisconfig, setTileStorageMisconfig] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   const initUpload = trpc.attachment.initUpload.useMutation();
   const finalize = trpc.attachment.finalize.useMutation();
   const attachLink = trpc.attachment.attachLink.useMutation({
-    onSuccess: () => {
+    onSuccess: (result) => {
       utils.attachment.list.invalidate({
         targetType: "issue",
         targetId: issueId,
       });
       utils.github.listLinked.invalidate({ issueId });
       utils.issue.byId.invalidate({ id: issueId });
+      if ("routedTo" in result && result.routedTo === "github.link") {
+        toast.success("GitHub link added to Automation & delivery.");
+      }
     },
     onError: (e) => toast.error(e.message),
   });
@@ -252,6 +258,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
   );
 
   const rows = (data ?? []) as Attachment[];
+  const visibleRows = expanded ? rows : rows.slice(0, 4);
   const hasAnything = rows.length > 0 || pending.length > 0;
 
   // The list query is DB-only so it won't trip on storage misconfig.
@@ -265,13 +272,16 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
 
   return (
     <section
-      className="rounded-lg border border-border bg-card/40"
+      id="issue-attachments"
+      tabIndex={-1}
+      aria-label="Attachments"
+      className="focus-ring min-w-0 scroll-mt-20 rounded-lg border border-border bg-card/40"
       onDragEnter={onDragEnter}
       onDragLeave={onDragLeave}
       onDragOver={onDragOver}
       onDrop={onDrop}
     >
-      <header className="flex h-9 items-center gap-2 border-b border-border px-3">
+      <header className="flex min-h-9 flex-wrap items-center gap-2 border-b border-border px-3 py-1">
         <Paperclip className="h-3.5 w-3.5 text-muted-foreground" />
         <h2 className="text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground">
           Attachments
@@ -296,7 +306,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
             className="h-6 px-2 text-[0.6875rem]"
             onClick={() => inputRef.current?.click()}
           >
-            <Upload className="h-3 w-3" /> Upload
+            <Upload className="h-3 w-3" /> Add file
           </Button>
           <Button
             type="button"
@@ -304,14 +314,19 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
             size="sm"
             className="h-6 px-2 text-[0.6875rem]"
             onClick={() => setLinkFormOpen((v) => !v)}
-            title="Attach an external link (Google Doc, GitHub PR, …)"
+            title="Attach a document or external reference"
+            aria-expanded={linkFormOpen}
+            aria-controls={`attachment-link-form-${issueId}`}
           >
             <Link2 className="h-3 w-3" /> Attach link
           </Button>
         </div>
       </header>
       {linkFormOpen && (
-        <div className="border-b border-border bg-card/40 px-3 py-2">
+        <div
+          id={`attachment-link-form-${issueId}`}
+          className="border-b border-border bg-card/40 px-3 py-2"
+        >
           <form
             onSubmit={(e) => {
               e.preventDefault();
@@ -321,6 +336,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
           >
             <input
               type="url"
+              aria-label="External link URL"
               required
               autoFocus
               value={linkUrl}
@@ -330,6 +346,7 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
             />
             <input
               type="text"
+              aria-label="External link title"
               value={linkTitle}
               onChange={(e) => setLinkTitle(e.target.value)}
               placeholder="Optional title (defaults to hostname)"
@@ -382,17 +399,31 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
           </div>
         )}
 
-        {storageMisconfig ? (
-          <StorageNotConfiguredBanner />
+        {storageMisconfig && <StorageNotConfiguredBanner />}
+        {listQuery.isError ? (
+          <div
+            role="status"
+            className="text-meta flex flex-wrap items-center gap-2 text-muted-foreground"
+          >
+            Attachments could not be loaded.
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => void listQuery.refetch()}
+            >
+              Try again
+            </Button>
+          </div>
         ) : isLoading ? (
           <p className="py-6 text-center text-xs text-muted-foreground">Loading attachments…</p>
         ) : !hasAnything ? (
-          <p className="py-6 text-center text-xs text-muted-foreground">
-            Drop files here, paste from clipboard, or click Upload.
+          <p className="text-meta py-1 text-muted-foreground">
+            No files attached. Drop files here or choose Add file.
           </p>
         ) : (
-          <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {rows.map((a) => (
+          <ul id={`attachment-list-${issueId}`} className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {visibleRows.map((a) => (
               <AttachmentTile
                 key={a.id}
                 attachment={a}
@@ -422,6 +453,24 @@ export function IssueAttachmentsPanel({ issueId }: { issueId: string }) {
               </li>
             ))}
           </ul>
+        )}
+        {rows.length > 4 && !listQuery.isError && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="mt-2 w-full text-muted-foreground"
+            aria-expanded={expanded}
+            aria-controls={`attachment-list-${issueId}`}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? (
+              <ChevronUp className="h-3.5 w-3.5" />
+            ) : (
+              <ChevronDown className="h-3.5 w-3.5" />
+            )}
+            {expanded ? "Show fewer files" : `View all attachments (${rows.length})`}
+          </Button>
         )}
       </div>
     </section>
@@ -517,7 +566,7 @@ function AttachmentTile({
   const body = useMemo(() => {
     if (isLink) {
       return (
-        <div className="flex min-h-16 items-center gap-2.5 p-2.5">
+        <div className="flex min-h-16 items-center gap-2.5 p-2.5 pr-9">
           <span className="grid h-8 w-8 shrink-0 place-items-center rounded-md border border-border bg-card/60">
             <LinkFavicon url={attachment.externalUrl} size={16} />
           </span>
@@ -541,28 +590,26 @@ function AttachmentTile({
         </div>
       );
     }
-    if (isImage && thumbUrl) {
-      return (
-        // Presigned GET into an <img>; `object-fit: cover` for the thumb.
-        // eslint-disable-next-line @next/next/no-img-element
-        <img
-          src={thumbUrl}
-          alt={attachment.filename}
-          loading="lazy"
-          className="h-full w-full object-cover"
-        />
-      );
-    }
     return (
-      <div className="flex h-full flex-col items-center justify-center gap-1 p-2 text-center">
-        {isPdf(attachment.mimeType) ? (
-          <FileText className="h-6 w-6 text-muted-foreground" />
-        ) : (
-          <FileIcon className="h-6 w-6 text-muted-foreground" />
-        )}
-        <div className="line-clamp-2 text-[0.6875rem] font-medium">{attachment.filename}</div>
-        <div className="font-mono text-[0.6875rem] text-muted-foreground">
-          {prettyBytes(attachment.size)}
+      <div className="flex min-h-16 items-center gap-2.5 p-2.5 pr-9">
+        <span className="grid h-10 w-10 shrink-0 place-items-center overflow-hidden rounded border border-border bg-card/60">
+          {isImage && thumbUrl ? (
+            // Presigned thumbnail; the file name stays visible beside it.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={thumbUrl} alt="" loading="lazy" className="h-full w-full object-cover" />
+          ) : isPdf(attachment.mimeType) ? (
+            <FileText className="h-5 w-5 text-muted-foreground" />
+          ) : (
+            <FileIcon className="h-5 w-5 text-muted-foreground" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="text-filename line-clamp-2 break-words font-medium">
+            {attachment.filename}
+          </div>
+          <div className="text-meta text-muted-foreground">
+            {prettyBytes(attachment.size)} · Preview
+          </div>
         </div>
       </div>
     );
@@ -578,15 +625,11 @@ function AttachmentTile({
   ]);
 
   return (
-    <li
-      className={cn(
-        "group relative overflow-hidden rounded-md border border-border bg-background",
-        isLink ? "col-span-2 sm:col-span-3" : "aspect-[4/3]",
-      )}
-    >
+    <li className="group relative min-w-0 overflow-hidden rounded-md border border-border bg-background">
       <button
         type="button"
         onClick={openTile}
+        aria-label={`${isLink ? "Open link" : "Preview attachment"}: ${attachment.filename}`}
         className="block h-full w-full text-left transition-shadow hover:ring-1 hover:ring-ember/40 focus:outline-none focus-visible:ring-2 focus-visible:ring-ember"
         title={
           isLink
@@ -596,22 +639,17 @@ function AttachmentTile({
       >
         {body}
       </button>
-      {/* Overlay footer — filename only on image thumbs (covers the image). */}
-      {isImage && (
-        <div className="text-filename pointer-events-none absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-background/95 to-transparent px-2 py-1 text-foreground/90">
-          {attachment.filename}
-        </div>
-      )}
       {canDelete && (
         <button
           type="button"
-          className="absolute right-1 top-1 grid h-6 w-6 place-items-center rounded-md bg-background/90 text-muted-foreground opacity-0 transition-opacity hover:text-danger group-hover:opacity-100"
+          className="focus-ring absolute right-1 top-1 grid h-7 w-7 place-items-center rounded-md bg-background/90 text-muted-foreground transition-colors hover:text-danger"
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
             setConfirmOpen(true);
           }}
           title="Delete attachment"
+          aria-label={`Delete attachment: ${attachment.filename}`}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -621,7 +659,11 @@ function AttachmentTile({
         onOpenChange={setConfirmOpen}
         variant="destructive"
         title="Delete attachment?"
-        description="Permanently removes the file from the issue and object storage."
+        description={
+          isLink
+            ? "Removes this external reference from the issue."
+            : "Permanently removes the file from the issue and object storage."
+        }
         primaryLabel="Delete attachment"
         typeToConfirm={attachment.filename}
         onConfirm={() => onDelete()}

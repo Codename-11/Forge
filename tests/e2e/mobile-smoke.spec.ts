@@ -43,7 +43,7 @@ async function createIssueFromMobileTopbar(page: Page, title: string) {
   await expect(titleField).toHaveValue(title);
   await titleField.press("Control+Enter");
   await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
-  await expect(page.getByText(title).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
 }
 
 test.describe("Mobile smoke", () => {
@@ -120,7 +120,7 @@ test.describe("Mobile smoke", () => {
     }) => {
       await page.setViewportSize({ width, height: HEIGHT });
 
-      await page.goto("/");
+      await page.goto("/mission-control");
       await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
       const activityPill = page.getByTitle("Activity · live runs and changes · shortcut G then 5");
       await expect(activityPill).toBeVisible();
@@ -132,7 +132,7 @@ test.describe("Mobile smoke", () => {
       await expectNoDocumentHorizontalOverflow(page, `activity feed at ${width}px`);
 
       await page.goto("/agents");
-      await expect(page.getByRole("heading", { name: "Agent fleet" })).toBeVisible();
+      await expect(page.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
       await page.getByRole("button", { name: "Open menu" }).click();
       const globalMenu = page.getByRole("dialog", { name: "Menu" });
       await expect(globalMenu).toBeVisible();
@@ -166,7 +166,7 @@ test.describe("Mobile smoke", () => {
 
   test("primary phone-width issue workflow supports create, edit, comment, status, assignment, agents, and runtimes", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: 390, height: HEIGHT });
     const title = `Mobile UX ${Date.now()}`;
     const editedTitle = `${title} edited`;
@@ -193,7 +193,13 @@ test.describe("Mobile smoke", () => {
     await page.getByRole("option", { name: "In Progress" }).click();
     await expect(status).toContainText("In Progress");
 
-    await page.getByTitle(/Assign agent/i).click();
+    await page.getByRole("link", { name: "Automation", exact: true }).click();
+    await page.getByText("Add agent or delivery…", { exact: true }).click();
+    await testInfo.attach("Mobile automation menu clears the floating dock", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
+    await page.getByRole("button", { name: "Assign an agent", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("radiogroup", { name: "Engagement mode" })).toBeVisible();
     await page.getByPlaceholder(/Assign agent/i).fill("victor");

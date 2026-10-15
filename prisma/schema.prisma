@@ -32,6 +32,19 @@ enum Role {
   GUEST
 }
 
+/// Ownership is independent of catalog sharing and workspace authorization.
+enum ResourceOwnerType {
+  PERSONAL
+  SERVICE
+  UNASSIGNED
+}
+
+enum PersonalAgentCreation {
+  DISABLED
+  APPROVAL_REQUIRED
+  SELF_SERVICE
+}
+
 /// Default audience for a project. RESTRICTED projects require an explicit
 /// ProjectAccess row for non-administrators.
 enum ProjectVisibility {
@@ -855,6 +868,7 @@ enum AgentRunStatus {
 // ----------------------------------------------------------------------------
 
 model User {
+  issueReminders           IssueReminder[]
   id                       String       @id @default(cuid())
   email                    String       @unique
   /// Canonical case-insensitive identity key. All account creation and lookup
@@ -959,7 +973,8 @@ model User {
   memberships            Membership[]
   invitationsSent        WorkspaceInvitation[]  @relation("InvitationSender")
   invitationsAccepted    WorkspaceInvitation[]  @relation("InvitationAcceptor")
-  agentProfiles          AgentProfile[]
+  agentProfiles          AgentProfile[]         @relation("AgentProfileOwner")
+  createdAgentProfiles   AgentProfile[]         @relation("AgentProfileCreator")
   requestedAgentProfiles AgentProfile[]         @relation("AgentProfileRequester")
   connections            Connection[]
   externalResourceLinks  ExternalResourceLink[] @relation("ExternalResourceLinkCreator")
@@ -989,7 +1004,8 @@ model User {
   timeEntries                       TimeEntry[]
   chatThreads                       ChatThread[]
   chatThreadReads                   ChatThreadRead[]
-  runtimes                          Runtime[]
+  runtimes                          Runtime[]                 @relation("RuntimeOwner")
+  createdRuntimes                   Runtime[]                 @relation("RuntimeCreator")
   controlRequestedRuns              AgentRun[]                @relation("AgentRunControlRequester")
   clearedAgentRuns                  AgentRun[]                @relation("AgentRunClearer")
   pins                              Pin[]
@@ -1084,6 +1100,14 @@ model InstanceAuthPolicy {
 
   autoRedirectProvider SsoProvider? @relation(fields: [autoRedirectProviderId], references: [id], onDelete: SetNull)
   breakGlassUser       User?        @relation("InstanceBreakGlassUser", fields: [breakGlassUserId], references: [id], onDelete: Restrict)
+}
+
+/// Singleton policy; default preserves the existing approval-required behavior.
+model InstanceAgentPolicy {
+  id                    String                @id @default("default")
+  personalAgentCreation PersonalAgentCreation @default(APPROVAL_REQUIRED)
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
 }
 
 /// Optional local sign-in method attached to the same canonical User used by
@@ -1198,6 +1222,7 @@ model SsoProvider {
 // ----------------------------------------------------------------------------
 
 model Workspace {
+  issueReminders                  IssueReminder[]
   id                              String                     @id @default(cuid())
   slug                            String                     @unique
   name                            String
@@ -1696,6 +1721,7 @@ model Label {
 }
 
 model Issue {
+  reminders             IssueReminder[]
   id                    String          @id @default(cuid())
   workspaceId           String
   projectId             String?
@@ -1838,6 +1864,31 @@ model ProjectTemplate {
 
   @@unique([workspaceId, name])
   @@index([workspaceId])
+}
+
+/// Private, one-shot reminder. A due date or issue snooze does not create one.
+model IssueReminder {
+  id           String   @id @default(cuid())
+  workspaceId  String
+  issueId      String
+  userId       String
+  remindAt     DateTime
+  timezone     String
+  browserPush  Boolean  @default(false)
+  readAt       DateTime?
+  dismissedAt  DateTime?
+  notifiedAt   DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  issue     Issue     @relation(fields: [issueId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, issueId])
+  @@index([workspaceId, userId, remindAt])
+  @@index([browserPush, notifiedAt, remindAt])
+  @@index([issueId])
 }
 
 /// Reusable issue starting-points scoped to a workspace (or project).
@@ -2569,12 +2620,12 @@ model Runtime {
   /// Stored only for ops display; the underlying ApiKey row is the
   /// source of truth.
   ownerKeyPrefix         String?
-  /// User who registered this runtime. The global owner — global runtime
-  /// views (Mission Control, /settings/runtimes) key off this rather than
-  /// `workspaceId`, so a host appears once across all the owner's
-  /// workspaces. `workspaceId` is retained (where the daemon first
-  /// registered) for back-compat; treat `ownerId` as the global identity.
+  /// Human owner, independent of the registration-home workspace. SERVICE
+  /// runtimes are instance-managed; UNASSIGNED preserves legacy ambiguity.
+  ownerType              ResourceOwnerType      @default(UNASSIGNED)
   ownerId                String?
+  /// Creation provenance only; never a permission grant. Legacy rows stay null.
+  createdById            String?
   /// Instance admin can mark a runtime instance-shared so it appears in
   /// every workspace's runtime picker (not just the owner's). Mirrors
   /// {@link AgentProfile.instanceShared}.
@@ -2604,7 +2655,8 @@ model Runtime {
   updatedAt              DateTime               @updatedAt
 
   workspace         Workspace          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  owner             User?              @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  owner             User?              @relation("RuntimeOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  createdBy         User?              @relation("RuntimeCreator", fields: [createdById], references: [id], onDelete: SetNull)
   agents            Agent[]            @relation("AgentRuntime")
   agentProfiles     AgentProfile[]     @relation("AgentProfileRuntime")
   secrets           RuntimeSecret[]
@@ -3205,8 +3257,12 @@ model ExternalWebhookEvent {
 /// `profileId` is null (un-backfilled rows).
 model AgentProfile {
   id               String           @id @default(cuid())
-  /// User who owns / defined this profile.
-  ownerId          String
+  /// PERSONAL profiles have a human owner; SERVICE profiles are managed by
+  /// instance administrators and survive the issuing human's departure.
+  ownerType        ResourceOwnerType @default(PERSONAL)
+  ownerId          String?
+  /// Creator provenance only. Unknown historical creators remain null.
+  createdById      String?
   /// Stable handle, unique per owner. Maps to a Hermes profile dir name.
   profileKey       String
   name             String
@@ -3244,7 +3300,8 @@ model AgentProfile {
   createdAt        DateTime         @default(now())
   updatedAt        DateTime         @updatedAt
 
-  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner       User?    @relation("AgentProfileOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  createdBy   User?    @relation("AgentProfileCreator", fields: [createdById], references: [id], onDelete: SetNull)
   requestedBy User?    @relation("AgentProfileRequester", fields: [requestedById], references: [id], onDelete: SetNull)
   runtime     Runtime? @relation("AgentProfileRuntime", fields: [runtimeId], references: [id], onDelete: SetNull)
   bindings    Agent[]  @relation("AgentProfileBinding")

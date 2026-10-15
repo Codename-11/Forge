@@ -1,7 +1,23 @@
 import { describe, expect, it } from "vitest";
-import { realtimeTargets } from "@/lib/realtime-targets";
+import { realtimeTargets, relationRealtimeTargets } from "@/lib/realtime-targets";
 
 describe("realtime cache targets", () => {
+  it("refreshes both ends of a relation without treating ordinary metadata as a relation", () => {
+    expect(
+      relationRealtimeTargets({
+        subjectType: "issue",
+        subjectId: "issue-1",
+        payload: { relationId: "relation-1", toIssueId: "issue-2" },
+      }),
+    ).toEqual(["issue-1", "issue-2"]);
+    expect(
+      relationRealtimeTargets({
+        subjectType: "issue",
+        subjectId: "issue-1",
+        payload: { title: "Changed" },
+      }),
+    ).toEqual([]);
+  });
   it("targets the viewed issue and both sides of a sprint move", () => {
     expect(
       realtimeTargets({
