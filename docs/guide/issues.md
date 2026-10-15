@@ -18,7 +18,7 @@ An assigned agent remains a separate control from human assignment.
   blocks, duplicates and related issues, including linked titles and statuses.
   Expand a group or the dependency map without replacing the list.
 - **Automation & delivery** is always discoverable. Add agent or delivery opens
-  Ask an agent, Link implementation PR, and Start delivery session. Existing
+  Ask an agent, Assign an agent, Link implementation PR, and Start delivery session. Existing
   agent outcomes, delivery ownership/stage, PR relations and warnings remain
   visible; only supporting evidence expands. Mobile header links jump directly
   to related work and automation.

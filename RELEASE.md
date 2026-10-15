@@ -127,6 +127,22 @@ once Actions billing is restored.)
 
 ### 3. Deploy (Docker-Server)
 
+**v0.36.0 ownership upgrade:** build both new images before downtime, preserve
+the previous image identities, then stop `forge` and `forge-worker`. Create and
+verify a protected database backup before applying the ownership migration.
+Run the migration explicitly and require exit 0:
+
+```bash
+docker compose run --rm --no-deps --entrypoint prisma forge migrate deploy --schema=prisma/schema.prisma
+```
+
+Only then start the matching new app and worker with
+`docker compose up -d --no-deps forge forge-worker`. Do not rely on an entrypoint
+that logs migration failures and continues. If migration fails, keep old
+writers stopped and inspect the result; restarting an old image against the
+new ownership constraints is not a safe rollback. This coordinated procedure
+replaces the ordinary uninterrupted `up -d` step below for this upgrade.
+
 Prod builds an exact tag/commit from a dedicated clean checkout, stamped with
 the commit. The deployment lock permits one release at a time:
 
