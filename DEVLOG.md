@@ -2,6 +2,58 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-10-15 — AXI-206 release preparation
+
+- Operator approved publication and deployment of the integrated AXI-203,
+  AXI-204 and AXI-206 work as v0.36.0. The separate AXI-191 architecture work
+  remains outside this release. Stopped all three local preview servers.
+- Fixed Windows local-runner parsing for npm-generated pnpm launchers using
+  `%dp0%`; the launcher regression suite passed all seven tests.
+- Added MinIO and explicit local S3 endpoints to each CI browser-test shard
+  because daily-workflow acceptance now uploads and previews real files.
+- Updated navigation/setup browser regressions for Home, Agents and workspace
+  access. Kept an explicit Assign an agent action in the automation menu so
+  unassigned issues still support touch-based assignment, not only a shortcut.
+- Production remains unchanged until exact-head CI and the coordinated
+  app/worker ownership-migration rollout complete.
+
+## 2026-10-15 — AXI-206 integrated daily workflow and issue context
+
+- Preserved local ownership/navigation work in checkpoint dc5c5c4 and integrated
+  AXI-203 capture + breadcrumb/centered pins and AXI-204 private reminders through
+  local cherry-picks (a8a3b99, 7b7a70a, 653dfe4). Only the development-log merge
+  needed manual reconciliation; both histories were retained. Main and origin
+  are untouched; no older release/recovery branches were included.
+- Promoted issue title, due date and reminder to the header. Attachments now
+  appear below the description with visible filenames/thumbnails, Add file,
+  preview and bounded expansion. Related work stays visible with typed links,
+  statuses, parent/subtask context and expandable dependency graph.
+- Added permanent Automation & delivery entry with explicit Ask, native
+  implementation PR linking, and delivery claim controls. Existing summaries
+  and warnings stay visible; evidence expands separately. Ask drafts a comment
+  with the selected mode and never dispatches or assigns just by opening it.
+  Existing draft modes/overrides for that agent are reconciled explicitly.
+- Moved activity into the main column with Discussion, Updates and All filters,
+  ID-based comment/event deduplication and expandable routine-change groups.
+  Open decisions remain above the description independent of filters. Legacy
+  section links and 1/2/3 shortcuts focus the visible sections; mobile header
+  links keep automation and related work reachable above long timelines.
+- Integrated due reminders into Home as well as Today and notification drawers.
+  Fixed the workspace experience-save baseline/race exposed by fast Personal →
+  Team → Personal switching. Realtime relation refresh covers reciprocal edges
+  and linked-title/status updates without creating extra activity or agent runs.
+- Local validation uses the isolated forge_206_dev preview on port 3002 plus
+  guarded forge_test/Redis/MinIO for integration tests. Full release gates and
+  production deployment remain deferred pending operator iteration.
+- Verification: 59 focused unit tests, 13 real reminder/notification integration
+  tests, TypeScript and focused ESLint passed (existing workspace native-select
+  warnings remain). A final single browser run passed all six scenarios:
+  capture/draft fields, status+manual delivery, private reminders, populated
+  files/relations/timeline, Ask mode reconciliation without dispatch, and
+  Personal/Team daily flow. Desktop/390px screenshots were inspected. Local
+  storage-backed browser checks allow bounded extra time for dev compilation;
+  this is functional proof, not a production performance certification.
+
 ## 2026-10-15 — AXI-206 explicit ownership and runtime lifecycle
 
 - Added PERSONAL/SERVICE ownership for agent definitions and runtimes, separate

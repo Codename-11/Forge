@@ -11,11 +11,13 @@ export function ReminderInbox({
   onNavigate,
   enabled = true,
   onCountChange,
+  className = "m-3",
 }: {
   workspaceId?: string;
   onNavigate?: () => void;
   enabled?: boolean;
   onCountChange?: (count: number) => void;
+  className?: string;
 }) {
   const utils = trpc.useUtils();
   const query = trpc.reminder.due.useInfiniteQuery(
@@ -57,7 +59,7 @@ export function ReminderInbox({
   return (
     <section
       aria-label="Your reminders"
-      className="m-3 overflow-hidden rounded-lg border border-border bg-card/40"
+      className={`${className} overflow-hidden rounded-lg border border-border bg-card/40`}
     >
       <header className="flex items-center gap-2 border-b border-border px-3 py-2 text-xs font-semibold">
         <Bell className="h-3.5 w-3.5 text-ember" />

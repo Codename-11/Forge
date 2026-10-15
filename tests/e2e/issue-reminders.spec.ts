@@ -14,8 +14,13 @@ if (
 const db = new PrismaClient({ datasourceUrl: databaseUrl });
 if (process.env.E2E_MANAGE_STACK !== "0") {
   const target = new URL(databaseUrl);
-  if (!["localhost", "127.0.0.1"].includes(target.hostname) || target.port !== "55432" ||
-      target.username !== "forge" || target.password !== "forge" || target.searchParams.get("schema") !== "public") {
+  if (
+    !["localhost", "127.0.0.1"].includes(target.hostname) ||
+    target.port !== "55432" ||
+    target.username !== "forge" ||
+    target.password !== "forge" ||
+    target.searchParams.get("schema") !== "public"
+  ) {
     throw new Error("Reminder E2E requires the guarded local Postgres endpoint.");
   }
 }
@@ -48,9 +53,10 @@ test("schedule, surface, snooze, and dismiss a personal issue reminder", async (
   await page.reload();
   await page.getByRole("button", { name: /^(?:\d+|No) unread items?$/ }).click();
   const inbox = page.getByRole("region", { name: "Your reminders" });
+  const card = inbox.locator("article").filter({ hasText: title });
   await expect(inbox.getByRole("link", { name: new RegExp(title) })).toBeVisible();
-  await inbox.getByRole("button", { name: "Snooze 1 hour", exact: true }).click();
-  await expect(inbox).toBeHidden();
+  await card.getByRole("button", { name: "Snooze 1 hour", exact: true }).click();
+  await expect(card).toBeHidden();
   expect(
     (await db.issueReminder.findUniqueOrThrow({ where: { id: reminder.id } })).remindAt.getTime(),
   ).toBeGreaterThan(Date.now());
@@ -64,8 +70,8 @@ test("schedule, surface, snooze, and dismiss a personal issue reminder", async (
   await expect(inbox.getByText(title, { exact: false })).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({ path: "output/playwright/axi-204-reminder-mobile.png" });
-  await inbox.getByRole("button", { name: "Dismiss reminder", exact: true }).click();
-  await expect(inbox).toBeHidden();
+  await card.getByRole("button", { name: "Dismiss reminder", exact: true }).click();
+  await expect(card).toBeHidden();
   expect(
     (await db.issueReminder.findUniqueOrThrow({ where: { id: reminder.id } })).dismissedAt,
   ).not.toBeNull();

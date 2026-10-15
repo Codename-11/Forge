@@ -16,12 +16,16 @@ import { test, expect } from "@playwright/test";
 
 test.describe("multi-workspace restructure", () => {
   test("global Mission Control renders without a workspace and is read-only", async ({ page }) => {
-    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.goto("/mission-control", { waitUntil: "domcontentloaded" });
     // Mission Control page header (no /w/<slug> in the URL).
-    await expect(page).toHaveURL(/\/$/);
+    await expect(page).toHaveURL(/\/mission-control$/);
     await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
     // Read-only badge in the global top bar.
-    await expect(page.getByText("Read-only across workspaces", { exact: true })).toBeVisible();
+    await expect(
+      page.getByText("Agent operations and delivery across your accessible workspaces.", {
+        exact: true,
+      }),
+    ).toBeVisible();
     await expect(page.getByText("Run capacity", { exact: true })).toBeVisible();
     const activityPill = page.getByRole("link", { name: /Open activity/ });
     await expect(activityPill).toBeVisible();
@@ -57,7 +61,7 @@ test.describe("multi-workspace restructure", () => {
 
     await breadcrumb.getByRole("link", { name: "Forge" }).click();
     await expect(page).toHaveURL(/\/$/);
-    await expect(page.getByRole("heading", { name: "Mission Control" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My work" })).toBeVisible();
   });
 
   test("global inbox and activity provide inspectable context", async ({ page }) => {
@@ -114,7 +118,7 @@ test.describe("multi-workspace restructure", () => {
 
   test("global agents page lists profiles", async ({ page }) => {
     await page.goto("/agents", { waitUntil: "domcontentloaded" });
-    await expect(page.getByRole("heading", { name: "Agent fleet" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
     // Seeded profiles are owned by the signed-in owner.
     await expect(page.getByText("Victor").first()).toBeVisible();
     await expect(page.getByText("Atlas").first()).toBeVisible();
@@ -122,8 +126,12 @@ test.describe("multi-workspace restructure", () => {
 
   test("settings scope, redirects, and dispatch defaults stay authoritative", async ({ page }) => {
     await page.goto("/settings", { waitUntil: "domcontentloaded" });
-    await expect(page.getByText("Account & identity", { exact: true })).toBeVisible();
-    await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+    await expect(
+      page.getByText("Your profile, sign-in, preferences, and personal resources.", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByRole("heading", { name: "My account" })).toBeVisible();
 
     await page.goto("/settings/auth", { waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(/\/admin\/auth$/);
@@ -149,24 +157,24 @@ test.describe("multi-workspace restructure", () => {
 
     await page.goto("/agents", { waitUntil: "domcontentloaded" });
     await page.locator('a[href^="/agents/"]', { hasText: "Atlas" }).first().click();
-    await expect(page.getByText("Global profile", { exact: true }).first()).toBeVisible();
+    await expect(page.getByText("Identity & execution", { exact: true })).toBeVisible();
 
     // Seed leaves Atlas unbound. Mission Control owns adoption into Forge.
-    await page.getByRole("combobox", { name: "Workspace to bind" }).click();
+    await page.getByRole("combobox", { name: "Workspace to add" }).click();
     await page.getByRole("option", { name: /Forge\s+FRG/ }).click();
-    await page.getByRole("button", { name: /^Bind$/ }).click();
+    await page.getByRole("button", { name: "Add access", exact: true }).click();
 
     await expect(page.getByRole("link", { name: "Workspace policy" })).toBeVisible({
       timeout: 15_000,
     });
     await expect(page.getByRole("link", { name: "Add MCP client" })).toBeVisible();
 
-    await page.getByRole("button", { name: "Unbind" }).click();
+    await page.getByRole("button", { name: "Remove access", exact: true }).click();
     await page
       .getByRole("alertdialog", { name: /Unbind from Forge/ })
       .getByRole("button", { name: /^Unbind/ })
       .click();
-    await expect(page.getByText("Not bound to any workspace", { exact: true })).toBeVisible({
+    await expect(page.getByText("No visible workspace access", { exact: true })).toBeVisible({
       timeout: 15_000,
     });
   });

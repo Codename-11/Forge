@@ -4,6 +4,22 @@ function stringValue(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/** Reciprocal relation changes refresh only their two issue-context queries. */
+export function relationRealtimeTargets(event: RealtimeEventShape): string[] {
+  const payload =
+    event.payload && typeof event.payload === "object"
+      ? (event.payload as Record<string, unknown>)
+      : {};
+  if (event.subjectType !== "issue" || !stringValue(payload.relationId)) return [];
+  return [
+    ...new Set(
+      [stringValue(event.subjectId), stringValue(payload.toIssueId)].filter((id): id is string =>
+        Boolean(id),
+      ),
+    ),
+  ];
+}
+
 /** Resolve exact cache keys carried by a realtime event. */
 export function realtimeTargets(event: RealtimeEventShape): {
   issueId: string | null;

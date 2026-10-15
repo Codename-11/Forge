@@ -100,14 +100,15 @@ test.describe("Issue flow", () => {
       "Do not merge, release, or deploy without explicit operator approval.",
     );
 
-    // The bare issue URL opens recent Activity, and the rail itself does not
-    // become a second vertical scroll container.
-    const activityTab = page.getByRole("tab", { name: /Activity/ });
-    const attachmentsTab = page.getByRole("tab", { name: "Attachments" });
-    const tabPanel = page.getByRole("tabpanel");
-    await expect(activityTab).toHaveAttribute("aria-selected", "true");
-    await expect(activityTab).toHaveAttribute("tabindex", "0");
-    await expect(tabPanel).toHaveAttribute("aria-labelledby", /activity-tab$/);
+    // Context remains visible without tab switching; routine updates are optional.
+    await expect(page.getByRole("button", { name: "Discussion", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const attachments = page.locator("#issue-attachments");
+    const relations = page.locator("#issue-relations");
+    await expect(attachments).toBeVisible();
+    await expect(relations).toBeVisible();
     const railSurface = page.getByLabel("Issue detail rail").locator(":scope > div");
     await expect(railSurface).toBeVisible();
     const railMetrics = await railSurface.evaluate((el) => ({
@@ -116,21 +117,22 @@ test.describe("Issue flow", () => {
     }));
     expect(railMetrics.scrollHeight - railMetrics.clientHeight).toBeLessThanOrEqual(1);
 
-    // Standard tab arrow navigation changes both focus and the deep-link URL.
-    await activityTab.focus();
-    await activityTab.press("ArrowRight");
-    await expect(attachmentsTab).toHaveAttribute("aria-selected", "true");
-    await expect(attachmentsTab).toBeFocused();
-    await expect(page).toHaveURL(/\?tab=attachments$/);
-
-    // Returning to the bare path restores Activity as the default.
-    await page.goto(new URL(page.url()).pathname);
-    await expect(activityTab).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("button", { name: "Discussion", exact: true }).focus();
+    await page.keyboard.press("2");
+    await expect(attachments).toBeFocused();
+    await page.keyboard.press("3");
+    await expect(relations).toBeFocused();
+    await page.goto(`${new URL(page.url()).pathname}?tab=activity`);
+    await expect(page.getByRole("button", { name: "All activity", exact: true })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
 
     // A browser claim is a manual UI invocation. It must not be guessed as a
     // Codex Desktop/MCP connection or as runtime execution.
     const delivery = page.getByRole("region", { name: "Code work coordination" });
-    await delivery.getByRole("button", { name: "Start isolated work" }).click();
+    await page.getByText("Add agent or delivery…", { exact: true }).click();
+    await page.getByRole("button", { name: "Start delivery session", exact: true }).click();
     await delivery.getByLabel("Repository").fill("Codename-11/Forge");
     await delivery
       .getByRole("textbox", { name: "Branch" })

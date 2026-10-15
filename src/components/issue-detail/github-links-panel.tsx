@@ -53,14 +53,22 @@ function metadataRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
-export function GitHubLinksPanel({ issueId }: { issueId: string }) {
+export function GitHubLinksPanel({
+  issueId,
+  embedded = false,
+}: {
+  issueId: string;
+  embedded?: boolean;
+}) {
   const utils = trpc.useUtils();
   const [modalOpen, setModalOpen] = useState(false);
 
-  const { data: links, isLoading } = trpc.github.listLinked.useQuery(
-    { issueId },
-    { staleTime: 30_000 },
-  );
+  const {
+    data: links,
+    isLoading,
+    isError,
+    refetch,
+  } = trpc.github.listLinked.useQuery({ issueId }, { staleTime: 30_000 });
   const syncM = trpc.github.sync.useMutation({
     onSuccess: () => {
       toast.success("GitHub state synced.");
@@ -70,8 +78,15 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
     onError: (e) => toast.error(e.message),
   });
 
+  if (embedded && !isLoading && !isError && !links?.length) return null;
+
   return (
-    <div id="github-links" className="scroll-mt-20 rounded-md border border-border bg-card/40">
+    <div
+      id="github-links"
+      className={
+        embedded ? "scroll-mt-20" : "scroll-mt-20 rounded-md border border-border bg-card/40"
+      }
+    >
       <div
         className={`flex items-center gap-2 px-2.5 py-2 ${links && links.length > 0 ? "border-b border-border/60" : ""}`}
       >
@@ -82,16 +97,27 @@ export function GitHubLinksPanel({ issueId }: { issueId: string }) {
         <span className="font-mono text-[0.625rem] text-muted-foreground">
           {isLoading ? "…" : (links?.length ?? 0)}
         </span>
-        <button
-          type="button"
-          onClick={() => setModalOpen(true)}
-          className="focus-ring ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
-          title="Link a GitHub issue or PR"
-        >
-          <Plus className="h-3 w-3" />
-          Link
-        </button>
+        {!embedded && (
+          <button
+            type="button"
+            onClick={() => setModalOpen(true)}
+            className="focus-ring ml-auto inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[0.6875rem] text-muted-foreground hover:bg-subtle hover:text-foreground"
+            title="Link a GitHub issue or PR"
+          >
+            <Plus className="h-3 w-3" />
+            Link
+          </button>
+        )}
       </div>
+
+      {isError && (
+        <div role="status" className="text-meta p-2.5 text-warning">
+          GitHub links could not be loaded. Existing links may still be attached.
+          <Button type="button" size="sm" variant="ghost" onClick={() => void refetch()}>
+            Retry
+          </Button>
+        </div>
+      )}
 
       {links && links.length > 0 ? (
         <div className="space-y-2 p-2.5">

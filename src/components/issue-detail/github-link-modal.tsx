@@ -98,24 +98,26 @@ export function GitHubLinkModal({
   issueId,
   open,
   onOpenChange,
+  defaultKind = "RELATES_TO",
 }: {
   issueId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  defaultKind?: LinkKind;
 }) {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
   const isAdmin = ws.role === "OWNER" || ws.role === "ADMIN";
   const [tab, setTab] = useState<"url" | "browse">("url");
-  const [kind, setKind] = useState<LinkKind>("RELATES_TO");
+  const [kind, setKind] = useState<LinkKind>(defaultKind);
 
   // Reset transient state whenever the modal is (re)opened.
   useEffect(() => {
     if (open) {
       setTab("url");
-      setKind("RELATES_TO");
+      setKind(defaultKind);
     }
-  }, [open]);
+  }, [open, defaultKind]);
 
   const onLinked = (closeAfter: boolean) => {
     void utils.github.listLinked.invalidate({ issueId });

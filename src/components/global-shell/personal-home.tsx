@@ -7,6 +7,7 @@ import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Card, EmptyState, Section, SkeletonList } from "@/components/ui";
 import { WorkspaceBadge, type GlobalShellWorkspace } from "./global-shell";
+import { ReminderInbox } from "@/components/reminders/reminder-inbox";
 
 /** Personal entry point: uses the same permission-filtered assignments as operations. */
 export function PersonalHome({ workspaces }: { workspaces: GlobalShellWorkspace[] }) {
@@ -97,6 +98,7 @@ export function PersonalHome({ workspaces }: { workspaces: GlobalShellWorkspace[
         </Card>
       </Section>
       <div className="min-w-0 space-y-6">
+        <ReminderInbox className="" />
         <Section
           title="Your workspaces"
           actions={

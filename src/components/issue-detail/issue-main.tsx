@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   ArrowDown,
@@ -48,7 +48,8 @@ import { useDropUpload } from "@/components/attachments/use-drop-upload";
 import { DropOverlay } from "@/components/attachments/drop-overlay";
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
-import { parseAgentRequestsFromBody, type ParsedAgentRequest } from "@/lib/agent-request-parser";
+import { type ParsedAgentRequest } from "@/lib/agent-request-parser";
+import { prepareAgentRequestDraft, resolveComposerAgentRequests } from "@/lib/agent-request-draft";
 import { parseSlashCommands, SLASH_COMMAND_HINT, type SlashCommand } from "@/lib/slash-commands";
 import { expandTemplatesInBody, type SlashTemplateSideEffect } from "@/lib/slash-templates";
 import { SlashAutocomplete, useSlashAutocomplete } from "@/components/slash-autocomplete";
@@ -59,6 +60,8 @@ import { clearDraft, readDraft, saveDraft } from "@/components/ui/modal/draft";
 import { useConfirm } from "@/components/ui/modal";
 import { useMaybeWorkspace } from "@/hooks/use-workspace";
 import { useRealtime } from "@/hooks/use-realtime";
+import { IssueActivityEventRow } from "@/components/issue-detail/issue-activity-panel";
+import { buildIssueTimeline, type IssueTimelineFilter } from "@/lib/issue-timeline";
 
 // Live data for the slash-command VALUE autocomplete (projects / agents /
 // labels), shared by the description + comment composers so `/project`,
@@ -121,7 +124,7 @@ function detectAgentRequests(
   agents: ComposerAgent[],
   overrides: Record<string, { mode: AgentRequestMode; assignIssue?: boolean }>,
 ): AgentRequestDraft[] {
-  const parsed = parseAgentRequestsFromBody(body);
+  const parsed = resolveComposerAgentRequests(body, overrides);
   const byKey = new Map(agents.map((agent) => [agent.profileKey.toLowerCase(), agent]));
   const out: AgentRequestDraft[] = [];
   const seen = new Set<string>();
@@ -129,12 +132,11 @@ function detectAgentRequests(
     const agent = byKey.get(req.profileKey.toLowerCase());
     if (!agent || seen.has(agent.profileKey.toLowerCase())) continue;
     seen.add(agent.profileKey.toLowerCase());
-    const override = overrides[agent.profileKey.toLowerCase()];
     const parsedMode = isAgentRequestMode(req.mode) ? req.mode : "DISCUSS";
     out.push({
       profileKey: agent.profileKey,
-      mode: override?.mode ?? parsedMode,
-      assignIssue: override?.assignIssue ?? req.assignIssue,
+      mode: parsedMode,
+      assignIssue: req.assignIssue,
       agentId: agent.id,
       agentName: agent.name,
     });
@@ -248,12 +250,18 @@ interface QuickReplyEventDetail {
   issueId: string;
   text: string;
   agentProfileKey?: string | null;
+  mode?: AgentRequestMode;
 }
-function dispatchQuickReply(issueId: string, text: string, agentProfileKey?: string | null) {
+export function dispatchQuickReply(
+  issueId: string,
+  text: string,
+  agentProfileKey?: string | null,
+  mode?: AgentRequestMode,
+) {
   if (typeof window === "undefined") return;
   window.dispatchEvent(
     new CustomEvent<QuickReplyEventDetail>(QUICK_REPLY_EVENT, {
-      detail: { issueId, text, agentProfileKey },
+      detail: { issueId, text, agentProfileKey, mode },
     }),
   );
 }
@@ -331,6 +339,7 @@ export function IssueMain({
   projectId,
   parent,
   executionSteps,
+  afterDescription,
 }: {
   issueId: string;
   description: string | null;
@@ -341,6 +350,7 @@ export function IssueMain({
   projectId: string | null;
   parent: { id: string; number: number; title: string; deletedAt: Date | string | null } | null;
   executionSteps: PlanStepIssueContext[];
+  afterDescription?: ReactNode;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-8">
@@ -350,7 +360,10 @@ export function IssueMain({
       <IssueGoalsStrip issueId={issueId} />
       <IssuePlansStrip issueId={issueId} />
       <DescriptionBlock issueId={issueId} description={description} onSave={onDescriptionSave} />
-      <SubIssuesPanel parentId={issueId} parentProjectId={projectId} parentKind={kind} />
+      {afterDescription}
+      <div id="issue-subtasks" tabIndex={-1} className="scroll-mt-28">
+        <SubIssuesPanel parentId={issueId} parentProjectId={projectId} parentKind={kind} />
+      </div>
       <Comments issueId={issueId} canResolveActions={canResolveActions} />
     </div>
   );
@@ -358,22 +371,34 @@ export function IssueMain({
 
 /**
  * Surface every open issue-bound ask even when the agent/runtime created it
- * outside the comment timeline. Comment-bound requests remain rendered beside
- * their source comment, so this panel only fills the visibility gap for other
- * sources (runs, automations, imports, and workspace decision flows).
+ * outside the comment timeline. Open comment-bound requests are also surfaced
+ * here, so activity filters cannot conceal an unresolved decision.
  */
 function IssueActionRequests({ issueId, canResolve }: { issueId: string; canResolve: boolean }) {
   const ws = useWorkspace();
   const utils = trpc.useUtils();
-  const { data } = trpc.actionRequest.list.useQuery(
-    { issueId, status: "OPEN", limit: 20 },
+  const { data, isError, refetch } = trpc.actionRequest.list.useQuery(
+    { issueId, status: "OPEN", limit: 100 },
     { staleTime: 15_000 },
   );
   useRealtime((event) => {
     if (event.subjectType !== "action-request") return;
     void utils.actionRequest.list.invalidate();
   });
-  const requests = (data?.items ?? []).filter((request) => request.sourceType !== "comment");
+  const requests = data?.items ?? [];
+  if (isError)
+    return (
+      <p className="text-meta rounded-md border border-warning/30 p-3 text-warning">
+        Open decisions could not be loaded.{" "}
+        <button
+          type="button"
+          className="focus-ring rounded underline"
+          onClick={() => void refetch()}
+        >
+          Retry
+        </button>
+      </p>
+    );
   if (requests.length === 0) return null;
   return (
     <section className="space-y-2 rounded-lg border border-warning/30 bg-warning/[0.04] p-3">
@@ -984,11 +1009,32 @@ function DescriptionBlock({
 
 function Comments({ issueId, canResolveActions }: { issueId: string; canResolveActions: boolean }) {
   const utils = trpc.useUtils();
+  const legacyTab = useSearchParams().get("tab");
+  const [timelineFilter, setTimelineFilter] = useState<IssueTimelineFilter>("discussion");
+  const [activityLimit, setActivityLimit] = useState(50);
+  const [linkedCommentId, setLinkedCommentId] = useState<string | null>(null);
+  const {
+    data: activity = [],
+    isLoading: activityLoading,
+    isError: activityError,
+    refetch: refetchActivity,
+  } = trpc.issue.activity.useQuery({ issueId, limit: activityLimit }, { staleTime: 30_000 });
+  const { data: openRequests } = trpc.actionRequest.list.useQuery(
+    { issueId, status: "OPEN", limit: 100 },
+    { staleTime: 15_000 },
+  );
+  const openRequestCommentIds = new Set(
+    (openRequests?.items ?? [])
+      .filter((request) => request.sourceType === "comment")
+      .map((request) => request.sourceId),
+  );
   const historyRef = useRef<HTMLDivElement | null>(null);
   const composerFormRef = useRef<HTMLFormElement | null>(null);
   const {
     data: commentPages,
     isLoading: commentsLoading,
+    isError: commentsError,
+    refetch: refetchComments,
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
@@ -1094,13 +1140,29 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
       const detail = (event as CustomEvent<QuickReplyEventDetail>).detail;
       if (!detail || detail.issueId !== issueId) return;
       const text = quickReplyTextForComposer(detail.text, detail.agentProfileKey);
-      setDraft((prev) => {
-        // If the composer already has text, separate with a blank
-        // line so the chip doesn't trample mid-sentence. Otherwise
-        // just seed it.
-        if (prev.trim().length === 0) return text;
-        return `${prev.replace(/\s+$/, "")}\n\n${text}`;
-      });
+      if (detail.agentProfileKey && detail.mode && isAgentRequestMode(detail.mode)) {
+        const { profileKey, override } = prepareAgentRequestDraft(
+          "",
+          detail.agentProfileKey,
+          detail.mode,
+          text,
+        );
+        setAgentRequestOverrides((previous) => ({ ...previous, [profileKey]: override }));
+        setDraft(
+          (previous) =>
+            prepareAgentRequestDraft(previous, detail.agentProfileKey!, detail.mode!, text).body,
+        );
+        setTimelineFilter("discussion");
+        setLinkedCommentId(null);
+      } else {
+        setDraft((prev) => {
+          // If the composer already has text, separate with a blank
+          // line so the chip doesn't trample mid-sentence. Otherwise
+          // just seed it.
+          if (prev.trim().length === 0) return text;
+          return `${prev.replace(/\s+$/, "")}\n\n${text}`;
+        });
+      }
       // Focus + scroll the textarea into view so the user can edit
       // before submitting. Defer to next tick so the state update
       // commits before the focus call.
@@ -1376,7 +1438,19 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
   // into view. This keeps deep links reliable without eager-loading every
   // comment on ordinary visits.
   useEffect(() => {
-    const targetId = window.location.hash.match(/^#comment-(.+)$/)?.[1];
+    const readLocation = () => {
+      const targetId = window.location.hash.match(/^#comment-(.+)$/)?.[1] ?? null;
+      setLinkedCommentId(targetId);
+      if (targetId) setTimelineFilter("all");
+      else if (legacyTab === "activity") setTimelineFilter("all");
+    };
+    readLocation();
+    window.addEventListener("hashchange", readLocation);
+    return () => window.removeEventListener("hashchange", readLocation);
+  }, [issueId, legacyTab]);
+
+  useEffect(() => {
+    const targetId = linkedCommentId;
     if (!targetId) return;
     const target = document.getElementById(`comment-${targetId}`);
     if (target) {
@@ -1384,16 +1458,30 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
       return;
     }
     if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
-  }, [comments.length, fetchNextPage, hasNextPage, isFetchingNextPage]);
+  }, [
+    linkedCommentId,
+    timelineFilter,
+    comments.length,
+    fetchNextPage,
+    hasNextPage,
+    isFetchingNextPage,
+  ]);
+
+  const timeline = buildIssueTimeline(comments, activity, timelineFilter, linkedCommentId);
 
   return (
-    <section aria-labelledby="issue-comments-heading">
+    <section
+      id="issue-activity"
+      tabIndex={-1}
+      className="scroll-mt-28"
+      aria-labelledby="issue-comments-heading"
+    >
       <div className="mb-3 flex min-h-7 flex-wrap items-center justify-between gap-2">
         <h2
           id="issue-comments-heading"
           className="flex items-center gap-2 text-[0.6875rem] font-semibold uppercase tracking-wider text-muted-foreground"
         >
-          Comments {totalComments > 0 && <Count>{totalComments}</Count>}
+          Activity {totalComments > 0 && <Count>{totalComments} comments</Count>}
         </h2>
         {totalComments > 0 && (
           <Button type="button" variant="ghost" size="sm" onClick={jumpToLatest}>
@@ -1401,6 +1489,28 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
             Reply
           </Button>
         )}
+      </div>
+      <div className="mb-4 flex flex-wrap gap-1" role="group" aria-label="Activity filter">
+        {(
+          [
+            ["discussion", "Discussion"],
+            ["updates", "Updates"],
+            ["all", "All activity"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={timelineFilter === value}
+            onClick={() => {
+              setTimelineFilter(value);
+              setLinkedCommentId(null);
+            }}
+            className={`focus-ring rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${timelineFilter === value ? "bg-subtle text-foreground" : "text-muted-foreground hover:bg-subtle/50 hover:text-foreground"}`}
+          >
+            {label}
+          </button>
+        ))}
       </div>
       <div ref={historyRef} className="space-y-3">
         {hasNextPage && (
@@ -1426,18 +1536,90 @@ function Comments({ issueId, canResolveActions }: { issueId: string; canResolveA
             <div className="h-20 animate-pulse rounded-md border border-border bg-card/30" />
           </div>
         )}
-        {!commentsLoading && timelineComments.length === 0 && (
-          <p className="text-xs text-muted-foreground">No comments yet.</p>
+        {activityError && (
+          <p className="text-meta text-warning">
+            Updates could not be loaded.{" "}
+            <button
+              type="button"
+              className="focus-ring rounded underline"
+              onClick={() => void refetchActivity()}
+            >
+              Retry
+            </button>
+          </p>
         )}
-        {timelineComments.map((c) => (
-          <TimelineCommentCard
-            key={c.id}
-            comment={c}
-            issueId={issueId}
-            canResolveActions={canResolveActions}
-            showQuickReplies={c.id === latestAgentBodyId}
-          />
-        ))}
+        {commentsError && (
+          <p className="text-meta text-warning">
+            Comments could not be loaded.{" "}
+            <button
+              type="button"
+              className="focus-ring rounded underline"
+              onClick={() => void refetchComments()}
+            >
+              Retry
+            </button>
+          </p>
+        )}
+        {!commentsLoading &&
+          !activityLoading &&
+          !commentsError &&
+          !activityError &&
+          timeline.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              {timelineFilter === "discussion"
+                ? "No discussion or outcomes yet. Add a comment below."
+                : "No updates in the loaded history."}
+            </p>
+          )}
+        {timeline.map((entry) => {
+          if (entry.type === "comment")
+            return (
+              <TimelineCommentCard
+                key={entry.id}
+                comment={entry.comment}
+                issueId={issueId}
+                canResolveActions={canResolveActions}
+                showQuickReplies={entry.comment.id === latestAgentBodyId}
+                hideActionRequest={openRequestCommentIds.has(entry.comment.id)}
+              />
+            );
+          if (entry.type === "event")
+            return <IssueActivityEventRow key={entry.id} event={entry.event} />;
+          return (
+            <details
+              key={entry.id}
+              className="group rounded-md border border-border bg-card/30 px-3"
+            >
+              <summary className="focus-ring text-meta cursor-pointer rounded py-2 text-muted-foreground hover:text-foreground">
+                {entry.events.length} property {entry.events.length === 1 ? "update" : "updates"}
+                <span className="ml-2">
+                  · {relativeTime(entry.events[entry.events.length - 1].createdAt)}
+                </span>
+              </summary>
+              <div className="divide-y divide-border border-t border-border">
+                {entry.events.map((event) => (
+                  <IssueActivityEventRow key={event.id} event={event} />
+                ))}
+              </div>
+            </details>
+          );
+        })}
+        {activity.length >= activityLimit && (
+          <div className="text-meta flex flex-wrap items-center gap-2 text-muted-foreground">
+            <span>
+              Showing the latest {activityLimit} recorded updates alongside loaded comments.
+            </span>
+            {activityLimit < 100 && (
+              <button
+                type="button"
+                className="focus-ring rounded text-ember hover:underline"
+                onClick={() => setActivityLimit(100)}
+              >
+                Load more updates
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <form
         ref={composerFormRef}
@@ -1601,11 +1783,13 @@ function TimelineCommentCard({
   issueId,
   canResolveActions,
   showQuickReplies,
+  hideActionRequest = false,
 }: {
   comment: Comment;
   issueId: string;
   canResolveActions: boolean;
   showQuickReplies: boolean;
+  hideActionRequest?: boolean;
 }) {
   const isAgent = Boolean(comment.authoringAgent);
   const isStatus = comment.kind === "STATUS";
@@ -1677,7 +1861,7 @@ function TimelineCommentCard({
          * `forComment(commentId)` resolves to a row, so cards never
          * leak onto plain comments.
          */}
-        {isAgent && (
+        {isAgent && !hideActionRequest && (
           <ActionRequestCard
             commentId={comment.id}
             issueId={issueId}

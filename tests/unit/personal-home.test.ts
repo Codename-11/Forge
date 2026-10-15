@@ -10,6 +10,9 @@ const query = vi.hoisted(() => ({
 }));
 vi.mock("@/lib/trpc", () => ({ trpc: { global: { work: { useQuery: () => query } } } }));
 vi.mock("@/components/global-shell/global-shell", () => ({ WorkspaceBadge: () => null }));
+vi.mock("@/components/reminders/reminder-inbox", () => ({
+  ReminderInbox: () => React.createElement("section", { "aria-label": "Your reminders" }),
+}));
 (globalThis as typeof globalThis & { React: typeof React }).React = React;
 const { PersonalHome } = await import("@/components/global-shell/personal-home");
 
@@ -27,6 +30,7 @@ describe("Personal Home", () => {
   it("offers everyday work without managed runtime setup", () => {
     const html = render();
     expect(html).toContain("No open assignments");
+    expect(html).toContain('aria-label="Your reminders"');
     expect(html).toContain('href="/workspaces"');
     expect(html).toContain('href="/w/forge"');
     expect(html).toContain('href="/inbox"');

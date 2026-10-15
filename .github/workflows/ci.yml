@@ -89,8 +89,24 @@ jobs:
       redis:
         image: redis:7-alpine
         ports: ["6379:6379"]
+      minio:
+        # Daily-workflow coverage uploads and previews real attachments.
+        image: bitnamilegacy/minio:latest
+        env:
+          MINIO_ROOT_USER: forgeminio
+          MINIO_ROOT_PASSWORD: forgeminio-dev-password
+        ports: ["9000:9000"]
+        options: >-
+          --health-cmd="mc ready local || curl -f http://localhost:9000/minio/health/live"
+          --health-interval=5s --health-timeout=5s --health-retries=20
     env:
       # E2E harness (see scripts/e2e-web.sh + playwright.config.ts).
+      S3_ENDPOINT: http://localhost:9000
+      S3_PUBLIC_ENDPOINT: http://localhost:9000
+      S3_REGION: us-east-1
+      S3_ACCESS_KEY: forgeminio
+      S3_SECRET_KEY: forgeminio-dev-password
+      S3_FORCE_PATH_STYLE: "true"
       E2E_MANAGE_STACK: "0" # use the service containers above, not docker-compose
       E2E_PORT: "3200"
       FORGE_E2E: "1" # mock-runs connector + seed fixtures

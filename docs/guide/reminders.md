@@ -1,6 +1,9 @@
 # Personal reminders
 
-Open an issue or task and expand **Reminder → Remind me**. Choose a date and
+Use **Remind me** in the issue header beside its due date. Due reminders also
+appear on cross-workspace Home, personal Today and the notification drawers.
+
+Open an issue or task and expand **Remind me**. Choose a date and
 time or a preset, then select **Save reminder**. The time is interpreted in the
 timezone shown by the form. Each person can keep one active reminder per item;
 saving again replaces their own schedule.

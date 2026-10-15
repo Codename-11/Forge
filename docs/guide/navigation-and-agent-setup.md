@@ -131,13 +131,14 @@ ownership foreign keys prevent hard-deleting an owner until resources are
 transferred or removed; service resources survive creator deletion.
 
 The new ownership CHECK constraints require updated runtime writers to supply
-their owner type. A future production rollout must quiesce old web/worker
+their owner type. The production rollout must quiesce old web/worker
 writers before applying this migration, then start the matching new application
 and worker together. An old binary must not continue writing to the new schema.
 Local validation does not authorize this production migration or deployment.
 
-## Local iteration boundary
+## Scope boundary
 
-AXI-206 is a local development iteration. It does not replace the separate
-multi-user People & Access, Teams, directory or SCIM program. No existing grants
-are migrated or widened, and no production migration or release is implied.
+This ownership model does not replace the separate multi-user People & Access,
+Teams, directory or SCIM program. No existing grants are migrated or widened.
+Production migration and release require the operator-approved process in
+`RELEASE.md`.

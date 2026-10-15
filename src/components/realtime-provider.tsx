@@ -6,7 +6,7 @@ import {
   setRealtimeConnectionHealth,
   type RealtimeEventShape,
 } from "@/hooks/use-realtime";
-import { realtimeTargets } from "@/lib/realtime-targets";
+import { realtimeTargets, relationRealtimeTargets } from "@/lib/realtime-targets";
 
 /**
  * Subscribes to the workspace SSE stream and invalidates tRPC queries on
@@ -81,13 +81,21 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
 
       if (!evt.subjectType && !evt.kind) return;
       const targets = realtimeTargets(evt);
+      for (const issueId of relationRealtimeTargets(evt)) {
+        void utils.relation.listForIssue.invalidate({ issueId });
+        void utils.issue.byId.invalidate({ id: issueId });
+      }
 
       // tRPC cache invalidations — coarse but cheap. Individual hook
       // subscribers can do finer-grained optimistic patching.
       if (evt.subjectType === "issue") {
         void utils.issue.list.invalidate();
         void utils.inbox.badge.invalidate();
-        // Activity tab + relations panel both hang off an issueId.
+        // A linked issue's title/status can change without changing the edge.
+        // Only mounted relation observers refetch; hidden panes stay dormant.
+        if (relationRealtimeTargets(evt).length === 0)
+          void utils.relation.listForIssue.invalidate();
+        // Visible context panels each own a query; refresh them without remounting.
         if (targets.issueId) {
           void utils.issue.activity.invalidate({ issueId: targets.issueId });
           void utils.issue.byId.invalidate({ id: targets.issueId });
@@ -156,9 +164,8 @@ export function RealtimeProvider({ workspaceId }: { workspaceId: string }) {
           void utils.issue.byId.invalidate({ id: targets.issueId });
         }
       }
-      // Relation router also emits ISSUE_UPDATED with subjectType=issue, so
-      // the issue branch above already triggers a rail refresh (issue.byId
-      // bundles relations) — no extra case needed.
+      // Relation changes emit ISSUE_UPDATED; the issue branch refreshes the
+      // persistent relations query as well as the issue itself.
     };
     es.onerror = () => {
       setRealtimeConnectionHealth({

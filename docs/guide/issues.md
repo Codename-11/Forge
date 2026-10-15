@@ -5,7 +5,40 @@ initiatives, time entries, attachments — orbits the issue. This page covers
 the fields, the assignment model (humans and agents in parallel), the
 queue concept, bulk operations, and how relations link issues together.
 
-## Fields
+## Daily issue detail
+
+The issue header keeps the full key/title, status, priority, human assignees,
+due date and private reminder together. Pins stay centered in the app header.
+An assigned agent remains a separate control from human assignment.
+
+- **Attachments** are visible below the description with names/thumbnails,
+  Add file, preview/download controls and a four-file summary. Expand View all
+  for longer lists. GitHub PR links continue through native GitHub relations.
+- **Related work** stays visible in the side rail: parent/subtasks, blocked-by,
+  blocks, duplicates and related issues, including linked titles and statuses.
+  Expand a group or the dependency map without replacing the list.
+- **Automation & delivery** is always discoverable. Add agent or delivery opens
+  Ask an agent, Link implementation PR, and Start delivery session. Existing
+  agent outcomes, delivery ownership/stage, PR relations and warnings remain
+  visible; only supporting evidence expands. Mobile header links jump directly
+  to related work and automation.
+- **Activity** is in the main column. Discussion shows comments and meaningful
+  outcomes, Updates shows system/status activity, and All activity combines the
+  loaded windows without duplicating comment events. Routine changes group into
+  expandable entries. Open decisions stay above the description regardless of
+  the selected filter. The comment composer remains available in every view.
+
+Ask an agent defaults to Discuss and prepares an editable comment; choosing
+an agent does not assign it, dispatch a run, claim Delivery or post a comment.
+The selected mode replaces prior mode instructions for that agent in the draft,
+while other draft content is preserved. Work starts only after explicit submit.
+
+Legacy `?tab=activity`, `?tab=attachments` and `?tab=relations` links now jump to
+visible sections; keys 1/2/3 focus those same sections when not editing. Comment
+deep links load earlier comment pages as needed. Activity explicitly identifies
+its bounded recent window rather than claiming to display unlimited history.
+
+## Fields reference
 
 | Field             | Type     | Notes                                                                         |
 | ----------------- | -------- | ----------------------------------------------------------------------------- |

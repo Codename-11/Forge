@@ -135,7 +135,12 @@ export default function WorkspaceSettingsPage() {
   }, [resetFromCurrent]);
 
   const update = trpc.workspace.update.useMutation({
-    onSuccess: (updated) => {
+    onSuccess: async (updated) => {
+      // Keep the form's dirty baseline in step with the visible navigation.
+      // A quick switch back must not compare against the previous snapshot.
+      utils.workspace.current.setData(undefined, (previous) =>
+        previous ? { ...previous, ...updated } : previous,
+      );
       toast.success("Workspace updated.");
       updateWorkspaceContext({
         name: updated.name,
@@ -152,10 +157,7 @@ export default function WorkspaceSettingsPage() {
       // tRPC cache. Update it from the committed mutation result above, then
       // refresh the RSC tree so server-owned dashboard branches agree too.
       router.refresh();
-      void Promise.all([
-        utils.workspace.current.invalidate(),
-        utils.workspace.list.invalidate(),
-      ]);
+      await Promise.all([utils.workspace.current.invalidate(), utils.workspace.list.invalidate()]);
     },
     onError: (e) => toast.error(e.message),
   });
@@ -461,51 +463,53 @@ export default function WorkspaceSettingsPage() {
                 title="Personal"
                 description="A calm Today view for tasks, notes, routines, and agent help."
                 onClick={() => setExperienceProfile("PERSONAL")}
-                disabled={!canEdit}
+                disabled={!canEdit || update.isPending}
               />
               <ProfileChoice
                 selected={experienceProfile === "TEAM"}
                 title="Project & team"
                 description="The full planning, delivery, analytics, and project workspace."
                 onClick={() => setExperienceProfile("TEAM")}
-                disabled={!canEdit}
+                disabled={!canEdit || update.isPending}
               />
             </FormCard>
           </Section>
 
-          {experienceProfile === "TEAM" && <Section
-            title="Sprint cadence"
-            hint="Default iteration cadence. Each sprint can still override on create; rollover uses these."
-          >
-            <FormCard className="grid grid-cols-1 gap-5 p-4 sm:grid-cols-2 sm:p-5">
-              <Field
-                label="Sprint length (days)"
-                hint="How long a sprint runs by default. Used when rollover creates the next sprint."
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  max={90}
-                  value={cycleLengthDays}
-                  onChange={(e) => setCycleLengthDays(Number(e.target.value) || 1)}
-                  disabled={!canEdit}
-                />
-              </Field>
-              <Field
-                label="Cooldown (days)"
-                hint="Gap between sprints. 0 means a new sprint starts the day the previous one ends."
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={30}
-                  value={cycleCooldownDays}
-                  onChange={(e) => setCycleCooldownDays(Number(e.target.value) || 0)}
-                  disabled={!canEdit}
-                />
-              </Field>
-            </FormCard>
-          </Section>}
+          {experienceProfile === "TEAM" && (
+            <Section
+              title="Sprint cadence"
+              hint="Default iteration cadence. Each sprint can still override on create; rollover uses these."
+            >
+              <FormCard className="grid grid-cols-1 gap-5 p-4 sm:grid-cols-2 sm:p-5">
+                <Field
+                  label="Sprint length (days)"
+                  hint="How long a sprint runs by default. Used when rollover creates the next sprint."
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    max={90}
+                    value={cycleLengthDays}
+                    onChange={(e) => setCycleLengthDays(Number(e.target.value) || 1)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+                <Field
+                  label="Cooldown (days)"
+                  hint="Gap between sprints. 0 means a new sprint starts the day the previous one ends."
+                >
+                  <Input
+                    type="number"
+                    min={0}
+                    max={30}
+                    value={cycleCooldownDays}
+                    onChange={(e) => setCycleCooldownDays(Number(e.target.value) || 0)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+              </FormCard>
+            </Section>
+          )}
 
           <Section
             title="Tracking & storage"

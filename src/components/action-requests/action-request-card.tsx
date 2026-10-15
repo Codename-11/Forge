@@ -142,6 +142,7 @@ function ActionRequestCardForRequest({
   const settle = () => {
     void utils.actionRequest.get.invalidate({ id: requestId });
     void utils.actionRequest.list.invalidate();
+    void utils.actionRequest.forComment.invalidate();
     void utils.issue.byId.invalidate({ id: issueId });
     void utils.commandCenter.summary.invalidate();
     void utils.commandCenter.decisionsCount.invalidate();
@@ -251,6 +252,8 @@ function ActionRequestCardForComment({
       utils.issue.activity.invalidate({ issueId });
       utils.agentRun.activeForIssue.invalidate({ issueId });
       utils.actionRequest.forComment.invalidate({ commentId });
+      utils.actionRequest.list.invalidate();
+      utils.actionRequest.get.invalidate();
     },
   });
 
@@ -279,6 +282,8 @@ function ActionRequestCardForComment({
     },
     onSuccess: () => {
       utils.actionRequest.forComment.invalidate({ commentId });
+      utils.actionRequest.list.invalidate();
+      utils.actionRequest.get.invalidate();
       setShowDeclineReason(false);
       setDeclineReason("");
     },
