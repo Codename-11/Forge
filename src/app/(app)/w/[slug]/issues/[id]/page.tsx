@@ -607,7 +607,8 @@ export default function IssueDetailPage({ params }: { params: Promise<{ id: stri
       />
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-3 sm:p-5 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
+        {/* Leave scroll clearance for the fixed mobile navigation and activity dock. */}
+        <div className="mx-auto flex min-h-full max-w-[1600px] flex-col gap-5 p-3 pb-40 sm:p-5 sm:pb-40 md:flex-row md:gap-8 md:p-6 xl:gap-10 xl:p-8">
           <div className="min-w-0 flex-1 md:max-w-3xl lg:max-w-4xl xl:max-w-5xl">
             <div className="mb-5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
               <Avatar name={issue.author.name} image={issue.author.image} size={16} />

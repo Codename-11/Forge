@@ -166,7 +166,7 @@ test.describe("Mobile smoke", () => {
 
   test("primary phone-width issue workflow supports create, edit, comment, status, assignment, agents, and runtimes", async ({
     page,
-  }) => {
+  }, testInfo) => {
     await page.setViewportSize({ width: 390, height: HEIGHT });
     const title = `Mobile UX ${Date.now()}`;
     const editedTitle = `${title} edited`;
@@ -195,6 +195,10 @@ test.describe("Mobile smoke", () => {
 
     await page.getByRole("link", { name: "Automation", exact: true }).click();
     await page.getByText("Add agent or delivery…", { exact: true }).click();
+    await testInfo.attach("Mobile automation menu clears the floating dock", {
+      body: await page.screenshot(),
+      contentType: "image/png",
+    });
     await page.getByRole("button", { name: "Assign an agent", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
     await expect(page.getByRole("radiogroup", { name: "Engagement mode" })).toBeVisible();

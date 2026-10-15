@@ -26,6 +26,12 @@
   does not reproduce in Linux CI. The final source typecheck/focused lint and
   automation/Compose focused checks passed; final-head hosted CI remains the
   release gate.
+- The final mobile assignment flow exposed actual activity-dock overlap at the
+  end of short issue pages. Added mobile scroll clearance using the existing
+  spacing scale; the browser regression retains ordinary pointer clicks and
+  captures the expanded automation menu as rendered evidence. The diagnostic
+  worker suite subsequently passed locally unchanged (3/3); no readiness
+  timeout was increased.
 
 ## 2026-10-15 — AXI-206 integrated daily workflow and issue context
 
