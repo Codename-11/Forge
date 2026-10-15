@@ -2,6 +2,19 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-10-15 — AXI-210 v0.36.0 release assembly
+
+- Assembled the operator-approved release from implementation PR #104,
+  squash-merged as 1363fe88f1dadb930050a1dd7169a798c50ec21d. Its final head
+  97c8d3dd83503aee74543c1d1dfd31b9d0f85d4c passed hosted lint/typecheck,
+  1,786 tests (one intentional skip), production builds and both browser shards.
+  Inspected the mobile automation capture and passing touch-assignment flow.
+- Bumped the package version and curated release notes for integrated AXI-203,
+  AXI-204 and AXI-206. AXI-191 remains separate. Documented the coordinated
+  ownership migration and explicit fail-closed migration command in RELEASE.md.
+- Release-head CI, immutable tag and production verification are recorded in
+  the release PR and Forge delivery history; publication alone is not deployment.
+
 ## 2026-10-15 — AXI-206 release preparation
 
 - Operator approved publication and deployment of the integrated AXI-203,

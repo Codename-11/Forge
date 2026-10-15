@@ -9,6 +9,30 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-10-15] — v0.36.0 · Daily workflows and agent ownership
+
+### Added
+
+- Clearer issue/task capture, persistent drafts, and private reminders with snooze and dismissal.
+- Visible issue attachments and relationships, filtered activity, and an expandable automation menu with separate request and assignment actions.
+- Personal and service-owned agent identities, configurable personal-agent creation policy, and guarded runtime transfer/removal.
+
+### Changed
+
+- Home focuses on personal work; Mission Control focuses on operations. Agents, workspace access, account settings, and instance administration have distinct entry points.
+- Issue headers show the full key/title, due date, and reminder while app pins remain centered.
+- Runtime ownership and workspace access stay separate; existing owners are preserved and ownerless legacy runtimes become explicitly unassigned.
+
+### Fixed
+
+- Mobile issue controls remain scrollable above the floating activity dock.
+- Workspace experience changes update the form baseline and navigation together.
+- Windows local checks support npm-generated pnpm launchers and CRLF checkouts; browser CI includes real attachment storage.
+
+### Upgrade
+
+- The ownership migration requires a coordinated app/worker rollout. Stop old writers, verify a database backup, apply migrations explicitly, and start matching new app/worker images. Follow `RELEASE.md`; do not run an old binary against the new ownership constraints.
+
 ## [2026-09-01] — v0.35.0 · Actionable issue blockers
 
 ### Added
