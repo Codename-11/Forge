@@ -44,7 +44,7 @@ export function TopBar({
   const ws = useMaybeWorkspace();
 
   return (
-    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card/30 px-3 md:gap-3">
+    <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card/30 px-3 md:grid md:grid-cols-3 md:gap-3">
       <button
         type="button"
         title="Open navigation"
@@ -71,7 +71,7 @@ export function TopBar({
       </div>
 
       {/* Right: actions. Order = most-frequent first. */}
-      <div className="flex items-center gap-1.5">
+      <div className="flex shrink-0 items-center gap-1.5 justify-self-end">
         <button
           type="button"
           data-quick-create
@@ -87,8 +87,8 @@ export function TopBar({
           )}
         >
           <Plus className="h-3.5 w-3.5" />
-          <span className="hidden sm:inline">New</span>
-          <span className="kbd hidden bg-ember/20 text-ember-foreground md:inline">⇧C</span>
+          <span className="hidden lg:inline">New</span>
+          <span className="kbd hidden bg-ember/20 text-ember-foreground xl:inline">⇧C</span>
         </button>
 
         {/* Single notification surface for the workspace shell. Opens

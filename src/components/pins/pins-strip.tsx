@@ -67,7 +67,7 @@ export function PinsStrip() {
   while (slots.length < MAX_SLOTS) slots.push(null);
 
   return (
-    <div className="hidden items-center gap-1 md:flex">
+    <div className="hidden min-w-0 max-w-full items-center gap-1 md:flex">
       {slots.map((pin, idx) => {
         if (!pin || !pin.target) {
           return <EmptyPinSlot key={`empty-${idx}`} alreadyPinnedIds={pinnedKeySet(pins)} />;
@@ -126,14 +126,14 @@ function EmptyPinSlot({ alreadyPinnedIds }: { alreadyPinnedIds: Set<string> }) {
   }, [open]);
 
   return (
-    <div ref={wrapRef} className="relative">
+    <div ref={wrapRef} className="relative min-w-0">
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
         title="Pin an item — issues, projects, sprints, agents…"
         aria-haspopup="dialog"
         aria-expanded={open}
-        className="focus-ring inline-flex h-7 min-w-[96px] items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2 text-[0.6875rem] text-muted-foreground/60 transition-colors hover:border-foreground/40 hover:text-foreground hover:bg-subtle"
+        className="focus-ring inline-flex h-7 w-24 min-w-0 max-w-full items-center gap-1.5 rounded-md border border-dashed border-border/70 px-2 text-[0.6875rem] text-muted-foreground/60 transition-colors hover:border-foreground/40 hover:text-foreground hover:bg-subtle"
       >
         <PinIcon className="h-3 w-3" />
         <span>Pin…</span>

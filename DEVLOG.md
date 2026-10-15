@@ -14723,3 +14723,13 @@ uses Node 20 with the standard Next compiler: Turbopack reproduced an existing
 recordChange import failure on creation, and the workstation's Node 24 also
 failed loading the Tailwind TypeScript config through the alternate compiler.
 No production deployment or release was performed.
+
+### AXI-203 header follow-up
+
+Issue breadcrumbs now use the workspace context key and show the issue title;
+the full identity remains available through the tooltip/accessibility label
+when the title truncates. Removed the unused route-parser key that produced
+bare numbers such as `-20`. The desktop header uses equal side columns so pins
+stay centered independently of breadcrumb length, with responsive pin widths
+and compact actions at smaller sizes. Focused lint passed; the rendered header
+was checked at 1764, 1280, 1024, and 768px with centered pins and no overflow.
