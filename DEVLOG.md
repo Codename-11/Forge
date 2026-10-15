@@ -16,6 +16,16 @@
   unassigned issues still support touch-based assignment, not only a shortcut.
 - Production remains unchanged until exact-head CI and the coordinated
   app/worker ownership-migration rollout complete.
+- First release-candidate CI passed lint, typecheck, all 1,786 tests (one
+  intentionally skipped), and browser shard 1. Shard 2 exposed two assertions
+  selecting hidden responsive copies rather than the visible issue heading
+  and desktop admin scope label; corrected those selectors without weakening
+  the workflow assertions. Windows Compose text checks now normalize CRLF.
+- Local full quality passed lint/typecheck and 1,784 tests, with two failures:
+  the corrected CRLF assertion and a diagnostic-worker readiness timeout that
+  does not reproduce in Linux CI. The final source typecheck/focused lint and
+  automation/Compose focused checks passed; final-head hosted CI remains the
+  release gate.
 
 ## 2026-10-15 — AXI-206 integrated daily workflow and issue context
 

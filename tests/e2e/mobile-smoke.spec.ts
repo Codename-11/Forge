@@ -43,7 +43,7 @@ async function createIssueFromMobileTopbar(page: Page, title: string) {
   await expect(titleField).toHaveValue(title);
   await titleField.press("Control+Enter");
   await expect(page).toHaveURL(/\/w\/forge\/issues\//, { timeout: 20_000 });
-  await expect(page.getByText(title).first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: title, exact: true })).toBeVisible();
 }
 
 test.describe("Mobile smoke", () => {

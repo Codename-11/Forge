@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 const compose = readFileSync(
   resolve(process.cwd(), "docker/docker-compose.production.example.yml"),
   "utf8",
-);
+).replace(/\r\n/g, "\n");
 
 function serviceBlock(name: string, nextName: string): string {
   const start = compose.indexOf(`  ${name}:`);

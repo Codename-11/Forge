@@ -135,7 +135,9 @@ test.describe("multi-workspace restructure", () => {
 
     await page.goto("/settings/auth", { waitUntil: "domcontentloaded" });
     await expect(page).toHaveURL(/\/admin\/auth$/);
-    await expect(page.getByText(/Instance scope/).first()).toBeVisible();
+    await expect(
+      page.getByText("Instance administration · review the scope of each change", { exact: true }),
+    ).toBeVisible();
     await expect(page.getByText("Identity & sign-in").first()).toBeVisible();
 
     await page.goto("/w/forge/settings/dispatch-rules", { waitUntil: "domcontentloaded" });
