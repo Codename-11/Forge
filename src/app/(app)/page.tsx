@@ -1,15 +1,13 @@
 import { redirect } from "next/navigation";
 import { GlobalShell } from "@/components/global-shell/global-shell";
 import { getGlobalShellData } from "@/components/global-shell/data";
-import { MissionControlHome } from "@/components/global-shell/mission-control-home";
+import { PersonalHome } from "@/components/global-shell/personal-home";
 
 /**
- * Mission Control — the cross-workspace home. Renders inside the global
- * ("concourse") shell. Shell chrome (user + workspaces for the rail) is
- * resolved server-side; the aggregations stream client-side from the
- * `global.*` tRPC routers. Part of the multi-workspace restructure.
+ * Personal home across accessible workspaces. Operational health has its
+ * own /mission-control route so runtime setup does not gate everyday work.
  */
-export default async function MissionControlPage() {
+export default async function HomePage() {
   const data = await getGlobalShellData();
   if (!data) redirect("/signin");
 
@@ -18,13 +16,12 @@ export default async function MissionControlPage() {
       user={data.user}
       workspaces={data.workspaces}
       activePath="/"
-      crumbs={[{ label: "Forge", href: "/" }, { label: "Mission Control" }]}
-      title="Mission Control"
-      subtitle="Across all workspaces"
-      eyebrow="Home"
+      crumbs={[{ label: "Home" }]}
+      title="My work"
+      subtitle="Your assignments and workspaces, together."
       big
     >
-      <MissionControlHome />
+      <PersonalHome workspaces={data.workspaces} />
     </GlobalShell>
   );
 }

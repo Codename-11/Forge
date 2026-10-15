@@ -68,6 +68,7 @@ describe("managed runtime lifecycle acceptance", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "Managed acceptance runtime",
           kind: RuntimeKind.REMOTE_HTTP,

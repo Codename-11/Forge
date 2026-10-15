@@ -91,8 +91,8 @@ const PROVIDERS: Array<{
   {
     id: "codex",
     label: "Codex",
-    eyebrow: "CLI/IDE",
-    description: "Codex CLI or IDE extension using streamable HTTP MCP config.",
+    eyebrow: "desktop/CLI/IDE",
+    description: "Codex Desktop, CLI, or IDE extension connected to Forge over MCP.",
     Icon: Terminal,
   },
   {
@@ -152,8 +152,8 @@ export default function AccessPage() {
   const [step, setStep] = useState(0);
   const [provider, setProvider] = useState<McpOnboardingProvider>("hermes");
   const [name, setName] = useState("");
-  const [scopes, setScopes] = useState<Scope[]>(FULL_ACCESS);
-  const [preset, setPreset] = useState<Preset>("full");
+  const [scopes, setScopes] = useState<Scope[]>(DEFAULT_SCOPES);
+  const [preset, setPreset] = useState<Preset>("default");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [linkedAgentId, setLinkedAgentId] = useState<string>("");
 
@@ -222,8 +222,8 @@ export default function AccessPage() {
   function openCreate() {
     setProvider("hermes");
     setName("");
-    setScopes(FULL_ACCESS);
-    setPreset("full");
+    setScopes(DEFAULT_SCOPES);
+    setPreset("default");
     setExpiresInDays("");
     setLinkedAgentId("");
     setStep(0);
@@ -377,8 +377,8 @@ export default function AccessPage() {
       const nextProvider = isMcpProvider(providerParam) ? providerParam : "hermes";
       setProvider(nextProvider);
       setName(`${PROVIDER_LABEL.get(nextProvider) ?? "Agent"} Forge MCP`);
-      setScopes(FULL_ACCESS);
-      setPreset("full");
+      setScopes(DEFAULT_SCOPES);
+      setPreset("default");
       setExpiresInDays("");
       setLinkedAgentId(requestedAgentId ?? "");
       setStep(0);
@@ -1363,8 +1363,8 @@ function Intro({ baseUrl }: { baseUrl: string }) {
       </div>
       <div className="text-meta mt-2 rounded-md border border-ember/30 bg-ember/5 px-3 py-2 text-muted-foreground">
         This page is the credential source of truth: create, inspect, rotate, revoke, and delete
-        every MCP client here. Primary execution runtimes stay with the identity in Mission Control
-        → Agents.
+        every MCP client here. These clients execute externally and do not require a managed
+        runtime. Agent identity and optional managed execution are configured in Agents.
       </div>
     </Section>
   );

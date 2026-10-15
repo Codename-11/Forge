@@ -53,6 +53,7 @@ describe("runs dispatcher", () => {
     const runtime = await prisma.runtime.create({
       data: {
         workspaceId: fixture.workspace.id,
+        ownerType: "PERSONAL",
         ownerId: fixture.user.id,
         name: "Hermes TTL test",
         kind: RuntimeKind.REMOTE_HTTP,
@@ -110,6 +111,7 @@ describe("runs dispatcher", () => {
     const runtime = await prisma.runtime.create({
       data: {
         workspaceId: fixture.workspace.id,
+        ownerType: "PERSONAL",
         ownerId: fixture.user.id,
         name: "Hermes patient wait",
         kind: RuntimeKind.REMOTE_HTTP,
@@ -170,6 +172,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock runs",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -258,6 +261,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock deferred runs",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -326,6 +330,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock runs",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -409,6 +414,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "legacy runtime",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -542,6 +548,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock runs",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -654,6 +661,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock runs",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -739,6 +747,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock runs",
           kind: RuntimeKind.LOCAL_DAEMON,
@@ -796,6 +805,7 @@ describe("runs dispatcher", () => {
       const runtime = await prisma.runtime.create({
         data: {
           workspaceId: fixture.workspace.id,
+          ownerType: "PERSONAL",
           ownerId: fixture.user.id,
           name: "mock runs",
           kind: RuntimeKind.LOCAL_DAEMON,

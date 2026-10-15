@@ -388,11 +388,15 @@ export const instanceAdminRouter = router({
   /** Every runtime across the instance (not just the caller's). */
   runtimes: instanceAdminProcedure.query(async ({ ctx }) => {
     const runtimes = await ctx.db.runtime.findMany({
-      where: { archivedAt: null },
       orderBy: { createdAt: "asc" },
       select: {
         id: true,
         name: true,
+        ownerType: true,
+        ownerId: true,
+        updatedAt: true,
+        workspace: { select: { id: true, name: true, slug: true, key: true } },
+        createdBy: { select: { id: true, name: true } },
         kind: true,
         adapterKey: true,
         heartbeatAt: true,
@@ -421,6 +425,7 @@ export const instanceAdminRouter = router({
       const health = deriveRuntimeHealthStatus(r);
       return {
         ...r,
+        homeWorkspace: r.workspace,
         health,
         selfTest: summarizeRuntimeSelfTest(r),
         runtimeInfoSummary: summarizeRuntimeInfo(r),

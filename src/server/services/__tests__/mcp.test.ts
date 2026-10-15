@@ -2091,6 +2091,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
         name: "host-a",
         kind: "LOCAL_DAEMON",
         ownerId: f.user.id,
+        ownerType: "PERSONAL",
       },
     });
     const { ctx } = buildMcpCtx(f);
@@ -2115,6 +2116,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
         name: "elsewhere",
         kind: "REMOTE_HTTP",
         ownerId: other.user.id,
+        ownerType: "PERSONAL",
       },
     });
     const { ctx } = buildMcpCtx(f);
@@ -2135,6 +2137,7 @@ describe("mcp — awareness tools (Stream BA)", () => {
         kind: "REMOTE_HTTP",
         adapterKey: "hermes",
         ownerId: f.user.id,
+        ownerType: "PERSONAL",
         config: {
           localWorkspaceTools: true,
           toolCapabilities: ["terminal", "filesystem", "git"],
@@ -2144,6 +2147,8 @@ describe("mcp — awareness tools (Stream BA)", () => {
     });
     const { ctx } = buildMcpCtx(f);
 
+    ctx.apiKey!.kind = "PERSONAL";
+    ctx.apiKey!.principalType = "USER";
     const updated = (await call(
       "runtimes.configure",
       {
@@ -5676,6 +5681,7 @@ describe("mcp — orchestration loop tools", () => {
         workspaceId: f.workspace.id,
         ownerId: f.user.id,
         name: "Hermes Test",
+        ownerType: "PERSONAL",
         kind: "REMOTE_HTTP",
         adapterKey: "hermes",
       },

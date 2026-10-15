@@ -12,7 +12,8 @@
  *      each existing Agent binding to it (Agent.profileId). The owner is
  *      the workspace's OWNER (fallback: ADMIN, then any member). The
  *      profile's definitional columns are copied from the binding.
- *   3. Backfills Runtime.ownerId from the workspace owner where null.
+ *   3. Reports unassigned runtimes for explicit ownership review. Service
+ *      resources deliberately have no human owner and must remain unchanged.
  *
  * Until this runs, Agent.profileId is null and the app treats each
  * binding's own columns as its definition (transitional). Running it is
@@ -44,7 +45,6 @@ async function main() {
   let promoted = 0;
   let profilesCreated = 0;
   let bindingsLinked = 0;
-  let runtimesOwned = 0;
 
   // 1. Bootstrap instance admin.
   const adminEmail = process.env.ADMIN_EMAIL?.toLowerCase();
@@ -113,19 +113,17 @@ async function main() {
     bindingsLinked++;
   }
 
-  // 3. Runtime ownership.
-  const runtimes = await db.runtime.findMany({ where: { ownerId: null }, select: { id: true, workspaceId: true } });
-  for (const rt of runtimes) {
-    const ownerId = await workspaceOwnerUserId(rt.workspaceId);
-    if (ownerId) {
-      await db.runtime.update({ where: { id: rt.id }, data: { ownerId } });
-      runtimesOwned++;
-    }
+  // 3. Registration location is not ownership. Leave historical unassigned
+  // runtimes for an administrator to transfer explicitly; never adopt SERVICE
+  // resources merely because their ownerId is intentionally null.
+  const unassignedRuntimes = await db.runtime.count({ where: { ownerType: "UNASSIGNED" } });
+  if (unassignedRuntimes > 0) {
+    console.warn(`${unassignedRuntimes} unassigned runtimes need explicit ownership review in Administration.`);
   }
 
   console.log(
     `backfill-multiws done — promoted ${promoted} admin, created ${profilesCreated} profiles, ` +
-      `linked ${bindingsLinked} bindings, owned ${runtimesOwned} runtimes.`,
+      `linked ${bindingsLinked} bindings; ${unassignedRuntimes} runtimes await ownership review.`,
   );
 }
 

@@ -31,6 +31,7 @@ async function setup(keyPrefix: string) {
     data: {
       workspaceId: fixture.workspace.id,
       ownerId: fixture.user.id,
+      ownerType: "PERSONAL",
       name: "test runtime",
       kind: RuntimeKind.REMOTE_HTTP,
       adapterKey: "codex-app-server",

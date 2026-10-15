@@ -96,6 +96,12 @@ export async function createWorkspaceFixture(
   });
 
   const cleanup = async () => {
+    // Personal resource ownership deliberately restricts user deletion. Only
+    // dispose of profiles owned by these fixture users; service resources must
+    // survive deletion of their creator and are cleaned up by their own tests.
+    await prisma.agentProfile.deleteMany({
+      where: { ownerType: "PERSONAL", ownerId: { in: [user.id, secondUser.id] } },
+    });
     // ON DELETE CASCADE on Workspace fans out to everything tenant-scoped.
     await prisma.workspace.delete({ where: { id: workspace.id } }).catch(() => {});
     await prisma.user

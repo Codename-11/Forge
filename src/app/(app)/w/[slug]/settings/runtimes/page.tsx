@@ -25,7 +25,6 @@ import {
 import { Topbar } from "@/components/topbar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Avatar } from "@/components/ui/avatar";
 import { Confirm, QuickForm, useConfirm } from "@/components/ui/modal";
 import { Combobox } from "@/components/ui/combobox";
 import { Card } from "@/components/settings/card";
@@ -36,6 +35,7 @@ import { useWorkspace } from "@/hooks/use-workspace";
 import { trpc } from "@/lib/trpc";
 import { cn, relativeTime } from "@/lib/utils";
 import { runtimeDisplayIdentity } from "@/lib/transport-display";
+import { runtimeOwnershipLabel } from "@/lib/runtime-ownership";
 
 /**
  * Runtimes index — workspace-scoped registry of compute environments
@@ -346,15 +346,10 @@ export default function RuntimesPage() {
                           {rt._count.agents} agent
                           {rt._count.agents === 1 ? "" : "s"}
                         </span>
-                        {rt.owner && (
-                          <>
-                            <span>·</span>
-                            <span className="inline-flex items-center gap-1.5">
-                              <Avatar name={rt.owner.name} image={rt.owner.image} size={16} />
-                              <span className="truncate">{rt.owner.name ?? "unknown"}</span>
-                            </span>
-                          </>
-                        )}
+                        <span>·</span>
+                        <span>{runtimeOwnershipLabel(rt)}</span>
+                        <span>·</span>
+                        <span>Registered in {ws.name}</span>
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-1.5">
                         <RuntimeToolSurfaceBadges

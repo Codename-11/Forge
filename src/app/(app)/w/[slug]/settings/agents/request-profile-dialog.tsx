@@ -4,7 +4,10 @@ import { toast } from "sonner";
 import { AgentProvider, RunEngine } from "@prisma/client";
 import { CenterModal } from "@/components/ui/modal";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { Combobox } from "@/components/ui/combobox";
 import { trpc } from "@/lib/trpc";
+import { personalAgentCreationCopy } from "@/lib/agent-ownership-ui";
 
 /**
  * Member-facing "Request a profile" form launched from Mission Control.
@@ -17,11 +20,17 @@ import { trpc } from "@/lib/trpc";
 export function RequestProfileDialog({
   open,
   onOpenChange,
+  onCreated,
+  setupMode,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  onCreated?: (profile: { id: string; approvedAt: Date | null }) => void;
+  setupMode?: "external" | "managed";
 }) {
   const utils = trpc.useUtils();
+  const policy = trpc.agents.profiles.policy.useQuery(undefined, { enabled: open });
+  const creation = personalAgentCreationCopy(policy.data?.personalAgentCreation);
   const [name, setName] = useState("");
   const [profileKey, setProfileKey] = useState("");
   const [provider, setProvider] = useState<AgentProvider>(AgentProvider.HERMES);
@@ -41,17 +50,26 @@ export function RequestProfileDialog({
   }
 
   const request = trpc.agents.profiles.request.useMutation({
-    onSuccess: () => {
-      toast.success("Profile requested — an instance admin will review it.");
+    onSuccess: (profile) => {
+      toast.success(
+        profile.approvedAt
+          ? "Personal agent created. Add workspace access to continue."
+          : "Profile requested — an instance admin will review it.",
+      );
       void utils.agents.bindings.catalog.invalidate();
       void utils.agents.profiles.list.invalidate();
       reset();
       onOpenChange(false);
+      onCreated?.(profile);
     },
     onError: (e) => toast.error(e.message),
   });
 
   function submit() {
+    if (!creation.enabled) {
+      toast.error("Personal agent creation is not available under the current instance policy.");
+      return;
+    }
     if (!name.trim() || !profileKey.trim()) {
       toast.error("Name and profile key are required.");
       return;
@@ -64,7 +82,7 @@ export function RequestProfileDialog({
       name: name.trim(),
       profileKey: profileKey.trim(),
       provider,
-      runEngine: runEngine === "DEFAULT" ? null : runEngine,
+      runEngine: setupMode === "external" || runEngine === "DEFAULT" ? null : runEngine,
       description: description.trim() || undefined,
       avatar: avatar.trim() || undefined,
       baseCapabilities,
@@ -79,11 +97,35 @@ export function RequestProfileDialog({
         onOpenChange(v);
       }}
       size="md"
-      title="Request an agent profile"
-      description="Profiles are defined globally and need an instance admin's approval before they can be bound to a workspace. Submit the definition essentials here — you'll see it in the catalog once it's approved."
-      primaryLabel="Submit request"
+      title={creation.label}
+      description={creation.description}
+      primaryLabel={
+        policy.data?.personalAgentCreation === "SELF_SERVICE" ? "Create my agent" : "Submit request"
+      }
       onPrimary={submit}
-      loading={request.isPending}
+      loading={request.isPending || policy.isLoading}
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={request.isPending}
+            onClick={() => onOpenChange(false)}
+          >
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="ember"
+            disabled={!creation.enabled || request.isPending || policy.isLoading}
+            onClick={submit}
+          >
+            {policy.data?.personalAgentCreation === "SELF_SERVICE"
+              ? "Create my agent"
+              : "Submit request"}
+          </Button>
+        </div>
+      }
     >
       <div className="space-y-4">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -106,32 +148,36 @@ export function RequestProfileDialog({
             />
           </Field>
           <Field label="Provider">
-            <select
+            <Combobox
+              ariaLabel="Personal agent provider"
               value={provider}
-              onChange={(e) => setProvider(e.target.value as AgentProvider)}
-              className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              {Object.values(AgentProvider).map((p) => (
-                <option key={p} value={p}>
-                  {p.toLowerCase()}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => {
+                if (value) setProvider(value as AgentProvider);
+              }}
+              options={Object.values(AgentProvider).map((value) => ({
+                value,
+                label: value.toLowerCase(),
+              }))}
+              className="h-9 w-full"
+            />
           </Field>
-          <Field label="Run engine" hint="Default = integration's choice">
-            <select
-              value={runEngine}
-              onChange={(e) => setRunEngine(e.target.value as "DEFAULT" | RunEngine)}
-              className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-            >
-              <option value="DEFAULT">Default</option>
-              {Object.values(RunEngine).map((r) => (
-                <option key={r} value={r}>
-                  {r.toLowerCase()}
-                </option>
-              ))}
-            </select>
-          </Field>
+          {setupMode !== "external" && (
+            <Field label="Run engine" hint="Default = integration's choice">
+              <Combobox
+                ariaLabel="Personal agent run engine"
+                value={runEngine}
+                onChange={(value) => setRunEngine((value ?? "DEFAULT") as "DEFAULT" | RunEngine)}
+                options={[
+                  { value: "DEFAULT", label: "Default" },
+                  ...Object.values(RunEngine).map((value) => ({
+                    value,
+                    label: value.toLowerCase(),
+                  })),
+                ]}
+                className="h-9 w-full"
+              />
+            </Field>
+          )}
           <Field label="Avatar" hint="Optional emoji">
             <Input value={avatar} onChange={(e) => setAvatar(e.target.value)} placeholder="🤖" />
           </Field>

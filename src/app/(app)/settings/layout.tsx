@@ -9,7 +9,7 @@ import { SettingsRail } from "@/components/settings/settings-rail";
  * settings (account, agents, runtimes, connections, workspaces). Workspace
  * settings live under `/w/[slug]/settings/*` and use the workspace shell.
  * These sit *above* any single workspace, so the back-link returns to
- * Mission Control (`/`), not into a workspace.
+ * Home (`/`), not into a workspace.
  */
 export default async function AccountSettingsLayout({
   children,
@@ -24,7 +24,7 @@ export default async function AccountSettingsLayout({
       <SettingsRail
         scope="account"
         backHref="/"
-        backLabel="Mission Control"
+        backLabel="Back to Home"
         email={session.user.email}
       />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</main>

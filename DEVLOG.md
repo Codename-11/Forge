@@ -2,6 +2,66 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-10-15 — AXI-206 explicit ownership and runtime lifecycle
+
+- Added PERSONAL/SERVICE ownership for agent definitions and runtimes, separate
+  immutable creator provenance, explicit UNASSIGNED legacy runtimes, owner-shape
+  checks and service-key uniqueness. Personal owner deletion is restricted;
+  deleting a service resource's creator does not delete the service identity.
+- Added audited personal creation policy (disabled / approval required /
+  self-service), defaulting to approval required. Self-service creates only a
+  private personal identity; workspace access and credentials remain separate.
+- Added admin ownership transfer with optimistic snapshots and runtime consent,
+  plus runtime impact/prepare/transfer/removal workflows. Active work, unsafe
+  configuration and historical tenant references are protected; external hosts
+  are never stopped by removal. Archived registrations remain discoverable.
+- Unified browser/MCP management checks and locked attachment, binding,
+  diagnostic and child-config mutations against stale ownership/home races.
+  An issuing human does not lend authority to a service key. New runtime
+  attachment requires explicit adoption of UNASSIGNED registrations; existing
+  legacy bindings remain operational pending deliberate operator action.
+- Applied migration only to guarded local test DB and a separate AXI-206
+  preview database copied from existing local data. Earlier previews and
+  production were not migrated. Verified real Postgres/Redis tests for policy,
+  transfer races, ownership constraints, scope isolation and compatibility;
+  focused UI tests and TypeScript/lint also passed. Shared-dispatcher suites
+  require sequential execution to avoid cross-suite pending-run interference.
+- Browser-verified ordinary member self-service creation, admin service-agent
+  creation and transfer, and runtime service ownership/home relocation followed
+  by removal of a disposable unused registration. Mobile confirmation has no
+  horizontal overflow. Fixed modal foreground inheritance from admin chrome and
+  removed a stale impact-query refetch after successful registration deletion.
+- No commit/push/PR/release/deploy. Full release gates remain deferred. Documented
+  the coordinated migration/code rollout required before future production use.
+
+## 2026-10-14 — AXI-206 navigation and agent setup local iteration
+
+- Split personal Home/My Work from Mission Control operations; added a global
+  Workspaces directory with a compatibility redirect from account settings.
+  Clarified My account, Administration and workspace scope labels.
+- Added intent-first external MCP versus managed-execution setup with workspace
+  and acting-identity continuity. Agent pages distinguish owner, catalog
+  availability, workspace access, configured runtime and valid client keys.
+  New profiles default owner-only; new keys default Standard scopes. Existing
+  records and the instance-admin approval requirement remain unchanged.
+- Unified agent availability gates and removed ownership-based cross-workspace
+  run/client visibility. Project restrictions apply to recent activity. Public
+  profile/binding results redact dispatch secrets, including mutation results.
+- Guarded permanent workspace deletion while runtime registrations exist,
+  including archived/unbound hosts, with real database locking. Bucket cleanup
+  retains the existing slug reservation until deletion; its pre-existing
+  non-atomic storage/database limitation is documented.
+- Verified 20 agent-access integration tests, 18 runtime/storage integration
+  tests, 18 focused UI/setup/operations unit tests, TypeScript and focused lint.
+  Real-browser walkthroughs on localhost:3002 covered Home, agent setup and
+  credential-form context, workspace redirect and operations; desktop and
+  390px mobile Home/Agents layouts have no horizontal overflow. No real external
+  runtime was dispatched or credential issued during browser checks.
+- Local iteration only: no commit, push, PR, release, schema migration or deploy.
+  Service-owned identities, explicit runtime relocation/removal and configurable
+  personal-agent creation remain follow-up model work. Full release gates are
+  deferred until the operator accepts the local iteration.
+
 ## 2026-09-01 — v0.35.0 release preparation
 
 - Squash-merged AXI-186 / PR #102 after exact-head lint, typecheck, unit,

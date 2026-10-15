@@ -1,22 +1,27 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import {
-  AgentProvider,
-  AgentRole,
-  AgentRuntimeMode,
-  RunEngine,
-  type Prisma,
-  type PrismaClient,
-} from "@prisma/client";
+import { AgentProvider, AgentRole, AgentRuntimeMode, RunEngine, type Prisma } from "@prisma/client";
 import { router, globalProcedure, protectedProcedure, instanceAdminProcedure } from "@/server/trpc";
+import { issueWhereForViewer } from "@/server/services/project-access";
+import {
+  agentProfileAvailability,
+  canViewAgentWorkspace,
+  publicAgentDefinition,
+} from "@/server/services/agent-profile-access";
+import {
+  assertActiveProfileOwner,
+  assertProfileRuntimeAvailable,
+  auditAgentProfile,
+  profileTransaction,
+  readAgentPolicy,
+  type ProfileDb,
+} from "@/server/services/agent-profile-policy";
 
 /**
- * Global agent **profiles** — the user-owned definitions in the
- * three-tier model (definition → binding → instance policy). Reads are
- * cross-workspace (`globalProcedure`); **creating** a profile requires
- * INSTANCE_ADMIN (members see a "requires instance admin" affordance in
- * the bind catalog). Owners may edit/archive their own profiles; instance
- * admins may edit any, mark instance-shared, and force-disable.
+ * Personal and instance-managed service definitions. Ownership determines who
+ * manages the definition; catalog sharing never grants workspace access.
+ * Member creation follows explicit instance policy. Service creation, sharing,
+ * and ownership transfers require instance administration.
  *
  * Part of the multi-workspace restructure (docs/plans/multiws-restructure.md).
  */
@@ -27,19 +32,19 @@ const profileKeySchema = z
   .max(40)
   .regex(/^[a-z0-9][a-z0-9-_]*$/, "Lowercase, digits, `-` or `_` only");
 
-async function instanceRoleOf(db: PrismaClient, userId: string) {
+async function instanceRoleOf(db: ProfileDb, userId: string) {
   const u = await db.user.findUnique({ where: { id: userId }, select: { instanceRole: true } });
   return u?.instanceRole ?? "MEMBER";
 }
 
 /** Throws unless the caller owns the profile or is an instance admin. */
-async function assertCanEdit(db: PrismaClient, userId: string, profileId: string) {
+async function assertCanEdit(db: ProfileDb, userId: string, profileId: string) {
   const p = await db.agentProfile.findUnique({
     where: { id: profileId },
-    select: { ownerId: true },
+    select: { ownerId: true, ownerType: true },
   });
   if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
-  if (p.ownerId === userId) return;
+  if (p.ownerType === "PERSONAL" && p.ownerId === userId) return;
   if ((await instanceRoleOf(db, userId)) === "INSTANCE_ADMIN") return;
   throw new TRPCError({
     code: "FORBIDDEN",
@@ -47,36 +52,48 @@ async function assertCanEdit(db: PrismaClient, userId: string, profileId: string
   });
 }
 
-async function assertRuntimeAvailable(
-  db: PrismaClient,
-  runtimeId: string | null | undefined,
-  ownerId: string,
-  actorId: string,
-) {
-  if (!runtimeId) return;
-  const runtime = await db.runtime.findFirst({
-    where: {
-      id: runtimeId,
-      archivedAt: null,
-      OR: [{ ownerId }, { ownerId: actorId }, { instanceShared: true }],
-    },
-    select: { id: true },
-  });
-  if (!runtime) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "That runtime is not available to this agent profile.",
-    });
-  }
-}
+const ownerTypeSchema = z.enum(["PERSONAL", "SERVICE"]);
+const creationPolicySchema = z.enum(["DISABLED", "APPROVAL_REQUIRED", "SELF_SERVICE"]);
+const auditActor = (ctx: {
+  session: { user: { id: string } };
+  ip: string | null;
+  userAgent: string | null;
+}) => ({ actorId: ctx.session.user.id, ip: ctx.ip, userAgent: ctx.userAgent });
 
 export const agentProfileRouter = router({
+  policy: protectedProcedure.query(({ ctx }) => readAgentPolicy(ctx.db)),
+
+  setPolicy: instanceAdminProcedure
+    .input(z.object({ personalAgentCreation: creationPolicySchema }))
+    .mutation(({ ctx, input }) =>
+      profileTransaction(ctx.db, async (tx) => {
+        const before = await readAgentPolicy(tx);
+        await tx.instanceAgentPolicy.upsert({
+          where: { id: "default" },
+          create: { id: "default", ...input },
+          update: input,
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.policy.updated", {
+          before,
+          after: input,
+        });
+        return input;
+      }),
+    ),
+
+  ownershipCandidates: instanceAdminProcedure.query(({ ctx }) =>
+    ctx.db.user.findMany({
+      where: { status: "ACTIVE", deletedAt: null, disabledAt: null },
+      select: { id: true, name: true, email: true, image: true },
+      orderBy: [{ name: "asc" }, { id: "asc" }],
+    }),
+  ),
   /** Owned + instance-shared profiles, with cross-workspace binding summary. */
   list: globalProcedure.query(async ({ ctx }) => {
     const [instanceRole, memberships] = await Promise.all([
       instanceRoleOf(ctx.db, ctx.session.user.id),
       ctx.db.membership.findMany({
-        where: { userId: ctx.session.user.id },
+        where: { userId: ctx.session.user.id, workspace: { deletedAt: null } },
         select: { workspaceId: true },
       }),
     ]);
@@ -90,6 +107,8 @@ export const agentProfileRouter = router({
       },
       orderBy: { createdAt: "asc" },
       include: {
+        owner: { select: { id: true, name: true, image: true } },
+        createdBy: { select: { id: true, name: true } },
         runtime: { select: { id: true, name: true, kind: true } },
         bindings: {
           where: { archivedAt: null },
@@ -105,14 +124,18 @@ export const agentProfileRouter = router({
       },
     });
     return profiles.map((p) => {
-      const canSeeAllBindings =
-        p.ownerId === ctx.session.user.id || instanceRole === "INSTANCE_ADMIN";
-      const bindings = canSeeAllBindings
-        ? p.bindings
-        : p.bindings.filter((binding) => visibleWorkspaceIds.has(binding.workspace.id));
+      const bindings = p.bindings.filter((binding) =>
+        canViewAgentWorkspace(
+          binding.workspace.id,
+          visibleWorkspaceIds,
+          instanceRole === "INSTANCE_ADMIN",
+        ),
+      );
       return {
-        ...p,
+        ...publicAgentDefinition(p),
         bindings,
+        bindingCount: bindings.length,
+        availability: agentProfileAvailability(p),
         ownedByMe: p.ownerId === ctx.session.user.id,
         online: bindings.some((b) => b.status === "ONLINE" || b.status === "BUSY"),
         clientCount: bindings.reduce((total, binding) => total + binding._count.apiKeys, 0),
@@ -125,6 +148,8 @@ export const agentProfileRouter = router({
     const p = await ctx.db.agentProfile.findUnique({
       where: { id: input.id },
       include: {
+        owner: { select: { id: true, name: true, image: true } },
+        createdBy: { select: { id: true, name: true } },
         runtime: { select: { id: true, name: true, kind: true } },
         bindings: {
           where: { archivedAt: null },
@@ -167,8 +192,9 @@ export const agentProfileRouter = router({
           where: {
             userId: ctx.session.user.id,
             workspaceId: { in: workspaceIds },
+            workspace: { deletedAt: null },
           },
-          select: { workspaceId: true, role: true },
+          select: { id: true, workspaceId: true, role: true },
         })
       : [];
     const visibleWorkspaceIds = new Set(memberships.map((membership) => membership.workspaceId));
@@ -177,13 +203,30 @@ export const agentProfileRouter = router({
         .filter((membership) => membership.role === "OWNER" || membership.role === "ADMIN")
         .map((membership) => membership.workspaceId),
     );
-    const visibleBindings = canEdit
-      ? p.bindings
-      : p.bindings.filter((binding) => visibleWorkspaceIds.has(binding.workspace.id));
+    // Managing a definition does not grant access to the workspaces using it.
+    const visibleBindings = p.bindings.filter((binding) =>
+      canViewAgentWorkspace(
+        binding.workspace.id,
+        visibleWorkspaceIds,
+        instanceRole === "INSTANCE_ADMIN",
+      ),
+    );
     const bindingIds = visibleBindings.map((binding) => binding.id);
     const recentRuns = bindingIds.length
       ? await ctx.db.agentRun.findMany({
-          where: { agentId: { in: bindingIds } },
+          where: {
+            agentId: { in: bindingIds },
+            ...(instanceRole === "INSTANCE_ADMIN"
+              ? {}
+              : {
+                  issue: {
+                    deletedAt: null,
+                    OR: memberships.map((membership) =>
+                      issueWhereForViewer({ workspaceId: membership.workspaceId, membership }),
+                    ),
+                  },
+                }),
+          },
           orderBy: { startedAt: "desc" },
           take: 15,
           select: {
@@ -200,11 +243,13 @@ export const agentProfileRouter = router({
         })
       : [];
     return {
-      ...p,
+      ...publicAgentDefinition(p),
       bindings: visibleBindings.map((binding) => ({
         ...binding,
         canManage: manageableWorkspaceIds.has(binding.workspace.id),
       })),
+      bindingCount: visibleBindings.length,
+      availability: agentProfileAvailability(p),
       ownedByMe: p.ownerId === ctx.session.user.id,
       canEdit,
       recentRuns,
@@ -221,46 +266,58 @@ export const agentProfileRouter = router({
         requestedBy: { select: { id: true, name: true, email: true, image: true } },
       },
     });
-    return profiles.map((p) => ({ ...p, requestedAt: p.createdAt }));
+    return profiles.map((p) => ({ ...publicAgentDefinition(p), requestedAt: p.createdAt }));
   }),
 
   /**
-   * Member-initiated profile request. Any signed-in user creates a PENDING
-   * profile (`requestedById` = caller, `approvedAt` = null). Not bindable
-   * until an instance admin approves. Owner defaults to the requester so the
-   * per-owner unique key constraint applies to their own requests.
+   * Member-initiated personal setup. Approval follows current instance policy;
+   * sharing, alternate ownership, and runtime credentials are never accepted.
    */
   request: protectedProcedure
     .input(
-      z.object({
-        profileKey: profileKeySchema,
-        name: z.string().min(1).max(80),
-        description: z.string().max(2000).optional(),
-        avatar: z.string().max(2048).optional(),
-        provider: z.nativeEnum(AgentProvider).default(AgentProvider.HERMES),
-        runEngine: z.nativeEnum(RunEngine).nullish(),
-        baseCapabilities: z.array(z.string().min(1).max(40)).default([]),
-        templateMarkdown: z.string().nullish(),
-      }),
+      z
+        .object({
+          profileKey: profileKeySchema,
+          name: z.string().min(1).max(80),
+          description: z.string().max(2000).optional(),
+          avatar: z.string().max(2048).optional(),
+          provider: z.nativeEnum(AgentProvider).default(AgentProvider.HERMES),
+          runEngine: z.nativeEnum(RunEngine).nullish(),
+          baseCapabilities: z.array(z.string().min(1).max(40)).default([]),
+          templateMarkdown: z.string().nullish(),
+        })
+        .strict(),
     )
     .mutation(async ({ ctx, input }) => {
       const ownerId = ctx.session.user.id;
-      const dupe = await ctx.db.agentProfile.findUnique({
-        where: { ownerId_profileKey: { ownerId, profileKey: input.profileKey } },
-        select: { id: true },
-      });
-      if (dupe)
-        throw new TRPCError({
-          code: "CONFLICT",
-          message: "You already have a profile with this key.",
+      return profileTransaction(ctx.db, async (tx) => {
+        const policy = await readAgentPolicy(tx);
+        if (policy.personalAgentCreation === "DISABLED") {
+          throw new TRPCError({
+            code: "FORBIDDEN",
+            message: "Personal agent creation is disabled by instance policy.",
+          });
+        }
+        await assertActiveProfileOwner(tx, ownerId);
+        const profile = await tx.agentProfile.create({
+          data: {
+            ...input,
+            ownerType: "PERSONAL",
+            ownerId,
+            createdById: ownerId,
+            requestedById: ownerId,
+            approvedAt: policy.personalAgentCreation === "SELF_SERVICE" ? new Date() : null,
+            instanceShared: false,
+          },
         });
-      return ctx.db.agentProfile.create({
-        data: {
-          ...input,
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.requested", {
+          profileId: profile.id,
+          ownerType: "PERSONAL",
           ownerId,
-          requestedById: ownerId,
-          approvedAt: null,
-        },
+          policy: policy.personalAgentCreation,
+          approved: Boolean(profile.approvedAt),
+        });
+        return publicAgentDefinition(profile);
       });
     }),
 
@@ -268,14 +325,19 @@ export const agentProfileRouter = router({
   approve: instanceAdminProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      const p = await ctx.db.agentProfile.findUnique({
-        where: { id: input.id },
-        select: { id: true, approvedAt: true },
-      });
-      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
-      return ctx.db.agentProfile.update({
-        where: { id: input.id },
-        data: { approvedAt: new Date(), disabledAt: null },
+      return profileTransaction(ctx.db, async (tx) => {
+        const p = await tx.agentProfile.findUnique({
+          where: { id: input.id },
+          select: { id: true, approvedAt: true, ownerId: true },
+        });
+        if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+        if (p.ownerId) await assertActiveProfileOwner(tx, p.ownerId);
+        const profile = await tx.agentProfile.update({
+          where: { id: input.id },
+          data: { approvedAt: new Date(), disabledAt: null },
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.approved", { profileId: p.id });
+        return publicAgentDefinition(profile);
       });
     }),
 
@@ -283,14 +345,18 @@ export const agentProfileRouter = router({
   reject: instanceAdminProcedure
     .input(z.object({ id: z.string().cuid() }))
     .mutation(async ({ ctx, input }) => {
-      const p = await ctx.db.agentProfile.findUnique({
-        where: { id: input.id },
-        select: { id: true },
-      });
-      if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
-      return ctx.db.agentProfile.update({
-        where: { id: input.id },
-        data: { archivedAt: new Date() },
+      return profileTransaction(ctx.db, async (tx) => {
+        const p = await tx.agentProfile.findUnique({
+          where: { id: input.id },
+          select: { id: true },
+        });
+        if (!p) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+        const profile = await tx.agentProfile.update({
+          where: { id: input.id },
+          data: { archivedAt: new Date() },
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.rejected", { profileId: p.id });
+        return publicAgentDefinition(profile);
       });
     }),
 
@@ -311,24 +377,32 @@ export const agentProfileRouter = router({
         templateMarkdown: z.string().nullish(),
         webhookUrl: z.string().url().max(2048).nullish(),
         instanceShared: z.boolean().default(false),
-        ownerId: z.string().cuid().optional(),
+        ownerType: ownerTypeSchema.default("PERSONAL"),
+        ownerId: z.string().cuid().nullish(),
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      const ownerId = input.ownerId ?? ctx.session.user.id;
-      await assertRuntimeAvailable(ctx.db, input.runtimeId, ownerId, ctx.session.user.id);
-      const dupe = await ctx.db.agentProfile.findUnique({
-        where: { ownerId_profileKey: { ownerId, profileKey: input.profileKey } },
-        select: { id: true },
-      });
-      if (dupe)
+      if (input.ownerType === "SERVICE" && input.ownerId)
         throw new TRPCError({
-          code: "CONFLICT",
-          message: "That owner already has a profile with this key.",
+          code: "BAD_REQUEST",
+          message: "Service agents are instance-managed and cannot have a personal owner.",
         });
+      const ownerId = input.ownerType === "SERVICE" ? null : (input.ownerId ?? ctx.session.user.id);
       const { ownerId: _drop, ...rest } = input;
-      // Admin-created profiles are pre-approved (requestedById stays null).
-      return ctx.db.agentProfile.create({ data: { ...rest, ownerId, approvedAt: new Date() } });
+      return profileTransaction(ctx.db, async (tx) => {
+        if (ownerId) await assertActiveProfileOwner(tx, ownerId);
+        await assertProfileRuntimeAvailable(tx, input.runtimeId, input.ownerType, ownerId);
+        const profile = await tx.agentProfile.create({
+          data: { ...rest, ownerId, createdById: ctx.session.user.id, approvedAt: new Date() },
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.created", {
+          profileId: profile.id,
+          ownerType: input.ownerType,
+          ownerId,
+          instanceShared: input.instanceShared,
+        });
+        return publicAgentDefinition(profile);
+      });
     }),
 
   /** Edit a profile's definition. Owner or instance admin. */
@@ -350,16 +424,21 @@ export const agentProfileRouter = router({
       }),
     )
     .mutation(async ({ ctx, input }) => {
-      await assertCanEdit(ctx.db, ctx.session.user.id, input.id);
-      const current = await ctx.db.agentProfile.findUniqueOrThrow({
-        where: { id: input.id },
-        select: { ownerId: true },
-      });
-      if (Object.prototype.hasOwnProperty.call(input, "runtimeId")) {
-        await assertRuntimeAvailable(ctx.db, input.runtimeId, current.ownerId, ctx.session.user.id);
-      }
       const { id, ...data } = input;
-      return ctx.db.$transaction(async (tx) => {
+      return profileTransaction(ctx.db, async (tx) => {
+        await assertCanEdit(tx, ctx.session.user.id, input.id);
+        const current = await tx.agentProfile.findUniqueOrThrow({
+          where: { id },
+          select: { ownerId: true, ownerType: true },
+        });
+        if (Object.prototype.hasOwnProperty.call(input, "runtimeId")) {
+          await assertProfileRuntimeAvailable(
+            tx,
+            input.runtimeId,
+            current.ownerType === "SERVICE" ? "SERVICE" : "PERSONAL",
+            current.ownerId,
+          );
+        }
         const profile = await tx.agentProfile.update({ where: { id }, data });
         const bindingData: Prisma.AgentUpdateManyMutationInput = {};
         const syncedFields = [
@@ -385,40 +464,143 @@ export const agentProfileRouter = router({
             data: bindingData,
           });
         }
-        return profile;
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.updated", {
+          profileId: id,
+          changedFields: Object.keys(data).filter(
+            (field) => data[field as keyof typeof data] !== undefined,
+          ),
+        });
+        return publicAgentDefinition(profile);
       });
     }),
+
+  transferOwnership: instanceAdminProcedure
+    .input(
+      z
+        .object({
+          id: z.string().cuid(),
+          ownerType: ownerTypeSchema,
+          ownerId: z.string().cuid().nullish(),
+          expectedOwnerType: ownerTypeSchema,
+          expectedOwnerId: z.string().cuid().nullable(),
+          expectedUpdatedAt: z.date(),
+          clearRuntime: z.boolean().default(false),
+        })
+        .strict(),
+    )
+    .mutation(({ ctx, input }) =>
+      profileTransaction(ctx.db, async (tx) => {
+        if (input.ownerType === "PERSONAL" && !input.ownerId)
+          throw new TRPCError({ code: "BAD_REQUEST", message: "Choose a personal owner." });
+        if (input.ownerType === "SERVICE" && input.ownerId)
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Service agents cannot have a personal owner.",
+          });
+        const ownerId = input.ownerType === "SERVICE" ? null : input.ownerId!;
+        const current = await tx.agentProfile.findUnique({ where: { id: input.id } });
+        if (!current) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+        if (
+          current.ownerType !== input.expectedOwnerType ||
+          current.ownerId !== input.expectedOwnerId ||
+          current.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()
+        ) {
+          throw new TRPCError({
+            code: "CONFLICT",
+            message:
+              "The agent changed since you opened it. Refresh before transferring ownership.",
+          });
+        }
+        if (ownerId) await assertActiveProfileOwner(tx, ownerId);
+        if (!input.clearRuntime)
+          await assertProfileRuntimeAvailable(tx, current.runtimeId, input.ownerType, ownerId);
+        const changed = await tx.agentProfile.updateMany({
+          where: {
+            id: input.id,
+            ownerType: input.expectedOwnerType,
+            ownerId: input.expectedOwnerId,
+            updatedAt: input.expectedUpdatedAt,
+          },
+          data: {
+            ownerType: input.ownerType,
+            ownerId,
+            ...(input.clearRuntime ? { runtimeId: null } : {}),
+          },
+        });
+        if (changed.count !== 1)
+          throw new TRPCError({
+            code: "CONFLICT",
+            message: "Ownership changed. Refresh before trying again.",
+          });
+        if (input.clearRuntime)
+          await tx.agent.updateMany({ where: { profileId: input.id }, data: { runtimeId: null } });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.ownership_transferred", {
+          profileId: input.id,
+          before: { ownerType: current.ownerType, ownerId: current.ownerId },
+          after: { ownerType: input.ownerType, ownerId },
+          clearedRuntime: input.clearRuntime,
+        });
+        return publicAgentDefinition(
+          await tx.agentProfile.findUniqueOrThrow({ where: { id: input.id } }),
+        );
+      }),
+    ),
 
   /** Instance admin: mark a profile available to every workspace's catalog. */
   setInstanceShared: instanceAdminProcedure
     .input(z.object({ id: z.string().cuid(), instanceShared: z.boolean() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.agentProfile.update({
-        where: { id: input.id },
-        data: { instanceShared: input.instanceShared },
+    .mutation(({ ctx, input }) =>
+      profileTransaction(ctx.db, async (tx) => {
+        const before = await tx.agentProfile.findUniqueOrThrow({
+          where: { id: input.id },
+          select: { instanceShared: true },
+        });
+        const profile = await tx.agentProfile.update({
+          where: { id: input.id },
+          data: { instanceShared: input.instanceShared },
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.sharing_updated", {
+          profileId: input.id,
+          before: before.instanceShared,
+          after: input.instanceShared,
+        });
+        return publicAgentDefinition(profile);
       }),
     ),
 
   /** Instance admin: force-disable (or re-enable) a profile and all its bindings. */
   setDisabled: instanceAdminProcedure
     .input(z.object({ id: z.string().cuid(), disabled: z.boolean() }))
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.agentProfile.update({
-        where: { id: input.id },
-        data: { disabledAt: input.disabled ? new Date() : null },
+    .mutation(({ ctx, input }) =>
+      profileTransaction(ctx.db, async (tx) => {
+        const profile = await tx.agentProfile.update({
+          where: { id: input.id },
+          data: { disabledAt: input.disabled ? new Date() : null },
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.disabled_updated", {
+          profileId: input.id,
+          disabled: input.disabled,
+        });
+        return publicAgentDefinition(profile);
       }),
     ),
 
   /** Archive a profile (owner or instance admin). Bindings survive via SetNull. */
   archive: protectedProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertCanEdit(ctx.db, ctx.session.user.id, input.id);
-      return ctx.db.agentProfile.update({
-        where: { id: input.id },
-        data: { archivedAt: new Date() },
-      });
-    }),
+    .mutation(({ ctx, input }) =>
+      profileTransaction(ctx.db, async (tx) => {
+        await assertCanEdit(tx, ctx.session.user.id, input.id);
+        const profile = await tx.agentProfile.update({
+          where: { id: input.id },
+          data: { archivedAt: new Date() },
+        });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.archived", {
+          profileId: input.id,
+        });
+        return publicAgentDefinition(profile);
+      }),
+    ),
 
   /**
    * Instance admin: smart remove — what the admin UI's "Remove" action calls.
@@ -429,21 +611,30 @@ export const agentProfileRouter = router({
    */
   remove: instanceAdminProcedure
     .input(z.object({ id: z.string().cuid() }))
-    .mutation(async ({ ctx, input }) => {
-      const profile = await ctx.db.agentProfile.findUnique({
-        where: { id: input.id },
-        select: { id: true, name: true, _count: { select: { bindings: true } } },
-      });
-      if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
-      const boundAgents = profile._count.bindings;
-      if (boundAgents > 0) {
-        await ctx.db.agentProfile.update({
-          where: { id: profile.id },
-          data: { archivedAt: new Date() },
+    .mutation(({ ctx, input }) =>
+      profileTransaction(ctx.db, async (tx) => {
+        const profile = await tx.agentProfile.findUnique({
+          where: { id: input.id },
+          select: { id: true, name: true, _count: { select: { bindings: true } } },
         });
-        return { action: "archived" as const, name: profile.name, boundAgents };
-      }
-      await ctx.db.agentProfile.delete({ where: { id: profile.id } });
-      return { action: "deleted" as const, name: profile.name, boundAgents: 0 };
-    }),
+        if (!profile) throw new TRPCError({ code: "NOT_FOUND", message: "Profile not found." });
+        const boundAgents = profile._count.bindings;
+        if (boundAgents > 0) {
+          await tx.agentProfile.update({
+            where: { id: profile.id },
+            data: { archivedAt: new Date() },
+          });
+          await auditAgentProfile(tx, auditActor(ctx), "agent.profile.archived", {
+            profileId: profile.id,
+            boundAgents,
+          });
+          return { action: "archived" as const, name: profile.name, boundAgents };
+        }
+        await tx.agentProfile.delete({ where: { id: profile.id } });
+        await auditAgentProfile(tx, auditActor(ctx), "agent.profile.deleted", {
+          profileId: profile.id,
+        });
+        return { action: "deleted" as const, name: profile.name, boundAgents: 0 };
+      }),
+    ),
 });

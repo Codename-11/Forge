@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState, type ReactNode } from "react";
-import { Bot, ChevronRight, KeyRound, Link2, Plus, Server, Shield } from "lucide-react";
+import { Bot, ChevronRight, KeyRound, Link2, Server } from "lucide-react";
 import { AgentProvider, RunEngine } from "@prisma/client";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,6 +15,9 @@ import { trpc } from "@/lib/trpc";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
 import { AgentAvatar } from "@/components/agents/agent-avatar";
 import { RequestProfileDialog } from "@/app/(app)/w/[slug]/settings/agents/request-profile-dialog";
+import { AgentSetupDialog } from "./agent-setup-dialog";
+import { matchesAgentView, type AgentListView, type AgentSetupMode } from "@/lib/agent-setup";
+import { agentOwnerLabel, personalAgentCreationCopy } from "@/lib/agent-ownership-ui";
 
 /**
  * Client body for the global agent profiles list. Each card links to its
@@ -68,8 +72,10 @@ export function AgentsContent({
   workspaces: Workspace[];
   initialWorkspaceId?: string;
 }) {
+  const router = useRouter();
   const { data: profiles, isLoading } = trpc.agents.profiles.list.useQuery();
-  const { data: runtimes } = trpc.global.runtimes.useQuery();
+  const policy = trpc.agents.profiles.policy.useQuery();
+  const creation = personalAgentCreationCopy(policy.data?.personalAgentCreation);
   const utils = trpc.useUtils();
   const [createOpen, setCreateOpen] = useState(false);
   const [name, setName] = useState("");
@@ -80,8 +86,17 @@ export function AgentsContent({
   const [description, setDescription] = useState("");
   const [avatar, setAvatar] = useState("");
   const [capsText, setCapsText] = useState("");
-  const [instanceShared, setInstanceShared] = useState(true);
+  const [instanceShared, setInstanceShared] = useState(false);
+  const [ownerType, setOwnerType] = useState<"PERSONAL" | "SERVICE">("PERSONAL");
+  const { data: runtimes } = trpc.global.runtimeOptions.useQuery(
+    { ownerType },
+    { enabled: isInstanceAdmin && createOpen },
+  );
   const [requestOpen, setRequestOpen] = useState(false);
+  const [setupMode, setSetupMode] = useState<AgentSetupMode | null>(null);
+  const [creationMode, setCreationMode] = useState<AgentSetupMode>("managed");
+  const [setupWorkspaceId, setSetupWorkspaceId] = useState(initialWorkspaceId ?? "");
+  const [view, setView] = useState<AgentListView>("available");
   const [workspaceId, setWorkspaceId] = useState(
     initialWorkspaceId && workspaces.some((workspace) => workspace.id === initialWorkspaceId)
       ? initialWorkspaceId
@@ -90,10 +105,11 @@ export function AgentsContent({
 
   const visibleProfiles = (profiles ?? []).filter(
     (profile) =>
-      workspaceId === "all" ||
-      (workspaceId === "unbound"
-        ? profile.bindings.length === 0
-        : profile.bindings.some((binding) => binding.workspace.id === workspaceId)),
+      matchesAgentView(profile, view, isInstanceAdmin) &&
+      (workspaceId === "all" ||
+        (workspaceId === "unbound"
+          ? profile.bindings.length === 0
+          : profile.bindings.some((binding) => binding.workspace.id === workspaceId))),
   );
 
   function resetCreate() {
@@ -105,15 +121,19 @@ export function AgentsContent({
     setDescription("");
     setAvatar("");
     setCapsText("");
-    setInstanceShared(true);
+    setInstanceShared(false);
+    setOwnerType("PERSONAL");
   }
 
   const createProfile = trpc.agents.profiles.create.useMutation({
-    onSuccess: () => {
+    onSuccess: (created) => {
       toast.success("Agent profile created.");
       void utils.agents.profiles.list.invalidate();
       resetCreate();
       setCreateOpen(false);
+      router.push(
+        `/agents/${created.id}?workspace=${encodeURIComponent(setupWorkspaceId)}&setup=${creationMode}`,
+      );
     },
     onError: (e) => toast.error(e.message),
   });
@@ -132,11 +152,12 @@ export function AgentsContent({
       profileKey: profileKey.trim(),
       provider,
       runEngine: runEngine === "DEFAULT" ? null : runEngine,
-      runtimeId: runtimeId || null,
+      runtimeId: creationMode === "managed" ? runtimeId || null : null,
       description: description.trim() || undefined,
       avatar: avatar.trim() || undefined,
       baseCapabilities,
       instanceShared,
+      ownerType,
     });
   }
 
@@ -144,68 +165,44 @@ export function AgentsContent({
     <>
       <div className="min-h-0 flex-1 overflow-y-auto" data-testid="agent-fleet-scroll-region">
         <div className="mx-auto max-w-4xl space-y-5 p-6">
-          <div className="grid gap-2 sm:grid-cols-4" aria-label="Agent lifecycle">
-            {[
-              ["Define", "Identity & runtime"],
-              ["Bind", "Workspace adoption"],
-              ["Operate", "Runs & connections"],
-              ["Govern", isInstanceAdmin ? "Instance policy" : "Admin controlled"],
-            ].map(([step, detail], index) => (
-              <div key={step} className="rounded-md border border-border bg-card/40 px-3 py-2">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-[10px] text-ember">0{index + 1}</span>
-                  <span className="text-xs font-semibold">{step}</span>
-                </div>
-                <p className="text-meta mt-1 text-muted-foreground">{detail}</p>
-              </div>
-            ))}
-          </div>
-
-          {/* Create affordance / admin-gated hint */}
-          <div className="flex flex-col items-start gap-3 rounded-md border border-ember/30 bg-ember/5 p-3 sm:flex-row sm:items-center">
-            <Shield size={14} className="shrink-0 text-ember" />
-            <div className="min-w-0 flex-1 text-[0.8125rem]">
-              <span className="font-medium">New agent profiles are instance-admin-gated.</span>
-              <span className="ml-1 text-muted-foreground">
-                {isInstanceAdmin
-                  ? "You can create and share profiles across the instance."
-                  : "Members can request a profile; an instance admin approves it."}
-              </span>
+          <div className="grid gap-3 sm:grid-cols-2" aria-label="Set up an agent">
+            <div className="rounded-lg border border-border bg-card/40 p-4">
+              <KeyRound className="mb-2 h-4 w-4 text-ember" />
+              <h2 className="text-sm font-semibold">Connect an external client</h2>
+              <p className="text-meta mb-3 mt-1 text-muted-foreground">
+                Codex Desktop, CLI, or another MCP client executes the work. No managed runtime
+                needed.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => setSetupMode("external")}>
+                Connect via MCP
+              </Button>
             </div>
-            {isInstanceAdmin ? (
-              <Button
-                type="button"
-                variant="ember"
-                size="sm"
-                className="shrink-0"
-                onClick={() => setCreateOpen(true)}
-              >
-                <Plus size={12} />
-                New profile
+            <div className="rounded-lg border border-border bg-card/40 p-4">
+              <Server className="mb-2 h-4 w-4 text-ember" />
+              <h2 className="text-sm font-semibold">Let Forge run an agent</h2>
+              <p className="text-meta mb-3 mt-1 text-muted-foreground">
+                Choose an identity and runtime for work dispatched and monitored by Forge.
+              </p>
+              <Button size="sm" variant="outline" onClick={() => setSetupMode("managed")}>
+                Set up managed execution
               </Button>
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="shrink-0"
-                onClick={() => setRequestOpen(true)}
-              >
-                <Plus size={12} /> Request profile
-              </Button>
-            )}
+            </div>
           </div>
+          {!isInstanceAdmin && (
+            <p className="text-meta text-muted-foreground">
+              {policy.isError
+                ? "Creation policy could not be loaded. Try refreshing before creating a new identity."
+                : creation.description}
+            </p>
+          )}
 
           <div className="flex flex-col gap-3 rounded-lg border border-border bg-card/40 p-3 sm:flex-row sm:items-center">
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 text-sm font-semibold">
-                <Link2 className="h-4 w-4 text-ember" /> Fleet scope
-                <span className="rounded border border-border/70 bg-background px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                  Global profiles
-                </span>
+                <Link2 className="h-4 w-4 text-ember" /> Agent identities
               </div>
               <p className="text-meta mt-1 text-muted-foreground">
-                Filter by workspace binding without leaving Mission Control.
+                Ownership, catalog availability, and workspace access are separate.
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
@@ -216,7 +213,7 @@ export function AgentsContent({
                 onChange={(value) => setWorkspaceId(value ?? "all")}
                 options={[
                   { value: "all", label: "All workspaces" },
-                  { value: "unbound", label: "Not bound" },
+                  { value: "unbound", label: "No visible workspace access" },
                   ...workspaces.map((workspace) => ({
                     value: workspace.id,
                     label: workspace.name,
@@ -228,6 +225,25 @@ export function AgentsContent({
               />
             </div>
           </div>
+          <div className="flex flex-wrap gap-1" aria-label="Agent visibility">
+            {(
+              [
+                { value: "mine", label: "My agents" },
+                { value: "available", label: "Available to me" },
+                ...(isInstanceAdmin ? [{ value: "all", label: "All agents · Admin" }] : []),
+              ] as const
+            ).map((item) => (
+              <Button
+                key={item.value}
+                size="sm"
+                variant={view === item.value ? "subtle" : "ghost"}
+                aria-pressed={view === item.value}
+                onClick={() => setView(item.value as AgentListView)}
+              >
+                {item.label}
+              </Button>
+            ))}
+          </div>
 
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
@@ -238,14 +254,14 @@ export function AgentsContent({
               variant="section"
               icon={<Bot />}
               title="No agent profiles yet"
-              description="Agent profiles are global identities you bind into workspaces."
+              description="Start with a personal MCP connection or create/request an agent identity using setup above."
             />
           ) : visibleProfiles.length === 0 ? (
             <EmptyState
               variant="section"
               icon={<Bot />}
               title="No profiles in this fleet view"
-              description="Choose another workspace filter or bind a profile from its Mission Control detail page."
+              description="Choose another filter or add workspace access from an agent’s detail page."
             />
           ) : (
             <div className="overflow-hidden rounded-lg border border-border bg-card/40">
@@ -257,7 +273,7 @@ export function AgentsContent({
                 >
                   <AgentAvatar agent={a} size="md" title={null} />
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="text-[0.8125rem] font-semibold">{a.name}</span>
                       <StatusPip online={a.online} />
                       <span className="font-mono text-[10px] text-muted-foreground">
@@ -265,17 +281,22 @@ export function AgentsContent({
                       </span>
                       {a.instanceShared && (
                         <span className="rounded border border-border/70 bg-card/60 px-1 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                          instance
+                          Instance catalog
                         </span>
                       )}
-                      {!a.ownedByMe && (
-                        <span className="rounded border border-border/70 bg-card/60 px-1 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                          shared
+                      {!a.instanceShared && (
+                        <span className="text-meta text-muted-foreground">
+                          {a.ownerType === "SERVICE" ? "Admin-only setup" : "Owner-only catalog"}
                         </span>
                       )}
-                      <span className="rounded border border-border/70 bg-background px-1 text-[9px] font-medium uppercase tracking-wider text-muted-foreground">
-                        global profile
-                      </span>
+                      {a.availability.state !== "AVAILABLE" && (
+                        <span className="text-meta text-warning">
+                          {a.availability.state.toLowerCase().replaceAll("_", " ")}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-meta mt-1 text-muted-foreground">
+                      Owner: {agentOwnerLabel(a)}
                     </div>
                     {a.description && (
                       <div className="text-meta mt-0.5 truncate text-muted-foreground">
@@ -298,19 +319,19 @@ export function AgentsContent({
                           {a.runtime.name}
                         </div>
                         <div className="text-[10px] text-muted-foreground">
-                          {a.runtime.kind.toLowerCase().replace("_", " ")}
+                          Managed execution configured
                         </div>
                       </>
                     ) : (
                       <span className="text-[0.8125rem] italic text-muted-foreground">
-                        unassigned
+                        No managed runtime
                       </span>
                     )}
                   </div>
                   <div className="hidden w-36 shrink-0 lg:block">
                     <div className="mb-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
                       <span>
-                        {a.bindings.length} binding{a.bindings.length === 1 ? "" : "s"}
+                        {a.bindings.length} workspace{a.bindings.length === 1 ? "" : "s"}
                       </span>
                       <span className="inline-flex items-center gap-1">
                         <KeyRound className="h-2.5 w-2.5" />
@@ -342,6 +363,26 @@ export function AgentsContent({
           )}
         </div>
       </div>
+      {setupMode && (
+        <AgentSetupDialog
+          mode={setupMode}
+          profiles={profiles ?? []}
+          workspaces={workspaces}
+          initialWorkspaceId={
+            workspaceId === "all" || workspaceId === "unbound" ? initialWorkspaceId : workspaceId
+          }
+          isInstanceAdmin={isInstanceAdmin}
+          personalCreationPolicy={policy.data?.personalAgentCreation}
+          onClose={() => setSetupMode(null)}
+          onCreate={(selectedWorkspaceId) => {
+            setSetupWorkspaceId(selectedWorkspaceId);
+            setCreationMode(setupMode);
+            setSetupMode(null);
+            if (isInstanceAdmin) setCreateOpen(true);
+            else if (creation.enabled) setRequestOpen(true);
+          }}
+        />
+      )}
       <CenterModal
         open={createOpen}
         onOpenChange={(open) => {
@@ -350,12 +391,36 @@ export function AgentsContent({
         }}
         size="md"
         title="Create agent profile"
-        description="Create the identity, then choose its one primary execution runtime. Workspace bindings and MCP clients can be added afterward."
+        description={
+          creationMode === "external"
+            ? "Create the acting identity, then add workspace access and an MCP client key. External execution does not require a managed runtime."
+            : "Create the acting identity and optionally select a managed runtime. Continue to workspace access after creation."
+        }
         primaryLabel="Create profile"
         onPrimary={submitCreate}
         loading={createProfile.isPending}
       >
         <div className="space-y-4">
+          <ProfileField label="Ownership" hint="Independent of workspace access and sharing">
+            <Combobox
+              ariaLabel="Agent ownership"
+              value={ownerType}
+              onChange={(value) => {
+                setOwnerType(value === "SERVICE" ? "SERVICE" : "PERSONAL");
+                setRuntimeId("");
+              }}
+              options={[
+                { value: "PERSONAL", label: "Personal · owned by my account" },
+                { value: "SERVICE", label: "Service-owned · instance administrators" },
+              ]}
+              className="w-full"
+            />
+            <p className="text-meta text-muted-foreground">
+              {ownerType === "SERVICE"
+                ? "A durable service identity managed by instance administrators. Your account is recorded as creator, not owner. Catalog availability is configured separately below."
+                : "You own this identity. An instance administrator can transfer ownership later; sharing does not change its owner."}
+            </p>
+          </ProfileField>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <ProfileField label="Name" hint="Display name">
               <Input
@@ -376,53 +441,62 @@ export function AgentsContent({
               />
             </ProfileField>
             <ProfileField label="Provider">
-              <select
+              <Combobox
+                ariaLabel="Agent provider"
                 value={provider}
-                onChange={(e) => setProvider(e.target.value as AgentProvider)}
-                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                {Object.values(AgentProvider).map((p) => (
-                  <option key={p} value={p}>
-                    {p.toLowerCase()}
-                  </option>
-                ))}
-              </select>
+                onChange={(value) => {
+                  if (value) setProvider(value as AgentProvider);
+                }}
+                options={Object.values(AgentProvider).map((value) => ({
+                  value,
+                  label: value.toLowerCase(),
+                }))}
+                className="h-9 w-full"
+              />
             </ProfileField>
-            <ProfileField label="Run engine" hint="Default = provider choice">
-              <select
-                value={runEngine}
-                onChange={(e) => setRunEngine(e.target.value as "DEFAULT" | RunEngine)}
-                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value="DEFAULT">Default</option>
-                {Object.values(RunEngine).map((r) => (
-                  <option key={r} value={r}>
-                    {r.toLowerCase()}
-                  </option>
-                ))}
-              </select>
-            </ProfileField>
-            <ProfileField label="Primary execution runtime" hint="One per profile · optional">
-              <select
-                value={runtimeId}
-                onChange={(e) => setRuntimeId(e.target.value)}
-                aria-label="Primary execution runtime"
-                className="focus-ring h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
-              >
-                <option value="">Not assigned yet</option>
-                {(runtimes ?? []).map((runtime) => (
-                  <option key={runtime.id} value={runtime.id}>
-                    {runtime.name} · {runtime.health.label}
-                  </option>
-                ))}
-              </select>
-            </ProfileField>
+            {creationMode === "managed" && (
+              <ProfileField label="Run engine" hint="Default = provider choice">
+                <Combobox
+                  ariaLabel="Agent run engine"
+                  value={runEngine}
+                  onChange={(value) => setRunEngine((value ?? "DEFAULT") as "DEFAULT" | RunEngine)}
+                  options={[
+                    { value: "DEFAULT", label: "Default" },
+                    ...Object.values(RunEngine).map((value) => ({
+                      value,
+                      label: value.toLowerCase(),
+                    })),
+                  ]}
+                  className="h-9 w-full"
+                />
+              </ProfileField>
+            )}
+            {creationMode === "managed" && (
+              <ProfileField label="Primary execution runtime" hint="One per profile · optional">
+                <Combobox
+                  value={runtimeId || null}
+                  onChange={(value) => setRuntimeId(value ?? "")}
+                  ariaLabel="Primary execution runtime"
+                  allowNone
+                  noneLabel="Not assigned yet"
+                  placeholder="Not assigned yet"
+                  options={(runtimes ?? []).map((runtime) => ({
+                    value: runtime.id,
+                    label: runtime.name,
+                    secondary: runtime.kind.toLowerCase().replaceAll("_", " "),
+                  }))}
+                  className="h-9 w-full"
+                />
+              </ProfileField>
+            )}
             <div className="text-meta rounded-md border border-border bg-background/40 px-2.5 py-2 text-muted-foreground">
               <div className="flex items-center gap-1.5 font-medium text-foreground">
-                <Server className="h-3.5 w-3.5 text-ember" /> Execution host
+                <Server className="h-3.5 w-3.5 text-ember" />{" "}
+                {creationMode === "external" ? "External execution" : "Managed execution"}
               </div>
-              Forge starts work through this runtime. MCP clients are separate and can be added per
-              workspace.
+              {creationMode === "external"
+                ? "Your MCP client executes the work. Add workspace access and a client credential after creating this identity."
+                : "Forge dispatches work through the selected runtime. MCP clients are separate connections and can be added per workspace."}
             </div>
             <ProfileField label="Avatar" hint="Optional">
               <Input value={avatar} onChange={(e) => setAvatar(e.target.value)} placeholder="VI" />
@@ -457,13 +531,28 @@ export function AgentsContent({
                 Share in every workspace catalog
               </span>
               <span className="text-meta block text-muted-foreground">
-                Turn this off for a private profile that only the owner can bind.
+                Allows workspace admins to add this identity. It does not grant access to any
+                workspace or data.{" "}
+                {ownerType === "SERVICE"
+                  ? "Without catalog sharing, only instance administrators can set it up."
+                  : "Owner-only by default."}
               </span>
             </span>
           </label>
         </div>
       </CenterModal>
-      <RequestProfileDialog open={requestOpen} onOpenChange={setRequestOpen} />
+      <RequestProfileDialog
+        open={requestOpen}
+        setupMode={creationMode}
+        onOpenChange={setRequestOpen}
+        onCreated={(created) => {
+          setView("mine");
+          if (created.approvedAt)
+            router.push(
+              `/agents/${created.id}?workspace=${encodeURIComponent(setupWorkspaceId)}&setup=${creationMode}`,
+            );
+        }}
+      />
     </>
   );
 }

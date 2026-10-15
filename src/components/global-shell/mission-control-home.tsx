@@ -321,7 +321,7 @@ export function MissionControlHome() {
           eyebrow="Queue"
           title="Workspaces needing attention"
           count={snapshot ? `${snapshot.openIssues} open` : undefined}
-          action={<HeaderLink href="/settings/workspaces">Manage</HeaderLink>}
+          action={<HeaderLink href="/workspaces">Browse</HeaderLink>}
           className="lg:col-span-8"
         >
           {workspaces.isLoading ? (
@@ -453,7 +453,7 @@ export function MissionControlHome() {
           eyebrow="Coverage"
           title="Agent presence"
           count={agents.data ? `${onlineAgents} online · ${agentsList.length} total` : undefined}
-          action={<HeaderLink href="/agents">Manage fleet</HeaderLink>}
+          action={<HeaderLink href="/agents">Manage agents</HeaderLink>}
           className="lg:col-span-5"
         >
           {agents.isLoading ? (
@@ -491,7 +491,7 @@ export function MissionControlHome() {
                     </span>
                     <span className="text-meta block truncate text-muted-foreground">
                       {agent.bindings.length === 0
-                        ? "No workspace bindings"
+                        ? "No workspace access"
                         : agent.bindings.map((binding) => binding.workspace.name).join(" · ")}
                     </span>
                   </span>
@@ -529,13 +529,13 @@ export function MissionControlHome() {
               </span>
               <p className="mt-3 text-sm font-medium">No runtimes registered</p>
               <p className="text-meta mt-1 max-w-64 leading-relaxed text-muted-foreground">
-                Register a host before agents can execute queued work.
+                Add a host for Forge-managed execution. External MCP clients do not need one.
               </p>
               <Link
-                href="/settings/runtimes"
+                href="/agents"
                 className="focus-ring mt-3 inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-xs font-medium hover:border-ember/40 sm:min-h-9"
               >
-                Register runtime <ArrowRight className="h-3.5 w-3.5" />
+                Set up an agent <ArrowRight className="h-3.5 w-3.5" />
               </Link>
             </div>
           ) : (

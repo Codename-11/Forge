@@ -3,7 +3,7 @@ import { GlobalShell } from "@/components/global-shell/global-shell";
 import { getGlobalShellData } from "@/components/global-shell/data";
 import { AgentsContent } from "@/app/(app)/settings/agents/agents-content";
 
-/** Mission Control fleet: define, bind, and operate global agent identities. */
+/** Agent identity, access, and connection setup. */
 export default async function AgentFleetPage({
   searchParams,
 }: {
@@ -17,14 +17,10 @@ export default async function AgentFleetPage({
       user={data.user}
       workspaces={data.workspaces}
       activePath="/agents"
-      crumbs={[
-        { label: "Forge", href: "/" },
-        { label: "Mission Control", href: "/" },
-        { label: "Agents" },
-      ]}
-      title="Agent fleet"
-      subtitle="Define identities, connect execution, bind workspaces, and monitor live use."
-      eyebrow="Mission Control"
+      crumbs={[{ label: "Home", href: "/" }, { label: "Agents" }]}
+      title="Agents"
+      subtitle="Manage identities, workspace access, and how agents connect or execute."
+      eyebrow="Agents"
       scope="control"
       contentClass="flex flex-col overflow-hidden"
     >

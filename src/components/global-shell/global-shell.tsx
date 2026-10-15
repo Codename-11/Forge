@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   Sparkles,
+  Home,
   Bot,
   Inbox,
   Activity,
@@ -120,9 +121,10 @@ export interface GlobalBreadcrumb {
 }
 
 const GLOBAL_NAV: { href: string; icon: LucideIcon; label: string; hint: string }[] = [
-  { href: "/", icon: Sparkles, label: "Mission Control", hint: "Across all workspaces" },
-  { href: "/agents", icon: Bot, label: "Agents", hint: "Fleet & profiles" },
-  { href: "/inbox", icon: Inbox, label: "Inbox", hint: "Mentions & assignments" },
+  { href: "/", icon: Home, label: "Home", hint: "My work & workspaces" },
+  { href: "/mission-control", icon: Sparkles, label: "Mission Control", hint: "Agent operations & delivery" },
+  { href: "/agents", icon: Bot, label: "Agents", hint: "Identity, access & connections" },
+  { href: "/inbox", icon: Inbox, label: "Inbox", hint: "Assigned work & context" },
   { href: "/activity", icon: Activity, label: "Activity", hint: "Live run feed" },
 ];
 
@@ -199,6 +201,7 @@ function NavRow({
   return (
     <Link
       href={item.href}
+      aria-current={active ? "page" : undefined}
       onClick={onNavigate}
       className={cn(
         "group flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem] transition-colors",
@@ -282,14 +285,15 @@ function GlobalNavContent({
 
       <div className={cn("mt-4 flex flex-col", inDrawer ? "" : "min-h-0 flex-1 px-2")}>
         <div className="flex items-center justify-between px-2 pb-1">
-          <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+          <Link href="/workspaces" onClick={onNavigate} className="focus-ring rounded text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70 hover:text-foreground">
             Workspaces
-          </span>
+          </Link>
           <Link
-            href="/settings/workspaces"
+            href="/workspaces"
             onClick={onNavigate}
             className="text-muted-foreground hover:text-foreground"
-            title="Manage workspaces"
+            title="Browse or create workspaces"
+            aria-label="Browse or create workspaces"
           >
             <Plus size={12} />
           </Link>
@@ -323,7 +327,7 @@ function GlobalNavContent({
           )}
         >
           <Settings size={13} />
-          <span className="flex-1">Settings</span>
+          <span className="flex-1">My account</span>
           <span className="hidden md:inline-flex">
             <Kbd>,</Kbd>
           </span>
@@ -340,9 +344,9 @@ function GlobalNavContent({
             )}
           >
             <Shield size={13} />
-            <span className="flex-1">Instance admin</span>
+            <span className="flex-1">Administration</span>
             <span className="rounded border border-ember/30 bg-ember/10 px-1 text-[9px] font-medium uppercase tracking-wider text-ember">
-              root
+              admin
             </span>
           </Link>
         )}
@@ -429,7 +433,7 @@ function GlobalTopBar({
       </nav>
       <span className="text-meta hidden items-center gap-1 rounded-md border border-border/70 bg-card/40 px-1.5 py-0.5 text-muted-foreground sm:ml-2 sm:inline-flex">
         {scope === "control" ? <Shield size={10} /> : <Eye size={10} />}
-        <span>{scope === "control" ? "Global control plane" : "Read-only across workspaces"}</span>
+        <span>{scope === "control" ? "Manage resources you can access" : "Your accessible workspaces"}</span>
       </span>
       <div className="ml-auto flex min-w-0 items-center gap-1 sm:gap-2">
         <ActivityPill />

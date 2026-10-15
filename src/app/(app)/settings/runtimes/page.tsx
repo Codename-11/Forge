@@ -9,6 +9,7 @@ import { RuntimeSelfTestBadge, RuntimeSelfTestLine } from "@/components/settings
 import { trpc } from "@/lib/trpc";
 import { relativeTime } from "@/lib/utils";
 import { workspaceChipColor } from "@/components/global-shell/global-shell";
+import { runtimeOwnershipLabel } from "@/lib/runtime-ownership";
 
 /**
  * Global runtimes — the compute hosts the user has registered (local
@@ -64,8 +65,8 @@ export default function RuntimesPage() {
   return (
     <>
       <Topbar
-        title="Runtimes"
-        subtitle="Managed compute hosts you've registered — local daemons, remote HTTP boxes, cloud runners."
+        title="My runtimes"
+        subtitle="Execution hosts you personally own. Service-owned and unassigned registrations are managed in Administration."
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-4xl space-y-4 p-6">
@@ -90,17 +91,17 @@ export default function RuntimesPage() {
             <Terminal size={14} className="shrink-0 text-ember" />
             <div className="min-w-0 flex-1">
               <span className="font-medium text-foreground">
-                Claude Code, Codex CLI, and one-off MCP sessions live under Agent access.
+                Connect desktop apps, CLI tools, and other MCP clients from Agents.
               </span>
               <span className="ml-1 text-muted-foreground">
                 Runtime hosts are for managed compute that Forge dials or monitors.
               </span>
             </div>
             <Link
-              href="/settings/access"
+              href="/agents"
               className="focus-ring inline-flex h-7 items-center justify-center rounded-md border border-border bg-card/60 px-2 text-xs font-medium text-foreground hover:bg-subtle"
             >
-              Open Agent access
+              Connect an agent
             </Link>
           </div>
 
@@ -167,6 +168,14 @@ export default function RuntimesPage() {
                     </header>
 
                     <div className="text-meta grid grid-cols-2 gap-2">
+                      <div>
+                        <div className="text-muted-foreground">Owner</div>
+                        <div className="mt-0.5">{runtimeOwnershipLabel(r)}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Registration home</div>
+                        <div className="mt-0.5">{r.homeWorkspace?.name ?? "Restricted workspace"}</div>
+                      </div>
                       <div>
                         <div className="text-muted-foreground">Last signal</div>
                         <div className="mt-0.5">{r.health.lastSignal}</div>
@@ -236,9 +245,10 @@ export default function RuntimesPage() {
           )}
 
           <div className="text-meta text-muted-foreground">
-            Runtimes are global to your account, not a workspace concern.{" "}
+            Ownership, registration home, and workspace access are separate. A runtime can serve
+            multiple workspaces; owning it does not grant access to their work.{" "}
             <Link href="/agents" className="underline hover:text-foreground">
-              Manage the agent fleet
+              Manage agents and workspace access
             </Link>{" "}
             to put them to work.
           </div>

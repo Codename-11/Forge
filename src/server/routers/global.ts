@@ -1,4 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
+import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { router, globalProcedure } from "@/server/trpc";
 import { deriveRuntimeHealthStatus } from "@/server/services/runtime-status";
 import { runtimeConfigStatus } from "@/server/services/runtime-config";
@@ -10,6 +12,14 @@ import {
   mapTimelineRow,
 } from "@/server/routers/event";
 import { issueWhereForViewer } from "@/server/services/project-access";
+import {
+  canViewAgentWorkspace,
+  agentProfileAvailability,
+} from "@/server/services/agent-profile-access";
+import {
+  assertActiveProfileOwner,
+  profileRuntimeOptionsWhere,
+} from "@/server/services/agent-profile-policy";
 
 /**
  * Cross-workspace, read-only aggregations for the global "concourse"
@@ -25,6 +35,16 @@ async function memberWorkspaceAccess(db: PrismaClient, userId: string) {
     where: { userId, workspace: { deletedAt: null } },
     select: { id: true, role: true, workspaceId: true },
   });
+}
+
+async function agentWorkspaceVisibility(db: PrismaClient, userId: string) {
+  const [memberships, user] = await Promise.all([
+    memberWorkspaceAccess(db, userId),
+    db.user.findUnique({ where: { id: userId }, select: { instanceRole: true } }),
+  ]);
+  const membershipIds = new Set(memberships.map((membership) => membership.workspaceId));
+  return (workspaceId: string) =>
+    canViewAgentWorkspace(workspaceId, membershipIds, user?.instanceRole === "INSTANCE_ADMIN");
 }
 
 export const globalRouter = router({
@@ -158,6 +178,7 @@ export const globalRouter = router({
    * owned by others are included read-only.
    */
   agents: globalProcedure.query(async ({ ctx }) => {
+    const canViewWorkspace = await agentWorkspaceVisibility(ctx.db, ctx.session.user.id);
     const profiles = await ctx.db.agentProfile.findMany({
       where: { archivedAt: null, OR: [{ ownerId: ctx.session.user.id }, { instanceShared: true }] },
       orderBy: { createdAt: "asc" },
@@ -172,7 +193,13 @@ export const globalRouter = router({
         baseCapabilities: true,
         instanceShared: true,
         disabledAt: true,
+        archivedAt: true,
+        requestedById: true,
+        approvedAt: true,
         ownerId: true,
+        ownerType: true,
+        createdById: true,
+        owner: { select: { id: true, name: true, image: true } },
         runtime: { select: { id: true, name: true, kind: true } },
         bindings: {
           where: { archivedAt: null },
@@ -186,17 +213,71 @@ export const globalRouter = router({
         },
       },
     });
-    return profiles.map((p) => ({
-      ...p,
-      ownedByMe: p.ownerId === ctx.session.user.id,
-      bindingCount: p.bindings.length,
-      // ONLINE if any binding is currently online/busy.
-      online: p.bindings.some((b) => b.status === "ONLINE" || b.status === "BUSY"),
-    }));
+    return profiles.map((p) => {
+      const bindings = p.bindings.filter((binding) => canViewWorkspace(binding.workspace.id));
+      return {
+        ...p,
+        bindings,
+        availability: agentProfileAvailability(p),
+        ownedByMe: p.ownerId === ctx.session.user.id,
+        bindingCount: bindings.length,
+        online: bindings.some((b) => b.status === "ONLINE" || b.status === "BUSY"),
+      };
+    });
   }),
+
+  /** Safe setup choices, evaluated against the intended profile owner. */
+  runtimeOptions: globalProcedure
+    .input(
+      z
+        .object({
+          ownerType: z.enum(["PERSONAL", "SERVICE"]).default("PERSONAL"),
+          ownerId: z.string().cuid().optional(),
+        })
+        .default({ ownerType: "PERSONAL" }),
+    )
+    .query(async ({ ctx, input }) => {
+      const user = await ctx.db.user.findUnique({
+        where: { id: ctx.session.user.id },
+        select: { instanceRole: true },
+      });
+      if (
+        (input.ownerType === "SERVICE" ||
+          (input.ownerId && input.ownerId !== ctx.session.user.id)) &&
+        user?.instanceRole !== "INSTANCE_ADMIN"
+      ) {
+        throw new TRPCError({
+          code: "FORBIDDEN",
+          message:
+            "Instance administration is required to configure another owner or a service agent.",
+        });
+      }
+      if (input.ownerType === "SERVICE" && input.ownerId)
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Service agents cannot have a personal owner.",
+        });
+      const ownerId = input.ownerType === "SERVICE" ? null : (input.ownerId ?? ctx.session.user.id);
+      if (ownerId) await assertActiveProfileOwner(ctx.db, ownerId);
+      return ctx.db.runtime.findMany({
+        where: profileRuntimeOptionsWhere(input.ownerType, ownerId),
+        orderBy: [{ name: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          name: true,
+          kind: true,
+          adapterKey: true,
+          ownerType: true,
+          ownerId: true,
+          instanceShared: true,
+          owner: { select: { id: true, name: true, image: true } },
+        },
+      });
+    }),
 
   /** The caller's runtimes (global, user-owned) with bound agents + workspaces in use. */
   runtimes: globalProcedure.query(async ({ ctx }) => {
+    const canViewWorkspace = await agentWorkspaceVisibility(ctx.db, ctx.session.user.id);
     const runtimes = await ctx.db.runtime.findMany({
       where: { ownerId: ctx.session.user.id, archivedAt: null },
       orderBy: { createdAt: "asc" },
@@ -205,6 +286,11 @@ export const globalRouter = router({
         name: true,
         kind: true,
         adapterKey: true,
+        ownerType: true,
+        ownerId: true,
+        instanceShared: true,
+        createdById: true,
+        owner: { select: { id: true, name: true, image: true } },
         config: true,
         endpoint: true,
         providersAvailable: true,
@@ -223,10 +309,7 @@ export const globalRouter = router({
         disabledAt: true,
         archivedAt: true,
         createdAt: true,
-        // The runtime's own home workspace (where it was registered). Always
-        // present, unlike `workspacesInUse` (derived from bound agents), so the
-        // settings UI can always link to the per-runtime detail page — even for
-        // a freshly registered daemon with no agents yet.
+        // Home-workspace identity is returned only when the caller can view it.
         workspace: { select: { id: true, slug: true, name: true, key: true } },
         agents: {
           where: { archivedAt: null },
@@ -240,14 +323,20 @@ export const globalRouter = router({
       },
     });
     return runtimes.map((r) => {
+      const agents = r.agents.filter((agent) => canViewWorkspace(agent.workspace.id));
       const workspaces = new Map<string, { id: string; slug: string; name: string; key: string }>();
-      for (const a of r.agents) workspaces.set(a.workspace.id, a.workspace);
+      for (const a of agents) workspaces.set(a.workspace.id, a.workspace);
       const health = deriveRuntimeHealthStatus(r);
       return {
         id: r.id,
         name: r.name,
         kind: r.kind,
         adapterKey: r.adapterKey,
+        ownerType: r.ownerType,
+        ownerId: r.ownerId,
+        instanceShared: r.instanceShared,
+        createdById: r.createdById,
+        owner: r.owner,
         config: r.config,
         endpoint: r.endpoint,
         providersAvailable: r.providersAvailable,
@@ -266,8 +355,8 @@ export const globalRouter = router({
         registeredAt: r.createdAt,
         online: health.kind === "online",
         disabled: !!r.disabledAt,
-        boundAgents: r.agents.map((a) => ({ id: a.id, profileKey: a.profileKey, name: a.name })),
-        homeWorkspace: r.workspace,
+        boundAgents: agents.map((a) => ({ id: a.id, profileKey: a.profileKey, name: a.name })),
+        homeWorkspace: canViewWorkspace(r.workspace.id) ? r.workspace : null,
         workspacesInUse: [...workspaces.values()],
       };
     });

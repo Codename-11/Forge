@@ -297,6 +297,7 @@ describe("orchestration: decompose + addSteps", () => {
     const runtime = await prisma.runtime.create({
       data: {
         workspaceId: fixture.workspace.id,
+        ownerType: "PERSONAL",
         ownerId: fixture.user.id,
         name: "Codex planner runtime",
         kind: RuntimeKind.LOCAL_DAEMON,
@@ -361,6 +362,7 @@ describe("orchestration: decompose + addSteps", () => {
     const runtime = await prisma.runtime.create({
       data: {
         workspaceId: fixture.workspace.id,
+        ownerType: "PERSONAL",
         ownerId: fixture.user.id,
         name: "Unanchored planner runtime",
         kind: RuntimeKind.LOCAL_DAEMON,

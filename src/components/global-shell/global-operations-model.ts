@@ -14,11 +14,13 @@ export function deriveGlobalOperationsPosture(input: {
 }): GlobalOperationsPosture {
   if (input.runtimeCount === 0) {
     return {
-      tone: "warning",
-      label: "Setup required",
-      summary: "Register a runtime before agents can execute queued work.",
-      actionLabel: "Register a runtime",
-      actionHref: "/settings/runtimes",
+      tone: input.activeRuns > 0 ? "success" : "neutral",
+      label: input.activeRuns > 0 ? "Work in motion" : "Managed execution optional",
+      summary: input.activeRuns > 0
+        ? `${input.activeRuns} active runs. No managed runtime is registered; external MCP work does not require one.`
+        : "External MCP clients can work without a runtime. Configure managed execution only when Forge should dispatch work.",
+      actionLabel: "Set up an agent",
+      actionHref: "/agents",
     };
   }
 

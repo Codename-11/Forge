@@ -340,7 +340,7 @@ export function Sidebar({
         {/* Escape hatch back to the cross-workspace home. The switcher also
             offers it, but this is the always-visible affordance. */}
         <Link
-          href="/"
+          href="/mission-control"
           title="Mission Control · across all workspaces"
           className={cn(
             "flex h-8 items-center gap-2 rounded-md text-[0.8125rem] text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground",
@@ -571,7 +571,7 @@ function MobileWorkspaceNav({
           <div className="flex items-center justify-between gap-3">
             <WorkspaceSwitcher />
             <Link
-              href="/"
+              href="/mission-control"
               onClick={() => onOpenChange(false)}
               className="focus-ring inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-md border border-border px-3 text-xs text-muted-foreground hover:bg-subtle hover:text-foreground"
             >

@@ -5,6 +5,8 @@ import { Check, ExternalLink, Globe, GlobeLock, Power, PowerOff, UserPlus, X } f
 import { toast } from "sonner";
 import { trpc } from "@/lib/trpc";
 import { ADMIN, AdminPanel, AdminLoading, AdminEmpty, AdminButton, relTime } from "./admin-ui";
+import { PersonalAgentPolicy } from "./personal-agent-policy";
+import { agentOwnerLabel } from "@/lib/agent-ownership-ui";
 
 /**
  * Instance agent-policy surface for `/admin/agents`. Lists global agent
@@ -74,8 +76,11 @@ export function AdminAgents() {
         >
           Instance policy
         </span>
-        Approve requests, control instance sharing, and force-disable profiles. Routine identity,
-        binding, archive, and removal work lives in Mission Control.
+        Approve requests, control instance catalog availability, and disable agents. Manage agent
+        identities, workspace access, archival, and removal in Agents.
+      </div>
+      <div className="mb-6">
+        <PersonalAgentPolicy />
       </div>
       {/* Pending profile requests — members request, admins approve/reject. */}
       {(pending.isLoading || (pending.data?.length ?? 0) > 0) && (
@@ -184,7 +189,7 @@ export function AdminAgents() {
           <span>Profile</span>
           <span>Provider</span>
           <span>Runtime</span>
-          <span className="text-right">Bindings</span>
+          <span className="text-right">Workspaces</span>
           <span className="text-right">Governance</span>
         </div>
         {profiles.isLoading ? (
@@ -237,6 +242,9 @@ export function AdminAgents() {
                     </span>
                     <span className="block font-mono text-[10px]" style={{ color: ADMIN.textDim }}>
                       @{p.profileKey}
+                    </span>
+                    <span className="text-meta block" style={{ color: ADMIN.textSoft }}>
+                      {agentOwnerLabel(p)}
                     </span>
                   </span>
                 </span>

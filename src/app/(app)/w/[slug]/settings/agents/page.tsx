@@ -98,14 +98,14 @@ export default function AgentsBindingPage() {
                 </span>
               </div>
               <p className="text-meta mt-0.5 text-muted-foreground">
-                Profiles and bindings live in Mission Control. This page only changes how a bound
-                agent works inside {ws.name}.
+                Manage identities and workspace access in Agents. This page controls how an
+                authorized agent works inside {ws.name}.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
               <Link href={`/agents?workspace=${ws.id}`}>
                 <Button size="sm" variant="outline">
-                  Manage profiles & bindings
+                  Manage agents & workspace access
                 </Button>
               </Link>
               <Link href={`/w/${ws.slug}/settings/access`}>
@@ -121,12 +121,12 @@ export default function AgentsBindingPage() {
 
           {/* Bound agents */}
           <Section
-            title="Bound agents"
-            hint="Policy for profiles already bound to this workspace. Binding and identity management live in Mission Control."
+            title="Workspace agents"
+            hint="Capacity, routing and approval policy for agents with access here. Manage identities and access in Agents."
             actions={
               boundRows.length > 0 ? (
                 <span className="text-[0.6875rem] tabular-nums text-muted-foreground">
-                  {boundRows.length} bound
+                  {boundRows.length} with access
                 </span>
               ) : undefined
             }
@@ -135,8 +135,8 @@ export default function AgentsBindingPage() {
               <EmptyState
                 as="div"
                 icon={Bot}
-                title="No agents bound yet"
-                hint="Bind a global profile from Mission Control. Workspace-specific capacity, routing, and approval controls will appear here afterward."
+                title="No agents have access yet"
+                hint="Choose an agent in Agents and add workspace access. Capacity, routing and approval controls will appear here afterward."
               />
             ) : (
               <Card as="div" className="divide-y-0">
