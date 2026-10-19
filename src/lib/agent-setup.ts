@@ -1,5 +1,6 @@
 export type AgentSetupMode = "external" | "managed";
 export type AgentListView = "mine" | "available" | "all";
+export type ManagedSetupTask = "runtime" | "agent";
 
 type SetupWorkspace = { id: string; slug: string; role?: string };
 type SetupProfile = {
@@ -25,14 +26,18 @@ export function agentSetupDestination({
   mode,
   workspace,
   profile,
+  managedTask = "agent",
 }: {
   mode: AgentSetupMode;
   workspace?: SetupWorkspace;
   profile?: SetupProfile;
+  managedTask?: ManagedSetupTask;
 }): string | null {
   if (!workspace || !["OWNER", "ADMIN", "MEMBER"].includes(workspace.role ?? "")) return null;
   const canManage = workspace.role === "OWNER" || workspace.role === "ADMIN";
   if (mode === "managed" && !canManage) return null;
+  if (mode === "managed" && managedTask === "runtime")
+    return `/w/${encodeURIComponent(workspace.slug)}/settings/runtimes?create=1`;
   if (profile && profile.availability.state !== "AVAILABLE") return null;
   const slug = encodeURIComponent(workspace.slug);
   if (mode === "external" && !profile) return `/w/${slug}/settings/access?create=personal`;

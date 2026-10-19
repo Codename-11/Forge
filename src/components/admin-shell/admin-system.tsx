@@ -23,7 +23,7 @@ export function AdminSystem() {
             {(
               [
                 ["Edition", "Self-hosted"],
-                ["Version", system.data?.version ?? "dev"],
+                ["Version", system.data?.version ?? "—"],
                 ["Build SHA", system.data?.buildSha ?? "—"],
                 ["Built at", system.data?.buildTime ?? "—"],
               ] as [string, string][]

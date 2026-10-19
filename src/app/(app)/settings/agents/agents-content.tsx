@@ -179,9 +179,10 @@ export function AgentsContent({
             </div>
             <div className="rounded-lg border border-border bg-card/40 p-4">
               <Server className="mb-2 h-4 w-4 text-ember" />
-              <h2 className="text-sm font-semibold">Let Forge run an agent</h2>
+              <h2 className="text-sm font-semibold">Connect a managed runtime</h2>
               <p className="text-meta mb-3 mt-1 text-muted-foreground">
-                Choose an identity and runtime for work dispatched and monitored by Forge.
+                Register a Hermes or Codex host, then choose which agent identities use it. An
+                existing agent is not required to connect a runtime.
               </p>
               <Button size="sm" variant="outline" onClick={() => setSetupMode("managed")}>
                 Set up managed execution
@@ -202,7 +203,8 @@ export function AgentsContent({
                 <Link2 className="h-4 w-4 text-ember" /> Agent identities
               </div>
               <p className="text-meta mt-1 text-muted-foreground">
-                Ownership, catalog availability, and workspace access are separate.
+                These are identities, not runtime hosts or MCP clients. Multiple identities can use
+                the same runtime.
               </p>
             </div>
             <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">

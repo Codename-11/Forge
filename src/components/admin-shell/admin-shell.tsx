@@ -56,7 +56,7 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
       }}
     >
       <div
-        className="px-3 pb-3 pt-3"
+        className="shrink-0 px-3 pb-3 pt-3"
         style={{ borderBottom: "1px solid var(--admin-border-strong)" }}
       >
         <div className="flex items-center gap-2">
@@ -81,7 +81,10 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
         </div>
       </div>
 
-      <nav className="mt-2 flex flex-1 flex-col gap-px px-2">
+      <nav
+        aria-label="Administration"
+        className="mt-2 flex min-h-0 flex-1 flex-col gap-px overflow-y-auto px-2"
+      >
         {ADMIN_NAV.map((it) => {
           const active = activePath === it.href;
           const Ico = it.icon;
@@ -111,7 +114,10 @@ function AdminSidebar({ activePath, instanceUrl }: { activePath: string; instanc
         })}
       </nav>
 
-      <div className="px-2 pb-3 pt-2" style={{ borderTop: "1px solid var(--admin-border-strong)" }}>
+      <div
+        className="shrink-0 px-2 pb-3 pt-2"
+        style={{ borderTop: "1px solid var(--admin-border-strong)" }}
+      >
         <Link
           href="/"
           className="flex items-center gap-2 rounded-md px-2 py-1.5 text-[0.8125rem]"
@@ -133,8 +139,6 @@ export function AdminPage({
   subtitle,
   eyebrow,
   actions,
-  version,
-  buildSha,
   instanceUrl = "self-hosted",
   contentClass = "overflow-y-auto",
   children,
@@ -145,8 +149,6 @@ export function AdminPage({
   subtitle?: string;
   eyebrow?: string;
   actions?: React.ReactNode;
-  version?: string | null;
-  buildSha?: string | null;
   instanceUrl?: string;
   contentClass?: string;
   children: React.ReactNode;
@@ -192,14 +194,13 @@ export function AdminPage({
             style={{ background: "rgba(217,119,87,0.16)", color: "hsl(var(--ember))" }}
           >
             <Shield size={10} />
-            <span className="hidden sm:inline">Instance administration · review the scope of each change</span>
+            <span className="hidden sm:inline">
+              Instance administration · review the scope of each change
+            </span>
             <span className="sm:hidden">Instance scope</span>
           </span>
-          <div className="ml-auto flex items-center gap-2">
-            <span className="text-meta" style={{ color: "hsl(var(--admin-text-muted))" }}>
-              v{version ?? "dev"}
-              {buildSha ? ` · ${buildSha}` : ""}
-            </span>
+          <div className="ml-auto min-w-0 max-w-full">
+            <VersionChip tone="admin" />
           </div>
         </header>
 
