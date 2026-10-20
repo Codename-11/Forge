@@ -2,6 +2,17 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-10-20 — AXI-220 v0.36.1 release assembly
+
+- Assembled the operator-approved patch from AXI-212 / PR #106, merged as
+  745a508b1eace5e56388e04d26d2d45d3dcd7545. Version and dated changelog are
+  the only product changes in this release assembly; no schema or dependency
+  changes. AXI-191 remains outside this release.
+- Local quality gate passed lint, TypeScript and 1,795 unit/integration tests
+  with one existing skip. Implementation CI passed quality and both browser
+  shards on 7798bad7ae5e52f1664984261cf51d2cf6249ba9. The release PR must
+  independently pass exact-head CI before merge, tag and deployment.
+
 ## 2026-10-19 — AXI-212 build labels and runtime-first setup
 
 - Reused the shared system.buildInfo VersionChip in the admin header instead

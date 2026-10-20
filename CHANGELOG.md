@@ -9,6 +9,14 @@ The dashboard's **What's New** rail reads this file at request time
 entries. Keep entries terse — one line per item under each version
 date, grouped by `Added` / `Changed` / `Fixed` / `Removed`.
 
+## [2026-10-20] — v0.36.1 · Build labels and agent setup
+
+### Fixed
+
+- Fix inconsistent admin version labels and overflowing build hashes.
+- Clarify runtime, agent identity, and MCP setup paths, and fix mobile admin navigation clipping.
+- No database migrations.
+
 ## [2026-10-15] — v0.36.0 · Daily workflows and agent ownership
 
 ### Added
