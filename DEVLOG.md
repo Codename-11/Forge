@@ -2,6 +2,38 @@
 
 > Append-only session log. Read at session start. Update at session end.
 
+## 2026-10-19 — AXI-212 build labels and runtime-first setup
+
+- Reused the shared system.buildInfo VersionChip in the admin header instead
+  of optional props with a vdev fallback. Header/footer show a bounded
+  seven-character SHA; their full build, release and timestamp remain in the
+  title/accessibility description. Removed false dev placeholders from other
+  admin version panels when data is unavailable.
+- Managed setup now starts with an explicit choice between connecting a
+  runtime and configuring an agent identity. Host registration requires only
+  an authorized home workspace, not an existing agent. Existing runtime
+  browsing and personal/agent MCP credential paths remain separate. Runtime
+  registration opens the existing host form and preserves server permission
+  checks; opening the flow never registers a host or dispatches work.
+- Added focused build-label, setup-rendering and routing/role regression
+  coverage. No schema changes, production configuration changes or release.
+- Initial visual verification was blocked by the in-app browser and Docker's
+  Inference Manager startup during an operator update. After the update,
+  verified against a fresh local fixture database and an authorized isolated
+  Playwright browser. No Docker data was reset or deleted.
+- Rendered review caught a related mobile admin sidebar clipping issue: its
+  navigation now scrolls independently and preserves the footer. Both build
+  chips fit in 129 CSS pixels with the full SHA retained in their descriptions;
+  the 390px page has no horizontal overflow. Verified runtime registration
+  (Hermes/Codex choices), existing-agent routing, and personal MCP token setup
+  without creating credentials, registering hosts, or dispatching runs.
+- Focused regression suite: 19 tests, final TypeScript and focused ESLint all
+  passed. Desktop/mobile captures are kept
+  in local output/playwright; the final browser page reported zero console
+  errors or warnings. Operator accepted the local iteration and authorized
+  commit, PR, merge and a separately assembled v0.36.1 patch release. Hosted
+  checks must pass on each exact PR head before merge.
+
 ## 2026-10-15 — AXI-210 v0.36.0 release assembly
 
 - Assembled the operator-approved release from implementation PR #104,

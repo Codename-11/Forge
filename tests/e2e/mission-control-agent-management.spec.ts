@@ -12,9 +12,12 @@ test.describe.serial("Mission Control agent management", () => {
     await expect(page).toHaveURL(/\/agents$/);
     await expect(page.getByRole("heading", { name: "Agents", exact: true })).toBeVisible();
     await expect(
-      page.getByText("Ownership, catalog availability, and workspace access are separate.", {
-        exact: true,
-      }),
+      page.getByText(
+        "These are identities, not runtime hosts or MCP clients. Multiple identities can use the same runtime.",
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Connect via MCP", exact: true }).click();

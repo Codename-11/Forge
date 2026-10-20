@@ -162,7 +162,7 @@ export function AdminOverview() {
             <div className="grid grid-cols-2 gap-x-2 gap-y-3 text-meta">
               {(
                 [
-                  ["Version", system.data?.version ?? "dev"],
+                  ["Version", system.data?.version ?? "—"],
                   ["Build", system.data?.buildSha ?? "—"],
                   ["Built at", system.data?.buildTime ?? "—"],
                   ["Tenants", String(counts?.tenants ?? "—")],
@@ -329,7 +329,7 @@ export function AdminOverview() {
             License · Self-hosted
           </div>
           <div className="text-meta" style={{ color: ADMIN.textMuted }}>
-            Unlimited tenants · {counts?.users ?? "—"} seats in use · version {system.data?.version ?? "dev"}
+            Unlimited tenants · {counts?.users ?? "—"} seats in use · version {system.data?.version ?? "—"}
           </div>
         </div>
         <AdminButton icon={FileText}>License details</AdminButton>

@@ -11,6 +11,26 @@ const profile = {
 };
 
 describe("agent setup navigation", () => {
+  it("connects a runtime without an existing agent while preserving the home workspace", () => {
+    expect(agentSetupDestination({ mode: "managed", managedTask: "runtime", workspace })).toBe(
+      "/w/my-workspace/settings/runtimes?create=1",
+    );
+    expect(agentSetupDestination({ mode: "managed", managedTask: "runtime" })).toBeNull();
+  });
+  it("does not let members or guests register hosts through setup", () => {
+    for (const role of ["MEMBER", "GUEST", ""]) {
+      expect(
+        agentSetupDestination({
+          mode: "managed",
+          managedTask: "runtime",
+          workspace: { ...workspace, role },
+        }),
+      ).toBeNull();
+    }
+  });
+  it("still requires an identity when configuring an agent rather than registering a host", () => {
+    expect(agentSetupDestination({ mode: "managed", managedTask: "agent", workspace })).toBeNull();
+  });
   it("requires an explicitly selected workspace", () => {
     expect(agentSetupDestination({ mode: "external" })).toBeNull();
   });

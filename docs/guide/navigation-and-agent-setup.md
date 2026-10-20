@@ -24,9 +24,18 @@ Begin in **Agents** and choose the execution intent:
   the work. Choose the workspace and either your personal identity or an agent.
   Personal credentials act as the current user. Agent credentials identify the
   agent and record the issuing operator. No managed runtime is required.
-- **Let Forge run an agent**: choose the workspace and agent, then configure
-  its managed execution host. Workspace owner/admin authority is required for
-  managed setup; instance administration alone is not workspace membership.
+- **Connect a managed runtime**: choose **Connect a runtime** and its home
+  workspace, then continue to the runtime-host form. Choose the supported
+  adapter (for example Hermes or Codex app server) and supply the host's
+  connection details. No existing agent identity is required. You can also
+  view existing runtimes without opening a new registration.
+- **Configure an agent** inside managed setup: choose an existing identity or
+  create/request one, then review its workspace access and runtime. Agent
+  identities and hosts are separate: several identities can use one host.
+
+Workspace owner/admin authority is required for managed setup; instance
+administration alone is not workspace membership. Opening setup does not
+create a credential, register a host, grant access, or dispatch work.
 
 An existing agent with workspace access can continue directly to its scoped
 MCP credential setup. Otherwise its detail page explains how an authorized
@@ -34,6 +43,14 @@ workspace administrator adds access. New agent definitions retain the existing
 instance policy under Administration → Agent governance. The compatibility
 default remains approval required; changing policy does not approve existing
 requests, share identities, or grant workspace membership.
+
+## Running build
+
+The admin header and shell footers use the same `system.buildInfo` source.
+They show the running version and a seven-character commit identifier in a
+bounded single line. Hover/accessibility descriptions retain the full commit,
+release and build timestamp; the link opens What's New. While build metadata
+is unavailable the label says Forge, not an invented development version.
 
 ## Ownership, availability and authorization
 

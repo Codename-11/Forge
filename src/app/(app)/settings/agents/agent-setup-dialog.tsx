@@ -5,7 +5,11 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { CenterModal } from "@/components/ui/modal";
 import { Combobox } from "@/components/ui/combobox";
-import { agentSetupDestination, type AgentSetupMode } from "@/lib/agent-setup";
+import {
+  agentSetupDestination,
+  type AgentSetupMode,
+  type ManagedSetupTask,
+} from "@/lib/agent-setup";
 import {
   personalAgentCreationCopy,
   type PersonalAgentCreationPolicy,
@@ -49,10 +53,12 @@ export function AgentSetupDialog({
         : "",
   );
   const [profileId, setProfileId] = useState("");
+  const [managedTask, setManagedTask] = useState<ManagedSetupTask>("runtime");
+  const choosingRuntime = mode === "managed" && managedTask === "runtime";
   const workspace = workspaces.find((item) => item.id === workspaceId);
   const profile = profiles.find((item) => item.id === profileId);
   const canManage = workspace?.role === "OWNER" || workspace?.role === "ADMIN";
-  const destination = agentSetupDestination({ mode, workspace, profile });
+  const destination = agentSetupDestination({ mode, workspace, profile, managedTask });
   const binding = profile?.bindings.find((item) => item.workspace.id === workspaceId);
   const creation = personalAgentCreationCopy(personalCreationPolicy);
 
@@ -63,11 +69,11 @@ export function AgentSetupDialog({
         if (!open) onClose();
       }}
       size="md"
-      title={mode === "external" ? "Connect an external client" : "Let Forge run an agent"}
+      title={mode === "external" ? "Connect an external client" : "Set up managed execution"}
       description={
         mode === "external"
           ? "Use Codex Desktop, a CLI, or another MCP client. Your client executes the work; no Forge runtime is required."
-          : "Forge dispatches work to a managed execution runtime. Choose the workspace and agent before configuring its host."
+          : "Connect a Hermes or Codex execution host first, or configure an agent identity to use a runtime. These are separate steps."
       }
       footer={
         <div className="flex justify-end gap-2">
@@ -79,19 +85,61 @@ export function AgentSetupDialog({
               className="focus-ring inline-flex h-8 items-center rounded-md bg-ember px-3 text-xs font-medium text-ember-foreground"
               href={destination}
             >
-              Continue
+              {choosingRuntime ? "Connect runtime" : "Continue"}
             </Link>
           ) : (
             <Button variant="ember" size="sm" disabled>
-              Continue
+              {choosingRuntime ? "Connect runtime" : "Continue"}
             </Button>
           )}
         </div>
       }
     >
       <div className="space-y-4">
+        {mode === "managed" && (
+          <fieldset className="space-y-2">
+            <legend className="text-sm font-medium">What would you like to set up?</legend>
+            {(
+              [
+                [
+                  "runtime",
+                  "Connect a runtime",
+                  "Register a Hermes, Codex, or other supported host. No agent identity is required yet.",
+                ],
+                [
+                  "agent",
+                  "Configure an agent",
+                  "Choose or create an identity, then give it workspace access and an execution runtime.",
+                ],
+              ] as const
+            ).map(([value, label, hint]) => (
+              <label
+                key={value}
+                className="flex cursor-pointer items-start gap-2 rounded-md border border-border p-3 hover:bg-subtle/40"
+              >
+                <input
+                  type="radio"
+                  name="managed-setup-task"
+                  value={value}
+                  checked={managedTask === value}
+                  onChange={() => {
+                    setManagedTask(value);
+                    setProfileId("");
+                  }}
+                  className="mt-0.5 accent-[hsl(var(--ember))]"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium">{label}</span>
+                  <span className="text-meta block text-muted-foreground">{hint}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+        )}
         <div className="space-y-1.5">
-          <p className="text-sm font-medium">Workspace access</p>
+          <p className="text-sm font-medium">
+            {choosingRuntime ? "Runtime home workspace" : "Workspace access"}
+          </p>
           <Combobox
             ariaLabel="Setup workspace"
             value={workspaceId || null}
@@ -108,50 +156,57 @@ export function AgentSetupDialog({
             className="w-full"
           />
           <p className="text-meta text-muted-foreground">
-            Credentials and permissions apply only to this workspace. You can add other workspaces
-            separately.
+            {choosingRuntime
+              ? "Choose where to register and manage the host. Registration alone does not grant agents access or start any work."
+              : "Credentials and permissions apply only to this workspace. You can add other workspaces separately."}
           </p>
         </div>
-        <div className="space-y-1.5">
-          <p className="text-sm font-medium">Acting identity</p>
-          <Combobox
-            ariaLabel="Setup agent identity"
-            value={profileId || null}
-            onChange={(value) => setProfileId(value ?? "")}
-            options={[
-              ...(mode === "external"
-                ? [{ value: "", label: "My account", secondary: "Personal MCP token" }]
-                : []),
-              ...profiles
-                .filter(
-                  (item) =>
-                    item.availability.state === "AVAILABLE" &&
-                    (isInstanceAdmin || item.ownedByMe || item.instanceShared),
-                )
-                .map((item) => ({
-                  value: item.id,
-                  label: item.name,
-                  secondary:
-                    item.ownerType === "SERVICE"
-                      ? "Service-owned"
-                      : item.ownedByMe
-                        ? "Owned by you"
-                        : "Available agent",
-                })),
-            ]}
-            placeholder={
-              mode === "external" ? "My account · Personal MCP token" : "Choose an agent…"
-            }
-            className="w-full"
-          />
-          <p className="text-meta text-muted-foreground">
-            {profile
-              ? "The agent is the acting identity. The issued key also records the human operator; sharing an identity does not grant workspace access."
-              : mode === "external"
-                ? "Actions are attributed to your user account. Choose an agent above for a separate agent identity."
-                : "Choose an existing agent or create/request a new identity below."}
-          </p>
-        </div>
+        {!choosingRuntime && (
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium">
+              {mode === "external" ? "Act as · agent identity is optional" : "Agent identity"}
+            </p>
+            <Combobox
+              ariaLabel="Setup agent identity"
+              value={profileId || null}
+              onChange={(value) => setProfileId(value ?? "")}
+              options={[
+                ...(mode === "external"
+                  ? [{ value: "", label: "My account", secondary: "Personal MCP token" }]
+                  : []),
+                ...profiles
+                  .filter(
+                    (item) =>
+                      item.availability.state === "AVAILABLE" &&
+                      (isInstanceAdmin || item.ownedByMe || item.instanceShared),
+                  )
+                  .map((item) => ({
+                    value: item.id,
+                    label: item.name,
+                    secondary:
+                      item.ownerType === "SERVICE"
+                        ? "Service-owned"
+                        : item.ownedByMe
+                          ? "Owned by you"
+                          : "Available agent",
+                  })),
+              ]}
+              placeholder={
+                mode === "external" ? "My account · Personal MCP token" : "Choose an agent…"
+              }
+              className="w-full"
+            />
+            <p className="text-meta text-muted-foreground">
+              {profile
+                ? mode === "external"
+                  ? "The agent is the acting identity. The issued key also records the human operator; sharing an identity does not grant workspace access."
+                  : "This is who does the work, not the host that executes it. Continue to review workspace access and its runtime."
+                : mode === "external"
+                  ? "Actions are attributed to your user account. Choose an agent above for a separate agent identity."
+                  : "Choose an existing agent or create/request a new identity below."}
+            </p>
+          </div>
+        )}
         {workspace?.role === "GUEST" && (
           <p className="text-sm text-warning">
             Guests cannot create credentials. Ask a workspace administrator for access.
@@ -175,26 +230,28 @@ export function AgentSetupDialog({
             href={`/w/${encodeURIComponent(workspace.slug)}/settings/runtimes`}
             className="focus-ring inline-flex text-sm text-ember hover:underline"
           >
-            Register or inspect a runtime in {workspace.name} →
+            View existing runtimes in {workspace.name} →
           </Link>
         )}
-        <div className="border-t border-border pt-3">
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={
-              !workspace || workspace.role === "GUEST" || (!isInstanceAdmin && !creation.enabled)
-            }
-            onClick={() => onCreate(workspaceId)}
-          >
-            {isInstanceAdmin ? "Create a new agent" : creation.label}
-          </Button>
-          <p className="text-meta mt-2 text-muted-foreground">
-            {isInstanceAdmin
-              ? "Choose personal or service ownership when creating an identity. Workspace access and catalog sharing remain separate controls."
-              : creation.description}
-          </p>
-        </div>
+        {!choosingRuntime && (
+          <div className="border-t border-border pt-3">
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={
+                !workspace || workspace.role === "GUEST" || (!isInstanceAdmin && !creation.enabled)
+              }
+              onClick={() => onCreate(workspaceId)}
+            >
+              {isInstanceAdmin ? "Create a new agent" : creation.label}
+            </Button>
+            <p className="text-meta mt-2 text-muted-foreground">
+              {isInstanceAdmin
+                ? "Choose personal or service ownership when creating an identity. Workspace access and catalog sharing remain separate controls."
+                : creation.description}
+            </p>
+          </div>
+        )}
       </div>
     </CenterModal>
   );

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Cloud,
@@ -155,6 +156,10 @@ function ChatModeBadge({ chatMode }: { chatMode: string }) {
 
 export default function RuntimesPage() {
   const ws = useWorkspace();
+  const router = useRouter();
+  const pathname = usePathname();
+  const search = useSearchParams();
+  const canRegister = ws.role === "OWNER" || ws.role === "ADMIN";
   const utils = trpc.useUtils();
   const [includeArchived, setIncludeArchived] = useState(false);
   const { data: runtimes, isLoading } = trpc.runtime.list.useQuery({
@@ -166,6 +171,13 @@ export default function RuntimesPage() {
     name: string;
   } | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  useEffect(() => {
+    if (search?.get("create") !== "1" || !canRegister) return;
+    setCreateOpen(true);
+    const next = new URLSearchParams(search.toString());
+    next.delete("create");
+    router.replace(`${pathname}${next.size ? `?${next}` : ""}`, { scroll: false });
+  }, [search, canRegister, pathname, router]);
   const [editTarget, setEditTarget] = useState<{
     id: string;
     name: string;
@@ -262,7 +274,17 @@ export default function RuntimesPage() {
             >
               {includeArchived ? "Hide archived" : "Show archived"}
             </Button>
-            <Button size="sm" variant="ember" onClick={() => setCreateOpen(true)}>
+            <Button
+              size="sm"
+              variant="ember"
+              onClick={() => setCreateOpen(true)}
+              disabled={!canRegister}
+              title={
+                !canRegister
+                  ? "A workspace owner or administrator must register runtimes."
+                  : undefined
+              }
+            >
               Add runtime host
             </Button>
           </>
@@ -461,7 +483,7 @@ export default function RuntimesPage() {
       </div>
 
       <CreateRuntimeModal
-        open={createOpen}
+        open={createOpen && canRegister}
         adapters={adapters ?? []}
         onCancel={() => setCreateOpen(false)}
         onSubmit={async (vals) => {
